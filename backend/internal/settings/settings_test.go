@@ -174,6 +174,23 @@ func TestEnvMapping(t *testing.T) {
 	}
 }
 
+func TestEnvAdvancedWindows(t *testing.T) {
+	v := Settings{AutoCompactWindow: "200k", DisableUnknownModelWindow: true}
+	env := v.Env()
+	joined := strings.Join(env, ",")
+	if !strings.Contains(joined, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=200k") {
+		t.Fatalf("缺少窗口设置: %v", env)
+	}
+	if !strings.Contains(joined, "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1") {
+		t.Fatalf("缺少未知模型窗口开关: %v", env)
+	}
+
+	// 关闭时不应注入该变量
+	if strings.Contains(strings.Join(Settings{}.Env(), ","), "DISABLE_UNKNOWN") {
+		t.Fatal("未开启时不应注入")
+	}
+}
+
 func TestEnvSkipsEmpty(t *testing.T) {
 	env := Settings{BaseURL: "https://x"}.Env()
 	if len(env) != 1 {

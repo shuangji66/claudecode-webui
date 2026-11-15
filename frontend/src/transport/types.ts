@@ -113,6 +113,8 @@ export interface PublicSettings {
   sonnet_model: string;
   haiku_model: string;
   permission_mode: string;
+  auto_compact_window: string;
+  disable_unknown_model_window: boolean;
   path: string;
 }
 
@@ -123,5 +125,20 @@ export interface ProbeResult {
   method: string;
   status: number;
   latency_ms: number;
+  detail: string;
+}
+
+/** 网关模型列表条目。 */
+export interface GatewayModel {
+  id: string;
+  display_name?: string;
+  owned_by?: string;
+}
+
+/** /api/settings/models 的响应。 */
+export interface ModelsResult {
+  models: GatewayModel[] | null;
+  endpoint: string;
+  status: number;
   detail: string;
 }

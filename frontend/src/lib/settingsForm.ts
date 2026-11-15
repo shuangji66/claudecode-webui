@@ -14,6 +14,8 @@ export interface SettingsPatch {
   sonnet_model?: string;
   haiku_model?: string;
   permission_mode?: string;
+  auto_compact_window?: string;
+  disable_unknown_model_window?: boolean;
 }
 
 export interface SettingsFormState {
@@ -25,6 +27,8 @@ export interface SettingsFormState {
   sonnetModel: string;
   haikuModel: string;
   permissionMode: string;
+  autoCompactWindow: string;
+  disableUnknownModelWindow: boolean;
 }
 
 export const EMPTY_FORM: SettingsFormState = {
@@ -36,6 +40,8 @@ export const EMPTY_FORM: SettingsFormState = {
   sonnetModel: "",
   haikuModel: "",
   permissionMode: "",
+  autoCompactWindow: "",
+  disableUnknownModelWindow: false,
 };
 
 /** 从后端脱敏视图填充表单；密钥字段保持为空。 */
@@ -46,6 +52,8 @@ export function formFromPublic(p: {
   sonnet_model?: string;
   haiku_model?: string;
   permission_mode?: string;
+  auto_compact_window?: string;
+  disable_unknown_model_window?: boolean;
 }): SettingsFormState {
   return {
     ...EMPTY_FORM,
@@ -55,6 +63,8 @@ export function formFromPublic(p: {
     sonnetModel: p.sonnet_model ?? "",
     haikuModel: p.haiku_model ?? "",
     permissionMode: p.permission_mode ?? "",
+    autoCompactWindow: p.auto_compact_window ?? "",
+    disableUnknownModelWindow: p.disable_unknown_model_window ?? false,
   };
 }
 
@@ -67,6 +77,8 @@ export function buildPatch(form: SettingsFormState, clear: { apiKey?: boolean; a
     sonnet_model: form.sonnetModel.trim(),
     haiku_model: form.haikuModel.trim(),
     permission_mode: form.permissionMode.trim(),
+    auto_compact_window: form.autoCompactWindow.trim(),
+    disable_unknown_model_window: form.disableUnknownModelWindow,
   };
   const apiKey = form.apiKey.trim();
   if (apiKey) patch.api_key = apiKey;

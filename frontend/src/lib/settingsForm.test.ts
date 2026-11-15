@@ -10,10 +10,14 @@ describe("formFromPublic", () => {
       sonnet_model: "s1",
       haiku_model: "h1",
       permission_mode: "acceptEdits",
+      auto_compact_window: "200k",
+      disable_unknown_model_window: true,
     });
     expect(f.baseUrl).toBe("https://relay.local");
     expect(f.model).toBe("m1");
     expect(f.permissionMode).toBe("acceptEdits");
+    expect(f.autoCompactWindow).toBe("200k");
+    expect(f.disableUnknownModelWindow).toBe(true);
     // 后端从不回传密钥，表单也不该有值
     expect(f.apiKey).toBe("");
     expect(f.authToken).toBe("");
@@ -48,6 +52,9 @@ describe("buildPatch", () => {
     expect(p.base_url).toBe("");
     expect(p.model).toBe("");
     expect(p.permission_mode).toBe("");
+    // 高级项也要始终提交，否则用户清空窗口设置后无法保存
+    expect(p.auto_compact_window).toBe("");
+    expect(p.disable_unknown_model_window).toBe(false);
   });
 
   it("字段两侧空白被修剪", () => {

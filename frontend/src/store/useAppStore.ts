@@ -10,7 +10,15 @@ import { apiFetch } from "../lib/runtime";
 import { appendError, appendUser, applyCLI } from "../lib/normalize";
 import type { Item } from "../lib/model";
 import { ClaudeClient } from "../transport/client";
-import type { InitPayload, PermissionPayload, ProbeResult, PublicSettings, WireEvent } from "../transport/types";
+import type {
+  GatewayModel,
+  InitPayload,
+  ModelsResult,
+  PermissionPayload,
+  ProbeResult,
+  PublicSettings,
+  WireEvent,
+} from "../transport/types";
 import type { SettingsPatch } from "../lib/settingsForm";
 
 export interface InfoResponse {
@@ -59,6 +67,8 @@ interface AppState {
   settings: PublicSettings | null;
   settingsSaving: boolean;
   probe: ProbeResult | null;
+  gatewayModels: GatewayModel[];
+  modelsError: string | null;
   projects: ProjectEntry[];
   history: HistorySession[];
   sessions: SessionInfo[];
@@ -77,6 +87,7 @@ interface AppState {
   loadSettings: () => Promise<void>;
   saveSettings: (patch: SettingsPatch) => Promise<boolean>;
   testConnection: () => Promise<void>;
+  fetchGatewayModels: (baseUrl: string, apiKey: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
   refreshHistory: () => Promise<void>;
   createSession: (cwd: string, model?: string) => Promise<void>;
@@ -116,6 +127,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   settings: null,
   settingsSaving: false,
   probe: null,
+  gatewayModels: [],
+  modelsError: null,
   projects: [],
   history: [],
   sessions: [],
@@ -190,6 +203,23 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set({ probe: r });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
+    }
+  },
+
+  fetchGatewayModels: async (baseUrl, apiKey) => {
+    set({ modelsError: null, error: null });
+    try {
+      const r = await apiFetch<ModelsResult>("/api/settings/models", {
+        method: "POST",
+        body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
+      });
+      if (r.models && r.models.length > 0) {
+        set({ gatewayModels: r.models });
+      } else {
+        set({ gatewayModels: [], modelsError: r.detail || "未获取到模型" });
+      }
+    } catch (e) {
+      set({ gatewayModels: [], modelsError: e instanceof Error ? e.message : String(e) });
     }
   },
 

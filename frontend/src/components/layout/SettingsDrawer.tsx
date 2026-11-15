@@ -11,19 +11,31 @@ import {
 
 const PERMISSION_MODES = ["", "default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
 
+/** 内置别名 → 表单字段的映射。CLI 只会请求这些别名，所以要在这里重定向到网关模型。 */
+const ALIAS_FIELDS: { alias: string; label: string; key: keyof SettingsFormState; env: string }[] = [
+  { alias: "default", label: "默认（不指定时）", key: "model", env: "ANTHROPIC_MODEL" },
+  { alias: "opus", label: "opus", key: "opusModel", env: "DEFAULT_OPUS" },
+  { alias: "sonnet", label: "sonnet", key: "sonnetModel", env: "DEFAULT_SONNET" },
+  { alias: "haiku", label: "haiku", key: "haikuModel", env: "DEFAULT_HAIKU" },
+];
+
 export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const info = useAppStore((s) => s.info);
   const settings = useAppStore((s) => s.settings);
   const saving = useAppStore((s) => s.settingsSaving);
   const probe = useAppStore((s) => s.probe);
+  const models = useAppStore((s) => s.gatewayModels);
+  const modelsError = useAppStore((s) => s.modelsError);
   const saveSettings = useAppStore((s) => s.saveSettings);
   const testConnection = useAppStore((s) => s.testConnection);
+  const fetchModels = useAppStore((s) => s.fetchGatewayModels);
 
   const [form, setForm] = useState<SettingsFormState>(EMPTY_FORM);
   const [clearApiKey, setClearApiKey] = useState(false);
   const [clearAuthToken, setClearAuthToken] = useState(false);
   const [token, setTokenDraft] = useState(getToken());
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [advOpen, setAdvOpen] = useState(false);
 
   // 打开时用后端脱敏值回填（密钥字段保持空，避免把占位当值提交）。
   useEffect(() => {
@@ -58,8 +70,16 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
     ["claude", `${info?.claude_bin ?? "-"} ${info?.claude_version ?? ""}`.trim()],
     ["版本", info?.version ?? "-"],
     ["会话上限", String(info?.max_sessions ?? "-")],
-    ["前端产物", info?.frontend ? "已内嵌" : "缺失"],
+    ["前端产物", info?.frontend ? "已内嵌" : "未内嵌"],
   ];
+
+  // 别名当前解析到哪个网关模型（未映射时给出提示）
+  const resolve = (alias: string): string => {
+    if (alias === "default") return form.model || form.opusModel || "";
+    if (alias === "opus") return form.opusModel;
+    if (alias === "sonnet") return form.sonnetModel;
+    return form.haikuModel;
+  };
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/30" onClick={onClose}>
@@ -69,9 +89,17 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
         role="dialog"
         aria-label="设置"
       >
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">设置</h2>
-          <button type="button" onClick={onClose} aria-label="关闭设置">
+        <div className="flex items-center gap-2">
+          {/* 明确的返回入口：用户反馈只有 ✕ 不够直观 */}
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg px-2 py-1 text-xs font-medium text-blue-700 hover:bg-slate-100 dark:text-blue-300 dark:hover:bg-slate-800"
+          >
+            ← 返回对话
+          </button>
+          <h2 className="ml-auto text-sm font-semibold text-slate-700 dark:text-slate-200">设置</h2>
+          <button type="button" onClick={onClose} aria-label="关闭设置" className="text-slate-500">
             ✕
           </button>
         </div>
@@ -79,12 +107,10 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
         <section className="mt-4">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">第三方模型接入</h3>
           <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
-            以 Anthropic Messages 兼容端点为例：填中转 / 私有网关地址即可，留空则走官方地址。
+            填 Anthropic Messages 兼容端点（中转 / 私有网关）。留空则走官方地址。
           </p>
 
-          <label className="mt-3 block text-[11px] font-medium text-slate-500">
-            API 地址（ANTHROPIC_BASE_URL）
-          </label>
+          <label className="mt-3 block text-[11px] font-medium text-slate-500">API 地址（ANTHROPIC_BASE_URL）</label>
           <input
             value={form.baseUrl}
             onChange={(e) => set("baseUrl", e.target.value)}
@@ -92,9 +118,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
           />
 
-          <label className="mt-3 block text-[11px] font-medium text-slate-500">
-            API 密钥（ANTHROPIC_API_KEY）
-          </label>
+          <label className="mt-3 block text-[11px] font-medium text-slate-500">API 密钥（ANTHROPIC_API_KEY）</label>
           <div className="mt-1 flex gap-2">
             <input
               type="password"
@@ -146,15 +170,57 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
         </section>
 
         <section className="mt-5">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">模型</h3>
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <ModelField label="默认" value={form.model} onChange={(v) => set("model", v)} env="ANTHROPIC_MODEL" />
-            <ModelField label="Opus 别名" value={form.opusModel} onChange={(v) => set("opusModel", v)} env="DEFAULT_OPUS" />
-            <ModelField label="Sonnet 别名" value={form.sonnetModel} onChange={(v) => set("sonnetModel", v)} env="DEFAULT_SONNET" />
-            <ModelField label="Haiku 别名" value={form.haikuModel} onChange={(v) => set("haikuModel", v)} env="DEFAULT_HAIKU" />
+          <div className="flex items-center gap-2">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">模型映射</h3>
+            <button
+              type="button"
+              onClick={() => fetchModels(form.baseUrl, form.apiKey)}
+              className="ml-auto rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+            >
+              获取模型列表
+            </button>
+          </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
+            CLI 只会请求内置别名（默认 / opus / sonnet / haiku）。网关没有这些模型时，
+            把网关里的模型挂到对应槽位即可——CLI 会被重定向过去。
+          </p>
+
+          {models.length > 0 && (
+            <datalist id="gateway-models">
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.display_name || m.id}
+                </option>
+              ))}
+            </datalist>
+          )}
+
+          {modelsError && <p className="mt-2 text-[11px] text-rose-600">{modelsError}</p>}
+          {models.length > 0 && (
+            <p className="mt-2 text-[11px] text-emerald-700 dark:text-emerald-400">
+              已获取 {models.length} 个模型，下面的输入框可直接下拉选择。
+            </p>
+          )}
+
+          <div className="mt-2 space-y-2">
+            {ALIAS_FIELDS.map(({ alias, label, key, env }) => (
+              <div key={alias} className="flex items-center gap-2">
+                <span className="w-32 shrink-0 text-[11px] text-slate-500">{label}</span>
+                <input
+                  list={models.length > 0 ? "gateway-models" : undefined}
+                  value={String(form[key] ?? "")}
+                  onChange={(e) => set(key, e.target.value)}
+                  placeholder={env}
+                  className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                />
+                <span className="w-10 shrink-0 text-[10px] text-slate-400">
+                  {resolve(alias) ? "已映射" : "未映射"}
+                </span>
+              </div>
+            ))}
           </div>
           <p className="mt-1 text-[11px] text-slate-400">
-            留空则由 CLI 使用内置默认；别名用于让 `--model sonnet` 之类解析到中转上的真实模型名。
+            `default` 未单独设置时跟随 `opus` 槽位（与 CLI 行为一致）。留空则使用 CLI 内置模型名。
           </p>
         </section>
 
@@ -171,6 +237,43 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
               </option>
             ))}
           </select>
+        </section>
+
+        <section className="mt-5">
+          <button
+            type="button"
+            onClick={() => setAdvOpen((v) => !v)}
+            className="text-xs font-semibold uppercase tracking-wide text-slate-400"
+          >
+            {advOpen ? "▾" : "▸"} 高级
+          </button>
+          {advOpen && (
+            <div className="mt-2 space-y-2">
+              <label className="block text-[11px] font-medium text-slate-500">
+                自动压缩窗口（CLAUDE_CODE_AUTO_COMPACT_WINDOW）
+              </label>
+              <input
+                value={form.autoCompactWindow}
+                onChange={(e) => set("autoCompactWindow", e.target.value)}
+                placeholder="例如 200k；留空用 CLI 默认"
+                className="w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+              />
+              <label className="flex items-start gap-2 text-[11px] text-slate-600 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={form.disableUnknownModelWindow}
+                  onChange={(e) => set("disableUnknownModelWindow", e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  关闭「未知模型窗口推断」
+                  <span className="block text-slate-400">
+                    自定义模型名不在 CLI 内置表里时，它默认按 1M token 估算上下文。
+                  </span>
+                </span>
+              </label>
+            </div>
+          )}
         </section>
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -243,35 +346,21 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
           </section>
         )}
 
-        <p className="mt-6 text-[11px] leading-relaxed text-slate-400">
+        <div className="mt-6 rounded-lg bg-slate-50 p-3 dark:bg-slate-800/60">
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full rounded-lg bg-slate-200 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-200"
+          >
+            ← 返回对话
+          </button>
+        </div>
+
+        <p className="mt-4 text-[11px] leading-relaxed text-slate-400">
           密钥只保存在数据目录下的配置文件（权限 0600），接口返回时一律脱敏。
           若经公网访问，请务必配置 CCWEB_AUTH_TOKEN 并在网关层再加一层鉴权。
         </p>
       </div>
     </div>
-  );
-}
-
-function ModelField({
-  label,
-  value,
-  onChange,
-  env,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  env: string;
-}) {
-  return (
-    <label className="block">
-      <span className="block text-[11px] font-medium text-slate-500">{label}</span>
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={env}
-        className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-      />
-    </label>
   );
 }

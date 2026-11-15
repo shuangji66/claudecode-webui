@@ -82,6 +82,33 @@ location /app/ccweb/ {
 - 密钥经接口返回时一律脱敏；输入框留空表示「不修改」，清除要点「清除」再保存。
 - 「测试连接」先 `GET /v1/models`（不计费），不支持时退回一次 `POST /v1/messages`（max_tokens=1）。
 
+### 把网关模型挂到内置别名（重要）
+
+Claude Code 只会**按内置别名**发请求（`default` / `opus` / `sonnet` / `haiku`），
+默认解析成 `claude-opus-5-5` 这类官方模型名。绝大多数中转网关没有这些模型，会直接 404：
+
+```
+There's an issue with the selected model (claude-opus-5-5).
+```
+
+处理方式：在设置页点「获取模型列表」（走网关的 `GET /v1/models`），
+再把网关里的模型填进对应的别名槽位。保存后新建会话即可，CLI 的请求会被重定向到网关模型。
+
+底层用的就是官方支持的变量：
+
+| 别名 | 环境变量 |
+|---|---|
+| 默认 | `ANTHROPIC_MODEL` |
+| opus | `ANTHROPIC_DEFAULT_OPUS_MODEL` |
+| sonnet | `ANTHROPIC_DEFAULT_SONNET_MODEL` |
+| haiku | `ANTHROPIC_DEFAULT_HAIKU_MODEL` |
+
+`default` 未单独设置时跟随 `opus` 槽位（与 CLI 行为一致）。
+
+自定义模型名不在 CLI 内置表里时，它会**按 1M token 估算上下文**并给出警告。
+设置页「高级」里可以填 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（如 `200k`），
+或勾选关闭未知模型窗口推断（`CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1`）。
+
 ## 数据目录
 
 `CCWEB_DATA_DIR` 下统一生成：

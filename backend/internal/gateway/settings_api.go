@@ -37,3 +37,33 @@ func (s *Server) handleTestSettings(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	writeJSON(w, settings.Probe(ctx, s.d.Settings.Get()))
 }
+
+// fetchModelsReq 允许用「尚未保存」的地址/密钥先拉一次列表。
+// 密钥留空则沿用已保存的值（与保存语义一致）。
+type fetchModelsReq struct {
+	BaseURL string `json:"base_url"`
+	APIKey  string `json:"api_key"`
+}
+
+// handleFetchModels 从网关拉取可用模型列表，供设置页把网关模型挂到内置别名上。
+func (s *Server) handleFetchModels(w http.ResponseWriter, r *http.Request) {
+	var req fetchModelsReq
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+			writeErr(w, "请求体解析失败: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	// 以存储态为底，再用请求里填的值覆盖（空值不覆盖）。
+	v := s.d.Settings.Get()
+	if req.BaseURL != "" {
+		v.BaseURL = req.BaseURL
+	}
+	if req.APIKey != "" {
+		v.APIKey = req.APIKey
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), settings.ProbeTimeout)
+	defer cancel()
+	writeJSON(w, settings.FetchModels(ctx, v))
+}

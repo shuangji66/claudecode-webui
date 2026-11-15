@@ -36,20 +36,29 @@ type Settings struct {
 
 	// PermissionMode 是新会话的默认权限模式。
 	PermissionMode string `json:"permission_mode"`
+
+	// AutoCompactWindow 对应 CLAUDE_CODE_AUTO_COMPACT_WINDOW（如 "200k"）。
+	// 自定义模型没有内置窗口元数据，CLI 会默认按 1M 估算，这里可以纠正。
+	AutoCompactWindow string `json:"auto_compact_window"`
+	// DisableUnknownModelWindow 关闭 CLI 对未知模型窗口的推断。
+	// 对应 CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1。
+	DisableUnknownModelWindow bool `json:"disable_unknown_model_window"`
 }
 
 // Public 是脱敏后的视图，用于回传前端。
 type Public struct {
-	BaseURL        string `json:"base_url"`
-	APIKeySet      bool   `json:"api_key_set"`
-	APIKeyMasked   string `json:"api_key_masked"`
-	AuthTokenSet   bool   `json:"auth_token_set"`
-	AuthTokenMask  string `json:"auth_token_masked"`
-	Model          string `json:"model"`
-	OpusModel      string `json:"opus_model"`
-	SonnetModel    string `json:"sonnet_model"`
-	HaikuModel     string `json:"haiku_model"`
-	PermissionMode string `json:"permission_mode"`
+	BaseURL                   string `json:"base_url"`
+	APIKeySet                 bool   `json:"api_key_set"`
+	APIKeyMasked              string `json:"api_key_masked"`
+	AuthTokenSet              bool   `json:"auth_token_set"`
+	AuthTokenMask             string `json:"auth_token_masked"`
+	Model                     string `json:"model"`
+	OpusModel                 string `json:"opus_model"`
+	SonnetModel               string `json:"sonnet_model"`
+	HaikuModel                string `json:"haiku_model"`
+	PermissionMode            string `json:"permission_mode"`
+	AutoCompactWindow         string `json:"auto_compact_window"`
+	DisableUnknownModelWindow bool   `json:"disable_unknown_model_window"`
 	// Path 是配置文件路径，方便用户在 NAS 上备份。
 	Path string `json:"path"`
 }
@@ -66,6 +75,9 @@ type Patch struct {
 	SonnetModel    *string `json:"sonnet_model"`
 	HaikuModel     *string `json:"haiku_model"`
 	PermissionMode *string `json:"permission_mode"`
+
+	AutoCompactWindow         *string `json:"auto_compact_window"`
+	DisableUnknownModelWindow *bool   `json:"disable_unknown_model_window"`
 }
 
 // Store 是带锁的内存态 + 磁盘持久化。
@@ -106,17 +118,19 @@ func (s *Store) Get() Settings {
 func (s *Store) Public() Public {
 	cur := s.Get()
 	p := Public{
-		BaseURL:        cur.BaseURL,
-		APIKeySet:      cur.APIKey != "",
-		APIKeyMasked:   Mask(cur.APIKey),
-		AuthTokenSet:   cur.AuthToken != "",
-		AuthTokenMask:  Mask(cur.AuthToken),
-		Model:          cur.Model,
-		OpusModel:      cur.OpusModel,
-		SonnetModel:    cur.SonnetModel,
-		HaikuModel:     cur.HaikuModel,
-		PermissionMode: cur.PermissionMode,
-		Path:           s.path,
+		BaseURL:                   cur.BaseURL,
+		APIKeySet:                 cur.APIKey != "",
+		APIKeyMasked:              Mask(cur.APIKey),
+		AuthTokenSet:              cur.AuthToken != "",
+		AuthTokenMask:             Mask(cur.AuthToken),
+		Model:                     cur.Model,
+		OpusModel:                 cur.OpusModel,
+		SonnetModel:               cur.SonnetModel,
+		HaikuModel:                cur.HaikuModel,
+		PermissionMode:            cur.PermissionMode,
+		AutoCompactWindow:         cur.AutoCompactWindow,
+		DisableUnknownModelWindow: cur.DisableUnknownModelWindow,
+		Path:                      s.path,
 	}
 	return p
 }
@@ -160,6 +174,12 @@ func (s *Store) Apply(p Patch) (Public, error) {
 	if p.PermissionMode != nil {
 		next.PermissionMode = strings.TrimSpace(*p.PermissionMode)
 	}
+	if p.AutoCompactWindow != nil {
+		next.AutoCompactWindow = strings.TrimSpace(*p.AutoCompactWindow)
+	}
+	if p.DisableUnknownModelWindow != nil {
+		next.DisableUnknownModelWindow = *p.DisableUnknownModelWindow
+	}
 
 	if err := writeAtomic(s.path, next); err != nil {
 		return Public{}, err
@@ -167,17 +187,19 @@ func (s *Store) Apply(p Patch) (Public, error) {
 	s.cur = next
 
 	return Public{
-		BaseURL:        next.BaseURL,
-		APIKeySet:      next.APIKey != "",
-		APIKeyMasked:   Mask(next.APIKey),
-		AuthTokenSet:   next.AuthToken != "",
-		AuthTokenMask:  Mask(next.AuthToken),
-		Model:          next.Model,
-		OpusModel:      next.OpusModel,
-		SonnetModel:    next.SonnetModel,
-		HaikuModel:     next.HaikuModel,
-		PermissionMode: next.PermissionMode,
-		Path:           s.path,
+		BaseURL:                   next.BaseURL,
+		APIKeySet:                 next.APIKey != "",
+		APIKeyMasked:              Mask(next.APIKey),
+		AuthTokenSet:              next.AuthToken != "",
+		AuthTokenMask:             Mask(next.AuthToken),
+		Model:                     next.Model,
+		OpusModel:                 next.OpusModel,
+		SonnetModel:               next.SonnetModel,
+		HaikuModel:                next.HaikuModel,
+		PermissionMode:            next.PermissionMode,
+		AutoCompactWindow:         next.AutoCompactWindow,
+		DisableUnknownModelWindow: next.DisableUnknownModelWindow,
+		Path:                      s.path,
 	}, nil
 }
 
@@ -204,6 +226,10 @@ func (v Settings) Env() []string {
 	add("ANTHROPIC_DEFAULT_OPUS_MODEL", v.OpusModel)
 	add("ANTHROPIC_DEFAULT_SONNET_MODEL", v.SonnetModel)
 	add("ANTHROPIC_DEFAULT_HAIKU_MODEL", v.HaikuModel)
+	add("CLAUDE_CODE_AUTO_COMPACT_WINDOW", v.AutoCompactWindow)
+	if v.DisableUnknownModelWindow {
+		out = append(out, "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1")
+	}
 	return out
 }
 
