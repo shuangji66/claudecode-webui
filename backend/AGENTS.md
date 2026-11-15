@@ -90,6 +90,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 提供商数组是**整体替换**语义；单个提供商的密钥空串 = 不改（前端密码框回填的是占位），
   清除必须 `clear_key`。ID 为空或重复要报错。
 - 删除提供商后若 `Selection` 悬空，必须清空 Selection。
+- **对话地址与列表地址不是同一个**：CLI 自己拼 `/v1/messages`，而 OpenAI/Gemini 协议的
+  base 习惯带 `/v1`。`Provider.ChatBaseURL()` 对非 Anthropic 协议剥掉尾部 `/v1`，
+  `Env()` 必须用它，否则会拼成 `/v1/v1/messages`（404）。
 - `Env()` 只注入选中提供商的值：`ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY`（或无 key 时
   `ANTHROPIC_AUTH_TOKEN`）/ `ANTHROPIC_MODEL`，并把三个别名变量也指向同一模型，
   使 CLI「固定使用默认模型」。

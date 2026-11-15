@@ -240,15 +240,30 @@ export const useAppStore = create<AppState>()((set, get) => ({
   selectModel: async (provider, model) => {
     const ok = await get().saveSettings({ selected: { provider, model } });
     if (!ok) return;
+
     const id = get().activeId;
-    if (!id) return;
+    if (!id) return; // 没有活动会话：新会话会用新选择，不必做什么
+
     const sess = get().sessions.find((s) => s.id === id);
-    if (sess?.provider && sess.provider !== provider) {
-      set({ error: "已切换提供商：该会话仍连在旧提供商上，请新建会话后生效" });
+    if (!sess) return;
+
+    // 同一提供商：模型只是请求参数，热切换即可。
+    if (sess.provider === provider) {
+      clients.get(id)?.send({ kind: "model", model });
+      await get().refreshSessions();
       return;
     }
-    clients.get(id)?.send({ kind: "model", model });
-    await get().refreshSessions();
+
+    // 提供商不同（含「会话创建时还没选模型」这种 provider 为空的情况）：
+    // 地址与密钥在进程启动时就已经固定，改不了。必须重建会话，
+    // 否则会带着旧地址 / 没有密钥继续跑，表现就是「Not logged in」。
+    if ((get().states[id] ?? sess.state) === "busy") {
+      set({ error: "本轮还在运行，无法切换提供商；等这一轮结束再切，或先点中断" });
+      return;
+    }
+    const cwd = sess.cwd;
+    await get().closeSession(id);
+    await get().createSession(cwd);
   },
 
   fetchModelsFor: async (form) => {

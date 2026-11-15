@@ -50,6 +50,21 @@ func (p Provider) ProtocolOrDefault() string {
 	return DefaultAPIProtocol
 }
 
+// ChatBaseURL 返回**对话**用的基础地址。
+//
+// claude CLI 只会说 Anthropic Messages：它在 baseURL 后面自己拼 `/v1/messages`。
+// 而 OpenAI / Gemini 协议的 base 习惯上带 `/v1`（列表地址是 `{base}/models`），
+// 两者直接共用会拼成 `/v1/v1/messages` → 404。
+// 因此非 Anthropic 协议要剥掉这层 `/v1`；Anthropic 协议按用户填的原样使用。
+func (p Provider) ChatBaseURL() string {
+	base := p.Root()
+	if p.ProtocolOrDefault() != ProtocolAnthropic {
+		base = strings.TrimSuffix(base, "/v1")
+		base = strings.TrimRight(base, "/")
+	}
+	return base
+}
+
 // Root 返回去掉尾斜杠的地址。
 func (p Provider) Root() string {
 	base := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")

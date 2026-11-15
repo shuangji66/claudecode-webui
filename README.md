@@ -84,8 +84,15 @@ location /app/ccweb/ {
 | `openai-completions` / `openai-responses` | `{base}/models` | `Authorization: Bearer` |
 | `google-generative-ai` | `{base}/models?pageSize=1000` | `x-goog-api-key` |
 
-**对话始终走 Anthropic Messages**——claude CLI 只支持这一种协议；协议在这里只决定
-「从哪个地址、用哪种鉴权去问模型列表」。401 时会自动用同一把密钥换 `Bearer` 再试一次。
+**对话始终走 Anthropic Messages**——claude CLI 只支持这一种协议。因此**地址会被归一化**：
+
+- `anthropic-messages`：对话地址就是你填的地址（官方地址本身不带 `/v1`）；
+- `openai-*` / `google-generative-ai`：这类地址习惯带 `/v1`（列表是 `{base}/models`），
+  对话时**自动剥掉尾部 `/v1`**，否则 CLI 会拼成 `/v1/v1/messages` 而 404。
+
+例：协议 OpenAI、地址 `http://127.0.0.1:7863/v1`
+→ 拉列表 `…/v1/models`，对话 `…/v1/messages`。</br>
+401 时会自动用同一把密钥换 `Bearer` 再试一次。
 
 获取不到列表是正常情况：端点什么格式由它自己决定，手动输入模型名效果完全相同。
 
@@ -96,8 +103,8 @@ location /app/ccweb/ {
 也指向它），CLI 因此固定使用它，不再暴露内置模型列表。
 
 - **同一提供商内**切换：直接对当前会话发 `set_model`，立即生效，无需重开；
-- **跨提供商**切换：地址与密钥在进程启动时就固定了，需要**新建会话**才会生效
-  （界面会提示）。
+- **跨提供商**切换（含会话创建时还没选模型的情况）：地址与密钥在进程启动时就固定了，
+  界面会**自动关闭并按相同目录重建会话**，随后正常对话。本轮正在运行时不允许切换。
 
 > 早期版本用「default/opus/sonnet/haiku 四个别名槽位」手动映射，那套已废弃：
 > 现在只有「已添加模型 + 当前选中」，不再需要手填别名。

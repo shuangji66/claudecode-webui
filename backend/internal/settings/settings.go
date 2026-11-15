@@ -274,8 +274,10 @@ func (v Settings) Env() []string {
 	var out []string
 	p, model, ok := v.Active()
 	if ok {
-		if p.BaseURL != "" {
-			out = append(out, "ANTHROPIC_BASE_URL="+p.BaseURL)
+		// 用 ChatBaseURL 而不是原始 base：OpenAI/Gemini 协议的地址带 /v1，
+		// 直接喂给 CLI 会拼成 /v1/v1/messages。
+		if base := p.ChatBaseURL(); base != "" {
+			out = append(out, "ANTHROPIC_BASE_URL="+base)
 		}
 		// 对话始终走 Anthropic Messages：有 APIKey 就用 x-api-key，否则用 Bearer。
 		if p.APIKey != "" {

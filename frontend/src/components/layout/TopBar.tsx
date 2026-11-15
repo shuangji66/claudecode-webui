@@ -34,7 +34,11 @@ export function TopBar({
     (p.models ?? []).map((m) => ({ provider: p.id, model: m, label: `${m} · ${p.name || p.id}` })),
   );
   const selected = settings?.selected;
-  const selectedKey = selected ? `${selected.provider}/${selected.model}` : "";
+  // 注意：后端在「未选择」时返回 {provider:"", model:""} —— 这是个真值对象，
+  // 直接拼成 "/" 会匹配不到任何 option，浏览器就回落到第一项，
+  // 看起来像"已选中模型"，实际什么都没选。必须两个字段都非空才算选中。
+  const selectedKey =
+    selected && selected.provider && selected.model ? `${selected.provider}/${selected.model}` : "";
 
   // 会话创建时绑定的提供商与当前选择不一致 → 需要新建会话
   const mismatch = Boolean(session?.provider) && Boolean(selected?.provider) && session!.provider !== selected!.provider;
@@ -76,7 +80,7 @@ export function TopBar({
           className="max-w-[16rem] rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
         >
           {options.length === 0 && <option value="">未添加模型</option>}
-          {options.length > 0 && !selectedKey && <option value="">未选择</option>}
+          {options.length > 0 && !selectedKey && <option value="">未选择模型</option>}
           {options.map((o) => (
             <option key={`${o.provider}/${o.model}`} value={`${o.provider}/${o.model}`}>
               {o.label}
