@@ -141,4 +141,8 @@ export interface ModelsResult {
   endpoint: string;
   status: number;
   detail: string;
+  /** 解析失败时的响应体片段，便于判断网关到底返回了什么。 */
+  raw?: string;
+  /** 尝试过的路径。 */
+  tried?: string[];
 }

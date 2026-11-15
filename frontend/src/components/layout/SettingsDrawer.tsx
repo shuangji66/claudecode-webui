@@ -26,6 +26,8 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
   const probe = useAppStore((s) => s.probe);
   const models = useAppStore((s) => s.gatewayModels);
   const modelsError = useAppStore((s) => s.modelsError);
+  const modelsRaw = useAppStore((s) => s.modelsRaw);
+  const modelsTried = useAppStore((s) => s.modelsTried);
   const saveSettings = useAppStore((s) => s.saveSettings);
   const testConnection = useAppStore((s) => s.testConnection);
   const fetchModels = useAppStore((s) => s.fetchGatewayModels);
@@ -195,7 +197,22 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             </datalist>
           )}
 
-          {modelsError && <p className="mt-2 text-[11px] text-rose-600">{modelsError}</p>}
+          {modelsError && (
+            <div className="mt-2 rounded-lg bg-rose-50 px-2 py-1.5 text-[11px] text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+              <p>{modelsError}</p>
+              {modelsTried.length > 0 && (
+                <p className="mt-1 opacity-70">已尝试：{modelsTried.join("、")}</p>
+              )}
+              {modelsRaw && (
+                <details className="mt-1">
+                  <summary className="cursor-pointer opacity-70">查看网关返回内容</summary>
+                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded bg-white/60 p-1.5 font-mono text-[10px] dark:bg-slate-900/60">
+                    {modelsRaw}
+                  </pre>
+                </details>
+              )}
+            </div>
+          )}
           {models.length > 0 && (
             <p className="mt-2 text-[11px] text-emerald-700 dark:text-emerald-400">
               已获取 {models.length} 个模型，下面的输入框可直接下拉选择。

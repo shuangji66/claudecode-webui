@@ -96,6 +96,13 @@ func Probe(ctx context.Context, v Settings) ProbeResult {
 
 // doJSON 发一个请求并读取有限长度的响应体。
 func doJSON(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte) (int, []byte, error) {
+	return doJSONAuth(ctx, c, method, url, v, body, false)
+}
+
+// doJSONAuth 是 doJSON 的可指定鉴权方式版本。
+// forceBearer=true 时把 APIKey 当作 Bearer 令牌发送（不发送 x-api-key）——
+// 不少中转的 /v1/models 只认 Authorization: Bearer，不认 x-api-key。
+func doJSONAuth(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, forceBearer bool) (int, []byte, error) {
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
@@ -109,10 +116,16 @@ func doJSON(ctx context.Context, c *http.Client, method, url string, v Settings,
 		req.Header.Set("content-type", "application/json")
 	}
 	// 两种鉴权方式二选一：官方用 x-api-key，部分中转只认 Bearer。
-	if v.APIKey != "" {
-		req.Header.Set("x-api-key", v.APIKey)
+	if forceBearer {
+		if v.APIKey != "" {
+			req.Header.Set("authorization", "Bearer "+v.APIKey)
+		}
+	} else {
+		if v.APIKey != "" {
+			req.Header.Set("x-api-key", v.APIKey)
+		}
 	}
-	if v.AuthToken != "" {
+	if v.AuthToken != "" && !forceBearer {
 		req.Header.Set("authorization", "Bearer "+v.AuthToken)
 	}
 

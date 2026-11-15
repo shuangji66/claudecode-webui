@@ -69,6 +69,8 @@ interface AppState {
   probe: ProbeResult | null;
   gatewayModels: GatewayModel[];
   modelsError: string | null;
+  modelsRaw: string;
+  modelsTried: string[];
   projects: ProjectEntry[];
   history: HistorySession[];
   sessions: SessionInfo[];
@@ -129,6 +131,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   probe: null,
   gatewayModels: [],
   modelsError: null,
+  modelsRaw: "",
+  modelsTried: [],
   projects: [],
   history: [],
   sessions: [],
@@ -214,12 +218,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
         body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
       });
       if (r.models && r.models.length > 0) {
-        set({ gatewayModels: r.models });
+        set({ gatewayModels: r.models, modelsRaw: "", modelsTried: r.tried ?? [] });
       } else {
-        set({ gatewayModels: [], modelsError: r.detail || "未获取到模型" });
+        set({
+          gatewayModels: [],
+          modelsError: r.detail || "未获取到模型",
+          modelsRaw: r.raw ?? "",
+          modelsTried: r.tried ?? [],
+        });
       }
     } catch (e) {
-      set({ gatewayModels: [], modelsError: e instanceof Error ? e.message : String(e) });
+      set({ gatewayModels: [], modelsError: e instanceof Error ? e.message : String(e), modelsRaw: "" });
     }
   },
 

@@ -91,7 +91,7 @@ Claude Code 只会**按内置别名**发请求（`default` / `opus` / `sonnet` /
 There's an issue with the selected model (claude-opus-5-5).
 ```
 
-处理方式：在设置页点「获取模型列表」（走网关的 `GET /v1/models`），
+处理方式：在设置页点「获取模型列表」（依次尝试 `/v1/models`、`/models`），
 再把网关里的模型填进对应的别名槽位。保存后新建会话即可，CLI 的请求会被重定向到网关模型。
 
 底层用的就是官方支持的变量：
@@ -104,6 +104,15 @@ There's an issue with the selected model (claude-opus-5-5).
 | haiku | `ANTHROPIC_DEFAULT_HAIKU_MODEL` |
 
 `default` 未单独设置时跟随 `opus` 槽位（与 CLI 行为一致）。
+
+**拉不到列表怎么办。** 各家中转对该端点的实现差别很大，程序已尽量兼容：
+
+- 外层结构不限定（`data[]` / `models[]` / `data.models[]` / 任意嵌套 / 纯字符串数组）；
+- 元素字段认 `id` / `name` / `model` / `model_id`；
+- 401 时会用同一个密钥换成 `Authorization: Bearer` 再试一次（很多中转只认这种）；
+- 仍然失败时，界面会显示**尝试过的路径**和**网关返回的原文片段**。
+  如果是 HTML，说明该网关根本没实现 `/v1/models`（被前端路由兜底了），
+  直接在下面的输入框手动填写模型名即可——映射与对话都不依赖这个接口。
 
 自定义模型名不在 CLI 内置表里时，它会**按 1M token 估算上下文**并给出警告。
 设置页「高级」里可以填 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（如 `200k`），
