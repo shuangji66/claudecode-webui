@@ -5,6 +5,7 @@ import {
   buildProviderPatches,
   findOption,
   formsFromSettings,
+  normalizeSettings,
   type ProviderForm,
 } from "./providerForm";
 import type { PublicSettings } from "../transport/types";
@@ -90,5 +91,28 @@ describe("allModelOptions", () => {
     expect(opts.map((o) => o.model)).toEqual(["cn:deepseek", "cn:qwen", "x"]);
     expect(findOption(opts, "gw2", "x")?.label).toContain("备用");
     expect(findOption(opts, "gw2", "nope")).toBeUndefined();
+  });
+});
+
+describe("normalizeSettings", () => {
+  // 回归：后端曾把空模型列表序列化成 null，前端 p.models.map 直接白屏。
+  it("models 为 null 时归一成空数组", () => {
+    const raw = {
+      ...sample,
+      providers: [{ ...sample.providers[0], models: null as unknown as string[] }],
+    };
+    const s = normalizeSettings(raw)!;
+    expect(s.providers[0].models).toEqual([]);
+    expect(() => allModelOptions(formsFromSettings(s))).not.toThrow();
+  });
+
+  it("providers 为 null 时归一成空数组", () => {
+    const raw = { ...sample, providers: null as unknown as typeof sample.providers };
+    expect(normalizeSettings(raw)!.providers).toEqual([]);
+  });
+
+  it("selected 缺失时补空", () => {
+    const raw = { ...sample, selected: null as unknown as typeof sample.selected };
+    expect(normalizeSettings(raw)!.selected).toEqual({ provider: "", model: "" });
   });
 });

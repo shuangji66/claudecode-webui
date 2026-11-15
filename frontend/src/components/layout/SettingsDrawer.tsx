@@ -235,7 +235,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
                       测试连接
                     </button>
                     {saved && (
-                      <span className="text-[10px] text-slate-400">已保存 {saved.models.length} 个模型</span>
+                      <span className="text-[10px] text-slate-400">已保存 {(saved.models ?? []).length} 个模型</span>
                     )}
                   </div>
 

@@ -319,6 +319,10 @@ func (s *Store) Public() Public {
 		Path:                      s.path,
 	}
 	for _, p := range cur.Providers {
+		// 注意：append([]string(nil), 空切片...) 返回 nil，JSON 会序列化成 null，
+		// 前端 p.models.map 会直接抛 TypeError 导致整页白屏。这里必须用非 nil 空切片。
+		models := make([]string, 0, len(p.Models))
+		models = append(models, p.Models...)
 		pub.Providers = append(pub.Providers, PublicProvider{
 			ID:           p.ID,
 			Name:         p.Name,
@@ -328,7 +332,7 @@ func (s *Store) Public() Public {
 			APIKeyMasked: Mask(p.APIKey),
 			AuthTokenSet: p.AuthToken != "",
 			ModelsPath:   p.ModelsPath,
-			Models:       append([]string(nil), p.Models...),
+			Models:       models,
 		})
 	}
 	return pub

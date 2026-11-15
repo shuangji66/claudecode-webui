@@ -54,6 +54,26 @@ function fromPublic(p: PublicProvider): ProviderForm {
   };
 }
 
+/**
+ * 把后端返回的 settings 归一化。
+ *
+ * 后端曾经在「提供商没有模型」时序列化出 `"models": null`（append([]string(nil), ...) 的结果），
+ * 前端直接 `p.models.map` 会抛 TypeError 导致整页白屏。这里统一兜底：
+ * 提供商数组、每个提供商的 models、selected 都强制成安全形状。
+ */
+export function normalizeSettings(s: PublicSettings | null): PublicSettings | null {
+  if (!s) return s;
+  const providers = (s.providers as unknown as PublicProvider[] | null | undefined) ?? [];
+  return {
+    ...s,
+    providers: providers.map((p) => ({
+      ...p,
+      models: (p.models as unknown as string[] | null | undefined) ?? [],
+    })),
+    selected: s.selected ?? { provider: "", model: "" },
+  };
+}
+
 export function formsFromSettings(s: PublicSettings | null): ProviderForm[] {
   return (s?.providers ?? []).map(fromPublic);
 }
@@ -112,7 +132,7 @@ export interface ModelOption {
 export function allModelOptions(forms: ProviderForm[]): ModelOption[] {
   const out: ModelOption[] = [];
   for (const p of forms) {
-    for (const m of p.models) {
+    for (const m of p.models ?? []) {
       out.push({
         provider: p.id,
         providerName: p.name || p.id,

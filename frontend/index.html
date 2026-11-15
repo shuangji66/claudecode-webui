@@ -16,7 +16,7 @@
     <script>
       (function () {
         var shown = false;
-        function fail(title, detail) {
+        function fail(title, detail, hint) {
           if (shown) return;
           shown = true;
           var el = document.getElementById("root");
@@ -27,30 +27,35 @@
             '<div style="font-size:15px;font-weight:600;color:#b91c1c">' + title + "</div>" +
             '<div style="margin-top:8px;font-size:12px;line-height:1.6;color:#475569;word-break:break-all">' + detail + "</div>" +
             '<div style="margin-top:12px;font-size:12px;line-height:1.6;color:#475569">' +
-            "常见原因：静态资源 404（浏览器或网关缓存了旧的 index.html）。<br/>" +
-            "处理：强制刷新（Ctrl/Cmd+Shift+R），或在网关侧清除该路径的缓存；" +
-            "仍不行请确认当前运行的二进制与前端产物是同一次构建。" +
+            hint +
             "</div></div></div>";
         }
+        var HINT_RESOURCE =
+          "常见原因：静态资源 404（浏览器或网关缓存了旧的 index.html）。<br/>" +
+          "处理：强制刷新（Ctrl/Cmd+Shift+R），或在网关侧清除该路径的缓存；" +
+          "仍不行请确认当前运行的二进制与前端产物是同一次构建。";
+        var HINT_SCRIPT =
+          "这是前端脚本运行时错误，与浏览器缓存无关——把这条信息反馈即可定位。<br/>" +
+          "临时处理：可在设置页清空有问题的配置，或删掉数据目录下的 settings.json 后重启。";
         window.addEventListener(
           "error",
           function (e) {
             var t = e && e.target;
             if (t && (t.tagName === "SCRIPT" || t.tagName === "LINK")) {
-              fail("静态资源加载失败", (t.src || t.href) + " 无法加载（多为 404）");
+              fail("静态资源加载失败", (t.src || t.href) + " 无法加载（多为 404）", HINT_RESOURCE);
             } else if (e && e.message) {
-              fail("前端脚本出错", String(e.message));
+              fail("前端脚本出错", String(e.message), HINT_SCRIPT);
             }
           },
           true,
         );
         window.addEventListener("unhandledrejection", function (e) {
-          fail("前端脚本出错", "未捕获的 Promise 错误：" + String(e && e.reason));
+          fail("前端脚本出错", "未捕获的 Promise 错误：" + String(e && e.reason), HINT_SCRIPT);
         });
         setTimeout(function () {
           var r = document.getElementById("root");
           if (r && r.childElementCount === 0 && !shown) {
-            fail("页面未能挂载", "根节点仍为空：脚本可能 404，或执行到一半失败。");
+            fail("页面未能挂载", "根节点仍为空：脚本可能 404，或执行到一半失败。", HINT_RESOURCE);
           }
         }, 8000);
       })();

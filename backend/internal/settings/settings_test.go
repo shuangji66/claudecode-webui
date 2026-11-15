@@ -238,6 +238,24 @@ func TestEnvUsesBearerWhenNoAPIKey(t *testing.T) {
 	}
 }
 
+// 提供商没有模型时，JSON 必须是 []，不能是 null —— 否则前端 map 会抛错白屏。
+func TestPublicEmptyModelsIsArrayNotNull(t *testing.T) {
+	s, _ := openTemp(t)
+	if _, err := s.Apply(Patch{Providers: &[]ProviderPatch{{ID: "empty"}}}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	b, err := json.Marshal(s.Public())
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(b), `"models":null`) {
+		t.Fatalf("models 不应为 null: %s", b)
+	}
+	if !strings.Contains(string(b), `"models":[]`) {
+		t.Fatalf("models 应为空数组: %s", b)
+	}
+}
+
 func TestMask(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"", ""},

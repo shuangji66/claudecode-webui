@@ -31,7 +31,7 @@ export function TopBar({
 
   // 聊天页只列「已添加的第三方模型」——CLI 固定用默认模型，不再暴露内置模型列表。
   const options = (settings?.providers ?? []).flatMap((p) =>
-    p.models.map((m) => ({ provider: p.id, model: m, label: `${m} · ${p.name || p.id}` })),
+    (p.models ?? []).map((m) => ({ provider: p.id, model: m, label: `${m} · ${p.name || p.id}` })),
   );
   const selected = settings?.selected;
   const selectedKey = selected ? `${selected.provider}/${selected.model}` : "";

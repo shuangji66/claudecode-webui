@@ -83,6 +83,10 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - **所有持久化文件落在 `CCWEB_DATA_DIR` 下**，路径由 `config.SettingsFile` 决定。
 - 写盘必须 `tmp + rename` 原子替换，权限 **0600**（文件里有密钥）。
 - `Public()` 是唯一对外视图：密钥只给 `*_set` 与脱敏串，**任何响应都不得回传明文**。
+- **对外 JSON 里的切片字段永远不能是 nil**：`append([]string(nil), 空...)` 返回 nil，
+  会序列化成 `null`，前端 `p.models.map` 直接抛 TypeError、整页白屏。
+  一律用 `make([]T, 0, n)` 再 append。前端也做了兜底（`normalizeSettings`），
+  两侧都要防。
 - 提供商数组是**整体替换**语义；单个提供商的密钥空串 = 不改（前端密码框回填的是占位），
   清除必须 `clear_key`。ID 为空或重复要报错。
 - 删除提供商后若 `Selection` 悬空，必须清空 Selection。

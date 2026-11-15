@@ -21,7 +21,7 @@ import type {
   Selection,
   WireEvent,
 } from "../transport/types";
-import type { ProviderForm } from "../lib/providerForm";
+import { normalizeSettings, type ProviderForm } from "../lib/providerForm";
 
 export interface InfoResponse {
   version: string;
@@ -191,7 +191,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         apiFetch<{ sessions: SessionInfo[] }>("/api/sessions").catch(() => ({ sessions: [] })),
         apiFetch<{ history: HistorySession[] }>("/api/history").catch(() => ({ history: [] })),
       ]);
-      const settings = await apiFetch<PublicSettings>("/api/settings").catch(() => null);
+      const settings = normalizeSettings(await apiFetch<PublicSettings>("/api/settings").catch(() => null));
       set({
         info,
         settings,
@@ -212,7 +212,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   loadSettings: async () => {
     try {
-      const s = await apiFetch<PublicSettings>("/api/settings");
+      const s = normalizeSettings(await apiFetch<PublicSettings>("/api/settings"));
       set({ settings: s });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
@@ -226,7 +226,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         method: "PUT",
         body: JSON.stringify(patch),
       });
-      set({ settings: s, settingsSaving: false });
+      set({ settings: normalizeSettings(s), settingsSaving: false });
       return true;
     } catch (e) {
       set({ settingsSaving: false, error: e instanceof Error ? e.message : String(e) });
