@@ -77,3 +77,19 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   }
   return body as T;
 }
+
+/** 内置终端的 WebSocket 地址（浏览器无法给 WS 设置自定义头，鉴权走 query）。 */
+export function terminalWsUrl(cwd: string, cols: number, rows: number, token: string): string {
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const base =
+    `${proto}//${window.location.host}${runtimeBase()}/ws/terminal` +
+    `?cwd=${encodeURIComponent(cwd)}&cols=${Math.max(2, Math.round(cols))}&rows=${Math.max(1, Math.round(rows))}`;
+  return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+}
+
+/** 图片 / PDF 的 inline 预览地址；token 只能放在 query 里。 */
+export function rawFileUrl(cwd: string, path: string): string {
+  const token = getToken();
+  const base = `${apiUrl("/api/fs/raw")}?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`;
+  return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+}

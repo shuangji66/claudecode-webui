@@ -10,8 +10,11 @@ import { TokenGate } from "./components/layout/TokenGate";
 import { WorkspaceDialog } from "./components/layout/WorkspaceDialog";
 import { HistoryDialog } from "./components/layout/HistoryDialog";
 import { BrandMark, IconClose, IconRetry } from "./components/common/Icons";
+import { RightSidebar, type RightTab } from "./components/right/RightSidebar";
 
 const COLLAPSE_KEY = "ccweb-sidebar-collapsed";
+const RIGHT_OPEN_KEY = "ccweb-right-open";
+const RIGHT_TAB_KEY = "ccweb-right-tab";
 
 function readCollapsed(): boolean {
   try {
@@ -19,6 +22,24 @@ function readCollapsed(): boolean {
   } catch {
     return false;
   }
+}
+
+function readRightOpen(): boolean {
+  try {
+    return localStorage.getItem(RIGHT_OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function readRightTab(): RightTab {
+  try {
+    const raw = localStorage.getItem(RIGHT_TAB_KEY);
+    if (raw === "files" || raw === "git" || raw === "terminal") return raw;
+  } catch {
+    /* 隐私模式 */
+  }
+  return "files";
 }
 
 export default function App() {
@@ -44,6 +65,9 @@ function AppShell() {
   const error = useAppStore((s) => s.error);
   const bootstrap = useAppStore((s) => s.bootstrap);
   const clearError = useAppStore((s) => s.clearError);
+  const activeId = useAppStore((s) => s.activeId);
+  const sessions = useAppStore((s) => s.sessions);
+  const currentWorkspace = useAppStore((s) => s.currentWorkspace);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -51,10 +75,21 @@ function AppShell() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [tokenEpoch, setTokenEpoch] = useState(0);
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [rightOpen, setRightOpen] = useState(readRightOpen);
+  const [rightTab, setRightTab] = useState<RightTab>(readRightTab);
 
   useEffect(() => {
     void bootstrap();
   }, [bootstrap, tokenEpoch]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(RIGHT_OPEN_KEY, rightOpen ? "1" : "0");
+      localStorage.setItem(RIGHT_TAB_KEY, rightTab);
+    } catch {
+      /* 隐私模式 */
+    }
+  }, [rightOpen, rightTab]);
 
   const toggleCollapse = () => {
     setCollapsed((v) => {
@@ -114,6 +149,9 @@ function AppShell() {
     setHistoryOpen(true);
   };
 
+  const rightCwd = sessions.find((s) => s.id === activeId)?.cwd ?? currentWorkspace;
+  const toggleRight = () => setRightOpen((v) => !v);
+
   return (
     <div className="flex h-[100dvh] overflow-hidden bg-canvas">
       <div className="hidden md:flex">
@@ -151,8 +189,19 @@ function AppShell() {
           onToggleCollapse={toggleCollapse}
           onOpenSettings={openSettings}
           onAddWorkspace={openWorkspace}
+          rightOpen={rightOpen}
+          onToggleRight={toggleRight}
         />
       </main>
+
+      {rightOpen && (
+        <RightSidebar
+          cwd={rightCwd}
+          activeTab={rightTab}
+          onTab={setRightTab}
+          onClose={() => setRightOpen(false)}
+        />
+      )}
 
       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <WorkspaceDialog open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />

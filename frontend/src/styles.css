@@ -292,3 +292,15 @@ pre {
     scroll-behavior: auto !important;
   }
 }
+
+/* 内置终端：xterm 的容器由 FitAddon 计算行数列数，必须有确定的宽高。
+   留一点内边距，避免文字贴边；滚动条沿用全局细样式。 */
+.ccweb-term .xterm {
+  height: 100%;
+  padding: 6px 8px;
+}
+
+.ccweb-term .xterm-viewport {
+  background: transparent !important;
+  scrollbar-width: thin;
+}

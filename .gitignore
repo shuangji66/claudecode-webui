@@ -19,3 +19,6 @@
 # 运行期
 *.log
 .DS_Store
+
+# 本地浏览器验证产物
+/.playwright-skill/

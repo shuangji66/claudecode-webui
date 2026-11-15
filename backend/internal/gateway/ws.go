@@ -103,32 +103,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
-	key := r.Header.Get("Sec-WebSocket-Key")
-	if key == "" {
-		http.Error(w, "missing Sec-WebSocket-Key", http.StatusBadRequest)
-		return
-	}
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		http.Error(w, "hijack unsupported", http.StatusInternalServerError)
-		return
-	}
-	conn, brw, err := hj.Hijack()
+	conn, reader, err := upgradeWebSocket(w, r)
 	if err != nil {
 		return
 	}
-	handshake := "HTTP/1.1 101 Switching Protocols\r\n" +
-		"Upgrade: websocket\r\n" +
-		"Connection: Upgrade\r\n" +
-		"Sec-WebSocket-Accept: " + wsframe.AcceptKey(key) + "\r\n\r\n"
-	_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if _, err := conn.Write([]byte(handshake)); err != nil {
-		_ = conn.Close()
-		return
-	}
-	_ = conn.SetWriteDeadline(time.Time{})
 
-	c := &wsClient{conn: conn, r: brw.Reader, topic: id}
+	c := &wsClient{conn: conn, r: reader, topic: id}
 	s.d.Hub.Subscribe(id, c)
 	defer func() {
 		s.d.Hub.Unsubscribe(id, c)
@@ -164,6 +144,38 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// upgradeWebSocket 完成 RFC 6455 握手并交出原始连接。
+//
+// 与 /ws 共用：浏览器无法给 WebSocket 设置自定义头，鉴权必须在调用方
+// 借 ?token= 完成后再升级。
+func upgradeWebSocket(w http.ResponseWriter, r *http.Request) (net.Conn, *bufio.Reader, error) {
+	key := r.Header.Get("Sec-WebSocket-Key")
+	if key == "" {
+		http.Error(w, "missing Sec-WebSocket-Key", http.StatusBadRequest)
+		return nil, nil, errors.New("missing Sec-WebSocket-Key")
+	}
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "hijack unsupported", http.StatusInternalServerError)
+		return nil, nil, errors.New("hijack unsupported")
+	}
+	conn, brw, err := hj.Hijack()
+	if err != nil {
+		return nil, nil, err
+	}
+	handshake := "HTTP/1.1 101 Switching Protocols\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Accept: " + wsframe.AcceptKey(key) + "\r\n\r\n"
+	_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	if _, err := conn.Write([]byte(handshake)); err != nil {
+		_ = conn.Close()
+		return nil, nil, err
+	}
+	_ = conn.SetWriteDeadline(time.Time{})
+	return conn, brw.Reader, nil
 }
 
 func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload []byte) {

@@ -18,9 +18,11 @@ interface Props {
   onToggleCollapse: () => void;
   onOpenSettings: () => void;
   onAddWorkspace: () => void;
+  rightOpen: boolean;
+  onToggleRight: () => void;
 }
 
-export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, onAddWorkspace }: Props) {
+export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, onAddWorkspace, rightOpen, onToggleRight }: Props) {
   const t = useT();
   const locale = useLocale();
   const info = useAppStore((s) => s.info);
@@ -156,6 +158,8 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
         onToggleCollapse={onToggleCollapse}
         onOpenSettings={onOpenSettings}
         onCopySession={copySession}
+        rightOpen={rightOpen}
+        onToggleRight={onToggleRight}
       />
 
       {activeId && conn.state !== "open" && conn.state !== "idle" && (

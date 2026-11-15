@@ -46,6 +46,9 @@ type Config struct {
 	PermissionMode string
 	// Model 是新建会话的默认模型（CCWEB_MODEL），空表示用 CLI 默认。
 	Model string
+	// TerminalShell 是右侧栏内置终端使用的 shell（CCWEB_TERMINAL_SHELL）。
+	// 空表示依次尝试 $SHELL / bash / sh。
+	TerminalShell string
 	// Version 由 -ldflags 注入。
 	Version string
 }
@@ -123,6 +126,7 @@ func Load(version string) Config {
 		IdleTimeout:    idle,
 		PermissionMode: EnvOr("PERMISSION_MODE", ""),
 		Model:          EnvOr("MODEL", ""),
+		TerminalShell:  EnvOr("TERMINAL_SHELL", ""),
 		Version:        version,
 	}
 }

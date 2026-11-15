@@ -13,7 +13,9 @@
 - **只监听 unix socket**，由前置网关注入 baseurl 前缀反代（不监听 TCP）；
 - 后端**常驻 claude 子进程**，通过 `--input-format stream-json --output-format stream-json`
   双向 NDJSON 通信；
-- 前端**不做终端模拟**，全部结构化渲染：消息流、thinking、工具卡片、diff、审批面板；
+- 主对话区**不做终端模拟**，全部结构化渲染：消息流、thinking、工具卡片、diff、审批面板；
+- 右侧栏（桌面停靠 / 移动端全屏）有工作区文件树与只读预览、Git 变更面板、以及真正跑在
+  Linux PTY 上的 bash 终端（`xterm.js` 只做渲染）；
 - **授权目录 = 工作区**，持久化在 `workspaces.json`；APP 启动自动在当前工作区拉起 claude；
 - 设置页分「通用 / 模型 / 代理」：主题、语言、字号、默认权限、代理，以及每个模型的推理强度/图片能力；
 - 输入框 `+` 支持文件/图片附件（图片/PDF/文本），随 prompt 发送；
@@ -33,13 +35,20 @@ gateway（unix socket）
 hub ── manager ── session ── process ── claude (NDJSON)
                                          │
                      history ← ~/.claude/projects/**/*.jsonl
+
+右侧栏：gateway ── fsapi（文件树/预览）
+                 ── gitctl（系统 git CLI）
+                 ── terminal（PTY + /ws/terminal）
 ```
 
 分层职责（**不要跨层调用**）：
 
 | 层 | 可以依赖 | 禁止 |
 |---|---|---|
-| `gateway` | manager 接口、history、project、workspace、authz、hub | 直接操作 `exec.Cmd`、直接读 claude 输出 |
+| `gateway` | manager 接口、history、project、workspace、authz、hub、fsapi、gitctl、terminal | 直接操作 `exec.Cmd`、直接读 claude 输出 |
+| `fsapi` | 标准库 | HTTP / 鉴权（由 gateway 负责） |
+| `gitctl` | 标准库、系统 `git` | shell 拼接、HTTP |
+| `terminal` | 标准库、Linux PTY ioctl | HTTP / WS 帧（由 gateway 负责） |
 | `agent/manager` | `agent/session`、`agent/process`、config、settings | 处理 HTTP / WS |
 | `agent/session` | `agent/protocol` | 知道文件系统布局、知道前端协议 |
 | `agent/process` | 标准库 | 启动会话、解析 NDJSON |
@@ -65,6 +74,11 @@ hub ── manager ── session ── process ── claude (NDJSON)
 11. **会话 cwd 必须在授权目录内**。`POST /api/session` / `/api/session/ensure` 都要过
     `workspace.Allows`；`CCWEB_PROJECTS_ROOT` 是默认授权目录，不是任意路径的通行证。
 12. **自动拉起用 `manager.Ensure`**，不要直接 `Create`：后端启动与前端同时触发时必须去重。
+13. **右侧栏的所有路径都必须过授权**。`/api/fs/*`、`/api/git/*`、`/ws/terminal` 都先校验
+    `cwd` 在授权目录内；相对路径解析符号链接后仍要留在工作区内。原始字节预览只放行
+    图片/PDF 白名单，并带 `CSP: sandbox`——不要让工作区的 HTML/SVG 以同源页面执行脚本。
+14. **Git 只调 CLI、不经 shell**。路径参数前加 `--literal-pathspecs`，rev/hash/分支前加
+    `--end-of-options`；提交沿用用户全局身份，禁止设置 `user.name/email`。
 
 ## 4. 踩过的坑（都已在代码里修好，别改回去）
 
@@ -93,7 +107,22 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - `go:embed all:embed` 要求目录存在；`embed/index.html` 是占位文件，构建会覆盖它，
   `make clean` 用 `git checkout` 还原。
 
-### 4.4 前端侧
+### 4.4 右侧栏 / 终端
+
+- **PTY 没有第三方依赖**：Linux 上直接开 `/dev/ptmx` + `TIOCSPTLCK/TIOCGPTN/TIOCSWINSZ`。
+  在 agent 沙箱里跑测试会 `permission denied`（设备访问被拦），这是环境限制，不是代码错；
+  完整权限下 `TestSessionEcho` 会真正跑通。
+- **终端 WS 输出必须走二进制帧**：PTY 的 ANSI 序列与半截 UTF-8 不能塞进 JSON 字符串，
+  否则会被替换字符破坏；上行命令才是 JSON 文本。
+- **服务端先发 `error`/`exit` 再关连接时，前端不能把状态覆盖成 `closed`**：`TerminalConnection`
+  记住最后一次状态，保留真正的失败原因。
+- **切页签不能卸载终端**：`RightSidebar` 三个面板常驻、只切 `hidden`；终端首次激活才创建 PTY。
+  关侧栏才 SIGHUP。改布局时不要把终端放回 `activeTab === "terminal" && ...` 条件里。
+- **Git 状态用 `--porcelain=v2 -z`**，并用 `--untracked-files=all` 列出未跟踪文件
+  （`normal` 只给目录，点开无法 diff）。解析按 NUL 字段走，不能按空格 split，
+  否则带空格的路径会被截断。
+
+### 4.5 前端侧
 
 - `--include-partial-messages` 会**先给逐字增量、再给完整消息**。两套都追加会导致
   每句话显示两遍；`lib/normalize.ts` 的做法是「替换流式气泡」。
@@ -130,6 +159,8 @@ cd frontend && npx tsc --noEmit
 - [ ] 改动 `protocol` 后是否同步了 `session` 与前端 `transport/types.ts`？
 - [ ] 新增工具卡片是否注册进 `ToolCardHost`，且未删除兜底？
 - [ ] 流式路径是否仍满足「替换而非追加」？
+- [ ] 新增右侧栏路由是否过了 `authorizedCwd` / 路径围栏？raw 预览是否仍在白名单？
+- [ ] 终端是否仍然常驻、PTY 输出走二进制帧、关侧栏才结束进程？
 - [ ] 是否补了测试（纯函数优先，组件用 Testing Library）？
 - [ ] `make test` 与 `npx tsc --noEmit` 是否都通过？
 
@@ -139,5 +170,10 @@ cd frontend && npx tsc --noEmit
 （消息分类、工具卡片分级展示、审批面板层级）。两者都是 React 且已归档，
 协议版本也停留在旧格式（`patterns: ["Bash(ls:*)"]`），因此**没有复用其代码**；
 本项目的前端是 React 19 + TS + Tailwind v4 重新实现。
+
+右侧栏的 Git 面板参考了 `omdsh-dev/DSH-better-sidebar`（**MIT**）的交互与命令安全规则，
+`backend/internal/gitctl` 与 `frontend/src/lib/workspace.ts` 是基于其思路的 Go/TS 重写；
+MIT 许可与版权声明见 `THIRD_PARTY_NOTICES.md`。内置终端使用 `@xterm/xterm`（MIT）做渲染，
+PTY 由本项目用 Linux ioctl 自行实现。
 
 `siteboon/claudecodeui` 是 **AGPL-3.0**，只可观察交互，**不得复制其代码或结构**。

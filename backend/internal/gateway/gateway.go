@@ -53,6 +53,7 @@ type Deps struct {
 	Settings      *settings.Store
 	Workspaces    *workspace.Store
 	ClaudeVersion string
+	TerminalShell string
 	StartedAt     time.Time
 }
 
@@ -61,6 +62,8 @@ type Server struct {
 	d   Deps
 	mux *http.ServeMux
 	log *log.Logger
+	// termSlots 限制同时存在的内置终端数量；每个终端是一个真实 shell。
+	termSlots chan struct{}
 }
 
 // New 构造网关。
@@ -68,7 +71,7 @@ func New(d Deps, logger *log.Logger) *Server {
 	if logger == nil {
 		logger = log.New(os.Stdout, "[ccweb] ", log.LstdFlags)
 	}
-	s := &Server{d: d, mux: http.NewServeMux(), log: logger}
+	s := &Server{d: d, mux: http.NewServeMux(), log: logger, termSlots: make(chan struct{}, maxTerminals)}
 	s.routes()
 	return s
 }
@@ -86,6 +89,20 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/workspaces", s.authed(s.handleRemoveWorkspace))
 	s.mux.HandleFunc("POST /api/workspaces/current", s.authed(s.handleSetCurrentWorkspace))
 	s.mux.HandleFunc("GET /api/fs/list", s.authed(s.handleBrowseDirs))
+	s.mux.HandleFunc("GET /api/fs/tree", s.authed(s.handleFsTree))
+	s.mux.HandleFunc("GET /api/fs/file", s.authed(s.handleFsFile))
+	s.mux.HandleFunc("GET /api/fs/raw", s.authed(s.handleFsRaw))
+	s.mux.HandleFunc("GET /api/git/status", s.authed(s.handleGitStatus))
+	s.mux.HandleFunc("GET /api/git/diff", s.authed(s.handleGitDiff))
+	s.mux.HandleFunc("GET /api/git/show", s.authed(s.handleGitShow))
+	s.mux.HandleFunc("GET /api/git/log", s.authed(s.handleGitLog))
+	s.mux.HandleFunc("GET /api/git/branches", s.authed(s.handleGitBranches))
+	s.mux.HandleFunc("POST /api/git/stage", s.authed(s.handleGitStage))
+	s.mux.HandleFunc("POST /api/git/unstage", s.authed(s.handleGitUnstage))
+	s.mux.HandleFunc("POST /api/git/discard", s.authed(s.handleGitDiscard))
+	s.mux.HandleFunc("POST /api/git/commit", s.authed(s.handleGitCommit))
+	s.mux.HandleFunc("POST /api/git/checkout", s.authed(s.handleGitCheckout))
+	s.mux.HandleFunc("POST /api/git/sync", s.authed(s.handleGitSync))
 	s.mux.HandleFunc("GET /api/history", s.authed(s.handleListHistory))
 	s.mux.HandleFunc("GET /api/settings", s.authed(s.handleGetSettings))
 	s.mux.HandleFunc("PUT /api/settings", s.authed(s.handlePutSettings))
@@ -94,6 +111,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/settings/verify", s.authed(s.handleVerifyModel))
 	s.mux.HandleFunc("POST /api/settings/proxy", s.authed(s.handleApplyProxy))
 	s.mux.HandleFunc("GET /ws", s.handleWS)
+	s.mux.HandleFunc("GET /ws/terminal", s.handleTerminalWS)
 	s.mux.HandleFunc("/", s.handleSPA)
 }
 

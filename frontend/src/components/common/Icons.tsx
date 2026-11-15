@@ -315,3 +315,96 @@ export function BrandMark({ size = 24, className }: { size?: number; className?:
     />
   );
 }
+
+/** 打开/收起右侧栏：与左侧 IconPanel 镜像。 */
+export function IconSidebarRight(props: Props) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <path d="M15 4v16" />
+    </Svg>
+  );
+}
+
+export function IconChevronLeft(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="m14.5 5-7 7 7 7" />
+    </Svg>
+  );
+}
+
+export function IconGitBranch(props: Props) {
+  return (
+    <Svg {...props}>
+      <circle cx="6" cy="5" r="2.2" />
+      <circle cx="6" cy="19" r="2.2" />
+      <circle cx="18" cy="7" r="2.2" />
+      <path d="M6 7.2v9.6M18 9.2c0 3.2-3 4.3-6 4.8" />
+    </Svg>
+  );
+}
+
+export function IconGitCommit(props: Props) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="12" r="3.5" />
+      <path d="M3 12h5.5M15.5 12H21" />
+    </Svg>
+  );
+}
+
+/** 取消暂存：与 IconPlus 配对的横线。 */
+export function IconMinus(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M5 12h14" />
+    </Svg>
+  );
+}
+
+export function IconExternal(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M14 4h6v6M20 4l-9 9" />
+      <path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4" />
+    </Svg>
+  );
+}
+
+export function IconFileText(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5M9 13h6M9 17h4" />
+    </Svg>
+  );
+}
+
+export function IconEye(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" />
+      <circle cx="12" cy="12" r="2.6" />
+    </Svg>
+  );
+}
+
+export function IconEyeOff(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M3 3l18 18" />
+      <path d="M10.6 6.2A9.6 9.6 0 0 1 12 6.1c6 0 9.5 5.9 9.5 5.9a17 17 0 0 1-2.7 3.3M6.2 7.7A16.7 16.7 0 0 0 2.5 12S6 18.5 12 18.5c1.2 0 2.3-.2 3.3-.6" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+    </Svg>
+  );
+}
+
+export function IconSync(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M20 8h-6a4 4 0 0 0-4 4v1M4 16h6a4 4 0 0 0 4-4v-1" />
+      <path d="m17 5 3 3-3 3M7 19l-3-3 3-3" />
+    </Svg>
+  );
+}

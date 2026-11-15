@@ -11,6 +11,7 @@ src/
   App.tsx              壳层：加载 / 令牌门 / 侧边栏 / 内容区
   transport/types.ts   与后端、claude 的线上协议类型（唯一真源）
   transport/client.ts  WebSocket 客户端（只管收发，不含业务）
+  transport/terminal.ts 内置终端 WebSocket 客户端（二进制输出 + JSON 控制帧）
   lib/model.ts         渲染模型（Item 联合类型）
   lib/normalize.ts     CLI 原始消息 → Item（纯函数，最重要的可测单元）
   lib/diff.ts          Edit 卡片的 diff 构造
@@ -19,13 +20,17 @@ src/
   lib/theme.ts         主题/字号/语言的 DOM 应用与缓存
   lib/providerForm.ts  提供商/模型元数据表单转换
   lib/attachments.ts   附件类型/大小/读取
+  lib/workspace.ts     文件路径/porcelain 分组/unified diff 解析（纯函数）
   assets/claude-code.svg 左侧栏品牌图标
   store/useAppStore.ts zustand 全局状态（只做状态搬运）
+  store/useSidebarStore.ts 右侧栏数据（文件树/Git/预览，所有 fetch 收敛在这里）
+  components/right/    RightSidebar / FilesPanel / GitPanel / TerminalPanel
   components/          layout / chat / tools / permission / settings / common
 ```
 
-**分层规则**：组件不直接调 `fetch` 或 `WebSocket`；一律经 store；
-协议解析一律进 `lib/`，组件只消费 `Item`。
+**分层规则**：组件不直接调 `fetch` 或 `WebSocket`；一律经 store / transport；
+协议解析一律进 `lib/`，组件只消费 `Item`。右侧栏的 fetch 在 `useSidebarStore`，
+终端 WS 在 `transport/terminal.ts`（终端是唯一需要真实字节流的例外）。
 
 ## 2. 不可破坏的约定
 
@@ -46,6 +51,12 @@ src/
 10. 移动端输入区必须保留 `env(safe-area-inset-bottom)`；设置页底部操作栏同样要留安全区。
 11. 不要加呼吸灯/无限 pulse 动画；状态点用静态圆点，流式光标也不闪烁。
 12. 输入框 `+` 是附件入口（文件/图片），不要再改回插入 `/`；" / " 命令仍由用户键入触发补全。
+13. **右侧栏三个面板必须常驻**，只切 `hidden`；终端只在首次激活后创建 PTY，切页签不能卸载
+    `TerminalPanel`，否则 shell 会被杀。关闭侧栏才允许结束终端。
+14. 文件树/Git 面板的所有请求走 `useSidebarStore`；路径使用后端返回的 POSIX 相对路径，
+    不要自己拼绝对路径。切换工作区由 `RightSidebar` 统一 `setCwd`，子面板不要重复调用。
+15. Git 的 `MM` 文件必须同时出现在暂存与更改两组，各自用本侧行数；不要把两侧相加。
+    `lib/workspace.ts` 的 `groupChanges` 是唯一分组入口。
 
 ## 3. 状态管理（zustand）
 
@@ -107,6 +118,7 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
   未知类型忽略）、`diff`（结构化补丁 / old-new 兜底 / null 降级）、`runtime`（base、wsUrl、token）、
   `providerForm`（模型元数据/补丁/强度回落）、`theme`（system 解析/字号夹取）、`labels`（中英）、
   `attachments`（类型/大小/格式化）、`sessionExport`（Markdown 导出）。
+- 右侧栏纯函数（`workspace`）覆盖 statusOfXY、MM 双分组、unified diff 行号、预览类型。
 - **组件用 Testing Library**，断言用户可见的结果（文本、按钮），不要断言内部 state。
 - 改 `normalize` 时先写一个会失败的用例，再改实现。
 - 不要写依赖 `Date.now()` 精确值的断言。

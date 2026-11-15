@@ -65,6 +65,7 @@ fmt:
 	cd "$(BACKEND)" && gofmt -w .
 
 clean:
-	rm -rf "$(ROOT)/bin"
+	# 只删构建产物 ccweb；bin/ 里还可能有部署时放进来的 claude，不能整目录删。
+	rm -f "$(OUT)"
 	rm -rf "$(EMBED)/assets"
 	git -C "$(ROOT)" checkout -- "$(EMBED)" 2>/dev/null || true

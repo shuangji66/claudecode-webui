@@ -17,6 +17,9 @@ internal/agent/manager    会话池、上限、空闲回收
 internal/history     转录文件读取
 internal/project     工作目录枚举/校验、目录浏览器
 internal/workspace   授权目录 + 当前工作区（workspaces.json）
+internal/fsapi       工作区内文件树/文本预览/原始字节（路径围栏 + 符号链接校验）
+internal/gitctl      Git 面板后端：status/diff/stage/commit/log/branch/sync
+internal/terminal    Linux PTY 会话（/dev/ptmx + ioctl，零依赖）
 internal/authz       token 鉴权
 internal/settings    持久化配置（第三方端点/密钥/模型）+ 端点探测
 internal/webui       go:embed 前端产物
@@ -118,6 +121,22 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 旧配置（顶层 base_url/api_key + 四个别名）在 `Open()` 时自动迁移成一个 provider，
   迁移后清空旧字段。
 
+## 5.2 右侧栏后端（`fsapi` / `gitctl` / `terminal`）
+
+- `fsapi.Root` 同时保存传入路径与 `EvalSymlinks` 后的真实路径；每次解析都要求真实路径
+  仍在根内。不要为了「方便」改成纯词法判断——符号链接可以从工作区跳到 `/etc`。
+- 文本预览只读前 `MaxPreviewBytes`（1 MiB），截断时回退完整 rune；含 NUL 或非 UTF-8
+  标记 `binary`，不把内容塞进 JSON。
+- `gitctl` 每次 spawn 系统 `git`，固定 `-C <root> --no-pager -c color.ui=false
+  -c core.quotePath=false`，环境加 `LC_ALL=C`、`GIT_OPTIONAL_LOCKS=0`、
+  `GIT_TERMINAL_PROMPT=0`。输出上限 8 MiB，超限报错而不是截断解析。
+- 路径前加 `--literal-pathspecs`，rev/hash/分支前加 `--end-of-options`；提交只传
+  `commit -m`，不碰用户身份。
+- `terminal` 在 Linux 上用 `/dev/ptmx` 自建 PTY；非 Linux 返回 `ErrUnsupported`。
+  终端进程与 WS 连接同生命周期，`Close` 先 SIGHUP 整个会话，2 秒后 SIGKILL。
+  PTY 输出必须走 WS 二进制帧，上行命令才用 JSON 文本。
+- 单进程最多 `maxTerminals`（8）个终端，槽位在升级 WS 前占用；超限直接 429。
+
 ## 6. 网关规则（`internal/gateway`）
 
 - 只监听 unix socket；启动时清理残留 socket 文件并 `chmod 0660`。
@@ -126,6 +145,10 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `/api/settings` 三个端点（GET/PUT/POST test）都属于敏感路由，务必保持鉴权。
 - 工作区路由：`GET/POST/DELETE /api/workspaces`、`POST /api/workspaces/current`、
   `GET /api/fs/list`。目录浏览是只读但能枚举宿主目录，必须保持鉴权。
+- 右侧栏路由：`GET /api/fs/tree|file|raw`、`GET /api/git/status|diff|show|log|branches`、
+  `POST /api/git/stage|unstage|discard|commit|checkout|sync`、`GET /ws/terminal`。
+  全部先过 `authorizedCwd`（`project.Validate` + `workspace.Allows`），再做路径围栏；
+  原始字节只放行图片/PDF 并带 `CSP: sandbox`，HTML/SVG 不得同源 inline。
 - `POST /api/settings/proxy` 是敏感路由；先 Apply 设置，再重启全部会话，并返回
   `{settings, sessions, warning}` 供前端直接切换。
 - `POST /api/session` 与 `/api/session/ensure` 必须先 `project.Validate`，再
@@ -148,6 +171,10 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 附件：`protocol.UserMessage` 负责 image/document/text content block；`gateway/ws.go`
   的 `decodeAttachments` 负责类型/大小/UTF-8 校验。WS 单帧上限 16MB，前端总附件 10MB。
 - `workspace` 的种子、增删、嵌套最长匹配、`Allows/ AutoStartPath` 必须有表驱动测试。
+- 右侧栏：`fsapi` 覆盖路径穿越、符号链接逃逸、隐藏文件、截断与二进制；`gitctl` 覆盖
+  porcelain v2 / numstat / log 解析与真实临时仓库；网关覆盖未授权 cwd、raw 类型白名单、
+  WS 升级前鉴权。
+- `terminal` 的 PTY 测试在 agent 沙箱里会因 `/dev/ptmx` 被拦而 skip；完整权限下必须通过。
 - 表驱动 + `t.Helper()`；断言失败信息要带实际值。
 - 新增导出的行为必须带测试；修 bug 先写复现测试。
 

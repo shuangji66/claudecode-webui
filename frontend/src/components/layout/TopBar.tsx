@@ -3,7 +3,7 @@ import type { SessionInfo } from "../../transport/types";
 import type { ConnInfo } from "../../store/useAppStore";
 import { clockTime, permissionLabel } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
-import { IconCheck, IconCopy, IconFolder, IconMore, IconPanel, IconSettings } from "../common/Icons";
+import { IconCheck, IconCopy, IconFolder, IconMore, IconPanel, IconSettings, IconSidebarRight } from "../common/Icons";
 
 export type ChatTab = "chat" | "overview";
 
@@ -19,6 +19,8 @@ interface Props {
   onToggleCollapse: () => void;
   onOpenSettings: () => void;
   onCopySession: () => Promise<boolean>;
+  rightOpen: boolean;
+  onToggleRight: () => void;
 }
 
 
@@ -30,7 +32,7 @@ const CONN_DOT: Record<string, string> = {
   closed: "bg-danger",
 };
 
-export function TopBar({ session, title, conn, busy, tab, mode, onTab, onToggleSidebar, onToggleCollapse, onOpenSettings, onCopySession }: Props) {
+export function TopBar({ session, title, conn, busy, tab, mode, onTab, onToggleSidebar, onToggleCollapse, onOpenSettings, onCopySession, rightOpen, onToggleRight }: Props) {
   const t = useT();
   const locale = useLocale();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -115,6 +117,17 @@ export function TopBar({ session, title, conn, busy, tab, mode, onTab, onToggleS
           {connText}
         </span>
         <span className={`h-1.5 w-1.5 rounded-full sm:hidden ${CONN_DOT[conn.state] ?? "bg-faint"}`} title={connText} />
+
+        <button
+          type="button"
+          onClick={onToggleRight}
+          className={`rounded-lg p-1.5 hover:bg-black/5 ${rightOpen ? "bg-panel-strong text-ink" : "text-muted hover:text-ink"}`}
+          aria-label={rightOpen ? t("收起右侧栏", "Close right sidebar") : t("打开右侧栏", "Open right sidebar")}
+          aria-pressed={rightOpen}
+          title={rightOpen ? t("收起右侧栏", "Close right sidebar") : t("打开右侧栏", "Open right sidebar")}
+        >
+          <IconSidebarRight size={17} />
+        </button>
 
         <div className="relative" ref={menuRef}>
           <button

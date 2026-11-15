@@ -68,6 +68,7 @@ func main() {
 		Workspaces:    wsStore,
 		ProjectsRoot:  cfg.ProjectsRoot,
 		ClaudeVersion: probeClaudeVersion(mgr.Binary()),
+		TerminalShell: cfg.TerminalShell,
 		StartedAt:     time.Now(),
 	}, logger)
 

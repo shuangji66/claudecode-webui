@@ -2,7 +2,8 @@
 
 把本地 `claude` CLI 包成一个**可视化 Web 界面**：单 Go 二进制、内嵌前端、只监听 unix socket，
 由网关注入 baseurl 前缀反代。后端常驻 claude 子进程，通过 `stream-json` 协议双向转发，
-前端不做终端模拟，全部是结构化渲染（消息流 / 工具卡片 / diff / 审批面板）。
+主对话区不做终端模拟，全部是结构化渲染（消息流 / 工具卡片 / diff / 审批面板）。
+右侧栏额外提供工作区文件树、Git 面板与一个真正跑在 PTY 上的 bash 终端。
 
 ## 它解决什么问题
 
@@ -61,6 +62,7 @@ location /app/ccweb/ {
 | `CCWEB_IDLE_TIMEOUT` | `30m` | 空闲会话回收阈值 |
 | `CCWEB_PERMISSION_MODE` | 空 | 新会话默认权限模式 |
 | `CCWEB_MODEL` | 空 | 新会话默认模型 |
+| `CCWEB_TERMINAL_SHELL` | 空 | 右侧栏内置终端使用的 shell；空则依次尝试 `$SHELL` / `bash` / `sh` |
 
 
 ## 工作区与授权目录
@@ -74,6 +76,46 @@ location /app/ccweb/ {
 - 目录被移动/卸载时列表会标记「不可用」，`CCWEB_AUTO_START` 会退到第一个仍存在的目录。
 
 服务端目录浏览接口是 `GET /api/fs/list`（需要鉴权），只读、只列目录。
+
+## 右侧栏：文件 / Git / 终端
+
+对话区右上角的侧栏按钮（桌面和移动端都有）打开右侧栏，分三个页签：
+
+### 文件
+
+- 工作区文件树按目录**懒加载**，默认隐藏点文件，可一键显示；
+- 点文件进入只读预览：文本（带行号，最多渲染 3000 行）、Markdown、图片、PDF；
+- 文本预览上限 1MB，超出会明确提示截断；二进制文件只显示大小与「新窗口打开」；
+- 树只读，不做上传/重命名/删除——写操作交给 Claude 或终端。
+
+### Git
+
+- 变更按 **Merge / Staged / Changes** 分组；同一个文件两侧都有改动（`MM`）会分别出现在两组，
+  行数徽标各算各的，不重复相加；
+- 点文件看 unified diff；行内按钮 stage / unstage / 丢弃工作区改动（丢弃需确认）；
+- 提交框支持 `Ctrl/⌘ + Enter`；只提交已暂存内容，冲突未解决时禁用；
+- 底栏显示当前分支、上游与 ahead/behind，可切换本地分支，也可「同步」= `pull --ff-only` + `push`；
+- 「历史」页签读取最近 30 条提交，点开看该提交的补丁。
+
+**没有**移植 dsh-better-sidebar 的提交图泳道、多 worktree 切换、revert/cherry-pick 和
+AI 生成提交信息——这些要么依赖它的宿主事件日志，要么会把无头面板变成容易误操作的入口。
+
+### 终端
+
+- 真正分配 PTY 的交互式 shell（`xterm.js` 只负责渲染），cwd 就是当前工作区；
+- 切换页签不会杀进程，关闭右侧栏会 SIGHUP 结束 shell（面板底部有提示）；
+- 每个连接一个终端，单进程最多 8 个；WebSocket 输出走二进制帧，ANSI 序列不会被 JSON 转义破坏；
+- **仅 Linux**：PTY 依赖 `/dev/ptmx`，其他平台会显示明确的「不支持」提示；
+- shell 可用 `CCWEB_TERMINAL_SHELL` 指定。
+
+### 安全边界
+
+- 所有 `/api/fs/*`、`/api/git/*` 都要求鉴权；`/ws/terminal` 走 `?token=`；
+- `cwd` 必须落在已授权工作区内，相对路径解析符号链接后仍要留在工作区内；
+- Git 只调系统 `git` CLI，不经 shell，路径前加 `--literal-pathspecs`，rev/hash/分支前加
+  `--end-of-options`；提交沿用用户全局 git 身份，从不设置 `user.name/email`；
+- 图片 / PDF 的原始字节预览有类型白名单并带 `CSP: sandbox`，HTML/SVG 只能当文本看，
+  避免工作区文件以同源页面身份执行脚本读到 token。
 
 ## APP 启动自动拉起 claude
 

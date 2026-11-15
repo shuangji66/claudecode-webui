@@ -220,3 +220,69 @@ export interface FsListing {
   entries: FsEntry[];
   roots: string[];
 }
+
+/** 文件树的一行。path 相对工作区根，使用 POSIX 斜杠。 */
+export interface FsEntry {
+  name: string;
+  path: string;
+  type: "dir" | "file" | "other";
+  size?: number;
+}
+
+export interface FsListing {
+  root: string;
+  path: string;
+  entries: FsEntry[];
+  truncated: boolean;
+}
+
+/** /api/fs/file 的文本预览结果。binary=true 时 content 为空。 */
+export interface FsFile {
+  path: string;
+  size: number;
+  binary: boolean;
+  truncated: boolean;
+  content: string;
+}
+
+/** 一侧的增删行数；binary=true 时 git 报的是 `-`/`-`。 */
+export interface GitLineCounts {
+  additions: number;
+  deletions: number;
+  binary?: boolean;
+}
+
+/** git status 的一条记录；XY 的两位分别是索引侧与工作区侧。 */
+export interface GitStatusEntry {
+  path: string;
+  xy: string;
+  staged?: GitLineCounts;
+  unstaged?: GitLineCounts;
+}
+
+export interface GitStatus {
+  is_repo: boolean;
+  branch?: string;
+  upstream?: string;
+  ahead?: number;
+  behind?: number;
+  detached?: boolean;
+  entries: GitStatusEntry[];
+  truncated?: boolean;
+  root?: string;
+}
+
+export interface GitLogEntry {
+  hash: string;
+  hash_full: string;
+  parents: string[];
+  subject: string;
+  author: string;
+  date: string;
+  refs: string;
+}
+
+export interface GitBranches {
+  current: string;
+  names: string[];
+}
