@@ -29,8 +29,11 @@ type Config struct {
 	ProjectsRoot string
 	// DataDir 存放运行期产生的临时数据（CCWEB_DATA_DIR）。
 	DataDir string
-	// Home 是派给 claude 子进程的 HOME（CCWEB_HOME）。
-	Home string
+	// ClaudeHome 是派给 claude 子进程的 HOME（CCWEB_CLAUDE_HOME）。
+	// 默认落在数据目录下，使 claude 的会话转录、登录态与其它持久化文件集中可备份。
+	ClaudeHome string
+	// SettingsFile 是持久化配置（含第三方端点与密钥）的路径（CCWEB_SETTINGS_FILE）。
+	SettingsFile string
 	// MaxSessions 是最多同时常驻的 claude 子进程数（CCWEB_MAX_SESSIONS）。
 	MaxSessions int
 	// IdleTimeout 是会话空闲多久后被回收（CCWEB_IDLE_TIMEOUT）。
@@ -63,6 +66,8 @@ func Load(version string) Config {
 		home = "/root"
 	}
 	dataDir := EnvOr("DATA_DIR", defaultDataDir())
+	// 兼容旧变量 CCWEB_HOME：显式给了就优先，否则统一落到数据目录下的 claude/。
+	claudeHome := EnvOr("CLAUDE_HOME", EnvOr("HOME", filepath.Join(dataDir, "claude")))
 
 	maxSessions := 8
 	if v := EnvOr("MAX_SESSIONS", ""); v != "" {
@@ -91,7 +96,8 @@ func Load(version string) Config {
 		AuthToken:      EnvOr("AUTH_TOKEN", ""),
 		ProjectsRoot:   EnvOr("PROJECTS_ROOT", home),
 		DataDir:        dataDir,
-		Home:           EnvOr("HOME", home),
+		ClaudeHome:     claudeHome,
+		SettingsFile:   EnvOr("SETTINGS_FILE", filepath.Join(dataDir, "settings.json")),
 		MaxSessions:    maxSessions,
 		IdleTimeout:    idle,
 		PermissionMode: EnvOr("PERMISSION_MODE", ""),

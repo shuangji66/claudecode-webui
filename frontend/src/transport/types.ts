@@ -100,3 +100,28 @@ export type ClientCommand =
       message?: string;
     }
   | { kind: "ping" };
+
+/** 后端 /api/settings 的脱敏视图（密钥永不回传）。 */
+export interface PublicSettings {
+  base_url: string;
+  api_key_set: boolean;
+  api_key_masked: string;
+  auth_token_set: boolean;
+  auth_token_masked: string;
+  model: string;
+  opus_model: string;
+  sonnet_model: string;
+  haiku_model: string;
+  permission_mode: string;
+  path: string;
+}
+
+/** 端点连通性探测结果。 */
+export interface ProbeResult {
+  ok: boolean;
+  endpoint: string;
+  method: string;
+  status: number;
+  latency_ms: number;
+  detail: string;
+}

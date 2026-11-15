@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -31,6 +32,22 @@ func TestLoadDefaults(t *testing.T) {
 	if !filepath.IsAbs(cfg.AdminSock) {
 		t.Fatalf("AdminSock 应为绝对路径: %q", cfg.AdminSock)
 	}
+	assertUnderDataDir(t, cfg)
+}
+
+// 所有持久化文件必须落在数据目录下（用户明确要求统一管理）。
+func assertUnderDataDir(t *testing.T, cfg Config) {
+	t.Helper()
+	for name, p := range map[string]string{
+		"AdminSock":    cfg.AdminSock,
+		"SettingsFile": cfg.SettingsFile,
+		"ClaudeHome":   cfg.ClaudeHome,
+	} {
+		rel, err := filepath.Rel(cfg.DataDir, p)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			t.Fatalf("%s = %q 不在数据目录 %q 下", name, p, cfg.DataDir)
+		}
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -42,6 +59,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(EnvPrefix+"CLAUDE_BIN", "/opt/claude")
 	t.Setenv(EnvPrefix+"PERMISSION_MODE", "acceptEdits")
 	t.Setenv(EnvPrefix+"MODEL", "sonnet")
+	t.Setenv(EnvPrefix+"DATA_DIR", "/var/lib/ccweb")
 
 	cfg := Load("v2")
 	if cfg.AdminSock != "/run/ccweb/app.sock" {
@@ -59,6 +77,13 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.ClaudeBin != "/opt/claude" || cfg.PermissionMode != "acceptEdits" || cfg.Model != "sonnet" {
 		t.Fatalf("cfg = %+v", cfg)
+	}
+	// 未显式指定时，claude 的家目录与配置文件都跟着数据目录走
+	if cfg.ClaudeHome != "/var/lib/ccweb/claude" {
+		t.Fatalf("ClaudeHome = %q", cfg.ClaudeHome)
+	}
+	if cfg.SettingsFile != "/var/lib/ccweb/settings.json" {
+		t.Fatalf("SettingsFile = %q", cfg.SettingsFile)
 	}
 }
 

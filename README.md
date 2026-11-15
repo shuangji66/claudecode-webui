@@ -51,13 +51,50 @@ location /app/ccweb/ {
 | `CCWEB_BASEURL` | 空（根路径） | 网关路径前缀，自动归一成 `/x/y` |
 | `CCWEB_CLAUDE_BIN` | 空 | 显式指定 claude；为空则依次查 PATH、程序同目录 |
 | `CCWEB_AUTH_TOKEN` | 空 | 非空即启用 Bearer 鉴权（WS 走 `?token=`） |
+| `CCWEB_DATA_DIR` | `$TMPDIR/ccweb` | **数据目录**：socket、设置、claude 家目录都在这下面 |
+| `CCWEB_SETTINGS_FILE` | `$DATA_DIR/settings.json` | 持久化配置（含第三方端点与密钥），权限 0600 |
+| `CCWEB_CLAUDE_HOME` | `$DATA_DIR/claude` | 派给 claude 子进程的 HOME（登录态与转录落在这里） |
 | `CCWEB_PROJECTS_ROOT` | `$HOME` | 「新建会话」可选目录的根 |
-| `CCWEB_HOME` | `$HOME` | 派给 claude 子进程的 HOME |
 | `CCWEB_MAX_SESSIONS` | `8` | 常驻会话上限（单会话约 176 MB 内存） |
 | `CCWEB_IDLE_TIMEOUT` | `30m` | 空闲会话回收阈值 |
 | `CCWEB_PERMISSION_MODE` | 空 | 新会话默认权限模式 |
 | `CCWEB_MODEL` | 空 | 新会话默认模型 |
-| `CCWEB_DATA_DIR` | `$TMPDIR/ccweb` | socket 等运行期数据 |
+
+
+## 第三方模型 / 中继接入
+
+设置页（右上角 ⚙）里可以直接填 **API 地址 + 密钥**，无需环境变量。保存后写进
+`$CCWEB_DATA_DIR/settings.json`（0600），并以 `ANTHROPIC_*` 环境变量注入**新建**的 claude 进程：
+
+| 设置项 | 注入的环境变量 |
+|---|---|
+| API 地址 | `ANTHROPIC_BASE_URL` |
+| API 密钥 | `ANTHROPIC_API_KEY`（`x-api-key` 头） |
+| Bearer 令牌 | `ANTHROPIC_AUTH_TOKEN`（`Authorization: Bearer`） |
+| 默认模型 | `ANTHROPIC_MODEL` |
+| Opus / Sonnet / Haiku 别名 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` |
+| 默认权限模式 | `--permission-mode` 启动参数 |
+
+要点：
+
+- 设置优先于宿主环境变量（追加在后面，后者生效），因此可以在同一台机器上给本应用单独配置中转。
+- **只对新建会话生效**；已在跑的进程环境变量改不了，需要关掉重开。
+- 密钥经接口返回时一律脱敏；输入框留空表示「不修改」，清除要点「清除」再保存。
+- 「测试连接」先 `GET /v1/models`（不计费），不支持时退回一次 `POST /v1/messages`（max_tokens=1）。
+
+## 数据目录
+
+`CCWEB_DATA_DIR` 下统一生成：
+
+```
+$CCWEB_DATA_DIR/
+  ccweb.sock          # 唯一监听入口
+  settings.json       # 设置（0600）
+  claude/             # claude 的 HOME：登录态、~/.claude/projects 转录
+```
+
+会话列表/历史就是读 `$CCWEB_CLAUDE_HOME/.claude/projects/**/*.jsonl`。
+把 `CCWEB_CLAUDE_HOME` 指回 `$HOME` 可复用操作者已有的登录态（但数据就不再集中）。
 
 ## 安全提醒
 

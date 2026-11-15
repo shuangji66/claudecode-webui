@@ -10,7 +10,8 @@ import { apiFetch } from "../lib/runtime";
 import { appendError, appendUser, applyCLI } from "../lib/normalize";
 import type { Item } from "../lib/model";
 import { ClaudeClient } from "../transport/client";
-import type { InitPayload, PermissionPayload, WireEvent } from "../transport/types";
+import type { InitPayload, PermissionPayload, ProbeResult, PublicSettings, WireEvent } from "../transport/types";
+import type { SettingsPatch } from "../lib/settingsForm";
 
 export interface InfoResponse {
   version: string;
@@ -19,6 +20,9 @@ export interface InfoResponse {
   claude_bin: string;
   claude_version: string;
   projects_root: string;
+  data_dir: string;
+  claude_home: string;
+  settings_file: string;
   auth_required: boolean;
   frontend: boolean;
   max_sessions: number;
@@ -52,6 +56,9 @@ type ConnState = "idle" | "open" | "closed";
 
 interface AppState {
   info: InfoResponse | null;
+  settings: PublicSettings | null;
+  settingsSaving: boolean;
+  probe: ProbeResult | null;
   projects: ProjectEntry[];
   history: HistorySession[];
   sessions: SessionInfo[];
@@ -67,6 +74,9 @@ interface AppState {
   error: string | null;
 
   bootstrap: () => Promise<void>;
+  loadSettings: () => Promise<void>;
+  saveSettings: (patch: SettingsPatch) => Promise<boolean>;
+  testConnection: () => Promise<void>;
   refreshSessions: () => Promise<void>;
   refreshHistory: () => Promise<void>;
   createSession: (cwd: string, model?: string) => Promise<void>;
@@ -103,6 +113,9 @@ function token(): string {
 
 export const useAppStore = create<AppState>()((set, get) => ({
   info: null,
+  settings: null,
+  settingsSaving: false,
+  probe: null,
   projects: [],
   history: [],
   sessions: [],
@@ -126,8 +139,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
         apiFetch<{ sessions: SessionInfo[] }>("/api/sessions").catch(() => ({ sessions: [] })),
         apiFetch<{ history: HistorySession[] }>("/api/history").catch(() => ({ history: [] })),
       ]);
+      const settings = await apiFetch<PublicSettings>("/api/settings").catch(() => null);
       set({
         info,
+        settings,
         projects: projects.projects,
         sessions: sessions.sessions,
         history: history.history,
@@ -141,6 +156,40 @@ export const useAppStore = create<AppState>()((set, get) => ({
       }
     } catch (e) {
       set({ loading: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  },
+
+  loadSettings: async () => {
+    try {
+      const s = await apiFetch<PublicSettings>("/api/settings");
+      set({ settings: s });
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : String(e) });
+    }
+  },
+
+  saveSettings: async (patch) => {
+    set({ settingsSaving: true, error: null });
+    try {
+      const s = await apiFetch<PublicSettings>("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      });
+      set({ settings: s, settingsSaving: false });
+      return true;
+    } catch (e) {
+      set({ settingsSaving: false, error: e instanceof Error ? e.message : String(e) });
+      return false;
+    }
+  },
+
+  testConnection: async () => {
+    set({ probe: null, error: null });
+    try {
+      const r = await apiFetch<ProbeResult>("/api/settings/test", { method: "POST" });
+      set({ probe: r });
+    } catch (e) {
+      set({ error: e instanceof Error ? e.message : String(e) });
     }
   },
 

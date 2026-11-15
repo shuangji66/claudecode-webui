@@ -20,6 +20,7 @@ import (
 	"ccweb/backend/internal/authz"
 	"ccweb/backend/internal/config"
 	"ccweb/backend/internal/hub"
+	"ccweb/backend/internal/settings"
 )
 
 // WireEvent 是推给前端的事件信封。
@@ -47,6 +48,7 @@ type Deps struct {
 	Manager       SessionManager
 	HistoryDir    string
 	ProjectsRoot  string
+	Settings      *settings.Store
 	ClaudeVersion string
 	StartedAt     time.Time
 }
@@ -76,6 +78,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/session", s.authed(s.handleCloseSession))
 	s.mux.HandleFunc("GET /api/projects", s.authed(s.handleListProjects))
 	s.mux.HandleFunc("GET /api/history", s.authed(s.handleListHistory))
+	s.mux.HandleFunc("GET /api/settings", s.authed(s.handleGetSettings))
+	s.mux.HandleFunc("PUT /api/settings", s.authed(s.handlePutSettings))
+	s.mux.HandleFunc("POST /api/settings/test", s.authed(s.handleTestSettings))
 	s.mux.HandleFunc("GET /ws", s.handleWS)
 	s.mux.HandleFunc("/", s.handleSPA)
 }

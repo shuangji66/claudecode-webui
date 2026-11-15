@@ -17,6 +17,7 @@ import (
 	"ccweb/backend/internal/agent/process"
 	"ccweb/backend/internal/agent/session"
 	"ccweb/backend/internal/config"
+	"ccweb/backend/internal/settings"
 )
 
 // ErrTooMany 表示常驻会话已达上限。
@@ -33,9 +34,10 @@ type Info struct {
 
 // Manager 持有全部常驻会话。
 type Manager struct {
-	cfg  config.Config
-	bin  string
-	emit func(sessionID string, ev session.Event)
+	cfg   config.Config
+	bin   string
+	store *settings.Store
+	emit  func(sessionID string, ev session.Event)
 
 	mu       sync.Mutex
 	sessions map[string]*session.Session
@@ -44,8 +46,9 @@ type Manager struct {
 	closing chan struct{}
 }
 
-// New 构造 Manager。exePath 用于在程序同目录里发现 claude。
-func New(cfg config.Config, exePath string, emit func(string, session.Event)) (*Manager, error) {
+// New 构造 Manager。exePath 用于在程序同目录里发现 claude；
+// store 提供第三方端点/密钥/默认模型等运行期配置。
+func New(cfg config.Config, exePath string, store *settings.Store, emit func(string, session.Event)) (*Manager, error) {
 	bin, err := process.Discover(cfg.ClaudeBin, exePath)
 	if err != nil {
 		return nil, err
@@ -53,6 +56,7 @@ func New(cfg config.Config, exePath string, emit func(string, session.Event)) (*
 	m := &Manager{
 		cfg:      cfg,
 		bin:      bin,
+		store:    store,
 		emit:     emit,
 		sessions: make(map[string]*session.Session),
 		procs:    make(map[string]*process.Proc),
@@ -91,8 +95,16 @@ func (m *Manager) Create(cwd, model, permissionMode string) (Info, error) {
 	}
 	m.mu.Unlock()
 
+	// 运行期设置优先于启动期环境变量：设置页改完之后新会话立刻用新值。
+	cfgSet := m.store.Get()
+	if model == "" {
+		model = cfgSet.Model
+	}
 	if model == "" {
 		model = m.cfg.Model
+	}
+	if permissionMode == "" {
+		permissionMode = cfgSet.PermissionMode
 	}
 	if permissionMode == "" {
 		permissionMode = m.cfg.PermissionMode
@@ -102,7 +114,9 @@ func (m *Manager) Create(cwd, model, permissionMode string) (Info, error) {
 		PermissionMode:         permissionMode,
 		IncludePartialMessages: true,
 	})
-	env := process.CleanEnv(os.Environ(), m.cfg.Home, abs)
+	// 先净化继承环境，再追加设置里的 ANTHROPIC_*（后者生效，从而覆盖宿主机同名变量）。
+	env := process.CleanEnv(os.Environ(), m.cfg.ClaudeHome, abs)
+	env = append(env, m.store.Env()...)
 
 	proc, err := process.Spawn(m.bin, args, abs, env)
 	if err != nil {

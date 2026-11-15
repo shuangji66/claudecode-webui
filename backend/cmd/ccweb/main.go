@@ -20,6 +20,7 @@ import (
 	"ccweb/backend/internal/config"
 	"ccweb/backend/internal/gateway"
 	"ccweb/backend/internal/hub"
+	"ccweb/backend/internal/settings"
 )
 
 // version 由 -ldflags "-X main.version=..." 注入。
@@ -33,7 +34,14 @@ func main() {
 
 	h := hub.New()
 
-	mgr, err := manager.New(cfg, exePath, func(sid string, ev session.Event) {
+	// 持久化配置：第三方端点 / 密钥 / 默认模型。文件落在 CCWEB_DATA_DIR 下。
+	store, err := settings.Open(cfg.SettingsFile)
+	if err != nil {
+		logger.Printf("启动失败: %v", err)
+		os.Exit(1)
+	}
+
+	mgr, err := manager.New(cfg, exePath, store, func(sid string, ev session.Event) {
 		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data})
 	})
 	if err != nil {
@@ -42,13 +50,13 @@ func main() {
 	}
 	defer mgr.CloseAll()
 
-	home := cfg.Home
 	srv := gateway.New(gateway.Deps{
 		Cfg:           cfg,
 		Guard:         authz.New(cfg.AuthToken),
 		Hub:           h,
 		Manager:       mgr,
-		HistoryDir:    filepath.Join(home, ".claude", "projects"),
+		HistoryDir:    filepath.Join(cfg.ClaudeHome, ".claude", "projects"),
+		Settings:      store,
 		ProjectsRoot:  cfg.ProjectsRoot,
 		ClaudeVersion: probeClaudeVersion(mgr.Binary()),
 		StartedAt:     time.Now(),

@@ -17,6 +17,7 @@ internal/agent/manager    会话池、上限、空闲回收
 internal/history     转录文件读取
 internal/project     工作目录枚举/校验
 internal/authz       token 鉴权
+internal/settings    持久化配置（第三方端点/密钥/模型）+ 端点探测
 internal/webui       go:embed 前端产物
 ```
 
@@ -69,11 +70,22 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - `Spawn()` 必须持续排空 stderr（否则管道写满会卡住子进程），只保留尾部用于报错。
 - `Close()` 幂等：关 stdin → Kill → Wait。
 
+## 5.1 设置与密钥（`internal/settings`）
+
+- **所有持久化文件落在 `CCWEB_DATA_DIR` 下**，路径由 `config.SettingsFile` 决定。
+- 写盘必须 `tmp + rename` 原子替换，权限 **0600**（文件里有密钥）。
+- `Public()` 是唯一对外视图：密钥只给 `*_set` 与脱敏串，**任何响应都不得回传明文**。
+- `Patch` 用指针区分「不改」与「清空」；**密钥空串 = 不改**（前端密码框回填的是占位），
+  清除必须 `clear_api_key` / `clear_auth_token`。
+- 注入子进程的环境变量追加在 `CleanEnv` 之后，保证覆盖宿主同名变量。
+- 改完设置只影响**新建**会话；运行中的进程环境不可变。
+
 ## 6. 网关规则（`internal/gateway`）
 
 - 只监听 unix socket；启动时清理残留 socket 文件并 `chmod 0660`。
 - `withBaseURL` 剥离前缀，**前缀外的请求 404**（不要放行裸路径）。
 - 新路由必须 `s.authed(...)`；WS 在 handler 内自行校验 token。
+  `/api/settings` 三个端点（GET/PUT/POST test）都属于敏感路由，务必保持鉴权。
 - SPA：`index.html` 注入 `<base href>`，`no-cache`；`assets/**` 用 `immutable` 强缓存。
 - WS 写帧必须设 `WriteDeadline`；hub 广播失败会自动退订。
 

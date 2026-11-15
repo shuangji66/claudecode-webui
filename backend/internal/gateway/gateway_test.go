@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"ccweb/backend/internal/authz"
 	"ccweb/backend/internal/config"
 	"ccweb/backend/internal/hub"
+	"ccweb/backend/internal/settings"
 )
 
 type fakeMgr struct {
@@ -59,6 +61,10 @@ var errFake = fakeErr{}
 func newTestServer(t *testing.T, token string) (*Server, *fakeMgr) {
 	t.Helper()
 	mgr := &fakeMgr{}
+	store, err := settings.Open(filepath.Join(t.TempDir(), "settings.json"))
+	if err != nil {
+		t.Fatalf("settings.Open: %v", err)
+	}
 	deps := Deps{
 		Cfg: config.Config{
 			BaseURL:     "",
@@ -71,6 +77,7 @@ func newTestServer(t *testing.T, token string) (*Server, *fakeMgr) {
 		Manager:       mgr,
 		HistoryDir:    t.TempDir(),
 		ProjectsRoot:  t.TempDir(),
+		Settings:      store,
 		ClaudeVersion: "2.1.325",
 		StartedAt:     time.Now(),
 	}
@@ -248,5 +255,99 @@ func TestUnknownRoute(t *testing.T) {
 	}
 	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
 		t.Fatalf("Content-Type = %q", ct)
+	}
+}
+
+func TestGetSettingsMasksSecret(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	body := `{"base_url":"https://relay.example.com","api_key":"sk-ant-supersecret-value"}`
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "supersecret") {
+		t.Fatalf("PUT 响应泄露密钥: %s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET code = %d", rec.Code)
+	}
+	var pub map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &pub)
+	if pub["api_key_set"] != true {
+		t.Fatalf("api_key_set 应为 true: %v", pub)
+	}
+	if pub["base_url"] != "https://relay.example.com" {
+		t.Fatalf("base_url = %v", pub["base_url"])
+	}
+	if strings.Contains(rec.Body.String(), "supersecret") {
+		t.Fatalf("GET 响应泄露密钥: %s", rec.Body.String())
+	}
+}
+
+func TestPutSettingsKeepsSecretWhenEmpty(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	put := func(body string) {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PUT code = %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+	put(`{"api_key":"sk-keep-me"}`)
+	put(`{"api_key":"","model":"claude-opus-5-5"}`)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	var pub map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &pub)
+	if pub["api_key_set"] != true {
+		t.Fatal("空串不应清空已保存的密钥")
+	}
+	if pub["model"] != "claude-opus-5-5" {
+		t.Fatalf("model 未更新: %v", pub["model"])
+	}
+}
+
+func TestPutSettingsClearExplicit(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	for _, body := range []string{`{"api_key":"sk-x"}`, `{"clear_api_key":true}`} {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PUT code = %d", rec.Code)
+		}
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	var pub map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &pub)
+	if pub["api_key_set"] != false {
+		t.Fatal("显式清除后 api_key_set 应为 false")
+	}
+}
+
+func TestSettingsRequireAuth(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("code = %d, want 401", rec.Code)
+	}
+}
+
+func TestInfoExposesDataDir(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/info", nil))
+	var info map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &info)
+	for _, k := range []string{"data_dir", "claude_home", "settings_file"} {
+		if _, ok := info[k]; !ok {
+			t.Fatalf("/api/info 缺少 %s", k)
+		}
 	}
 }
