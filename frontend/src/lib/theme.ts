@@ -45,7 +45,6 @@ export function applyPreferences(settings: PublicSettings | null): void {
   root.dataset.theme = resolvedTheme(preference, prefersDark);
   root.dataset.themePreference = preference;
   root.lang = locale;
-  document.title = locale === "en" ? "Claude Code Console" : "Claude Code 控制台";
   root.style.setProperty("--chat-font-size", `${font}px`);
   root.style.setProperty("--code-font-size", `${Math.max(10, font - 2.5)}px`);
 

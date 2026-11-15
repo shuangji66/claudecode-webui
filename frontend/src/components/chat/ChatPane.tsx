@@ -8,6 +8,8 @@ import { PermissionPanel } from "../permission/PermissionPanel";
 import type { PermissionPayload } from "../../transport/types";
 import { sessionTitle } from "../../lib/labels";
 import { effortFor, findOption, modelOptionsFromSettings } from "../../lib/providerForm";
+import { sessionToMarkdown } from "../../lib/sessionExport";
+import { copyText } from "../../lib/clipboard";
 import { useLocale, useT } from "../../lib/i18n";
 import { IconAlert, IconFolderPlus, IconRetry, IconSpark } from "../common/Icons";
 
@@ -59,6 +61,10 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
   useEffect(() => {
     if (!activeId) setTab("chat");
   }, [activeId]);
+
+  useEffect(() => {
+    document.title = session ? title : "Claude Code";
+  }, [session, title]);
 
   const pending = useMemo(
     () => (activeId ? (perms[activeId] ?? []).filter((p) => !dismissed.has(p.request_id)) : []),
@@ -120,6 +126,17 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
     </>
   );
 
+  const copySession = async (): Promise<boolean> => {
+    if (!session) return false;
+    const markdown = sessionToMarkdown({
+      title,
+      cwd: session.cwd,
+      items: itemList,
+      locale,
+    });
+    return copyText(markdown);
+  };
+
   const newChat = () => {
     if (currentWorkspace) void createSession(currentWorkspace);
     else onAddWorkspace();
@@ -138,6 +155,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
         onToggleSidebar={onToggleSidebar}
         onToggleCollapse={onToggleCollapse}
         onOpenSettings={onOpenSettings}
+        onCopySession={copySession}
       />
 
       {activeId && conn.state !== "open" && conn.state !== "idle" && (

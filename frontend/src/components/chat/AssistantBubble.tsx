@@ -2,17 +2,15 @@ import { useState } from "react";
 import { Markdown } from "../common/Markdown";
 import { IconCopy } from "../common/Icons";
 import { useT } from "../../lib/i18n";
+import { copyText } from "../../lib/clipboard";
 
 export function AssistantBubble({ text, streaming }: { text: string; streaming: boolean; ts?: number }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
+    if (await copyText(text)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
-    } catch {
-      /* 忽略 */
     }
   };
   return (

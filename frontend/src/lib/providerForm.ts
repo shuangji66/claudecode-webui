@@ -20,6 +20,9 @@ export const PROTOCOLS = [
 export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 export interface ProviderForm {
+  /** 仅前端使用的稳定 key：新建时 id 还是空，不能拿 id 当 React key。 */
+  uid: string;
+  /** 提供商 ID；新建时必须由用户手动输入。 */
   id: string;
   name: string;
   protocol: string;
@@ -63,8 +66,9 @@ function fromPublic(p: PublicProvider): ProviderForm {
   const meta: Record<string, ModelSpec> = {};
   for (const id of p.models ?? []) meta[id] = specOf(p.model_meta?.[id]);
   return {
+    uid: p.id,
     id: p.id,
-    name: p.name || p.id,
+    name: p.name || "",
     protocol: p.protocol || "anthropic-messages",
     baseUrl: p.base_url ?? "",
     apiKey: "",
@@ -108,16 +112,18 @@ export function formsFromSettings(s: PublicSettings | null): ProviderForm[] {
 
 /** 新建一个尚未保存的提供商。 */
 export function blankProvider(existing: ProviderForm[]): ProviderForm {
-  let n = existing.length + 1;
-  let id = `provider-${n}`;
-  const taken = new Set(existing.map((p) => p.id));
-  while (taken.has(id)) {
+  const base = `draft-${existing.length + 1}`;
+  let uid = base;
+  let n = 1;
+  const taken = new Set(existing.map((p) => p.uid));
+  while (taken.has(uid)) {
     n += 1;
-    id = `provider-${n}`;
+    uid = `${base}-${n}`;
   }
   return {
-    id,
-    name: id,
+    uid,
+    id: "",
+    name: "",
     protocol: "anthropic-messages",
     baseUrl: "",
     apiKey: "",

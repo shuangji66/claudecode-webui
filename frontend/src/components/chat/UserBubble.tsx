@@ -2,18 +2,16 @@ import { useState } from "react";
 import { clockTime } from "../../lib/labels";
 import { IconCopy } from "../common/Icons";
 import { useLocale, useT } from "../../lib/i18n";
+import { copyText } from "../../lib/clipboard";
 
 export function UserBubble({ text, ts }: { text: string; ts?: number }) {
   const t = useT();
   const locale = useLocale();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
+    if (await copyText(text)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
-    } catch {
-      /* 剪贴板不可用时静默失败 */
     }
   };
   return (

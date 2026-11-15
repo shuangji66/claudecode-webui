@@ -8,7 +8,6 @@ import {
   normalizeSettings,
   modelOptionsFromSettings,
   effortFor,
-  type ProviderForm,
 } from "./providerForm";
 import type { PublicSettings } from "../transport/types";
 
@@ -48,10 +47,17 @@ describe("formsFromSettings", () => {
 });
 
 describe("blankProvider", () => {
-  it("生成不冲突的 id", () => {
-    const existing = [blankProvider([]), blankProvider([{ id: "provider-1" } as ProviderForm])];
-    const ids = new Set(existing.map((p) => p.id));
-    expect(ids.size).toBe(2);
+  it("生成不冲突的前端 key，ID 留空等待手动输入", () => {
+    const first = blankProvider([]);
+    const second = blankProvider([first]);
+    expect(first.id).toBe("");
+    expect(second.id).toBe("");
+    expect(new Set([first.uid, second.uid]).size).toBe(2);
+  });
+
+  it("显示名留空时跟随 ID", () => {
+    const f = { ...blankProvider([]), id: "my-relay", name: "" };
+    expect(buildProviderPatches([f])[0].name).toBe("my-relay");
   });
 });
 

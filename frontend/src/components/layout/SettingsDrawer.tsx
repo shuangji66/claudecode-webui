@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import { getToken, setToken } from "../../lib/runtime";
 import { useT } from "../../lib/i18n";
@@ -14,6 +14,7 @@ import {
 import type { ModelSpec } from "../../transport/types";
 import {
   IconCheck,
+  IconChevronDown,
   IconClose,
   IconGauge,
   IconGlobe,
@@ -295,6 +296,8 @@ function ModelsSettings() {
   const [forms, setForms] = useState<ProviderForm[]>(() => formsFromSettings(settings));
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const initialized = useRef(false);
 
   useEffect(() => {
     // 通用设置（主题/语言/字号）也会更新 settings；此时不能把用户尚未保存的
@@ -303,17 +306,39 @@ function ModelsSettings() {
     setForms(formsFromSettings(settings));
   }, [settings, dirty]);
 
-  const update = (id: string, patch: Partial<ProviderForm>) => {
-    setForms((list) => list.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  useEffect(() => {
+    if (initialized.current || forms.length === 0) return;
+    initialized.current = true;
+    // DSH 的模型页：只有一个提供商时默认展开；多个时默认全部折叠。
+    setExpanded(forms.length === 1 ? new Set([forms[0].uid]) : new Set());
+  }, [forms]);
+
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const update = (uid: string, patch: Partial<ProviderForm>) => {
+    setForms((list) => list.map((p) => (p.uid === uid ? { ...p, ...patch } : p)));
     setDirty(true);
     setSavedAt(null);
+    setSaveError(null);
   };
 
   const onSave = async () => {
+    const ids = forms.map((f) => f.id.trim());
+    if (ids.some((id) => !id)) {
+      setSaveError(t("提供商 ID 不能为空；显示名留空时会自动跟随 ID。", "Provider ID is required; a blank display name follows the ID."));
+      return;
+    }
+    if (new Set(ids).size !== ids.length) {
+      setSaveError(t("提供商 ID 不能重复。", "Provider IDs must be unique."));
+      return;
+    }
+    setSaveError(null);
     const ok = await saveSettings({ providers: buildProviderPatches(forms) });
     if (ok) {
       setDirty(false);
       setSavedAt(Date.now());
+      // 保存后 forms 会按服务端 ID 重建 uid；单提供商保持展开。
+      if (forms.length === 1 && forms[0].id.trim()) setExpanded(new Set([forms[0].id.trim()]));
     }
   };
 
@@ -338,12 +363,24 @@ function ModelsSettings() {
       <div className="space-y-3">
         {forms.map((p) => (
           <ProviderCard
-            key={p.id}
+            key={p.uid}
             provider={p}
-            onChange={(patch) => update(p.id, patch)}
+            expanded={expanded.has(p.uid)}
+            onToggle={() =>
+              setExpanded((prev) => {
+                const next = new Set(prev);
+                if (next.has(p.uid)) next.delete(p.uid);
+                else next.add(p.uid);
+                return next;
+              })
+            }
+            onChange={(patch) => update(p.uid, patch)}
             onRemove={() => {
-              if (!window.confirm(t(`删除提供商「${p.name}」？`, `Delete provider "${p.name}"?`))) return;
-              setForms((list) => list.filter((x) => x.id !== p.id));
+              if (!window.confirm(t(`删除提供商「${p.name || p.id}」？`, `Delete provider "${p.name || p.id}"?`))) return;
+              const next = forms.filter((x) => x.uid !== p.uid);
+              setForms(next);
+              if (next.length === 1) setExpanded(new Set([next[0].uid]));
+              else if (next.length === 0) setExpanded(new Set());
               setDirty(true);
               setSavedAt(null);
             }}
@@ -354,9 +391,12 @@ function ModelsSettings() {
       <button
         type="button"
         onClick={() => {
-          setForms((list) => [...list, blankProvider(list)]);
+          const draft = blankProvider(forms);
+          setForms((list) => [...list, draft]);
+          setExpanded(new Set([draft.uid]));
           setDirty(true);
           setSavedAt(null);
+          setSaveError(null);
         }}
         className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-line-strong py-2.5 text-[12px] font-medium text-muted hover:bg-panel-strong hover:text-ink"
       >
@@ -368,6 +408,7 @@ function ModelsSettings() {
 
       <div className="shrink-0 border-t border-line bg-canvas pb-[calc(env(safe-area-inset-bottom,0px)+8px)] pt-3">
         <div className="mx-auto flex max-w-2xl items-center gap-3">
+          {saveError && <span className="text-[10.5px] text-danger">{saveError}</span>}
           <span className="text-[10.5px] text-faint">
             {saving ? t("保存中…", "Saving…") : savedAt ? t("已保存", "Saved") : dirty ? t("有未保存的修改", "Unsaved changes") : t("模型配置会写入设置文件", "Model config is stored in the settings file")}
           </span>
@@ -491,7 +532,19 @@ function ProxySettings() {
   );
 }
 
-function ProviderCard({ provider, onChange, onRemove }: { provider: ProviderForm; onChange: (patch: Partial<ProviderForm>) => void; onRemove: () => void }) {
+function ProviderCard({
+  provider,
+  expanded,
+  onToggle,
+  onChange,
+  onRemove,
+}: {
+  provider: ProviderForm;
+  expanded: boolean;
+  onToggle: () => void;
+  onChange: (patch: Partial<ProviderForm>) => void;
+  onRemove: () => void;
+}) {
   const t = useT();
   const fetchModelsFor = useAppStore((s) => s.fetchModelsFor);
   const probeProvider = useAppStore((s) => s.probeProvider);
@@ -538,21 +591,38 @@ function ProviderCard({ provider, onChange, onRemove }: { provider: ProviderForm
   return (
     <div className="overflow-hidden rounded-xl border border-line bg-canvas">
       <div className="flex items-center gap-2 border-b border-line bg-panel/50 px-3 py-2.5">
+        {provider.isNew ? (
+          <input
+            value={provider.id}
+            onChange={(e) => onChange({ id: e.target.value })}
+            placeholder={t("提供商 ID", "Provider ID")}
+            aria-label={t("提供商 ID", "Provider ID")}
+            className="w-28 shrink-0 rounded-md border border-line-strong bg-canvas px-1.5 py-0.5 font-mono text-[10.5px] text-ink outline-none focus:border-brand/60"
+          />
+        ) : (
+          <span className="max-w-[8rem] shrink-0 truncate rounded bg-panel-strong px-1.5 py-0.5 font-mono text-[10px] text-muted" title={provider.id}>
+            {provider.id}
+          </span>
+        )}
         <input
           value={provider.name}
           onChange={(e) => onChange({ name: e.target.value })}
-          placeholder={t("提供商名称", "Provider name")}
-          className="min-w-0 flex-1 bg-transparent text-[13px] font-semibold text-ink outline-none"
+          placeholder={provider.id || t("显示名（留空跟随 ID）", "Display name (blank follows ID)")}
+          aria-label={t("显示名", "Display name")}
+          className="min-w-0 flex-1 bg-transparent text-[13px] font-semibold text-ink outline-none placeholder:font-normal placeholder:text-faint"
         />
         <span className="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] text-muted">
           {provider.models.length} {t("个模型", "models")}
         </span>
+        <button type="button" onClick={onToggle} className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink" aria-label={expanded ? t("收起提供商", "Collapse provider") : t("展开提供商", "Expand provider")} aria-expanded={expanded}>
+          <IconChevronDown size={14} className={expanded ? "rotate-180 transition-transform" : "transition-transform"} />
+        </button>
         <button type="button" onClick={onRemove} className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-danger" aria-label={t("删除提供商", "Delete provider")}>
           <IconTrash size={14} />
         </button>
       </div>
 
-      <div className="space-y-2.5 px-3 py-3">
+      {expanded && <div className="space-y-2.5 px-3 py-3">
         <label className="block">
           <span className="block text-[10.5px] text-faint">{t("协议", "Protocol")}</span>
           <select
@@ -732,7 +802,7 @@ function ProviderCard({ provider, onChange, onRemove }: { provider: ProviderForm
             </button>
           </div>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

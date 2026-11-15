@@ -359,3 +359,20 @@ func TestVerifyModel(t *testing.T) {
 		t.Fatalf("空模型名应失败: %+v", empty)
 	}
 }
+
+// 显示名只取 display_name/name 等字段，不能把 description 当成名字。
+func TestParseModelsDoesNotUseDescriptionAsDisplay(t *testing.T) {
+	got, err := parseModels([]byte(`{"data":[
+	  {"id":"a","name":"A 模型","description":"很长的模型描述"},
+	  {"id":"b","description":"只有描述"}
+	]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Display != "A 模型" {
+		t.Fatalf("Display = %q", got[0].Display)
+	}
+	if got[1].Display != "" {
+		t.Fatalf("只有 description 时 Display 应为空，实际 %q", got[1].Display)
+	}
+}

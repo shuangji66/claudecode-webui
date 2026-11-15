@@ -1,9 +1,9 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { SessionInfo } from "../../transport/types";
 import type { ConnInfo } from "../../store/useAppStore";
 import { clockTime, permissionLabel } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
-import { IconFolder, IconMore, IconPanel } from "../common/Icons";
+import { IconCheck, IconCopy, IconFolder, IconMore, IconPanel, IconSettings } from "../common/Icons";
 
 export type ChatTab = "chat" | "overview";
 
@@ -18,6 +18,7 @@ interface Props {
   onToggleSidebar: () => void;
   onToggleCollapse: () => void;
   onOpenSettings: () => void;
+  onCopySession: () => Promise<boolean>;
 }
 
 
@@ -29,9 +30,40 @@ const CONN_DOT: Record<string, string> = {
   closed: "bg-danger",
 };
 
-export function TopBar({ session, title, conn, busy, tab, mode, onTab, onToggleSidebar, onToggleCollapse, onOpenSettings }: Props) {
+export function TopBar({ session, title, conn, busy, tab, mode, onTab, onToggleSidebar, onToggleCollapse, onOpenSettings, onCopySession }: Props) {
   const t = useT();
   const locale = useLocale();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "ok" | "fail">("idle");
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
+
+  const copySession = async () => {
+    if (!session) return;
+    const ok = await onCopySession();
+    setCopyState(ok ? "ok" : "fail");
+    if (ok) {
+      window.setTimeout(() => {
+        setCopyState("idle");
+        setMenuOpen(false);
+      }, 900);
+    }
+  };
   const connText =
     conn.state === "open" ? t("已连接", "Connected")
       : conn.state === "reconnecting" ? t("重连中", "Reconnecting")
@@ -62,7 +94,7 @@ export function TopBar({ session, title, conn, busy, tab, mode, onTab, onToggleS
 
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <h1 className="truncate text-[14px] font-semibold text-ink">{session ? title : t("新对话", "New chat")}</h1>
+            <h1 className="truncate text-[14px] font-semibold text-ink">{session ? title : "Claude Code"}</h1>
             <span className="hidden shrink-0 items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[10px] text-muted sm:inline-flex">
               <span className="h-1.5 w-1.5 rounded-full bg-brand" />
               {permissionLabel(mode, locale)}
@@ -84,15 +116,59 @@ export function TopBar({ session, title, conn, busy, tab, mode, onTab, onToggleS
         </span>
         <span className={`h-1.5 w-1.5 rounded-full sm:hidden ${CONN_DOT[conn.state] ?? "bg-faint"}`} title={connText} />
 
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
-          aria-label={t("设置", "Settings")}
-          title={t("设置", "Settings")}
-        >
-          <IconMore size={17} />
-        </button>
+        <div className="relative" ref={menuRef}>
+          <button
+            type="button"
+            onClick={() => {
+              setMenuOpen((v) => !v);
+              setCopyState("idle");
+            }}
+            className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+            aria-label={t("更多", "More")}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            title={t("更多", "More")}
+          >
+            <IconMore size={17} />
+          </button>
+          {menuOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 top-full z-50 mt-1 w-56 rounded-xl border border-line bg-canvas p-1 shadow-soft"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!session}
+                onClick={() => void copySession()}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-ink hover:bg-panel-strong disabled:opacity-40"
+              >
+                {copyState === "ok" ? <IconCheck size={14} className="text-ok" /> : <IconCopy size={14} className="text-muted" />}
+                <span>
+                  {!session
+                    ? t("没有可复制的会话", "No session to copy")
+                    : copyState === "ok"
+                      ? t("已复制为 Markdown", "Copied as Markdown")
+                      : copyState === "fail"
+                        ? t("复制失败", "Copy failed")
+                        : t("复制会话为 Markdown", "Copy session as Markdown")}
+                </span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onOpenSettings();
+                }}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-ink hover:bg-panel-strong"
+              >
+                <IconSettings size={14} className="text-muted" />
+                {t("设置", "Settings")}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="flex h-[38px] items-end gap-1 px-3 md:px-4">

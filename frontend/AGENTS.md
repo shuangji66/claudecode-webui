@@ -62,7 +62,7 @@ src/
 | `assistant` | `assistant.content[].text` 或 `stream_event` 增量 | 左对齐气泡 + Markdown，`streaming` 时显示光标 |
 | `thinking` | `assistant.content[].thinking` | 折叠块 |
 | `tool` | `assistant.content[].tool_use` + `user.content[].tool_result` | 按工具名分派卡片 |
-| `result` | `result` 消息 | 耗时/成本/被拒数 |
+| `result` | `result` 消息 | 耗时/被拒数（不显示费用） |
 | `system` | `system`（非 init/status） | 等宽小字，需清洗 ANSI |
 | `error` | 后端 `error` 事件 / 连接关闭 | 红色提示 |
 
@@ -89,6 +89,9 @@ src/
 - 长输出必须折叠或限高（`max-h-80 overflow-auto`），否则会毁掉滚动体验。
 - 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 代理」；通用设置即时保存，
   模型配置在底部「保存模型设置」统一提交，代理保存后重启所有 claude 会话。
+- 模型页提供商只有一个时默认展开，多个时默认折叠；新建提供商必须手填 ID，显示名留空跟随 ID。
+- 右上角「更多」是下拉菜单（复制会话为 Markdown / 设置），不要直接打开设置。
+- `document.title` 默认 `Claude Code`，有活动会话时跟随会话名；结果条不显示费用。
 
 ## 7. 测试
 
@@ -103,7 +106,7 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
 - **`lib/` 下的纯函数必须有单测**：`normalize`（流式去重、tool 配对、ANSI 清洗、
   未知类型忽略）、`diff`（结构化补丁 / old-new 兜底 / null 降级）、`runtime`（base、wsUrl、token）、
   `providerForm`（模型元数据/补丁/强度回落）、`theme`（system 解析/字号夹取）、`labels`（中英）、
-  `attachments`（类型/大小/格式化）。
+  `attachments`（类型/大小/格式化）、`sessionExport`（Markdown 导出）。
 - **组件用 Testing Library**，断言用户可见的结果（文本、按钮），不要断言内部 state。
 - 改 `normalize` 时先写一个会失败的用例，再改实现。
 - 不要写依赖 `Date.now()` 精确值的断言。

@@ -282,8 +282,12 @@ func decodeItems(items []any) []Model {
 			if id == "" {
 				continue
 			}
-			add(id,
-				firstString(el, "display_name", "displayName", "title", "label", "description"),
+			display := firstString(el, "display_name", "displayName", "title", "label", "name")
+			if display == id {
+				// `name` 在部分网关里就是模型 ID；留空让前端回落到 ID。
+				display = ""
+			}
+			add(id, display,
 				firstString(el, "owned_by", "ownedBy", "provider", "owner"),
 				contextLengthOf(el))
 		}

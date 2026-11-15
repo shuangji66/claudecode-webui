@@ -104,6 +104,8 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 代理只在进程启动时生效：`POST /api/settings/proxy` 保存后关闭全部会话并 `Ensure`
   原目录的新会话；`Settings.Env()` 注入大小写两套 proxy 变量和 localhost `NO_PROXY`，
   `process.CleanEnv` 必须剔除继承的代理变量，保证空值=直连。
+- 模型列表解析的显示名只取 `display_name` / `displayName` / `title` / `label` / `name`，
+  绝不能把 `description` 当显示名；`name` 等于 ID 时按空处理，前端回落 ID。
 - **对话地址与列表地址不是同一个**：CLI 自己拼 `/v1/messages`，而 OpenAI/Gemini 协议的
   base 习惯带 `/v1`。`Provider.ChatBaseURL()` 对非 Anthropic 协议剥掉尾部 `/v1`，
   `Env()` 必须用它，否则会拼成 `/v1/v1/messages`（404）。
