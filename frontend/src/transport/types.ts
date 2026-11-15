@@ -76,9 +76,10 @@ export interface SessionInfo {
   id: string;
   cwd: string;
   state: string;
-  /** 创建会话时选中的提供商 / 模型（后端记录，用于判断能否热切换）。 */
+  /** 创建会话时选中的提供商 / 模型 / 推理强度（后端记录）。 */
   provider?: string;
   model?: string;
+  effort?: string;
   created_at?: string;
   last_active?: string;
 }
@@ -104,6 +105,14 @@ export type ClientCommand =
     }
   | { kind: "ping" };
 
+/** 单个模型的展示与能力元数据。 */
+export interface ModelSpec {
+  name?: string;
+  reasoning_efforts?: string[];
+  default_reasoning_effort?: string;
+  supports_image?: boolean;
+}
+
 /** 一个第三方模型提供商的脱敏视图。 */
 export interface PublicProvider {
   id: string;
@@ -115,12 +124,16 @@ export interface PublicProvider {
   auth_token_set: boolean;
   models_path: string;
   models: string[];
+  /** 按模型 ID 的元数据；老后端可能不返回。 */
+  model_meta?: Record<string, ModelSpec>;
 }
 
 /** 当前选中的模型（= claude CLI 的默认模型）。 */
 export interface Selection {
   provider: string;
   model: string;
+  /** 推理强度；空表示用模型默认值。 */
+  effort?: string;
 }
 
 /** 后端 /api/settings 的脱敏视图（密钥永不回传）。 */
@@ -130,6 +143,9 @@ export interface PublicSettings {
   permission_mode: string;
   auto_compact_window: string;
   disable_unknown_model_window: boolean;
+  theme?: "system" | "light" | "dark" | string;
+  locale?: "zh" | "en" | string;
+  font_size?: number;
   path: string;
 }
 

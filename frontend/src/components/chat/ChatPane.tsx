@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
-import { Composer, type ModelOption } from "./Composer";
+import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
 import { OverviewPanel } from "./OverviewPanel";
 import { TopBar, type ChatTab } from "../layout/TopBar";
 import { PermissionPanel } from "../permission/PermissionPanel";
 import type { PermissionPayload } from "../../transport/types";
 import { sessionTitle } from "../../lib/labels";
+import { effortFor, findOption, modelOptionsFromSettings } from "../../lib/providerForm";
+import { useLocale, useT } from "../../lib/i18n";
 import { IconAlert, IconFolderPlus, IconRetry, IconSpark } from "../common/Icons";
 
 interface Props {
@@ -17,6 +19,8 @@ interface Props {
 }
 
 export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, onAddWorkspace }: Props) {
+  const t = useT();
+  const locale = useLocale();
   const info = useAppStore((s) => s.info);
   const activeId = useAppStore((s) => s.activeId);
   const sessions = useAppStore((s) => s.sessions);
@@ -46,7 +50,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
   const conn = activeId ? (conns[activeId] ?? { state: "idle" as const }) : { state: "idle" as const };
   const state = activeId ? (states[activeId] ?? session?.state ?? "idle") : "idle";
   const busy = state === "busy";
-  const title = session ? sessionTitle(session.cwd, itemList) : "新对话";
+  const title = session ? sessionTitle(session.cwd, itemList, locale) : t("新对话", "New chat");
 
   useEffect(() => {
     setModeState(init?.current_permission_mode ?? settings?.permission_mode ?? "");
@@ -76,38 +80,42 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
     setDismissed((prev) => new Set(prev).add(perm.request_id));
   };
 
-  const modelOptions = useMemo<ModelOption[]>(
-    () =>
-      (settings?.providers ?? []).flatMap((p) =>
-        (p.models ?? []).map((m) => ({ provider: p.id, model: m, label: `${m} · ${p.name || p.id}` })),
-      ),
-    [settings],
-  );
+  const modelOptions = useMemo(() => modelOptionsFromSettings(settings), [settings]);
   const selected = settings?.selected;
   const selectedKey = selected && selected.provider && selected.model ? `${selected.provider}/${selected.model}` : "";
+  const selectedOption = findOption(modelOptions, selected?.provider ?? "", selected?.model ?? "");
+  const selectedEffort = effortFor(selectedOption?.spec, selected?.effort);
   const mismatch = Boolean(session?.provider) && Boolean(selected?.provider) && session!.provider !== selected!.provider;
 
   const canSend = Boolean(activeId || currentWorkspace);
   const disabled = starting || !canSend;
   const sendBlocked = Boolean(activeId) && conn.state !== "open";
   const placeholder = !currentWorkspace
-    ? "先添加一个授权目录"
+    ? t("先添加一个授权目录", "Add an authorized directory first")
     : starting
-      ? "正在启动 Claude…"
+      ? t("正在启动 Claude…", "Starting Claude…")
       : sendBlocked
-        ? "连接断开，正在自动重连…"
+        ? t("连接断开，正在自动重连…", "Disconnected, reconnecting…")
         : !activeId
-          ? "输入消息即可开始"
+          ? t("输入消息即可开始", "Type a message to start")
           : undefined;
 
   const tools = itemList.filter((i) => i.kind === "tool").length;
+  const effortMismatch = Boolean(activeId && selectedEffort && session && session.effort !== selectedEffort);
   const footer = (
     <>
       <span className="truncate">
-        {busy ? "Claude 正在工作，可随时中断" : starting ? "正在启动 Claude…" : "Enter 发送 · Shift+Enter 换行"}
+        {effortMismatch
+          ? t("推理强度将在新会话生效", "Reasoning effort applies to new sessions")
+          : busy ? t("Claude 正在工作，可随时中断", "Claude is working; interrupt anytime") : starting ? t("正在启动 Claude…", "Starting Claude…") : (
+            <>
+              <span className="hidden sm:inline">{t("Enter 发送 · Shift+Enter 换行", "Enter to send · Shift+Enter for newline")}</span>
+              <span className="sm:hidden">{t("点右下角发送 · / 唤起命令", "Tap send · / commands")}</span>
+            </>
+          )}
       </span>
       <span className="shrink-0">
-        {itemList.length > 0 ? `${itemList.length} 条事件 · ${tools} 次工具` : ""}
+        {itemList.length > 0 ? t(`${itemList.length} 条事件 · ${tools} 次工具`, `${itemList.length} events · ${tools} tools`) : ""}
       </span>
     </>
   );
@@ -143,11 +151,11 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${conn.state === "closed" ? "bg-danger" : "thinking-dot bg-warn"}`} />
           <span className="min-w-0 truncate">
             {conn.state === "closed"
-              ? "连接已关闭"
+              ? t("连接已关闭", "Connection closed")
               : conn.state === "reconnecting"
-                ? `连接已断开，正在自动重连${conn.attempt ? `（第 ${conn.attempt} 次）` : ""}…`
-                : "正在连接…"}
-            {conn.delayMs ? ` ${Math.max(1, Math.ceil(conn.delayMs / 1000))}s 后重试` : ""}
+                ? t(`连接已断开，正在自动重连${conn.attempt ? `（第 ${conn.attempt} 次）` : ""}…`, `Disconnected, reconnecting${conn.attempt ? ` (attempt ${conn.attempt})` : ""}…`)
+                : t("正在连接…", "Connecting…")}
+            {conn.delayMs ? t(` ${Math.max(1, Math.ceil(conn.delayMs / 1000))}s 后重试`, ` retrying in ${Math.max(1, Math.ceil(conn.delayMs / 1000))}s`) : ""}
           </span>
           <button
             type="button"
@@ -155,7 +163,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
             className="ml-auto flex shrink-0 items-center gap-1 rounded-full border border-current/20 px-2 py-0.5 font-medium hover:bg-black/5"
           >
             <IconRetry size={11} />
-            立即重试
+            {t("立即重试", "Retry now")}
           </button>
         </div>
       )}
@@ -176,21 +184,21 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
             onOpenSettings={onOpenSettings}
           />
         ) : activeId ? (
-          <MessageList items={itemList} empty="开始新的对话" />
+          <MessageList items={itemList} empty={t("开始新的对话", "Start a new conversation")} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
             <span className="flex h-14 w-14 items-center justify-center rounded-[20px] bg-brand-soft text-brand">
               <IconSpark size={26} />
             </span>
             <h2 className="text-[18px] font-semibold tracking-tight text-ink">
-              {starting ? "正在启动 Claude…" : currentWorkspace ? "开始新的对话" : "先添加授权目录"}
+              {starting ? t("正在启动 Claude…", "Starting Claude…") : currentWorkspace ? t("开始新的对话", "Start a new conversation") : t("先添加授权目录", "Add an authorized directory first")}
             </h2>
             <p className="max-w-sm text-[12px] leading-relaxed text-muted">
               {starting
-                ? "后端正在拉起 claude 子进程，完成后即可发送消息。"
+                ? t("后端正在拉起 claude 子进程，完成后即可发送消息。", "The backend is starting the claude process; you can send once it is ready.")
                 : currentWorkspace
-                  ? "在下方输入消息即可自动启动会话；也可以从左侧切换工作区。"
-                  : "授权一个目录作为工作区，Claude 会在其中读写文件、执行命令。"}
+                  ? t("在下方输入消息即可自动启动会话；也可以从左侧切换工作区。", "Type below to start automatically, or switch workspaces from the sidebar.")
+                  : t("授权一个目录作为工作区，Claude 会在其中读写文件、执行命令。", "Authorize a directory as a workspace; Claude will read, write and run commands there.")}
             </p>
             {!currentWorkspace && (
               <button
@@ -199,7 +207,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
                 className="mt-1 flex items-center gap-1.5 rounded-full bg-ink px-4 py-2 text-[12px] font-medium text-canvas hover:opacity-90"
               >
                 <IconFolderPlus size={15} />
-                添加授权目录
+                {t("添加授权目录", "Add authorized directory")}
               </button>
             )}
             {currentWorkspace && (
@@ -216,7 +224,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
           {mismatch && (
             <div className="mx-auto flex w-full max-w-[820px] items-start gap-2 px-4 pb-1 text-[11px] text-warn md:px-6">
               <IconAlert size={13} className="mt-0.5 shrink-0" />
-              当前会话使用的是「{session?.provider}」，与所选模型的提供商不同。切换提供商的模型需要新建会话。
+              {t(`当前会话使用的是「${session?.provider}」，与所选模型的提供商不同。切换提供商的模型需要新建会话。`, `This session uses "${session?.provider}", which differs from the selected model's provider. Start a new session to switch providers.`)}
             </div>
           )}
 
@@ -241,8 +249,15 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
                 placeholder={placeholder}
                 modelOptions={modelOptions}
                 selectedKey={selectedKey}
+                selectedEffort={selectedEffort}
                 permissionMode={mode}
-                onSelectModel={(provider, model) => void selectModel(provider, model)}
+                onSelectModel={(provider, model) => {
+                  const opt = findOption(modelOptions, provider, model);
+                  void selectModel(provider, model, effortFor(opt?.spec, undefined));
+                }}
+                onSelectEffort={(effort) => {
+                  if (selected?.provider && selected.model) void selectModel(selected.provider, selected.model, effort);
+                }}
                 onPermissionMode={(m) => {
                   setModeState(m);
                   setPermissionMode(m);

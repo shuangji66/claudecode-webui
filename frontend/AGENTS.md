@@ -15,8 +15,11 @@ src/
   lib/normalize.ts     CLI 原始消息 → Item（纯函数，最重要的可测单元）
   lib/diff.ts          Edit 卡片的 diff 构造
   lib/runtime.ts       baseurl / token / fetch 封装
+  lib/i18n.tsx         极简双语（useT(中文, English)）
+  lib/theme.ts         主题/字号/语言的 DOM 应用与缓存
+  lib/providerForm.ts  提供商/模型元数据表单转换
   store/useAppStore.ts zustand 全局状态（只做状态搬运）
-  components/          layout / chat / tools / permission / common
+  components/          layout / chat / tools / permission / settings / common
 ```
 
 **分层规则**：组件不直接调 `fetch` 或 `WebSocket`；一律经 store；
@@ -33,7 +36,12 @@ src/
 4. **未知消息类型静默忽略**，不要 throw —— 协议会演进。
 5. **令牌只存 localStorage**，并通过 `?token=` 传给 WS（浏览器限制，无法设头）。
 6. **不要用 `dangerouslySetInnerHTML`**。Markdown 渲染走 React 节点（`common/Markdown.tsx`）。
-7. 所有用户可见文案用中文，与后端日志风格一致。
+7. 用户可见文案走 `useT()`：`t("中文", "English")`；默认中文，测试未挂 Provider 时也是中文。
+   新增文案不要只写中文。
+8. 主题由 `<html data-theme="light|dark">` 决定，Tailwind 的 `dark:` 已绑定该属性；
+   禁止再用 `@media (prefers-color-scheme: dark)` 覆盖设计令牌。
+9. 强调色是陶土色 `#D97757`，统一用 `bg-brand/text-brand/border-brand`。
+10. 移动端输入区必须保留 `env(safe-area-inset-bottom)`；设置页底部操作栏同样要留安全区。
 
 ## 3. 状态管理（zustand）
 
@@ -46,7 +54,7 @@ src/
 
 | kind | 来源 | 渲染 |
 |---|---|---|
-| `user` | 本地插入 / CLI 回显去重 | 右对齐蓝色气泡 |
+| `user` | 本地插入 / CLI 回显去重 | 右对齐浅色气泡 |
 | `assistant` | `assistant.content[].text` 或 `stream_event` 增量 | 左对齐气泡 + Markdown，`streaming` 时显示光标 |
 | `thinking` | `assistant.content[].thinking` | 折叠块 |
 | `tool` | `assistant.content[].tool_use` + `user.content[].tool_result` | 按工具名分派卡片 |
@@ -70,9 +78,13 @@ src/
 ## 6. 样式
 
 - Tailwind v4（`@tailwindcss/vite` + `@import "tailwindcss"`），无 `tailwind.config.js`。
-- 颜色一律用 slate 系 + 语义色（blue 主色、emerald 允许、rose 拒绝、amber 警告）。
-- 移动端优先：侧边栏在 `md` 以下变成抽屉；输入框用 `max-h` 限制高度。
+- 颜色用语义令牌（`bg-canvas/panel/ink/line/brand`），强调色 `#D97757`；不要写死 slate/blue。
+- 深色主题只认 `<html data-theme="dark">`；系统跟随在 `lib/theme.ts` 解析后写入。
+- 移动端优先：侧边栏在 `md` 以下变成抽屉；输入框用 `max-h` 限制高度；
+  输入区、设置页底部栏都要留 `env(safe-area-inset-bottom)`。
 - 长输出必须折叠或限高（`max-h-80 overflow-auto`），否则会毁掉滚动体验。
+- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型」；通用设置即时保存，
+  模型配置在底部「保存模型设置」统一提交。
 
 ## 7. 测试
 
@@ -85,7 +97,8 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
 要求：
 
 - **`lib/` 下的纯函数必须有单测**：`normalize`（流式去重、tool 配对、ANSI 清洗、
-  未知类型忽略）、`diff`（结构化补丁 / old-new 兜底 / null 降级）、`runtime`（base、wsUrl、token）。
+  未知类型忽略）、`diff`（结构化补丁 / old-new 兜底 / null 降级）、`runtime`（base、wsUrl、token）、
+  `providerForm`（模型元数据/补丁/强度回落）、`theme`（system 解析/字号夹取）、`labels`（中英）。
 - **组件用 Testing Library**，断言用户可见的结果（文本、按钮），不要断言内部 state。
 - 改 `normalize` 时先写一个会失败的用例，再改实现。
 - 不要写依赖 `Date.now()` 精确值的断言。

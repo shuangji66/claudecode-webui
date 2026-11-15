@@ -6,6 +6,8 @@ import {
   findOption,
   formsFromSettings,
   normalizeSettings,
+  modelOptionsFromSettings,
+  effortFor,
   type ProviderForm,
 } from "./providerForm";
 import type { PublicSettings } from "../transport/types";
@@ -114,5 +116,60 @@ describe("normalizeSettings", () => {
   it("selected 缺失时补空", () => {
     const raw = { ...sample, selected: null as unknown as typeof sample.selected };
     expect(normalizeSettings(raw)!.selected).toEqual({ provider: "", model: "" });
+  });
+});
+
+describe("模型能力元数据", () => {
+  const withMeta: PublicSettings = {
+    ...sample,
+    providers: [
+      {
+        ...sample.providers[0],
+        models: ["m1", "m2"],
+        model_meta: {
+          m1: { name: "模型一", reasoning_efforts: ["low", "high"], default_reasoning_effort: "high", supports_image: true },
+          m2: { reasoning_efforts: [] },
+        },
+      },
+    ],
+  };
+
+  it("回填并按模型保留元数据", () => {
+    const [f] = formsFromSettings(withMeta);
+    expect(f.modelMeta.m1.name).toBe("模型一");
+    expect(f.modelMeta.m1.supports_image).toBe(true);
+    expect(f.modelMeta.m2).toEqual({ name: undefined, reasoning_efforts: [], default_reasoning_effort: undefined, supports_image: false });
+  });
+
+  it("提交补丁带 model_meta，且只保留仍存在的模型", () => {
+    const [f] = formsFromSettings(withMeta);
+    f.models = ["m1"];
+    const [p] = buildProviderPatches([f]);
+    expect(p.models).toEqual(["m1"]);
+    expect(p.model_meta.m1.name).toBe("模型一");
+    expect(p.model_meta.m2).toBeUndefined();
+  });
+
+  it("模型选择器使用显示名与元数据", () => {
+    const opts = modelOptionsFromSettings(withMeta);
+    expect(opts.map((o) => o.label)).toEqual(["模型一 · 我的网关", "m2 · 我的网关"]);
+    expect(opts[0].spec.supports_image).toBe(true);
+  });
+
+  it("推理强度回落到默认值/第一项", () => {
+    const spec = { reasoning_efforts: ["low", "high"], default_reasoning_effort: "high" };
+    expect(effortFor(spec, "low")).toBe("low");
+    expect(effortFor(spec, "nope")).toBe("high");
+    expect(effortFor({ reasoning_efforts: ["low"] }, "")).toBe("low");
+    expect(effortFor({}, "high")).toBe("");
+  });
+
+  it("model_meta 为 null 时归一成空对象", () => {
+    const raw = {
+      ...withMeta,
+      providers: [{ ...withMeta.providers[0], model_meta: null as unknown as Record<string, never> }],
+    };
+    const s = normalizeSettings(raw)!;
+    expect(s.providers[0].model_meta).toEqual({ m1: { name: undefined, reasoning_efforts: [], default_reasoning_effort: undefined, supports_image: false }, m2: { name: undefined, reasoning_efforts: [], default_reasoning_effort: undefined, supports_image: false } });
   });
 });

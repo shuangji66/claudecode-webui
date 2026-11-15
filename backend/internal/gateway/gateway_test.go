@@ -552,3 +552,46 @@ func TestBrowseDirsRejectsMissingPath(t *testing.T) {
 		t.Fatalf("code = %d", rec.Code)
 	}
 }
+
+func TestSettingsModelMetaAndPreferences(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	body := `{
+	  "providers":[{"id":"gw","name":"网关","protocol":"anthropic-messages","base_url":"https://gw.example",
+	    "models":["m1"],"model_meta":{"m1":{"name":"模型一","reasoning_efforts":["low","high"],"default_reasoning_effort":"high","supports_image":true}}}],
+	  "selected":{"provider":"gw","model":"m1","effort":"low"},
+	  "theme":"dark","locale":"en","font_size":16
+	}`
+	rec := putSettings(t, srv, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT code = %d: %s", rec.Code, rec.Body.String())
+	}
+	var pub struct {
+		Providers []struct {
+			ModelMeta map[string]struct {
+				Name          string   `json:"name"`
+				Efforts       []string `json:"reasoning_efforts"`
+				DefaultEffort string   `json:"default_reasoning_effort"`
+				SupportsImage bool     `json:"supports_image"`
+			} `json:"model_meta"`
+		} `json:"providers"`
+		Selected struct {
+			Effort string `json:"effort"`
+		} `json:"selected"`
+		Theme    string `json:"theme"`
+		Locale   string `json:"locale"`
+		FontSize int    `json:"font_size"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pub); err != nil {
+		t.Fatal(err)
+	}
+	if pub.Theme != "dark" || pub.Locale != "en" || pub.FontSize != 16 {
+		t.Fatalf("prefs = %+v", pub)
+	}
+	if pub.Selected.Effort != "low" {
+		t.Fatalf("effort = %q", pub.Selected.Effort)
+	}
+	m := pub.Providers[0].ModelMeta["m1"]
+	if m.Name != "模型一" || !m.SupportsImage || m.DefaultEffort != "high" || len(m.Efforts) != 2 {
+		t.Fatalf("model meta = %+v", m)
+	}
+}

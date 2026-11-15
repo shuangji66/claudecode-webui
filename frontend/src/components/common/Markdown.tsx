@@ -44,10 +44,10 @@ export function renderInline(s: string, keyPrefix = "i"): ReactNode[] {
 export function Markdown({ text }: { text: string }) {
   const segments = useMemo(() => splitFences(text), [text]);
   return (
-    <div className="space-y-3 text-[14.5px] leading-[1.75]">
+    <div className="chat-text space-y-3">
       {segments.map((seg, i) =>
         seg.type === "code" ? (
-          <pre key={i} className="overflow-x-auto rounded-xl border border-line bg-[#0f1115] p-3 text-[12px] leading-relaxed text-[#e5e7eb]">
+          <pre key={i} className="chat-code overflow-x-auto rounded-xl border border-line bg-[#0f1115] p-3 leading-relaxed text-[#e5e7eb]">
             <code>{seg.content.replace(/\n$/, "")}</code>
           </pre>
         ) : (

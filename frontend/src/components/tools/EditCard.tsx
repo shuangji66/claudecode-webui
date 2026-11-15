@@ -3,6 +3,7 @@ import { Collapsible } from "../common/Collapsible";
 import { IconWrench } from "../common/Icons";
 import { buildDiff, editSummary } from "../../lib/diff";
 import type { ToolItem } from "../../lib/model";
+import { useT } from "../../lib/i18n";
 
 const tone: Record<string, string> = {
   add: "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300",
@@ -13,6 +14,7 @@ const tone: Record<string, string> = {
 
 /** Edit 卡片：有结构化补丁就渲染行级 diff，否则退回 old/new 对比。 */
 export function EditCard({ item }: { item: ToolItem }) {
+  const t = useT();
   const diff = useMemo(() => buildDiff(item.input, item.structured), [item.input, item.structured]);
   const summary = editSummary(item.input, diff);
 
@@ -23,7 +25,7 @@ export function EditCard({ item }: { item: ToolItem }) {
         <span className="font-medium text-ink">Edit</span>
         <span className="truncate font-mono text-[11px] text-muted">{summary}</span>
         <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] ${item.isError ? "bg-rose-50 text-danger dark:bg-rose-950/30" : "bg-panel-strong text-muted"}`}>
-          {item.isError ? "失败" : item.result === undefined ? "进行中" : "完成"}
+          {item.isError ? t("失败", "Failed") : item.result === undefined ? t("进行中", "Working") : t("完成", "Done")}
         </span>
       </div>
       {diff ? (
@@ -39,8 +41,8 @@ export function EditCard({ item }: { item: ToolItem }) {
         </div>
       ) : (
         <div className="px-3 py-2.5">
-          <Collapsible title="变更内容" summary="无结构化补丁">
-            <pre className="overflow-x-auto text-[11.5px]">{item.result ?? "（等待结果）"}</pre>
+          <Collapsible title={t("变更内容", "Changes")} summary={t("无结构化补丁", "No structured patch")}>
+            <pre className="overflow-x-auto text-[11.5px]">{item.result ?? t("（等待结果）", "(waiting for result)")}</pre>
           </Collapsible>
         </div>
       )}

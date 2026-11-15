@@ -13,7 +13,9 @@
 - **只监听 unix socket**，由前置网关注入 baseurl 前缀反代（不监听 TCP）；
 - 后端**常驻 claude 子进程**，通过 `--input-format stream-json --output-format stream-json`
   双向 NDJSON 通信；
-- 前端**不做终端模拟**，全部结构化渲染：消息流、thinking、工具卡片、diff、审批面板。
+- 前端**不做终端模拟**，全部结构化渲染：消息流、thinking、工具卡片、diff、审批面板；
+- **授权目录 = 工作区**，持久化在 `workspaces.json`；APP 启动自动在当前工作区拉起 claude；
+- 设置页分「通用 / 模型」：主题、语言、字号、默认权限，以及每个模型的推理强度/图片能力。
 
 部署约定：`ccweb` 与 `claude` 放同一目录，`claude` 在 PATH 中，后端直接 exec `claude`。
 
@@ -35,8 +37,8 @@ hub ── manager ── session ── process ── claude (NDJSON)
 
 | 层 | 可以依赖 | 禁止 |
 |---|---|---|
-| `gateway` | manager 接口、history、project、authz、hub | 直接操作 `exec.Cmd`、直接读 claude 输出 |
-| `agent/manager` | `agent/session`、`agent/process`、config | 处理 HTTP / WS |
+| `gateway` | manager 接口、history、project、workspace、authz、hub | 直接操作 `exec.Cmd`、直接读 claude 输出 |
+| `agent/manager` | `agent/session`、`agent/process`、config、settings | 处理 HTTP / WS |
 | `agent/session` | `agent/protocol` | 知道文件系统布局、知道前端协议 |
 | `agent/process` | 标准库 | 启动会话、解析 NDJSON |
 | `agent/protocol` | 标准库 | I/O、状态机 |
@@ -58,6 +60,9 @@ hub ── manager ── session ── process ── claude (NDJSON)
 8. **鉴权默认关闭但必须可用**。新增 HTTP 路由要挂 `s.authed`；WS 必须校验 token。
 9. **日志只在异常/失败时输出**。不要加启动横幅、例行生命周期日志。
 10. **不提交构建产物**：`bin/`、`frontend/dist/`、`embed/assets/`、`.gocache/` 等见 `.gitignore`。
+11. **会话 cwd 必须在授权目录内**。`POST /api/session` / `/api/session/ensure` 都要过
+    `workspace.Allows`；`CCWEB_PROJECTS_ROOT` 是默认授权目录，不是任意路径的通行证。
+12. **自动拉起用 `manager.Ensure`**，不要直接 `Create`：后端启动与前端同时触发时必须去重。
 
 ## 4. 踩过的坑（都已在代码里修好，别改回去）
 
@@ -95,6 +100,11 @@ hub ── manager ── session ── process ── claude (NDJSON)
   禁止硬编码工具清单。
 - `Edit` 的 diff 优先取 `tool_use_result.structuredPatch`，没有才退回 `old_string/new_string`。
 - 浏览器无法给 WebSocket 设自定义头，鉴权只能走 `?token=`。
+- 主题用 `<html data-theme>` 切换，Tailwind 的 `dark:` 已绑定到该属性；不要再写
+  `@media (prefers-color-scheme: dark)` 覆盖令牌。
+- 强调色固定为陶土色 `#D97757`，用 `bg-brand/text-brand` 等语义类，不要写死 slate/blue。
+- 移动端输入框下方必须保留 `env(safe-area-inset-bottom)`，否则 iPhone Home Indicator 会盖住输入区。
+- 界面文案走 `useT()`（中文 / English 两参数），默认中文；新增文案不要再硬编码单语。
 
 ## 5. 命令速查
 

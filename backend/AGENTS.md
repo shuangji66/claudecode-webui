@@ -15,7 +15,8 @@ internal/agent/process    定位 claude、拼参数、净化环境、启动进�
 internal/agent/session    单会话状态机（握手/轮次/审批/中断）
 internal/agent/manager    会话池、上限、空闲回收
 internal/history     转录文件读取
-internal/project     工作目录枚举/校验
+internal/project     工作目录枚举/校验、目录浏览器
+internal/workspace   授权目录 + 当前工作区（workspaces.json）
 internal/authz       token 鉴权
 internal/settings    持久化配置（第三方端点/密钥/模型）+ 端点探测
 internal/webui       go:embed 前端产物
@@ -65,6 +66,8 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 ## 5. 进程层规则（`agent/process`）
 
 - `Args()` 的第一个不变量：**`--permission-prompt-tool stdio` 永远存在**。
+- `Effort` 非空时追加 `--effort <level>`；CLI 只接受 low/medium/high/xhigh/max，
+  设置层已做白名单过滤，不要在 process 层再放行任意字符串。
 - `CleanEnv()` 剔除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`HOME`、`PWD`，
   再强制注入 `HOME`/`PWD`；**保留 `ANTHROPIC_*`**。
 - `Spawn()` 必须持续排空 stderr（否则管道写满会卡住子进程），只保留尾部用于报错。
@@ -75,7 +78,7 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 数据模型（对齐 DSH 模型页）：
 
 - `Provider`：id / name / 协议 / baseURL / 密钥 / models[]（该提供商下已添加的模型）
-- `Selection{Provider, Model}`：全局唯一的「当前选中模型」，就是 CLI 的默认模型
+- `Selection{Provider, Model, Effort}`：全局唯一的「当前选中模型 + 推理强度」，模型就是 CLI 的默认模型
 - **没有别名槽位**：`default/opus/sonnet/haiku` 那套映射已废弃，不要再加回来
 
 不变量：
@@ -90,6 +93,13 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 提供商数组是**整体替换**语义；单个提供商的密钥空串 = 不改（前端密码框回填的是占位），
   清除必须 `clear_key`。ID 为空或重复要报错。
 - 删除提供商后若 `Selection` 悬空，必须清空 Selection。
+- `Provider.Models` 仍是模型 ID 列表；能力元数据放在 `Provider.ModelMeta`（按 ID 索引）：
+  `name` / `reasoning_efforts` / `default_reasoning_effort` / `supports_image`。
+  新增字段时保持老配置（只有 `models: ["id"]`）可读。
+- 推理强度没有控制请求，只在 `process.Args` 里用 `--effort` 固定；已有会话改强度
+  只能提示「新会话生效」，不要假装热切换。
+- 界面偏好 `theme`（system/light/dark）、`locale`（zh/en）、`font_size`（12–20）也落在
+  `settings.json`；`Open` 时补默认值，`Apply` 时校验，非法值直接报错。
 - **对话地址与列表地址不是同一个**：CLI 自己拼 `/v1/messages`，而 OpenAI/Gemini 协议的
   base 习惯带 `/v1`。`Provider.ChatBaseURL()` 对非 Anthropic 协议剥掉尾部 `/v1`，
   `Env()` 必须用它，否则会拼成 `/v1/v1/messages`（404）。
@@ -108,6 +118,10 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - `withBaseURL` 剥离前缀，**前缀外的请求 404**（不要放行裸路径）。
 - 新路由必须 `s.authed(...)`；WS 在 handler 内自行校验 token。
   `/api/settings` 三个端点（GET/PUT/POST test）都属于敏感路由，务必保持鉴权。
+- 工作区路由：`GET/POST/DELETE /api/workspaces`、`POST /api/workspaces/current`、
+  `GET /api/fs/list`。目录浏览是只读但能枚举宿主目录，必须保持鉴权。
+- `POST /api/session` 与 `/api/session/ensure` 必须先 `project.Validate`，再
+  `s.ensureCwdAuthorized`；移除工作区时若仍有会话在用要返回 409。
 - SPA：`index.html` 注入 `<base href>`，缓存头用 **`no-store`**；`assets/**` 用 `immutable` 强缓存。
 - **带扩展名的请求找不到时必须 404，不能回退到 index.html**：否则浏览器会拿到
   200 + `text/html` 的"JS"，拒绝按模块执行，整页**白屏**，而且原因极难看出
@@ -121,8 +135,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `gateway.rewriteBase/cacheControlFor`、`wsframe` 编解码。
 - **状态机用假对端**：`session` 的测试用 `os.Pipe` 对（**不要用 `net.Pipe`**，无缓冲会自锁），
   假 CLI 按真实协议回包。
-- **网关用 fake manager**：`gateway_test.go` 里的 `fakeMgr` 实现 `SessionManager`，
-  这样不依赖 claude 二进制。
+- **网关用 fake manager**：`gateway_test.go` 里的 `fakeMgr` 实现 `SessionManager`
+  （含 `Ensure`），这样不依赖 claude 二进制。
+- `workspace` 的种子、增删、嵌套最长匹配、`Allows/ AutoStartPath` 必须有表驱动测试。
 - 表驱动 + `t.Helper()`；断言失败信息要带实际值。
 - 新增导出的行为必须带测试；修 bug 先写复现测试。
 

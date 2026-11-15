@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { Markdown } from "../common/Markdown";
 import { IconCopy } from "../common/Icons";
+import { useT } from "../../lib/i18n";
 
 export function AssistantBubble({ text, streaming }: { text: string; streaming: boolean; ts?: number }) {
+  const t = useT();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
@@ -21,10 +23,10 @@ export function AssistantBubble({ text, streaming }: { text: string; streaming: 
       </div>
       {!streaming && text.trim() && (
         <div className="mt-1 flex h-4 items-center gap-1 text-[10px] text-faint opacity-0 transition group-hover:opacity-100">
-          <button type="button" onClick={() => void copy()} className="rounded p-0.5 hover:text-ink" aria-label="复制回复">
+          <button type="button" onClick={() => void copy()} className="rounded p-0.5 hover:text-ink" aria-label={t("复制回复", "Copy reply")}>
             <IconCopy size={12} />
           </button>
-          {copied && <span>已复制</span>}
+          {copied && <span>{t("已复制", "Copied")}</span>}
         </div>
       )}
     </div>

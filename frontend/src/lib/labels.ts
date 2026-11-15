@@ -1,5 +1,7 @@
 // 展示层的小型纯函数：会话标题、相对时间、模式名。
 import type { Item } from "./model";
+import { tr } from "./i18n";
+import type { Locale } from "./i18n";
 
 export function baseName(p: string): string {
   const parts = p.split("/").filter(Boolean);
@@ -12,32 +14,32 @@ function truncate(s: string, n: number): string {
 }
 
 /** 会话标题：优先用第一条用户消息，没有就用工作区目录名。 */
-export function sessionTitle(cwd: string, items: Item[] | undefined): string {
+export function sessionTitle(cwd: string, items: Item[] | undefined, locale: Locale = "zh"): string {
   const first = items?.find((i) => i.kind === "user" && i.text.trim());
   if (first && first.kind === "user") return truncate(first.text, 48);
-  return baseName(cwd) || "新会话";
+  return baseName(cwd) || tr(locale, "新会话", "New session");
 }
 
 /** 相对时间；传 now 便于测试。 */
-export function relativeTime(iso: string | undefined, now = Date.now()): string {
+export function relativeTime(iso: string | undefined, now = Date.now(), locale: Locale = "zh"): string {
   if (!iso) return "";
   const t = new Date(iso).getTime();
   if (!Number.isFinite(t)) return "";
   const diff = Math.max(0, now - t);
   const min = Math.floor(diff / 60_000);
-  if (min < 1) return "刚刚";
-  if (min < 60) return `${min} 分钟前`;
+  if (min < 1) return tr(locale, "刚刚", "just now");
+  if (min < 60) return tr(locale, `${min} 分钟前`, `${min} min ago`);
   const hours = Math.floor(min / 60);
-  if (hours < 24) return `${hours} 小时前`;
+  if (hours < 24) return tr(locale, `${hours} 小时前`, `${hours} h ago`);
   const days = Math.floor(hours / 24);
-  if (days < 7) return `${days} 天前`;
-  return new Date(t).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+  if (days < 7) return tr(locale, `${days} 天前`, `${days} d ago`);
+  return new Date(t).toLocaleDateString(locale === "en" ? "en-US" : "zh-CN", { month: "numeric", day: "numeric" });
 }
 
 /** 消息时间 HH:mm。 */
-export function clockTime(ts: number): string {
+export function clockTime(ts: number, locale: Locale = "zh"): string {
   if (!Number.isFinite(ts)) return "";
-  return new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  return new Date(ts).toLocaleTimeString(locale === "en" ? "en-US" : "zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
 
 const MODE_LABELS: Record<string, string> = {
@@ -49,21 +51,33 @@ const MODE_LABELS: Record<string, string> = {
   bypassPermissions: "跳过权限",
 };
 
-export function permissionLabel(mode: string | undefined): string {
-  return MODE_LABELS[mode ?? ""] ?? mode ?? "标准模式";
+export function permissionLabel(mode: string | undefined, locale: Locale = "zh"): string {
+  const key = mode ?? "";
+  if (locale === "en") {
+    const en: Record<string, string> = {
+      "": "Standard",
+      default: "Default",
+      acceptEdits: "Accept edits",
+      plan: "Plan",
+      dontAsk: "Don't ask",
+      bypassPermissions: "Bypass permissions",
+    };
+    return en[key] ?? key;
+  }
+  return MODE_LABELS[key] ?? key ?? "标准模式";
 }
 
-export function stateLabel(state: string | undefined): string {
+export function stateLabel(state: string | undefined, locale: Locale = "zh"): string {
   switch (state) {
     case "busy":
-      return "运行中";
+      return tr(locale, "运行中", "Running");
     case "starting":
-      return "启动中";
+      return tr(locale, "启动中", "Starting");
     case "ready":
-      return "空闲";
+      return tr(locale, "空闲", "Idle");
     case "closed":
-      return "已关闭";
+      return tr(locale, "已关闭", "Closed");
     default:
-      return "未连接";
+      return tr(locale, "未连接", "Disconnected");
   }
 }

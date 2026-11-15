@@ -75,6 +75,9 @@ export interface SettingsPatch {
   permission_mode?: string;
   auto_compact_window?: string;
   disable_unknown_model_window?: boolean;
+  theme?: string;
+  locale?: string;
+  font_size?: number;
 }
 
 interface AppState {
@@ -114,7 +117,7 @@ interface AppState {
   bootstrap: () => Promise<void>;
   loadSettings: () => Promise<void>;
   saveSettings: (patch: SettingsPatch) => Promise<boolean>;
-  selectModel: (provider: string, model: string) => Promise<void>;
+  selectModel: (provider: string, model: string, effort?: string) => Promise<void>;
   fetchModelsFor: (form: ProviderForm) => Promise<void>;
   verifyModelFor: (form: ProviderForm, model: string) => Promise<void>;
   probeProvider: (form: ProviderForm) => Promise<void>;
@@ -338,8 +341,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   // 选中模型 = 动态指定 CLI 的默认模型。
   // 同一提供商下可以热切换（发 set_model）；跨提供商必须新建会话，
   // 因为地址与密钥在进程启动时就固定了。
-  selectModel: async (provider, model) => {
-    const ok = await get().saveSettings({ selected: { provider, model } });
+  selectModel: async (provider, model, effort) => {
+    const ok = await get().saveSettings({ selected: { provider, model, effort } });
     if (!ok) return;
 
     const id = get().activeId;
@@ -367,7 +370,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   fetchModelsFor: async (form) => {
-    set({ modelsFor: form.id, modelsError: null, modelsRaw: "", modelsAttempts: [], error: null });
+    set({ modelsFor: form.id, gatewayModels: [], modelsError: null, modelsRaw: "", modelsAttempts: [], error: null });
     try {
       const r = await apiFetch<ModelsResult>("/api/settings/models", {
         method: "POST",

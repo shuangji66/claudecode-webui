@@ -323,3 +323,102 @@ func TestAutoCompactEnv(t *testing.T) {
 		t.Fatal("未开启时不应注入")
 	}
 }
+
+func TestModelMetaAndEffort(t *testing.T) {
+	s, _ := openTemp(t)
+	if _, err := s.Apply(Patch{
+		Providers: &[]ProviderPatch{{
+			ID:     "gw",
+			Models: []string{"m1", "m2"},
+			ModelMeta: map[string]ModelSpec{
+				"m1": {Name: "模型一", ReasoningEfforts: []string{"low", "high"}, DefaultReasoningEffort: "high", SupportsImage: true},
+				"m2": {ReasoningEfforts: []string{"bogus"}},
+			},
+		}},
+		Selected: &Selection{Provider: "gw", Model: "m1", Effort: "low"},
+	}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	got := s.Get()
+	p := got.Providers[0]
+	spec := p.ModelMeta["m1"]
+	if spec.Name != "模型一" || !spec.SupportsImage || spec.DefaultReasoningEffort != "high" {
+		t.Fatalf("m1 meta = %+v", spec)
+	}
+	if len(p.ModelMeta["m2"].ReasoningEfforts) != 0 {
+		t.Fatalf("非法强度应被过滤: %+v", p.ModelMeta["m2"])
+	}
+	_, model, active, ok := got.ActiveModel()
+	if !ok || model != "m1" || active.Name != "模型一" {
+		t.Fatalf("ActiveModel = %q %+v ok=%v", model, active, ok)
+	}
+	if eff := got.DefaultEffort(); eff != "low" {
+		t.Fatalf("DefaultEffort = %q", eff)
+	}
+
+	// 默认强度不合法时回落到列表第一项。
+	if _, err := s.Apply(Patch{
+		Providers: &[]ProviderPatch{{
+			ID: "gw", Models: []string{"m1"},
+			ModelMeta: map[string]ModelSpec{"m1": {ReasoningEfforts: []string{"medium", "high"}, DefaultReasoningEffort: "nope"}},
+		}},
+		Selected: &Selection{Provider: "gw", Model: "m1", Effort: "low"},
+	}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if eff := s.Get().DefaultEffort(); eff != "medium" {
+		t.Fatalf("默认强度应回落到 medium，实际 %q", eff)
+	}
+}
+
+func TestModelMetaPrunedWhenModelRemoved(t *testing.T) {
+	s, _ := openTemp(t)
+	if _, err := s.Apply(Patch{Providers: &[]ProviderPatch{{
+		ID: "gw", Models: []string{"a", "b"},
+		ModelMeta: map[string]ModelSpec{"a": {Name: "A"}, "b": {Name: "B"}},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Apply(Patch{Providers: &[]ProviderPatch{{
+		ID: "gw", Models: []string{"a"}, ModelMeta: map[string]ModelSpec{"a": {Name: "A"}, "b": {Name: "B"}},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.Get().Provider("gw")
+	if _, ok := p.ModelMeta["b"]; ok {
+		t.Fatalf("已移除模型的元数据不应保留: %+v", p.ModelMeta)
+	}
+}
+
+func TestPreferencesPatchAndDefaults(t *testing.T) {
+	s, path := openTemp(t)
+	got := s.Get()
+	if got.Theme != DefaultTheme || got.Locale != DefaultLocale || got.FontSize != DefaultFontSize {
+		t.Fatalf("默认界面偏好 = %+v", got)
+	}
+	theme, locale, size := "dark", "en", 17
+	if _, err := s.Apply(Patch{Theme: &theme, Locale: &locale, FontSize: &size}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = reopened.Get()
+	if got.Theme != "dark" || got.Locale != "en" || got.FontSize != 17 {
+		t.Fatalf("重开后偏好 = %+v", got)
+	}
+
+	badTheme := "neon"
+	if _, err := s.Apply(Patch{Theme: &badTheme}); err == nil {
+		t.Fatal("非法主题应报错")
+	}
+	badLocale := "fr"
+	if _, err := s.Apply(Patch{Locale: &badLocale}); err == nil {
+		t.Fatal("非法语言应报错")
+	}
+	badSize := 99
+	if _, err := s.Apply(Patch{FontSize: &badSize}); err == nil {
+		t.Fatal("非法字号应报错")
+	}
+}

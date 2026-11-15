@@ -1,13 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { CommandInfo } from "../../transport/types";
 import { permissionLabel } from "../../lib/labels";
-import { IconChevronDown, IconPlus, IconSend, IconShield, IconSpark, IconStop } from "../common/Icons";
-
-export interface ModelOption {
-  provider: string;
-  model: string;
-  label: string;
-}
+import { useLocale, useT } from "../../lib/i18n";
+import type { ModelOption } from "../../lib/providerForm";
+import { IconChevronDown, IconGauge, IconImage, IconPlus, IconSend, IconShield, IconSpark, IconStop } from "../common/Icons";
 
 interface Props {
   disabled: boolean;
@@ -19,8 +15,10 @@ interface Props {
   placeholder?: string;
   modelOptions: ModelOption[];
   selectedKey: string;
+  selectedEffort: string;
   permissionMode: string;
   onSelectModel: (provider: string, model: string) => void;
+  onSelectEffort: (effort: string) => void;
   onPermissionMode: (mode: string) => void;
   onSend: (text: string) => void;
   onInterrupt: () => void;
@@ -39,13 +37,17 @@ export function Composer({
   placeholder,
   modelOptions,
   selectedKey,
+  selectedEffort,
   permissionMode,
   onSelectModel,
+  onSelectEffort,
   onPermissionMode,
   onSend,
   onInterrupt,
   footer,
 }: Props) {
+  const t = useT();
+  const locale = useLocale();
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -62,6 +64,9 @@ export function Composer({
     return commands.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8);
   }, [text, commands]);
 
+  const selectedModel = modelOptions.find((o) => `${o.provider}/${o.model}` === selectedKey);
+  const efforts = selectedModel?.spec.reasoning_efforts ?? [];
+
   const submit = () => {
     const t = text.trim();
     if (!t || disabled) return;
@@ -72,12 +77,12 @@ export function Composer({
   };
 
   const hint = starting
-    ? "正在启动 Claude…"
+    ? t("正在启动 Claude…", "Starting Claude…")
     : sendBlocked
-      ? "连接断开，正在自动重连…"
+      ? t("连接断开，正在自动重连…", "Disconnected, reconnecting…")
       : disabled
-        ? (placeholder ?? "连接未就绪")
-        : "输入消息，/ 命令";
+        ? (placeholder ?? t("连接未就绪", "Connection not ready"))
+        : t("输入消息，/ 命令", "Message, / commands");
 
   return (
     <div className="w-full">
@@ -115,11 +120,11 @@ export function Composer({
             }
           }}
           placeholder={hint}
-          aria-label="消息输入框"
-          className="composer-textarea w-full bg-transparent px-1 text-[14px] leading-6 text-ink outline-none placeholder:text-faint disabled:cursor-not-allowed"
+          aria-label={t("消息输入框", "Message input")}
+          className="composer-textarea chat-text w-full bg-transparent px-1 leading-6 text-ink outline-none placeholder:text-faint disabled:cursor-not-allowed"
         />
 
-        <div className="mt-1.5 flex items-center gap-1.5">
+        <div className="mt-1.5 flex items-center gap-1 sm:gap-1.5">
           <button
             type="button"
             onClick={() => {
@@ -128,36 +133,40 @@ export function Composer({
             }}
             disabled={disabled}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted hover:bg-panel-strong hover:text-ink disabled:opacity-40"
-            aria-label="斜杠命令"
-            title="斜杠命令"
+            aria-label={t("斜杠命令", "Slash command")}
+            title={t("斜杠命令", "Slash command")}
           >
             <IconPlus size={17} />
           </button>
 
-          <label className="relative flex min-w-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] text-muted hover:bg-panel-strong" title="权限模式">
+          <label className="relative flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] text-muted hover:bg-panel-strong" title={t("权限模式", "Permission mode")}>
             <IconShield size={13} className="shrink-0" />
-            <span className="max-w-[7rem] truncate">{permissionLabel(permissionMode)}</span>
+            <span className="hidden max-w-[7rem] truncate sm:inline">{permissionLabel(permissionMode, locale)}</span>
             <IconChevronDown size={11} className="shrink-0 opacity-60" />
             <select
               value={permissionMode}
               onChange={(e) => onPermissionMode(e.target.value)}
               disabled={disabled}
               className="absolute inset-0 cursor-pointer appearance-none opacity-0"
-              aria-label="权限模式"
+              aria-label={t("权限模式", "Permission mode")}
             >
               {PERMISSION_MODES.map((m) => (
                 <option key={m || "default"} value={m}>
-                  {permissionLabel(m)}
+                  {permissionLabel(m, locale)}
                 </option>
               ))}
             </select>
           </label>
 
-          <label className="relative flex min-w-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] text-muted hover:bg-panel-strong" title="模型">
+          <label className="relative flex min-w-0 flex-1 items-center gap-1 rounded-full px-2 py-1 text-[11px] text-muted hover:bg-panel-strong" title={t("模型", "Model")}>
             <IconSpark size={13} className="shrink-0" />
-            <span className="max-w-[9rem] truncate">
-              {modelOptions.find((o) => `${o.provider}/${o.model}` === selectedKey)?.model ?? "未添加模型"}
-            </span>
+            <span className="min-w-0 truncate">{selectedModel ? (selectedModel.spec.name || selectedModel.model) : t("未添加模型", "No models")}</span>
+            {selectedModel?.spec.supports_image && (
+              <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-brand-soft px-1 text-[9px] text-brand" title={t("支持图片输入", "Supports image input")}>
+                <IconImage size={10} />
+                <span className="hidden sm:inline">{t("图片", "Image")}</span>
+              </span>
+            )}
             <IconChevronDown size={11} className="shrink-0 opacity-60" />
             <select
               value={selectedKey}
@@ -167,27 +176,52 @@ export function Composer({
               }}
               disabled={disabled || modelOptions.length === 0}
               className="absolute inset-0 cursor-pointer appearance-none opacity-0"
-              aria-label="模型"
+              aria-label={t("模型", "Model")}
             >
-              {modelOptions.length === 0 && <option value="">未添加模型</option>}
-              {modelOptions.length > 0 && !selectedKey && <option value="">未选择模型</option>}
+              {modelOptions.length === 0 && <option value="">{t("未添加模型", "No models")}</option>}
+              {modelOptions.length > 0 && !selectedKey && <option value="">{t("未选择模型", "No model selected")}</option>}
               {modelOptions.map((o) => (
                 <option key={`${o.provider}/${o.model}`} value={`${o.provider}/${o.model}`}>
                   {o.label}
+                  {o.spec.supports_image ? t(" · 图片", " · Image") : ""}
                 </option>
               ))}
             </select>
           </label>
 
-          <div className="ml-auto flex items-center gap-1.5">
+          {efforts.length > 0 && (
+            <label
+              className="relative flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] text-muted hover:bg-panel-strong"
+              title={t("推理强度（在新建会话时生效）", "Reasoning effort (applies to new sessions)")}
+            >
+              <IconGauge size={13} className="shrink-0" />
+              <span className="max-w-[5rem] truncate">{selectedEffort || t("默认", "Default")}</span>
+              <IconChevronDown size={11} className="shrink-0 opacity-60" />
+              <select
+                value={selectedEffort}
+                onChange={(e) => onSelectEffort(e.target.value)}
+                disabled={disabled}
+                className="absolute inset-0 cursor-pointer appearance-none opacity-0"
+                aria-label={t("推理强度", "Reasoning effort")}
+              >
+                {efforts.map((effort) => (
+                  <option key={effort} value={effort}>
+                    {effort}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
             {busy ? (
               <button
                 type="button"
                 onClick={onInterrupt}
                 disabled={sendBlocked}
                 className="send-button is-stop disabled:opacity-40"
-                aria-label="中断本轮"
-                title="中断"
+                aria-label={t("中断本轮", "Stop this turn")}
+                title={t("中断", "Stop")}
               >
                 <IconStop size={15} />
               </button>
@@ -197,8 +231,8 @@ export function Composer({
                 onClick={submit}
                 disabled={disabled || sendBlocked || !text.trim()}
                 className="send-button"
-                aria-label="发送"
-                title="发送（Enter）"
+                aria-label={t("发送", "Send")}
+                title={t("发送（Enter）", "Send (Enter)")}
               >
                 <IconSend size={17} />
               </button>

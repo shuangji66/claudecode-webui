@@ -123,3 +123,14 @@ func TestDiscoverRejectsDirectory(t *testing.T) {
 		t.Fatal("传入目录时应报错")
 	}
 }
+
+func TestArgsEffort(t *testing.T) {
+	args := strings.Join(Args(Options{Effort: "high"}), " ")
+	if !strings.Contains(args, "--effort high") {
+		t.Fatalf("缺少 --effort: %s", args)
+	}
+	args = strings.Join(Args(Options{}), " ")
+	if strings.Contains(args, "--effort") {
+		t.Fatalf("空 Effort 不应传参: %s", args)
+	}
+}

@@ -212,6 +212,69 @@ export function IconShield(props: Props) {
   );
 }
 
+export function IconSun(props: Props) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4" />
+    </Svg>
+  );
+}
+
+export function IconMoon(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5z" />
+    </Svg>
+  );
+}
+
+export function IconMonitor(props: Props) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="4" width="18" height="13" rx="2.5" />
+      <path d="M8 21h8M12 17v4" />
+    </Svg>
+  );
+}
+
+export function IconImage(props: Props) {
+  return (
+    <Svg {...props}>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+      <circle cx="9" cy="10" r="1.5" />
+      <path d="m5 17 5-5 4 4 2-2 3 3" />
+    </Svg>
+  );
+}
+
+export function IconGlobe(props: Props) {
+  return (
+    <Svg {...props}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M3.5 12h17M12 3.5c2.2 2.4 3.3 5.2 3.3 8.5S14.2 18.1 12 20.5C9.8 18.1 8.7 15.3 8.7 12S9.8 5.9 12 3.5z" />
+    </Svg>
+  );
+}
+
+export function IconType(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M4 6h16M12 6v13M8 19h8" />
+    </Svg>
+  );
+}
+
+export function IconGauge(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M4.5 17a8.5 8.5 0 1 1 15 0" />
+      <path d="m12 13 3.5-4" />
+      <circle cx="12" cy="13" r="1.2" fill="currentColor" stroke="none" />
+    </Svg>
+  );
+}
+
 export function IconCheck(props: Props) {
   return (
     <Svg {...props}>

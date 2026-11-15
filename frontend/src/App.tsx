@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useAppStore } from "./store/useAppStore";
 import { getToken } from "./lib/runtime";
+import { applyPreferences, watchSystemTheme } from "./lib/theme";
+import { I18nProvider, useT } from "./lib/i18n";
 import { Sidebar } from "./components/layout/Sidebar";
 import { ChatPane } from "./components/chat/ChatPane";
 import { SettingsDrawer } from "./components/layout/SettingsDrawer";
@@ -20,6 +22,23 @@ function readCollapsed(): boolean {
 }
 
 export default function App() {
+  const settings = useAppStore((s) => s.settings);
+  const locale = settings?.locale === "en" ? "en" : "zh";
+
+  useEffect(() => {
+    applyPreferences(settings);
+    return watchSystemTheme(settings, () => applyPreferences(settings));
+  }, [settings]);
+
+  return (
+    <I18nProvider locale={locale}>
+      <AppShell />
+    </I18nProvider>
+  );
+}
+
+function AppShell() {
+  const t = useT();
   const info = useAppStore((s) => s.info);
   const loading = useAppStore((s) => s.loading);
   const error = useAppStore((s) => s.error);
@@ -60,8 +79,8 @@ export default function App() {
       <div className="flex h-[100dvh] flex-col items-center justify-center gap-4 bg-canvas px-6 text-center">
         <BrandMark size={40} className="text-ink" />
         <div>
-          <p className="text-[15px] font-medium text-ink">{loading ? "正在连接服务…" : "无法连接服务"}</p>
-          <p className="mt-1 max-w-md break-words text-[12px] leading-relaxed text-muted">{error ?? "正在加载配置与会话列表"}</p>
+          <p className="text-[15px] font-medium text-ink">{loading ? t("正在连接服务…", "Connecting…") : t("无法连接服务", "Cannot connect")}</p>
+          <p className="mt-1 max-w-md break-words text-[12px] leading-relaxed text-muted">{error ?? t("正在加载配置与会话列表", "Loading settings and sessions")}</p>
         </div>
         {!loading && (
           <button
@@ -70,7 +89,7 @@ export default function App() {
             className="flex items-center gap-1.5 rounded-full border border-line-strong px-4 py-2 text-[12px] font-medium text-ink hover:bg-panel-strong"
           >
             <IconRetry size={14} />
-            重试
+            {t("重试", "Retry")}
           </button>
         )}
       </div>
@@ -119,7 +138,7 @@ export default function App() {
           </div>
           <button
             type="button"
-            aria-label="关闭侧栏"
+            aria-label={t("关闭侧栏", "Close sidebar")}
             className="h-full flex-1 bg-black/35"
             onClick={() => setSidebarOpen(false)}
           />
@@ -143,7 +162,7 @@ export default function App() {
         <div className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] z-[60] md:left-1/2 md:right-auto md:w-auto md:-translate-x-1/2">
           <div className="flex items-start gap-2 rounded-xl bg-ink px-3.5 py-2.5 text-[12px] text-canvas shadow-xl">
             <span className="min-w-0 flex-1 break-words">{error}</span>
-            <button type="button" onClick={clearError} className="shrink-0 rounded p-0.5 opacity-70 hover:opacity-100" aria-label="关闭提示">
+            <button type="button" onClick={clearError} className="shrink-0 rounded p-0.5 opacity-70 hover:opacity-100" aria-label={t("关闭提示", "Dismiss")}>
               <IconClose size={14} />
             </button>
           </div>

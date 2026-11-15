@@ -51,19 +51,49 @@ location /app/ccweb/ {
 | `CCWEB_BASEURL` | 空（根路径） | 网关路径前缀，自动归一成 `/x/y` |
 | `CCWEB_CLAUDE_BIN` | 空 | 显式指定 claude；为空则依次查 PATH、程序同目录 |
 | `CCWEB_AUTH_TOKEN` | 空 | 非空即启用 Bearer 鉴权（WS 走 `?token=`） |
-| `CCWEB_DATA_DIR` | `$TMPDIR/ccweb` | **数据目录**：socket、设置、claude 家目录都在这下面 |
-| `CCWEB_SETTINGS_FILE` | `$DATA_DIR/settings.json` | 持久化配置（含第三方端点与密钥），权限 0600 |
+| `CCWEB_DATA_DIR` | `$TMPDIR/ccweb` | **数据目录**：socket、设置、授权目录、claude 家目录都在这下面 |
+| `CCWEB_SETTINGS_FILE` | `$DATA_DIR/settings.json` | 持久化配置（含第三方端点、密钥与界面偏好），权限 0600 |
+| `CCWEB_WORKSPACES_FILE` | `$DATA_DIR/workspaces.json` | 授权目录与当前工作区，权限 0600 |
 | `CCWEB_CLAUDE_HOME` | `$DATA_DIR/claude` | 派给 claude 子进程的 HOME（登录态与转录落在这里） |
-| `CCWEB_PROJECTS_ROOT` | `$HOME` | 「新建会话」可选目录的根 |
+| `CCWEB_PROJECTS_ROOT` | `$HOME` | 首次启动时自动授权的默认目录 |
+| `CCWEB_AUTO_START` | `1` | 进程启动后自动在当前工作区拉起 claude（`0/false` 关闭） |
 | `CCWEB_MAX_SESSIONS` | `8` | 常驻会话上限（单会话约 176 MB 内存） |
 | `CCWEB_IDLE_TIMEOUT` | `30m` | 空闲会话回收阈值 |
 | `CCWEB_PERMISSION_MODE` | 空 | 新会话默认权限模式 |
 | `CCWEB_MODEL` | 空 | 新会话默认模型 |
 
 
+## 工作区与授权目录
+
+左侧栏的「工作区」就是**授权目录**列表：
+
+- 首次启动会把 `CCWEB_PROJECTS_ROOT` 写进 `workspaces.json` 作为默认工作区；
+- 点工作区标题右侧的文件夹图标打开服务器目录浏览器，授权任意目录后立即切换过去；
+- 切换工作区时若该目录没有运行中的会话，会通过 `POST /api/session/ensure` 自动拉起 claude；
+- 会话创建只允许落在授权目录（及其子目录）内，直接调 API 传别的路径会得到 403；
+- 目录被移动/卸载时列表会标记「不可用」，`CCWEB_AUTO_START` 会退到第一个仍存在的目录。
+
+服务端目录浏览接口是 `GET /api/fs/list`（需要鉴权），只读、只列目录。
+
+## APP 启动自动拉起 claude
+
+`CCWEB_AUTO_START=1`（默认）时，进程启动后异步 `ensure` 当前工作区的会话。前端打开时
+如果还没会话，也会再 ensure 一次；`manager.Ensure` 内部串行化，不会重复启动。
+
+## 设置页
+
+左侧栏底部的「设置」打开分页设置（通用 / 模型）：
+
+- **通用**：主题（浅色 / 深色 / 跟随系统）、界面语言（简体中文 / English）、
+  会话字号（12–20px）、新建会话的默认权限模式；修改即时写入 `settings.json`。
+- **模型**：按协议管理提供商；每个模型可配置显示名、**推理强度档位**（`low` / `medium` /
+  `high` / `xhigh` / `max`）、默认推理强度和**图片输入支持**。选中的推理强度会作为
+  `--effort` 传给新建的 claude 进程；对已有会话修改强度会在输入框下方提示「将在新会话生效」。
+- 设置页不再展示运行环境 / 数据目录等诊断信息。
+
 ## 第三方模型 / 中继接入
 
-设置页（右上角 ⚙）里按**协议**添加「提供商」，每家填自己的 API 地址与密钥，
+在「设置 → 模型」里按**协议**添加「提供商」，每家填自己的 API 地址与密钥，
 然后从它那里获取模型列表、勾选要添加的模型。
 
 ### 添加提供商
@@ -98,9 +128,10 @@ location /app/ccweb/ {
 
 ### 在聊天页选择模型
 
-已添加的模型汇总到聊天页顶部的**模型选择器**。选中的那个就是 claude CLI 的
+已添加的模型汇总到聊天输入框下方的**模型选择器**。选中的那个就是 claude CLI 的
 **默认模型**——后端把它写进 `ANTHROPIC_MODEL`（同时把 opus/sonnet/haiku 三个别名
-也指向它），CLI 因此固定使用它，不再暴露内置模型列表。
+也指向它），CLI 因此固定使用它，不再暴露内置模型列表。模型元数据里声明了推理档位时，
+输入框下方还会出现推理强度选择器；该值通过 `--effort` 在**新会话**启动时生效。
 
 - **同一提供商内**切换：直接对当前会话发 `set_model`，立即生效，无需重开；
 - **跨提供商**切换（含会话创建时还没选模型的情况）：地址与密钥在进程启动时就固定了，
@@ -116,7 +147,8 @@ location /app/ccweb/ {
 ```
 $CCWEB_DATA_DIR/
   ccweb.sock          # 唯一监听入口
-  settings.json       # 设置（0600）
+  settings.json       # 设置 + 界面偏好（0600）
+  workspaces.json     # 授权目录 + 当前工作区（0600）
   claude/             # claude 的 HOME：登录态、~/.claude/projects 转录
 ```
 
@@ -130,7 +162,8 @@ $CCWEB_DATA_DIR/
 
 1. 设置 `CCWEB_AUTH_TOKEN`；
 2. 网关层再加一层认证 / 仅监听 localhost / 只对内网开放；
-3. 不要用 `bypassPermissions` 作为默认权限模式。
+3. 不要用 `bypassPermissions` 作为默认权限模式；
+4. 授权目录会扩大 Claude 可读写的范围——只添加确实需要的目录。
 
 ## 开发
 
@@ -163,14 +196,15 @@ backend/
       session/          单会话状态机（握手 / 轮次 / 审批 / 中断）
       manager/          会话池、上限、空闲回收
     history/            读取 ~/.claude/projects/**/*.jsonl
-    project/            工作目录枚举与校验
+    project/            工作目录枚举与校验、目录浏览器
+    workspace/          授权目录与当前工作区（workspaces.json）
     authz/              Bearer / query token 鉴权
     webui/              前端产物内嵌（go:embed）
 frontend/
   src/transport/        线上协议类型 + WebSocket 客户端
-  src/lib/              纯函数：消息归一化、diff、路径解析
+  src/lib/              纯函数：消息归一化、diff、路径解析、i18n、主题
   src/store/            zustand 全局状态
-  src/components/       布局 / 聊天 / 工具卡片 / 审批
+  src/components/       布局 / 聊天 / 工具卡片 / 审批 / 设置分页
 ```
 
 ## 协议要点（做二次开发必读）
@@ -179,6 +213,8 @@ frontend/
 - 客户端必须先发 `initialize` 控制请求，**否则 CLI 一个字节都不输出**。
 - `control_request` 的 `request_id` 在顶层；`control_response` 的在 `response.request_id`。
 - `--include-partial-messages` 会先给逐字增量、再给完整消息，前端必须「替换」而非「追加」。
+- 推理强度没有对应的控制请求，只能通过启动参数 `--effort` 固定；改强度需要新会话。
+- WebSocket 断开后前端按指数退避自动重连，并用 ping/pong 心跳清理半开连接。
 
 更多细节见三份 `AGENTS.md`。
 

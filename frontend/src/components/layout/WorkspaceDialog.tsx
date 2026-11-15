@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import type { FsListing } from "../../transport/types";
 import { baseName } from "../../lib/labels";
+import { useT } from "../../lib/i18n";
 import { IconChevronRight, IconClose, IconFolder, IconFolderPlus, IconSearch, IconTrash } from "../common/Icons";
 
 interface Props {
@@ -17,6 +18,7 @@ interface Props {
  * store 紧接着 ensure 一个 claude 会话。
  */
 export function WorkspaceDialog({ open, onClose }: Props) {
+  const t = useT();
   const workspaces = useAppStore((s) => s.workspaces);
   const currentWorkspace = useAppStore((s) => s.currentWorkspace);
   const workspaceRoot = useAppStore((s) => s.workspaceRoot);
@@ -87,18 +89,18 @@ export function WorkspaceDialog({ open, onClose }: Props) {
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 md:items-center md:p-6" onClick={onClose}>
       <div
         role="dialog"
-        aria-label="添加授权目录"
+        aria-label={t("添加授权目录", "Add authorized directory")}
         className="flex h-[90dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-canvas shadow-2xl md:h-auto md:max-h-[82vh] md:max-w-2xl md:rounded-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="safe-top flex items-start gap-3 border-b border-line px-4 py-3.5 md:pt-3.5">
           <div className="min-w-0 flex-1">
-            <h2 className="text-[15px] font-semibold text-ink">添加授权目录</h2>
+            <h2 className="text-[15px] font-semibold text-ink">{t("添加授权目录", "Add authorized directory")}</h2>
             <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
-              授权后该目录可作为工作区，Claude 会在其中读写文件。选择后立即切换并启动会话。
+              {t("授权后该目录可作为工作区，Claude 会在其中读写文件。选择后立即切换并启动会话。", "Authorize this directory as a workspace; Claude can read and write there. It switches and starts a session immediately.")}
             </p>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink" aria-label="关闭">
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink" aria-label={t("关闭", "Close")}>
             <IconClose size={18} />
           </button>
         </div>
@@ -119,7 +121,7 @@ export function WorkspaceDialog({ open, onClose }: Props) {
                 placeholder="/path/to/workspace"
                 spellCheck={false}
                 className="min-w-0 flex-1 bg-transparent font-mono text-[12px] outline-none placeholder:text-faint"
-                aria-label="目录路径"
+                aria-label={t("目录路径", "Directory path")}
               />
             </div>
             <button
@@ -128,13 +130,13 @@ export function WorkspaceDialog({ open, onClose }: Props) {
               className="flex items-center gap-1 rounded-[10px] border border-line-strong px-3 py-1.5 text-[12px] font-medium text-ink hover:bg-panel-strong disabled:opacity-40"
             >
               <IconSearch size={14} />
-              前往
+              {t("前往", "Go")}
             </button>
           </form>
 
           {quick.length > 0 && (
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] text-faint">快捷入口</span>
+              <span className="text-[10px] text-faint">{t("快捷入口", "Shortcuts")}</span>
               {quick.slice(0, 6).map((p) => (
                 <button
                   key={p}
@@ -162,13 +164,13 @@ export function WorkspaceDialog({ open, onClose }: Props) {
               className="side-row mb-0.5 text-muted"
             >
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-panel-strong text-[13px]">..</span>
-              <span className="text-[12px]">上一级</span>
+              <span className="text-[12px]">{t("上一级", "Parent")}</span>
               <span className="ml-auto max-w-[50%] truncate font-mono text-[10px] text-faint">{listing.parent}</span>
             </button>
           )}
-          {loading && !listing && <p className="px-3 py-6 text-center text-[12px] text-muted">正在读取目录…</p>}
+          {loading && !listing && <p className="px-3 py-6 text-center text-[12px] text-muted">{t("正在读取目录…", "Reading directory…")}</p>}
           {listing && listing.entries.length === 0 && !loading && (
-            <p className="px-3 py-8 text-center text-[12px] text-muted">这个目录下没有子目录。</p>
+            <p className="px-3 py-8 text-center text-[12px] text-muted">{t("这个目录下没有子目录。", "No subdirectories here.")}</p>
           )}
           {listing?.entries.map((entry) => (
             <button
@@ -192,10 +194,10 @@ export function WorkspaceDialog({ open, onClose }: Props) {
           <div className="mb-2 flex items-center gap-3">
             <label className="flex items-center gap-1.5 text-[11px] text-muted">
               <input type="checkbox" checked={hidden} onChange={(e) => toggleHidden(e.target.checked)} className="accent-[var(--c-brand)]" />
-              显示隐藏目录
+              {t("显示隐藏目录", "Show hidden")}
             </label>
             <span className="ml-auto max-w-[60%] truncate font-mono text-[10px] text-faint" title={target}>
-              {target || "未选择目录"}
+              {target || t("未选择目录", "No directory selected")}
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -204,21 +206,21 @@ export function WorkspaceDialog({ open, onClose }: Props) {
               onClick={onClose}
               className="rounded-[10px] border border-line-strong px-3.5 py-2 text-[12px] font-medium text-ink hover:bg-panel-strong"
             >
-              取消
+              {t("取消", "Cancel")}
             </button>
             <button
               type="button"
               disabled={!target || workspaceBusy || loading}
               onClick={() => void submit()}
-              className="ml-auto flex items-center gap-1.5 rounded-[10px] bg-ink px-4 py-2 text-[12px] font-medium text-canvas hover:opacity-90 disabled:opacity-40"
+              className="ml-auto flex items-center gap-1.5 rounded-[10px] bg-brand px-4 py-2 text-[12px] font-medium text-white hover:bg-brand-hover disabled:opacity-40"
             >
               <IconFolderPlus size={14} />
-              {workspaceBusy ? "授权中…" : "授权并切换"}
+              {workspaceBusy ? t("授权中…", "Authorizing…") : t("授权并切换", "Authorize & switch")}
             </button>
           </div>
           {workspaces.length > 0 && (
             <div className="mt-3 border-t border-line pt-2">
-              <p className="mb-1 text-[10px] text-faint">已授权目录</p>
+              <p className="mb-1 text-[10px] text-faint">{t("已授权目录", "Authorized directories")}</p>
               <div className="dsh-scroll flex max-h-24 flex-wrap gap-1.5 overflow-y-auto">
                 {workspaces.map((w) => (
                   <span key={w.path} className="flex max-w-full items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[10px] text-muted">
@@ -228,10 +230,10 @@ export function WorkspaceDialog({ open, onClose }: Props) {
                     <button
                       type="button"
                       onClick={() => {
-                        if (window.confirm(`移除授权目录「${w.path}」？`)) void removeWorkspace(w.path);
+                        if (window.confirm(t(`移除授权目录「${w.path}」？`, `Remove authorized directory "${w.path}"?`))) void removeWorkspace(w.path);
                       }}
                       className="text-faint hover:text-danger"
-                      aria-label={`移除 ${w.path}`}
+                      aria-label={`${t("移除", "Remove")} ${w.path}`}
                     >
                       <IconTrash size={11} />
                     </button>

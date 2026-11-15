@@ -18,6 +18,8 @@ type Options struct {
 	Model string
 	// PermissionMode 为空表示不显式指定，交由 CLI 设置决定。
 	PermissionMode string
+	// Effort 是推理强度（low/medium/high/xhigh/max）；空表示用 CLI 默认。
+	Effort string
 	// Resume 非空则续接该 session id。
 	Resume string
 	// SessionID 非空则强制使用该 session id（必须是 UUID）。
@@ -79,6 +81,9 @@ func Args(o Options) []string {
 	}
 	if o.PermissionMode != "" {
 		args = append(args, "--permission-mode", o.PermissionMode)
+	}
+	if o.Effort != "" {
+		args = append(args, "--effort", o.Effort)
 	}
 	if o.Resume != "" {
 		args = append(args, "--resume", o.Resume)

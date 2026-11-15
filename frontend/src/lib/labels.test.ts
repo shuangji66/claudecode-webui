@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseName, permissionLabel, relativeTime, sessionTitle } from "./labels";
+import { baseName, permissionLabel, relativeTime, sessionTitle, stateLabel } from "./labels";
 import type { Item } from "./model";
 
 describe("labels", () => {
@@ -32,5 +32,15 @@ describe("labels", () => {
     expect(permissionLabel("")).toBe("标准模式");
     expect(permissionLabel("acceptEdits")).toBe("接受编辑");
     expect(permissionLabel("custom")).toBe("custom");
+  });
+});
+
+describe("labels (en)", () => {
+  it("英文模式下时间与权限标签", () => {
+    const now = Date.parse("2026-01-02T00:00:00Z");
+    expect(relativeTime("2026-01-01T23:30:00Z", now, "en")).toBe("30 min ago");
+    expect(permissionLabel("acceptEdits", "en")).toBe("Accept edits");
+    expect(stateLabel("busy", "en")).toBe("Running");
+    expect(sessionTitle("/data/proj", [], "en")).toBe("proj");
   });
 });

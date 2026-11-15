@@ -1,9 +1,11 @@
 import { Collapsible } from "../common/Collapsible";
 import { IconWrench } from "../common/Icons";
 import type { ToolItem } from "../../lib/model";
+import { useT } from "../../lib/i18n";
 
 /** 兜底卡片：任何未注册的工具都能显示，保证版本升级后不出现空白卡片。 */
 export function GenericCard({ item }: { item: ToolItem }) {
+  const t = useT();
   const running = item.result === undefined;
   const inputText = safePretty(item.input);
   return (
@@ -12,15 +14,15 @@ export function GenericCard({ item }: { item: ToolItem }) {
         <IconWrench size={14} className="shrink-0 text-muted" />
         <span className="font-medium text-ink">{item.name}</span>
         <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] ${running ? "bg-brand-soft text-brand" : item.isError ? "bg-rose-50 text-danger dark:bg-rose-950/30" : "bg-panel-strong text-muted"}`}>
-          {running ? "运行中…" : item.isError ? "失败" : "完成"}
+          {running ? t("运行中…", "Running…") : item.isError ? t("失败", "Failed") : t("完成", "Done")}
         </span>
       </div>
       <div className="space-y-2 px-3 py-2.5">
-        <Collapsible title="参数" summary={preview(inputText)}>
+        <Collapsible title={t("参数", "Input")} summary={preview(inputText)}>
           <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-ink-2">{inputText}</pre>
         </Collapsible>
         {item.result !== undefined && (
-          <Collapsible title="结果" summary={preview(item.result)}>
+          <Collapsible title={t("结果", "Result")} summary={preview(item.result)}>
             <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-ink-2">
               {item.result}
             </pre>

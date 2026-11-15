@@ -8,6 +8,25 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>Claude Code 控制台</title>
+    <script>
+      // 样式加载前先定主题/字号，避免深色模式闪白。设置页同步后会再次覆盖。
+      (function () {
+        try {
+          var pref = localStorage.getItem("ccweb-theme-pref") || "system";
+          var dark = pref === "dark" || (pref === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var root = document.documentElement;
+          root.dataset.theme = dark ? "dark" : "light";
+          root.dataset.themePreference = pref;
+          var font = parseInt(localStorage.getItem("ccweb-font-size") || "15", 10);
+          if (!(font >= 12 && font <= 20)) font = 15;
+          root.style.setProperty("--chat-font-size", font + "px");
+          root.style.setProperty("--code-font-size", Math.max(10, font - 2.5) + "px");
+          root.lang = localStorage.getItem("ccweb-locale") || "zh";
+        } catch (e) {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,6 +1,9 @@
 @import "tailwindcss";
 
-/* 设计令牌对齐官方 DSH：中性底、细分隔线、蓝色业务主色、大圆角输入卡。 */
+/* dark: 工具类跟随 data-theme，而不是只跟系统媒体查询——用户可以在设置里强制浅色/深色。 */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* 设计令牌对齐官方 DSH：中性底、细分隔线、陶土色强调、大圆角输入卡。 */
 @theme inline {
   --color-canvas: var(--c-canvas);
   --color-panel: var(--c-panel);
@@ -34,10 +37,10 @@
   --c-faint: #9ca3af;
   --c-line: #ececee;
   --c-line-strong: #dedee2;
-  --c-brand: #4d6bfe;
-  --c-brand-hover: #3c5af0;
-  --c-brand-soft: #eef2ff;
-  --c-bubble: #eef2f8;
+  --c-brand: #d97757;
+  --c-brand-hover: #c96645;
+  --c-brand-soft: #fdf1ec;
+  --c-bubble: #f5f1ed;
   --c-danger: #dc2626;
   --c-warn: #b45309;
   --c-ok: #059669;
@@ -46,31 +49,33 @@
   --r-panel: 20px;
   --r-card: 14px;
   --sh-soft: 0 1px 2px rgba(16, 24, 40, 0.04), 0 10px 28px rgba(16, 24, 40, 0.07);
+  --chat-font-size: 15px;
+  --chat-line-height: 1.75;
+  --code-font-size: 12.5px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --c-canvas: #0f1115;
-    --c-panel: #15171c;
-    --c-panel-strong: #1c1f26;
-    --c-ink: #e8eaed;
-    --c-ink-2: #c7cad1;
-    --c-muted: #9aa0aa;
-    --c-faint: #717782;
-    --c-line: #262a31;
-    --c-line-strong: #333842;
-    --c-brand: #7d93ff;
-    --c-brand-hover: #93a5ff;
-    --c-brand-soft: #1c2440;
-    --c-bubble: #1d2433;
-    --c-danger: #f87171;
-    --c-warn: #fbbf24;
-    --c-ok: #34d399;
-    --c-scroll: #3a3f48;
-    --c-scroll-hover: #4b515d;
-    --sh-soft: 0 1px 2px rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.35);
-  }
+/* data-theme 由前端按「主题偏好 + 系统外观」解析后写到 <html>。 */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --c-canvas: #0f1115;
+  --c-panel: #15171c;
+  --c-panel-strong: #1c1f26;
+  --c-ink: #e8eaed;
+  --c-ink-2: #c7cad1;
+  --c-muted: #9aa0aa;
+  --c-faint: #717782;
+  --c-line: #262a31;
+  --c-line-strong: #333842;
+  --c-brand: #d97757;
+  --c-brand-hover: #e58f70;
+  --c-brand-soft: #3a241d;
+  --c-bubble: #2a2320;
+  --c-danger: #f87171;
+  --c-warn: #fbbf24;
+  --c-ok: #34d399;
+  --c-scroll: #3a3f48;
+  --c-scroll-hover: #4b515d;
+  --sh-soft: 0 1px 2px rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.35);
 }
 
 * {
@@ -193,10 +198,18 @@ pre {
   max-height: 168px;
   min-height: 26px;
   resize: none;
+  font-size: var(--chat-font-size);
 }
 
 .composer-textarea::placeholder {
   color: var(--c-faint);
+}
+
+/* iOS 对 <16px 的输入框会在聚焦时放大页面。 */
+@media (pointer: coarse) {
+  .composer-textarea {
+    font-size: max(16px, var(--chat-font-size));
+  }
 }
 
 /* 发送按钮：DSH 的圆形箭头。 */
@@ -247,6 +260,15 @@ pre {
 
   .side-row[data-active="true"] {
     background: color-mix(in srgb, var(--c-ink) 7%, transparent);
+  }
+
+  .chat-text {
+    font-size: var(--chat-font-size);
+    line-height: var(--chat-line-height);
+  }
+
+  .chat-code {
+    font-size: var(--code-font-size);
   }
 }
 

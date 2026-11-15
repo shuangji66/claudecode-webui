@@ -34,6 +34,40 @@ const (
 // SupportedProtocols 是允许选择的协议。
 var SupportedProtocols = []string{ProtocolAnthropic, ProtocolOpenAI, ProtocolResponses, ProtocolGemini}
 
+// 界面偏好的默认值与允许范围。主题与语言都落在服务端，换设备也能保持一致。
+const (
+	DefaultTheme    = "system"
+	DefaultLocale   = "zh"
+	DefaultFontSize = 15
+	MinFontSize     = 12
+	MaxFontSize     = 20
+)
+
+// SupportedThemes / SupportedLocales / SupportedEfforts 是配置校验白名单。
+var (
+	SupportedThemes  = []string{"system", "light", "dark"}
+	SupportedLocales = []string{"zh", "en"}
+	SupportedEfforts = []string{"low", "medium", "high", "xhigh", "max"}
+)
+
+// ModelSpec 是某个模型的展示与能力元数据，按模型 ID 存在 Provider.ModelMeta 里。
+// 模型 ID 列表仍是 Provider.Models，保持与旧配置 / 网关列表兼容。
+type ModelSpec struct {
+	// Name 是显示名，留空用模型 ID。
+	Name string `json:"name,omitempty"`
+	// ReasoningEfforts 是该模型支持的推理强度；为空表示不暴露强度选择。
+	ReasoningEfforts []string `json:"reasoning_efforts,omitempty"`
+	// DefaultReasoningEffort 是新建会话时的默认强度，必须在 ReasoningEfforts 内。
+	DefaultReasoningEffort string `json:"default_reasoning_effort,omitempty"`
+	// SupportsImage 表示模型接受图片输入（仅影响界面提示与能力标记）。
+	SupportsImage bool `json:"supports_image,omitempty"`
+}
+
+func (m ModelSpec) Clone() ModelSpec {
+	m.ReasoningEfforts = append([]string(nil), m.ReasoningEfforts...)
+	return m
+}
+
 // Provider 是一个第三方模型提供商。
 type Provider struct {
 	// ID 是小写唯一标识，用于稳定引用（改名不影响已选模型）。
@@ -53,12 +87,18 @@ type Provider struct {
 	ModelsPath string `json:"models_path"`
 	// Models 是从该提供商处选中并添加的模型 ID。
 	Models []string `json:"models"`
+	// ModelMeta 按模型 ID 记录显示名、推理强度与图片能力。
+	ModelMeta map[string]ModelSpec `json:"model_meta,omitempty"`
 }
 
 // Clone 返回深拷贝（切片不共享底层数组）。
 func (p Provider) Clone() Provider {
 	cp := p
 	cp.Models = append([]string(nil), p.Models...)
+	cp.ModelMeta = make(map[string]ModelSpec, len(p.ModelMeta))
+	for k, v := range p.ModelMeta {
+		cp.ModelMeta[k] = v.Clone()
+	}
 	return cp
 }
 
@@ -66,6 +106,8 @@ func (p Provider) Clone() Provider {
 type Selection struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+	// Effort 是选中的推理强度；为空时用模型默认值。
+	Effort string `json:"effort,omitempty"`
 }
 
 // Settings 是全部可持久化配置。
@@ -76,6 +118,11 @@ type Settings struct {
 	PermissionMode            string `json:"permission_mode"`
 	AutoCompactWindow         string `json:"auto_compact_window"`
 	DisableUnknownModelWindow bool   `json:"disable_unknown_model_window"`
+
+	// 界面偏好（服务端持久化，所有设备共享）。
+	Theme    string `json:"theme"`
+	Locale   string `json:"locale"`
+	FontSize int    `json:"font_size"`
 
 	// 以下字段已废弃，仅用于把旧配置迁移成 provider；迁移后会被清空。
 	LegacyBaseURL   string `json:"base_url,omitempty"`
@@ -99,34 +146,40 @@ type Public struct {
 	AutoCompactWindow         string `json:"auto_compact_window"`
 	DisableUnknownModelWindow bool   `json:"disable_unknown_model_window"`
 
+	Theme    string `json:"theme"`
+	Locale   string `json:"locale"`
+	FontSize int    `json:"font_size"`
+
 	// Path 是配置文件路径，方便在 NAS 上备份。
 	Path string `json:"path"`
 }
 
 // PublicProvider 是提供商的脱敏视图。
 type PublicProvider struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Protocol     string   `json:"protocol"`
-	BaseURL      string   `json:"base_url"`
-	APIKeySet    bool     `json:"api_key_set"`
-	APIKeyMasked string   `json:"api_key_masked"`
-	AuthTokenSet bool     `json:"auth_token_set"`
-	ModelsPath   string   `json:"models_path"`
-	Models       []string `json:"models"`
+	ID           string               `json:"id"`
+	Name         string               `json:"name"`
+	Protocol     string               `json:"protocol"`
+	BaseURL      string               `json:"base_url"`
+	APIKeySet    bool                 `json:"api_key_set"`
+	APIKeyMasked string               `json:"api_key_masked"`
+	AuthTokenSet bool                 `json:"auth_token_set"`
+	ModelsPath   string               `json:"models_path"`
+	Models       []string             `json:"models"`
+	ModelMeta    map[string]ModelSpec `json:"model_meta"`
 }
 
 // ProviderPatch 是提交上来的提供商（密钥留空表示沿用已保存的）。
 type ProviderPatch struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	Protocol   string   `json:"protocol"`
-	BaseURL    string   `json:"base_url"`
-	APIKey     string   `json:"api_key"`
-	AuthToken  string   `json:"auth_token"`
-	ClearKey   bool     `json:"clear_key"`
-	ModelsPath string   `json:"models_path"`
-	Models     []string `json:"models"`
+	ID         string               `json:"id"`
+	Name       string               `json:"name"`
+	Protocol   string               `json:"protocol"`
+	BaseURL    string               `json:"base_url"`
+	APIKey     string               `json:"api_key"`
+	AuthToken  string               `json:"auth_token"`
+	ClearKey   bool                 `json:"clear_key"`
+	ModelsPath string               `json:"models_path"`
+	Models     []string             `json:"models"`
+	ModelMeta  map[string]ModelSpec `json:"model_meta"`
 }
 
 // Patch 是局部更新请求。Providers 为 nil 表示不改；非 nil 则整体替换。
@@ -136,6 +189,9 @@ type Patch struct {
 	PermissionMode            *string          `json:"permission_mode"`
 	AutoCompactWindow         *string          `json:"auto_compact_window"`
 	DisableUnknownModelWindow *bool            `json:"disable_unknown_model_window"`
+	Theme                     *string          `json:"theme"`
+	Locale                    *string          `json:"locale"`
+	FontSize                  *int             `json:"font_size"`
 }
 
 // Store 是带锁的内存态 + 磁盘持久化。
@@ -156,11 +212,25 @@ func Open(path string) (*Store, error) {
 		}
 		migrateLegacy(&s.cur)
 	case errors.Is(err, os.ErrNotExist):
-		// 首次启动，保持空配置
+		// 首次启动，保持空 provider；界面偏好仍要给默认值
 	default:
 		return nil, fmt.Errorf("settings: 读取 %s: %w", path, err)
 	}
+	normalizePreferences(&s.cur)
 	return s, nil
+}
+
+// normalizePreferences 给老配置补上界面偏好默认值。
+func normalizePreferences(v *Settings) {
+	if !containsString(SupportedThemes, v.Theme) {
+		v.Theme = DefaultTheme
+	}
+	if !containsString(SupportedLocales, v.Locale) {
+		v.Locale = DefaultLocale
+	}
+	if v.FontSize < MinFontSize || v.FontSize > MaxFontSize {
+		v.FontSize = DefaultFontSize
+	}
 }
 
 // migrateLegacy 把旧的「单端点 + 别名槽位」配置转成一个 provider。
@@ -248,22 +318,42 @@ func (v Settings) Provider(id string) (Provider, bool) {
 	return Provider{}, false
 }
 
-// Active 返回当前选中的提供商与模型；未选中或提供商不存在时 ok=false。
+// Active 返回当前选中的提供商与模型 ID；未选中或提供商不存在时 ok=false。
 func (v Settings) Active() (Provider, string, bool) {
+	p, model, _, ok := v.ActiveModel()
+	return p, model, ok
+}
+
+// ActiveModel 返回当前选中的提供商、模型 ID 与元数据。
+// 模型被从列表移除时仍视为有效（模型 ID 可以直接发），元数据用空默认值。
+func (v Settings) ActiveModel() (Provider, string, ModelSpec, bool) {
 	if v.Selected.Provider == "" || v.Selected.Model == "" {
-		return Provider{}, "", false
+		return Provider{}, "", ModelSpec{}, false
 	}
 	p, ok := v.Provider(v.Selected.Provider)
 	if !ok {
-		return Provider{}, "", false
+		return Provider{}, "", ModelSpec{}, false
 	}
-	for _, m := range p.Models {
-		if m == v.Selected.Model {
-			return p, m, true
-		}
+	spec := p.ModelMeta[v.Selected.Model].Clone()
+	if spec.Name == "" {
+		spec.Name = v.Selected.Model
 	}
-	// 模型可能被从列表里移除，但当前选择仍指向它——仍然生效，避免会话凭空失效。
-	return p, v.Selected.Model, true
+	return p, v.Selected.Model, spec, true
+}
+
+// DefaultEffort 返回新建会话应使用的推理强度；模型未声明强度时为空。
+func (v Settings) DefaultEffort() string {
+	_, _, spec, ok := v.ActiveModel()
+	if !ok || len(spec.ReasoningEfforts) == 0 {
+		return ""
+	}
+	if containsString(spec.ReasoningEfforts, v.Selected.Effort) {
+		return v.Selected.Effort
+	}
+	if containsString(spec.ReasoningEfforts, spec.DefaultReasoningEffort) {
+		return spec.DefaultReasoningEffort
+	}
+	return spec.ReasoningEfforts[0]
 }
 
 // Env 返回注入 claude 子进程的环境变量。
@@ -318,6 +408,9 @@ func (s *Store) Public() Public {
 		PermissionMode:            cur.PermissionMode,
 		AutoCompactWindow:         cur.AutoCompactWindow,
 		DisableUnknownModelWindow: cur.DisableUnknownModelWindow,
+		Theme:                     cur.Theme,
+		Locale:                    cur.Locale,
+		FontSize:                  cur.FontSize,
 		Path:                      s.path,
 	}
 	for _, p := range cur.Providers {
@@ -325,6 +418,10 @@ func (s *Store) Public() Public {
 		// 前端 p.models.map 会直接抛 TypeError 导致整页白屏。这里必须用非 nil 空切片。
 		models := make([]string, 0, len(p.Models))
 		models = append(models, p.Models...)
+		meta := make(map[string]ModelSpec, len(p.ModelMeta))
+		for k, v := range p.ModelMeta {
+			meta[k] = v.Clone()
+		}
 		pub.Providers = append(pub.Providers, PublicProvider{
 			ID:           p.ID,
 			Name:         p.Name,
@@ -335,6 +432,7 @@ func (s *Store) Public() Public {
 			AuthTokenSet: p.AuthToken != "",
 			ModelsPath:   p.ModelsPath,
 			Models:       models,
+			ModelMeta:    meta,
 		})
 	}
 	return pub
@@ -365,11 +463,42 @@ func (s *Store) Apply(p Patch) (Public, error) {
 	if p.DisableUnknownModelWindow != nil {
 		next.DisableUnknownModelWindow = *p.DisableUnknownModelWindow
 	}
+	if p.Theme != nil {
+		theme := strings.TrimSpace(*p.Theme)
+		if !containsString(SupportedThemes, theme) {
+			s.mu.Unlock()
+			return Public{}, fmt.Errorf("settings: 不支持的主题 %q", theme)
+		}
+		next.Theme = theme
+	}
+	if p.Locale != nil {
+		locale := strings.TrimSpace(*p.Locale)
+		if !containsString(SupportedLocales, locale) {
+			s.mu.Unlock()
+			return Public{}, fmt.Errorf("settings: 不支持的语言 %q", locale)
+		}
+		next.Locale = locale
+	}
+	if p.FontSize != nil {
+		if *p.FontSize < MinFontSize || *p.FontSize > MaxFontSize {
+			s.mu.Unlock()
+			return Public{}, fmt.Errorf("settings: 字号必须在 %d–%d px 之间", MinFontSize, MaxFontSize)
+		}
+		next.FontSize = *p.FontSize
+	}
 
 	// 选中的提供商被删掉时清空选择，避免悬空引用。
 	if next.Selected.Provider != "" {
-		if _, ok := next.Provider(next.Selected.Provider); !ok {
+		p, ok := next.Provider(next.Selected.Provider)
+		if !ok {
 			next.Selected = Selection{}
+		} else if next.Selected.Model != "" {
+			spec := p.ModelMeta[next.Selected.Model]
+			if len(spec.ReasoningEfforts) == 0 {
+				next.Selected.Effort = ""
+			} else if !containsString(spec.ReasoningEfforts, next.Selected.Effort) {
+				next.Selected.Effort = spec.DefaultReasoningEffort
+			}
 		}
 	}
 
@@ -407,13 +536,15 @@ func mergeProviders(old []Provider, in []ProviderPatch) ([]Provider, error) {
 		}
 		prev, existed := oldByID[id]
 
+		models := dedupe(patch.Models)
 		p := Provider{
 			ID:         id,
 			Name:       strings.TrimSpace(patch.Name),
 			Protocol:   proto,
 			BaseURL:    strings.TrimRight(strings.TrimSpace(patch.BaseURL), "/"),
 			ModelsPath: strings.TrimSpace(patch.ModelsPath),
-			Models:     dedupe(patch.Models),
+			Models:     models,
+			ModelMeta:  normalizeModelMeta(models, patch.ModelMeta),
 		}
 		if p.Name == "" {
 			p.Name = id
@@ -437,6 +568,45 @@ func mergeProviders(old []Provider, in []ProviderPatch) ([]Provider, error) {
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// normalizeModelMeta 只保留仍存在的模型 ID，并修正强度列表/默认值。
+func normalizeModelMeta(models []string, in map[string]ModelSpec) map[string]ModelSpec {
+	out := make(map[string]ModelSpec, len(models))
+	for _, id := range models {
+		spec, ok := in[id]
+		if !ok {
+			continue
+		}
+		spec.Name = strings.TrimSpace(spec.Name)
+		efforts := make([]string, 0, len(spec.ReasoningEfforts))
+		seen := make(map[string]bool)
+		for _, e := range spec.ReasoningEfforts {
+			e = strings.TrimSpace(e)
+			if e == "" || seen[e] || !containsString(SupportedEfforts, e) {
+				continue
+			}
+			seen[e] = true
+			efforts = append(efforts, e)
+		}
+		spec.ReasoningEfforts = efforts
+		if len(efforts) == 0 {
+			spec.DefaultReasoningEffort = ""
+		} else if !containsString(efforts, spec.DefaultReasoningEffort) {
+			spec.DefaultReasoningEffort = efforts[0]
+		}
+		out[id] = spec
+	}
+	return out
+}
+
+func containsString(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 func dedupe(in []string) []string {

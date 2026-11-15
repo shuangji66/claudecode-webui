@@ -6,8 +6,10 @@ import { ThinkingBlock } from "./ThinkingBlock";
 import { UserBubble } from "./UserBubble";
 import { ToolCardHost } from "../tools/ToolCardHost";
 import { IconAlert, IconSpark } from "../common/Icons";
+import { useT } from "../../lib/i18n";
 
 export function MessageList({ items, empty }: { items: Item[]; empty?: string }) {
+  const t = useT();
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
@@ -27,9 +29,9 @@ export function MessageList({ items, empty }: { items: Item[]; empty?: string })
         <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft text-brand">
           <IconSpark size={23} />
         </span>
-        <p className="text-[15px] font-medium text-ink">{empty ?? "开始新的对话"}</p>
+        <p className="text-[15px] font-medium text-ink">{empty ?? t("开始新的对话", "Start a new conversation")}</p>
         <p className="max-w-sm text-[12px] leading-relaxed text-muted">
-          在下方输入消息。Claude 会在当前工作区里读取文件、执行命令，并把每一步结构化展示出来。
+          {t("在下方输入消息。Claude 会在当前工作区里读取文件、执行命令，并把每一步结构化展示出来。", "Type below. Claude reads files, runs commands and renders each step structurally.")}
         </p>
       </div>
     );
@@ -45,7 +47,7 @@ export function MessageList({ items, empty }: { items: Item[]; empty?: string })
       }}
     >
       <div className="mx-auto w-full max-w-[820px] px-4 py-6 md:px-6 md:py-8">
-        <div className="space-y-5 text-[14.5px]">
+        <div className="space-y-5">
           {items.map((item) => {
             switch (item.kind) {
               case "user":

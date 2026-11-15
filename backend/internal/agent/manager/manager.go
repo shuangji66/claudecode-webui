@@ -32,6 +32,7 @@ type Info struct {
 	// （跨提供商切换需要新建会话，因为地址与密钥在进程启动时就定死了）。
 	Provider   string    `json:"provider,omitempty"`
 	Model      string    `json:"model,omitempty"`
+	Effort     string    `json:"effort,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	LastActive time.Time `json:"last_active"`
 }
@@ -177,9 +178,11 @@ func (m *Manager) create(abs, model, permissionMode string) (Info, error) {
 	if permissionMode == "" {
 		permissionMode = m.cfg.PermissionMode
 	}
+	effort := cfgSet.DefaultEffort()
 	args := process.Args(process.Options{
 		Model:                  model,
 		PermissionMode:         permissionMode,
+		Effort:                 effort,
 		IncludePartialMessages: true,
 	})
 	// 先净化继承环境，再追加设置里的 ANTHROPIC_*（后者生效，从而覆盖宿主机同名变量）。
@@ -201,7 +204,7 @@ func (m *Manager) create(abs, model, permissionMode string) (Info, error) {
 	m.mu.Lock()
 	m.sessions[id] = sess
 	m.procs[id] = proc
-	m.metas[id] = meta{Provider: cfgSet.Selected.Provider, Model: model}
+	m.metas[id] = meta{Provider: cfgSet.Selected.Provider, Model: model, Effort: effort}
 	m.mu.Unlock()
 
 	if err := sess.Start(); err != nil {
@@ -221,6 +224,7 @@ func (m *Manager) create(abs, model, permissionMode string) (Info, error) {
 	info := infoOf(sess)
 	info.Provider = cfgSet.Selected.Provider
 	info.Model = model
+	info.Effort = effort
 	return info, nil
 }
 
@@ -242,6 +246,7 @@ func (m *Manager) List() []Info {
 		if mt, ok := m.metas[id]; ok {
 			info.Provider = mt.Provider
 			info.Model = mt.Model
+			info.Effort = mt.Effort
 		}
 		out = append(out, info)
 	}
@@ -329,6 +334,7 @@ func (m *Manager) reapIdle() {
 type meta struct {
 	Provider string
 	Model    string
+	Effort   string
 }
 
 func infoOf(s *session.Session) Info {

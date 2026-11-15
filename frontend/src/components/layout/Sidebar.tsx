@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import type { SessionInfo, WorkspaceEntry } from "../../transport/types";
-import { baseName, relativeTime, sessionTitle } from "../../lib/labels";
+import { baseName, relativeTime, sessionTitle, stateLabel } from "../../lib/labels";
+import { useLocale, useT } from "../../lib/i18n";
 import {
   BrandMark,
   IconChevronDown,
@@ -43,6 +44,8 @@ function belongs(cwd: string, workspacePath: string): boolean {
 }
 
 export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onAddWorkspace, onOpenHistory }: Props) {
+  const t = useT();
+  const locale = useLocale();
   const workspaces = useAppStore((s) => s.workspaces);
   const currentWorkspace = useAppStore((s) => s.currentWorkspace);
   const sessions = useAppStore((s) => s.sessions);
@@ -85,7 +88,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       else others.push(s);
     }
     if (others.length > 0) {
-      result.push({ path: "__other__", name: "其他会话", exists: true, workspace: null, sessions: others });
+      result.push({ path: "__other__", name: t("其他会话", "Other sessions"), exists: true, workspace: null, sessions: others });
     }
     const q = query.trim().toLowerCase();
     for (const g of result) {
@@ -97,25 +100,25 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         ...g,
         sessions: g.sessions.filter(
           (s) =>
-            sessionTitle(s.cwd, items[s.id]).toLowerCase().includes(q) ||
+            sessionTitle(s.cwd, items[s.id], locale).toLowerCase().includes(q) ||
             s.cwd.toLowerCase().includes(q) ||
             g.name.toLowerCase().includes(q),
         ),
       }))
       .filter((g) => g.sessions.length > 0 || g.name.toLowerCase().includes(q));
-  }, [workspaces, sessions, query, items]);
+  }, [workspaces, sessions, query, items, locale]);
 
   const activeConn = activeId ? (conns[activeId]?.state ?? "idle") : "idle";
   const connLabel =
     activeConn === "open"
-      ? "已连接"
+      ? t("已连接", "Connected")
       : activeConn === "reconnecting"
-        ? "重连中"
+        ? t("重连中", "Reconnecting")
         : activeConn === "connecting"
-          ? "连接中"
+          ? t("连接中", "Connecting")
           : activeConn === "closed"
-            ? "已断开"
-            : "未连接";
+            ? t("已断开", "Disconnected")
+            : t("未连接", "Not connected");
   const connTone =
     activeConn === "open" ? "bg-ok" : activeConn === "reconnecting" || activeConn === "connecting" ? "bg-warn" : "bg-faint";
 
@@ -146,27 +149,27 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   const askRemove = async (g: WorkspaceGroup) => {
     if (g.path === "__other__") return;
-    if (!window.confirm(`移除授权目录「${g.path}」？\n移除后不能再在该目录新建会话。`)) return;
+    if (!window.confirm(t(`移除授权目录「${g.path}」？\n移除后不能再在该目录新建会话。`, `Remove authorized directory "${g.path}"?\nYou cannot start new sessions there afterwards.`))) return;
     await removeWorkspace(g.path);
   };
 
   const closeOne = async (s: SessionInfo) => {
-    if (!window.confirm(`关闭会话「${sessionTitle(s.cwd, items[s.id])}」？\n会终止对应的 claude 进程。`)) return;
+    if (!window.confirm(t(`关闭会话「${sessionTitle(s.cwd, items[s.id], locale)}」？\n会终止对应的 claude 进程。`, `Close session "${sessionTitle(s.cwd, items[s.id], locale)}"?\nThe claude process will be terminated.`))) return;
     await closeSession(s.id);
   };
 
   if (collapsed) {
     return (
       <aside className="flex h-full w-16 shrink-0 flex-col items-center border-r border-line bg-panel px-2 py-3">
-        <button type="button" onClick={onToggleCollapse} className="rounded-lg p-1.5 text-ink hover:bg-black/5" aria-label="展开侧栏" title="展开侧栏">
+        <button type="button" onClick={onToggleCollapse} className="rounded-lg p-1.5 text-ink hover:bg-black/5" aria-label={t("展开侧栏", "Expand sidebar")} title={t("展开侧栏", "Expand sidebar")}>
           <BrandMark size={26} />
         </button>
         <button
           type="button"
           onClick={startNewChat}
           className="mt-4 flex h-9 w-9 items-center justify-center rounded-full border border-line-strong bg-canvas text-ink hover:bg-panel-strong"
-          aria-label="新对话"
-          title="新对话"
+          aria-label={t("新对话", "New chat")}
+          title={t("新对话", "New chat")}
         >
           <IconPlus size={17} />
         </button>
@@ -174,8 +177,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
           type="button"
           onClick={onOpenHistory}
           className="mt-2 flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:bg-black/5 hover:text-ink"
-          aria-label="历史记录"
-          title="历史记录"
+          aria-label={t("历史记录", "History")}
+          title={t("历史记录", "History")}
         >
           <IconHistory size={18} />
         </button>
@@ -185,8 +188,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
           type="button"
           onClick={onOpenSettings}
           className="flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:bg-black/5 hover:text-ink"
-          aria-label="设置"
-          title="设置"
+          aria-label={t("设置", "Settings")}
+          title={t("设置", "Settings")}
         >
           <IconSettings size={18} />
         </button>
@@ -197,7 +200,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   return (
     <aside className="safe-top flex h-full w-[280px] shrink-0 flex-col border-r border-line bg-panel md:pt-0">
       <div className="flex h-[58px] shrink-0 items-center gap-2 px-3">
-        <button type="button" onClick={startNewChat} className="flex min-w-0 items-center gap-2 text-left" aria-label="新对话">
+        <button type="button" onClick={startNewChat} className="flex min-w-0 items-center gap-2 text-left" aria-label={t("新对话", "New chat")}>
           <BrandMark size={25} className="shrink-0 text-ink" />
           <span className="truncate text-[15px] font-semibold tracking-tight text-ink">Claude Code</span>
           <span className="shrink-0 rounded-[5px] border border-line-strong px-1 py-[1px] text-[9px] font-semibold tracking-wide text-muted">
@@ -208,8 +211,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
           type="button"
           onClick={onClose ?? onToggleCollapse}
           className="ml-auto rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
-          aria-label={onClose ? "关闭侧栏" : "收起侧栏"}
-          title={onClose ? "关闭" : "收起侧栏"}
+          aria-label={onClose ? t("关闭侧栏", "Close sidebar") : t("收起侧栏", "Collapse sidebar")}
+          title={onClose ? t("关闭", "Close") : t("收起侧栏", "Collapse sidebar")}
         >
           {onClose ? <IconClose size={17} /> : <IconPanel size={17} />}
         </button>
@@ -222,12 +225,12 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
           className="flex w-full items-center justify-center gap-2 rounded-[10px] border border-line-strong bg-canvas py-2 text-[13px] font-medium text-ink transition hover:bg-panel-strong"
         >
           <IconPlus size={15} />
-          {starting ? "正在启动…" : "新对话"}
+          {starting ? t("正在启动…", "Starting…") : t("新对话", "New chat")}
         </button>
       </div>
 
       <div className="mt-4 flex items-center gap-1 px-3">
-        <span className="text-[12px] font-medium text-muted">工作区</span>
+        <span className="text-[12px] font-medium text-muted">{t("工作区", "Workspaces")}</span>
         <div className="ml-auto flex items-center gap-0.5">
           <button
             type="button"
@@ -236,8 +239,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
               if (searchOpen) setQuery("");
             }}
             className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
-            aria-label="搜索会话"
-            title="搜索"
+            aria-label={t("搜索会话", "Search sessions")}
+            title={t("搜索", "Search")}
           >
             <IconSearch size={15} />
           </button>
@@ -245,8 +248,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             type="button"
             onClick={onAddWorkspace}
             className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
-            aria-label="添加授权目录"
-            title="添加授权目录"
+            aria-label={t("添加授权目录", "Add authorized directory")}
+            title={t("添加授权目录", "Add authorized directory")}
           >
             <IconFolderPlus size={15} />
           </button>
@@ -259,7 +262,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索工作区或会话"
+            placeholder={t("搜索工作区或会话", "Search workspaces or sessions")}
             className="w-full rounded-lg border border-line-strong bg-canvas px-2.5 py-1.5 text-[12px] outline-none placeholder:text-faint focus:border-brand/60"
           />
         </div>
@@ -273,8 +276,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             className="mt-6 flex w-full flex-col items-center gap-2 rounded-xl border border-dashed border-line-strong px-4 py-6 text-center hover:bg-black/[0.02]"
           >
             <IconFolder size={22} className="text-faint" />
-            <span className="text-[12px] font-medium text-ink">添加授权目录</span>
-            <span className="text-[11px] leading-relaxed text-muted">授权一个目录后，Claude 就能在其中工作。</span>
+            <span className="text-[12px] font-medium text-ink">{t("添加授权目录", "Add authorized directory")}</span>
+            <span className="text-[11px] leading-relaxed text-muted">{t("授权一个目录后，Claude 就能在其中工作。", "Authorize a directory and Claude can work there.")}</span>
           </button>
         )}
 
@@ -290,11 +293,11 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                   disabled={g.path === "__other__" || !g.exists}
                   className={`side-row min-w-0 flex-1 ${isCurrent ? "text-ink" : "text-ink-2"} ${!g.exists ? "opacity-50" : ""}`}
                   data-active={isCurrent}
-                  title={g.path === "__other__" ? "不在授权目录内的运行会话" : g.path}
+                  title={g.path === "__other__" ? t("不在授权目录内的运行会话", "Running sessions outside authorized directories") : g.path}
                 >
                   {g.path === "__other__" ? <IconTerminal size={15} className="shrink-0 text-muted" /> : <IconFolder size={15} className="shrink-0 text-muted" />}
                   <span className="truncate text-[12.5px] font-medium">{g.name}</span>
-                  {!g.exists && g.path !== "__other__" && <span className="shrink-0 text-[10px] text-warn">不可用</span>}
+                  {!g.exists && g.path !== "__other__" && <span className="shrink-0 text-[10px] text-warn">{t("不可用", "Missing")}</span>}
                   {g.sessions.length > 0 && (
                     <span className="ml-auto shrink-0 rounded-full bg-black/[0.06] px-1.5 text-[10px] text-muted">{g.sessions.length}</span>
                   )}
@@ -305,8 +308,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                       type="button"
                       onClick={() => toggleGroup(g.path)}
                       className="rounded-md p-1 text-muted hover:bg-black/5 hover:text-ink"
-                      aria-label={open ? "收起会话" : "展开会话"}
-                      title={open ? "收起" : "展开"}
+                      aria-label={open ? t("收起会话", "Collapse sessions") : t("展开会话", "Expand sessions")}
+                      title={open ? t("收起", "Collapse") : t("展开", "Expand")}
                     >
                       {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
                     </button>
@@ -314,8 +317,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                       type="button"
                       onClick={() => void askRemove(g)}
                       className="rounded-md p-1 text-muted opacity-0 transition hover:bg-black/5 hover:text-danger group-hover:opacity-100"
-                      aria-label={`移除授权目录 ${g.path}`}
-                      title="移除授权目录"
+                      aria-label={`${t("移除授权目录", "Remove authorized directory")} ${g.path}`}
+                      title={t("移除授权目录", "Remove authorized directory")}
                     >
                       <IconTrash size={14} />
                     </button>
@@ -327,7 +330,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                 <div className="mb-1 ml-2 border-l border-line pl-1.5">
                   {g.sessions.length === 0 && (
                     <p className="px-2 py-1.5 text-[11px] text-faint">
-                      {isCurrent && starting ? "正在启动 Claude…" : "暂无会话"}
+                      {isCurrent && starting ? t("正在启动 Claude…", "Starting Claude…") : t("暂无会话", "No sessions")}
                     </p>
                   )}
                   {g.sessions.map((s) => {
@@ -343,7 +346,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                           }}
                           className="side-row min-w-0 flex-1"
                           data-active={active}
-                          title={`${s.cwd}\n${state}`}
+                          title={`${s.cwd}\n${stateLabel(state, locale)}`}
                         >
                           <span
                             className={`h-1.5 w-1.5 shrink-0 rounded-full ${
@@ -351,16 +354,16 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                             }`}
                           />
                           <span className={`truncate text-[12px] ${active ? "text-ink" : "text-ink-2"}`}>
-                            {sessionTitle(s.cwd, items[s.id])}
+                            {sessionTitle(s.cwd, items[s.id], locale)}
                           </span>
-                          <span className="ml-auto shrink-0 text-[10px] text-faint">{relativeTime(s.last_active ?? s.created_at)}</span>
+                          <span className="ml-auto shrink-0 text-[10px] text-faint">{relativeTime(s.last_active ?? s.created_at, Date.now(), locale)}</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => void closeOne(s)}
                           className="rounded-md p-1 text-muted opacity-0 transition hover:bg-black/5 hover:text-danger group-hover/session:opacity-100"
-                          aria-label="关闭会话"
-                          title="关闭会话"
+                          aria-label={t("关闭会话", "Close session")}
+                          title={t("关闭会话", "Close session")}
                         >
                           <IconClose size={13} />
                         </button>
@@ -377,18 +380,18 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       <div className="shrink-0 border-t border-line px-2 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] pt-2 md:pb-2">
         <button type="button" onClick={onOpenHistory} className="side-row text-muted hover:text-ink">
           <IconClock size={15} />
-          <span className="text-[12px]">历史记录</span>
+          <span className="text-[12px]">{t("历史记录", "History")}</span>
         </button>
         <button type="button" onClick={onOpenSettings} className="side-row text-muted hover:text-ink">
           <IconSettings size={15} />
-          <span className="text-[12px]">设置</span>
+          <span className="text-[12px]">{t("设置", "Settings")}</span>
           <span className="ml-auto flex items-center gap-1 text-[10px] text-faint">
             <span className={`h-1.5 w-1.5 rounded-full ${connTone}`} />
             {connLabel}
           </span>
         </button>
         <div className="flex items-center justify-between px-2 pt-1 text-[10px] text-faint">
-          <span className="truncate font-mono">{currentWorkspace ? baseName(currentWorkspace) : "未选择工作区"}</span>
+          <span className="truncate font-mono">{currentWorkspace ? baseName(currentWorkspace) : t("未选择工作区", "No workspace")}</span>
           <span>v{info?.version ?? "-"}</span>
         </div>
       </div>
