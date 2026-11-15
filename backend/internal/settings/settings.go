@@ -43,6 +43,10 @@ type Settings struct {
 	// DisableUnknownModelWindow 关闭 CLI 对未知模型窗口的推断。
 	// 对应 CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1。
 	DisableUnknownModelWindow bool `json:"disable_unknown_model_window"`
+
+	// ModelsPath 是拉取模型列表的路径（如 /api/models）。
+	// 留空表示自动探测。不同中转的实现路径差异极大，必须允许手填。
+	ModelsPath string `json:"models_path"`
 }
 
 // Public 是脱敏后的视图，用于回传前端。
@@ -59,6 +63,7 @@ type Public struct {
 	PermissionMode            string `json:"permission_mode"`
 	AutoCompactWindow         string `json:"auto_compact_window"`
 	DisableUnknownModelWindow bool   `json:"disable_unknown_model_window"`
+	ModelsPath                string `json:"models_path"`
 	// Path 是配置文件路径，方便用户在 NAS 上备份。
 	Path string `json:"path"`
 }
@@ -78,6 +83,7 @@ type Patch struct {
 
 	AutoCompactWindow         *string `json:"auto_compact_window"`
 	DisableUnknownModelWindow *bool   `json:"disable_unknown_model_window"`
+	ModelsPath                *string `json:"models_path"`
 }
 
 // Store 是带锁的内存态 + 磁盘持久化。
@@ -130,6 +136,7 @@ func (s *Store) Public() Public {
 		PermissionMode:            cur.PermissionMode,
 		AutoCompactWindow:         cur.AutoCompactWindow,
 		DisableUnknownModelWindow: cur.DisableUnknownModelWindow,
+		ModelsPath:                cur.ModelsPath,
 		Path:                      s.path,
 	}
 	return p
@@ -180,6 +187,9 @@ func (s *Store) Apply(p Patch) (Public, error) {
 	if p.DisableUnknownModelWindow != nil {
 		next.DisableUnknownModelWindow = *p.DisableUnknownModelWindow
 	}
+	if p.ModelsPath != nil {
+		next.ModelsPath = strings.TrimSpace(*p.ModelsPath)
+	}
 
 	if err := writeAtomic(s.path, next); err != nil {
 		return Public{}, err
@@ -199,6 +209,7 @@ func (s *Store) Apply(p Patch) (Public, error) {
 		PermissionMode:            next.PermissionMode,
 		AutoCompactWindow:         next.AutoCompactWindow,
 		DisableUnknownModelWindow: next.DisableUnknownModelWindow,
+		ModelsPath:                next.ModelsPath,
 		Path:                      s.path,
 	}, nil
 }

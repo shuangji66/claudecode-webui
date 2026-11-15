@@ -71,6 +71,8 @@ interface AppState {
   modelsError: string | null;
   modelsRaw: string;
   modelsTried: string[];
+  modelsAttempts: { path: string; status: number; note: string }[];
+  verify: { model: string; result: ProbeResult } | null;
   projects: ProjectEntry[];
   history: HistorySession[];
   sessions: SessionInfo[];
@@ -89,7 +91,8 @@ interface AppState {
   loadSettings: () => Promise<void>;
   saveSettings: (patch: SettingsPatch) => Promise<boolean>;
   testConnection: () => Promise<void>;
-  fetchGatewayModels: (baseUrl: string, apiKey: string) => Promise<void>;
+  fetchGatewayModels: (baseUrl: string, apiKey: string, modelsPath?: string) => Promise<void>;
+  verifyModel: (model: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
   refreshHistory: () => Promise<void>;
   createSession: (cwd: string, model?: string) => Promise<void>;
@@ -133,6 +136,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   modelsError: null,
   modelsRaw: "",
   modelsTried: [],
+  modelsAttempts: [],
+  verify: null,
   projects: [],
   history: [],
   sessions: [],
@@ -210,25 +215,55 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
   },
 
-  fetchGatewayModels: async (baseUrl, apiKey) => {
-    set({ modelsError: null, error: null });
+  fetchGatewayModels: async (baseUrl, apiKey, modelsPath = "") => {
+    set({ modelsError: null, error: null, modelsAttempts: [] });
     try {
       const r = await apiFetch<ModelsResult>("/api/settings/models", {
         method: "POST",
-        body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
+        body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, models_path: modelsPath }),
       });
       if (r.models && r.models.length > 0) {
-        set({ gatewayModels: r.models, modelsRaw: "", modelsTried: r.tried ?? [] });
+        set({
+          gatewayModels: r.models,
+          modelsRaw: "",
+          modelsTried: r.tried ?? [],
+          modelsAttempts: r.attempts ?? [],
+        });
       } else {
         set({
           gatewayModels: [],
           modelsError: r.detail || "未获取到模型",
           modelsRaw: r.raw ?? "",
           modelsTried: r.tried ?? [],
+          modelsAttempts: r.attempts ?? [],
         });
       }
     } catch (e) {
-      set({ gatewayModels: [], modelsError: e instanceof Error ? e.message : String(e), modelsRaw: "" });
+      set({
+        gatewayModels: [],
+        modelsError: e instanceof Error ? e.message : String(e),
+        modelsRaw: "",
+        modelsAttempts: [],
+      });
+    }
+  },
+
+  verifyModel: async (model) => {
+    if (!model.trim()) return;
+    set({ verify: { model, result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: "验证中…" } } });
+    try {
+      const r = await apiFetch<ProbeResult>("/api/settings/verify", {
+        method: "POST",
+        body: JSON.stringify({ model }),
+      });
+      set({ verify: { model, result: r } });
+    } catch (e) {
+      set({
+        verify: {
+          model,
+          result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: e instanceof Error ? e.message : String(e) },
+        },
+      });
     }
   },
 

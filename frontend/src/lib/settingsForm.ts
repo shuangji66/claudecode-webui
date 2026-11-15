@@ -16,6 +16,7 @@ export interface SettingsPatch {
   permission_mode?: string;
   auto_compact_window?: string;
   disable_unknown_model_window?: boolean;
+  models_path?: string;
 }
 
 export interface SettingsFormState {
@@ -29,6 +30,7 @@ export interface SettingsFormState {
   permissionMode: string;
   autoCompactWindow: string;
   disableUnknownModelWindow: boolean;
+  modelsPath: string;
 }
 
 export const EMPTY_FORM: SettingsFormState = {
@@ -42,6 +44,7 @@ export const EMPTY_FORM: SettingsFormState = {
   permissionMode: "",
   autoCompactWindow: "",
   disableUnknownModelWindow: false,
+  modelsPath: "",
 };
 
 /** 从后端脱敏视图填充表单；密钥字段保持为空。 */
@@ -54,6 +57,7 @@ export function formFromPublic(p: {
   permission_mode?: string;
   auto_compact_window?: string;
   disable_unknown_model_window?: boolean;
+  models_path?: string;
 }): SettingsFormState {
   return {
     ...EMPTY_FORM,
@@ -65,6 +69,7 @@ export function formFromPublic(p: {
     permissionMode: p.permission_mode ?? "",
     autoCompactWindow: p.auto_compact_window ?? "",
     disableUnknownModelWindow: p.disable_unknown_model_window ?? false,
+    modelsPath: p.models_path ?? "",
   };
 }
 
@@ -79,6 +84,7 @@ export function buildPatch(form: SettingsFormState, clear: { apiKey?: boolean; a
     permission_mode: form.permissionMode.trim(),
     auto_compact_window: form.autoCompactWindow.trim(),
     disable_unknown_model_window: form.disableUnknownModelWindow,
+    models_path: form.modelsPath.trim(),
   };
   const apiKey = form.apiKey.trim();
   if (apiKey) patch.api_key = apiKey;

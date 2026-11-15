@@ -149,3 +149,46 @@ func snippet(b []byte) string {
 	}
 	return s
 }
+
+// VerifyModel 用指定模型名发一次最小请求，验证「网关 + 凭据 + 模型名」三者是否可用。
+//
+// 有些网关压根没有 /v1/models（直接 404），这时用户只能手输模型名，
+// 这个接口就是给他确认输入是否正确用的。
+func VerifyModel(ctx context.Context, v Settings, model string) ProbeResult {
+	base := strings.TrimRight(v.BaseURL, "/")
+	if base == "" {
+		base = DefaultBaseURL
+	}
+	res := ProbeResult{Endpoint: base, Method: "POST /v1/messages"}
+	if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+		res.Detail = "地址必须以 http:// 或 https:// 开头"
+		return res
+	}
+	if strings.TrimSpace(model) == "" {
+		res.Detail = "模型名为空"
+		return res
+	}
+
+	payload := map[string]any{
+		"model":      model,
+		"max_tokens": 1,
+		"messages":   []map[string]any{{"role": "user", "content": "ping"}},
+	}
+	raw, _ := json.Marshal(payload)
+
+	start := time.Now()
+	client := &http.Client{Timeout: ProbeTimeout}
+	status, body, err := doJSON(ctx, client, http.MethodPost, base+"/v1/messages", v, raw)
+	res.Status = status
+	res.LatencyMs = time.Since(start).Milliseconds()
+	switch {
+	case err != nil:
+		res.Detail = "请求失败：" + err.Error()
+	case status >= 200 && status < 300:
+		res.OK = true
+		res.Detail = "模型 " + model + " 可用"
+	default:
+		res.Detail = fmt.Sprintf("模型 %s 不可用：%s", model, snippet(body))
+	}
+	return res
+}

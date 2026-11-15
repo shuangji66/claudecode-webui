@@ -115,6 +115,7 @@ export interface PublicSettings {
   permission_mode: string;
   auto_compact_window: string;
   disable_unknown_model_window: boolean;
+  models_path: string;
   path: string;
 }
 
@@ -145,4 +146,6 @@ export interface ModelsResult {
   raw?: string;
   /** 尝试过的路径。 */
   tried?: string[];
+  /** 每个候选路径的探测结果。 */
+  attempts?: { path: string; status: number; note: string }[];
 }

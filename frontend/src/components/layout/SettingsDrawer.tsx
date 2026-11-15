@@ -28,6 +28,9 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
   const modelsError = useAppStore((s) => s.modelsError);
   const modelsRaw = useAppStore((s) => s.modelsRaw);
   const modelsTried = useAppStore((s) => s.modelsTried);
+  const modelsAttempts = useAppStore((s) => s.modelsAttempts);
+  const verify = useAppStore((s) => s.verify);
+  const verifyModel = useAppStore((s) => s.verifyModel);
   const saveSettings = useAppStore((s) => s.saveSettings);
   const testConnection = useAppStore((s) => s.testConnection);
   const fetchModels = useAppStore((s) => s.fetchGatewayModels);
@@ -74,14 +77,6 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
     ["会话上限", String(info?.max_sessions ?? "-")],
     ["前端产物", info?.frontend ? "已内嵌" : "未内嵌"],
   ];
-
-  // 别名当前解析到哪个网关模型（未映射时给出提示）
-  const resolve = (alias: string): string => {
-    if (alias === "default") return form.model || form.opusModel || "";
-    if (alias === "opus") return form.opusModel;
-    if (alias === "sonnet") return form.sonnetModel;
-    return form.haikuModel;
-  };
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/30" onClick={onClose}>
@@ -176,7 +171,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">模型映射</h3>
             <button
               type="button"
-              onClick={() => fetchModels(form.baseUrl, form.apiKey)}
+              onClick={() => fetchModels(form.baseUrl, form.apiKey, form.modelsPath)}
               className="ml-auto rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
             >
               获取模型列表
@@ -185,6 +180,19 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
           <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
             CLI 只会请求内置别名（默认 / opus / sonnet / haiku）。网关没有这些模型时，
             把网关里的模型挂到对应槽位即可——CLI 会被重定向过去。
+          </p>
+
+          <label className="mt-2 block text-[11px] font-medium text-slate-500">
+            模型列表路径
+          </label>
+          <input
+            value={form.modelsPath}
+            onChange={(e) => set("modelsPath", e.target.value)}
+            placeholder="留空自动探测（/v1/models、/models、/api/models…）"
+            className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+          />
+          <p className="mt-1 text-[11px] text-slate-400">
+            不同中转的模型接口路径不一样。知道确切路径就填这里（如 /api/models），省去自动探测。
           </p>
 
           {models.length > 0 && (
@@ -198,9 +206,18 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
           )}
 
           {modelsError && (
-            <div className="mt-2 rounded-lg bg-rose-50 px-2 py-1.5 text-[11px] text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+            <div className="mt-2 rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
               <p>{modelsError}</p>
-              {modelsTried.length > 0 && (
+              {modelsAttempts.length > 0 && (
+                <ul className="mt-1 space-y-0.5 font-mono text-[10px] opacity-80">
+                  {modelsAttempts.map((a) => (
+                    <li key={a.path}>
+                      {a.path} → {a.status || "-"} {a.note}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {modelsTried.length > 0 && modelsAttempts.length === 0 && (
                 <p className="mt-1 opacity-70">已尝试：{modelsTried.join("、")}</p>
               )}
               {modelsRaw && (
@@ -215,29 +232,67 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
           )}
           {models.length > 0 && (
             <p className="mt-2 text-[11px] text-emerald-700 dark:text-emerald-400">
-              已获取 {models.length} 个模型，下面的输入框可直接下拉选择。
+              已获取 {models.length} 个模型，下面的输入框可直接下拉选择或点「验证」确认可用。
             </p>
           )}
 
           <div className="mt-2 space-y-2">
             {ALIAS_FIELDS.map(({ alias, label, key, env }) => (
-              <div key={alias} className="flex items-center gap-2">
-                <span className="w-32 shrink-0 text-[11px] text-slate-500">{label}</span>
-                <input
-                  list={models.length > 0 ? "gateway-models" : undefined}
-                  value={String(form[key] ?? "")}
-                  onChange={(e) => set(key, e.target.value)}
-                  placeholder={env}
-                  className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-                />
-                <span className="w-10 shrink-0 text-[10px] text-slate-400">
-                  {resolve(alias) ? "已映射" : "未映射"}
-                </span>
+              <div key={alias}>
+                <div className="flex items-center gap-2">
+                  <span className="w-28 shrink-0 text-[11px] text-slate-500">{label}</span>
+                  <input
+                    list={models.length > 0 ? "gateway-models" : undefined}
+                    value={String(form[key] ?? "")}
+                    onChange={(e) => set(key, e.target.value)}
+                    placeholder={env}
+                    className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                  />
+                  <button
+                    type="button"
+                    disabled={!String(form[key] ?? "").trim()}
+                    onClick={() => verifyModel(String(form[key] ?? ""))}
+                    className="shrink-0 rounded-lg px-2 py-1 text-[11px] text-slate-600 ring-1 ring-slate-300 hover:bg-slate-50 disabled:opacity-40 dark:text-slate-300 dark:ring-slate-600"
+                  >
+                    验证
+                  </button>
+                  {alias === "default" && (
+                    <button
+                      type="button"
+                      disabled={!form.model.trim()}
+                      onClick={() => {
+                        const v = form.model;
+                        setForm((f) => ({ ...f, opusModel: v, sonnetModel: v, haikuModel: v }));
+                      }}
+                      className="shrink-0 rounded-lg px-2 py-1 text-[11px] text-slate-600 ring-1 ring-slate-300 hover:bg-slate-50 disabled:opacity-40 dark:text-slate-300 dark:ring-slate-600"
+                    >
+                      应用全部
+                    </button>
+                  )}
+                </div>
+                {verify && verify.model === String(form[key] ?? "") && (
+                  <p
+                    className={`ml-28 mt-0.5 text-[10px] ${
+                      verify.result.detail === "验证中…"
+                        ? "text-slate-400"
+                        : verify.result.ok
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : "text-rose-600 dark:text-rose-400"
+                    }`}
+                  >
+                    {verify.result.detail === "验证中…"
+                      ? "验证中…"
+                      : verify.result.ok
+                        ? `✓ 可用（${verify.result.latency_ms}ms）`
+                        : `✗ ${verify.result.detail}`}
+                  </p>
+                )}
               </div>
             ))}
           </div>
           <p className="mt-1 text-[11px] text-slate-400">
             `default` 未单独设置时跟随 `opus` 槽位（与 CLI 行为一致）。留空则使用 CLI 内置模型名。
+            「验证」会发一次 max_tokens=1 的真实请求（需先保存）。
           </p>
         </section>
 

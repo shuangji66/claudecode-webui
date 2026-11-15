@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Model 是网关 /v1/models 返回的一个模型条目。
@@ -27,13 +28,38 @@ type ModelsResult struct {
 	Raw string `json:"raw,omitempty"`
 	// Tried 记录尝试过的路径，避免用户以为只试了一个。
 	Tried []string `json:"tried,omitempty"`
+	// Attempts 是每个候选路径的探测结果，供前端列表展示。
+	Attempts []Attempt `json:"attempts,omitempty"`
 }
 
-// modelsPaths 是依次尝试的模型列表路径。
-// 绝大多数中转实现 /v1/models；少数只暴露 /models。
-var modelsPaths = []string{"/v1/models?limit=1000", "/models?limit=1000", "/v1/models", "/models"}
+// Attempt 是一次路径探测的结果。
+type Attempt struct {
+	Path   string `json:"path"`
+	Status int    `json:"status"`
+	Note   string `json:"note"`
+}
+
+// autoModelPaths 是自动探测时依次尝试的路径。
+//
+// 各中转实现差异极大：Anthropic 兼容层一般是 /v1/models，但不少「Claude Code 专用」
+// 代理只转发 /v1/messages，模型列表放在自己的管理接口下（/api/models 等）。
+// 实测遇到过所有标准路径都 404、而列表其实在别的路径上的情况，所以这里放宽候选。
+var autoModelPaths = []string{
+	"/v1/models",
+	"/models",
+	"/api/models",
+	"/api/v1/models",
+	"/v1/model/list",
+	"/v1/models/list",
+	"/model/list",
+	"/openai/v1/models",
+}
 
 const rawPreviewBytes = 600
+
+// perPathTimeout 是自动探测单个候选路径的超时。
+// 404 之类会立刻返回，这个上限只用于兜住「连接挂住」的情况。
+const perPathTimeout = 4 * time.Second
 
 // FetchModels 用给定配置向网关拉取模型列表。
 //
@@ -53,70 +79,122 @@ func FetchModels(ctx context.Context, v Settings) ModelsResult {
 		return res
 	}
 
-	client := &http.Client{Timeout: ProbeTimeout}
-	var last ModelsResult
+	// 用户显式指定了路径 → 只试它；否则按候选表自动探测。
+	paths := autoModelPaths
+	if p := strings.TrimSpace(v.ModelsPath); p != "" {
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		paths = []string{p}
+	}
 
-	for _, p := range modelsPaths {
-		url := base + p
+	var lastBody []byte
+	for _, p := range paths {
 		res.Tried = append(res.Tried, p)
-		status, body, err := doJSON(ctx, client, http.MethodGet, url, v, nil)
-		last = ModelsResult{Endpoint: base, Status: status, Tried: res.Tried}
-
-		if err != nil {
-			last.Detail = "请求失败：" + err.Error()
-			continue
-		}
-		if status == http.StatusUnauthorized || status == http.StatusForbidden {
-			// 常见坑：中转的 /v1/models 只认 Authorization: Bearer，
-			// 而我们默认发 x-api-key。这里用同一个密钥换一种方式再试一次。
-			if v.APIKey != "" && v.AuthToken == "" {
-				status2, body2, err2 := doJSONAuth(ctx, client, http.MethodGet, url, v, nil, true)
-				if err2 == nil && status2 >= 200 && status2 < 300 {
-					if models, perr := parseModels(body2); perr == nil && len(models) > 0 {
-						return ModelsResult{
-							Models: models, Endpoint: base, Status: status2,
-							Detail: fmt.Sprintf("共 %d 个模型（%s，Bearer 鉴权）", len(models), p),
-							Tried:  res.Tried,
-						}
-					}
-				}
-				last.Status = status2
-				last.Raw = preview(body2)
-				last.Detail = fmt.Sprintf("鉴权失败（x-api-key 与 Bearer 均返回 %d/%d）", status, status2)
-				return last
-			}
-			last.Detail = fmt.Sprintf("鉴权失败（HTTP %d）", status)
-			last.Raw = preview(body)
-			return last
-		}
-		if status < 200 || status >= 300 {
-			last.Detail = fmt.Sprintf("HTTP %d", status)
-			last.Raw = preview(body)
-			continue
-		}
-
-		models, perr := parseModels(body)
-		if perr == nil && len(models) > 0 {
+		body, attempt, models := fetchOnePath(ctx, base, p, v)
+		res.Attempts = append(res.Attempts, attempt)
+		if len(models) > 0 {
 			return ModelsResult{
-				Models: models, Endpoint: base, Status: status,
-				Detail: fmt.Sprintf("共 %d 个模型（%s）", len(models), p),
-				Tried:  res.Tried,
+				Models: models, Endpoint: base, Status: attempt.Status,
+				Detail: successDetail(len(models), p, attempt.Note),
+				Tried:  res.Tried, Attempts: res.Attempts,
 			}
 		}
-
-		last.Raw = preview(body)
-		if perr != nil {
-			last.Detail = perr.Error()
-		} else {
-			last.Detail = "响应里没有找到任何模型条目"
+		if body != nil {
+			lastBody = body
 		}
 	}
 
-	if last.Detail == "" {
-		last.Detail = "未能获取模型列表"
+	res.Status = 0
+	if n := len(res.Attempts); n > 0 {
+		res.Status = res.Attempts[n-1].Status
 	}
-	last.Detail += "。" + hintFor(last.Raw)
-	return last
+	res.Raw = preview(lastBody)
+	res.Detail = summarizeAttempts(res.Attempts) + hintFor(res.Raw)
+	return res
+}
+
+// fetchOnePath 探测单个路径。返回原始响应体、探测记录与解析出的模型。
+func fetchOnePath(ctx context.Context, base, path string, v Settings) ([]byte, Attempt, []Model) {
+	attempt := Attempt{Path: path}
+	pctx, cancel := context.WithTimeout(ctx, perPathTimeout)
+	defer cancel()
+
+	client := &http.Client{Timeout: perPathTimeout}
+	status, body, err := doJSON(pctx, client, http.MethodGet, base+path, v, nil)
+	attempt.Status = status
+	switch {
+	case err != nil:
+		attempt.Note = "请求失败：" + err.Error()
+		return body, attempt, nil
+	case status == http.StatusNotFound:
+		attempt.Note = "404（该路径不存在）"
+		return body, attempt, nil
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		// 很多中转的这个端点只认 Authorization: Bearer，换一种方式再试一次。
+		if v.APIKey != "" && v.AuthToken == "" {
+			s2, b2, e2 := doJSONAuth(pctx, client, http.MethodGet, base+path, v, nil, true)
+			if e2 == nil {
+				if models, perr := parseModels(b2); perr == nil && len(models) > 0 {
+					attempt.Status = s2
+					attempt.Note = "200，Bearer 鉴权"
+					return b2, attempt, models
+				}
+			}
+			attempt.Note = fmt.Sprintf("鉴权失败（%d / Bearer %d）", status, s2)
+			return b2, attempt, nil
+		}
+		attempt.Note = fmt.Sprintf("鉴权失败（HTTP %d）", status)
+		return body, attempt, nil
+	case status < 200 || status >= 300:
+		attempt.Note = fmt.Sprintf("HTTP %d", status)
+		return body, attempt, nil
+	}
+
+	models, perr := parseModels(body)
+	if perr != nil {
+		attempt.Note = "200，但不是模型列表（" + perr.Error() + "）"
+		return body, attempt, nil
+	}
+	if len(models) == 0 {
+		attempt.Note = "200，但没有模型条目"
+		return body, attempt, nil
+	}
+	attempt.Note = fmt.Sprintf("200，%d 个模型", len(models))
+	return body, attempt, models
+}
+
+// successDetail 生成成功时的说明；用了 Bearer 重试就点明，避免用户以为没生效。
+func successDetail(n int, path, note string) string {
+	d := fmt.Sprintf("共 %d 个模型（%s）", n, path)
+	if strings.Contains(note, "Bearer") {
+		d += "，Bearer 鉴权"
+	}
+	return d
+}
+
+// summarizeAttempts 把探测结果压成一句能直接读的结论。
+func summarizeAttempts(attempts []Attempt) string {
+	if len(attempts) == 0 {
+		return "未尝试任何路径"
+	}
+	notFound, authFail := 0, 0
+	for _, a := range attempts {
+		if a.Status == http.StatusNotFound {
+			notFound++
+		}
+		if a.Status == http.StatusUnauthorized || a.Status == http.StatusForbidden {
+			authFail++
+		}
+	}
+	switch {
+	case authFail > 0:
+		return "鉴权失败：所有路径都返回 401/403，请检查密钥或鉴权方式"
+	case notFound == len(attempts):
+		return fmt.Sprintf("尝试的 %d 个路径全部 404：该网关没有在这些路径上暴露模型列表", len(attempts))
+	default:
+		return fmt.Sprintf("尝试了 %d 个路径，均未拿到模型列表", len(attempts))
+	}
 }
 
 // hintFor 依据原始响应给出下一步提示。

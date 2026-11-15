@@ -187,3 +187,34 @@ func TestFetchModelsBothAuthFail(t *testing.T) {
 		t.Fatalf("应报鉴权失败: %+v", res)
 	}
 }
+
+func TestVerifyModel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		if r.Header.Get("x-api-key") != "k" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer srv.Close()
+
+	ok := VerifyModel(t.Context(), Settings{BaseURL: srv.URL, APIKey: "k"}, "gw-good")
+	if !ok.OK {
+		t.Fatalf("应验证通过: %+v", ok)
+	}
+
+	bad := VerifyModel(t.Context(), Settings{BaseURL: srv.URL, APIKey: "wrong"}, "gw-good")
+	if bad.OK || !strings.Contains(bad.Detail, "不可用") {
+		t.Fatalf("错误凭据应失败: %+v", bad)
+	}
+
+	empty := VerifyModel(t.Context(), Settings{BaseURL: srv.URL}, "")
+	if empty.OK || !strings.Contains(empty.Detail, "为空") {
+		t.Fatalf("空模型名应失败: %+v", empty)
+	}
+}
