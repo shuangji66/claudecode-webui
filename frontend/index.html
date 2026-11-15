@@ -7,6 +7,54 @@
   </head>
   <body>
     <div id="root"></div>
+    <!--
+      启动兜底：任何"白屏"都要能自我解释。
+      最常见的原因是浏览器或网关缓存了旧的 index.html，它引用的哈希资源
+      在新构建里已经不存在（404）——此时模块脚本根本没执行，页面就是空白。
+      这里把资源加载失败/未挂载显式画出来，避免用户只看到一片白。
+    -->
+    <script>
+      (function () {
+        var shown = false;
+        function fail(title, detail) {
+          if (shown) return;
+          shown = true;
+          var el = document.getElementById("root");
+          if (!el) return;
+          el.innerHTML =
+            '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;font-family:system-ui,sans-serif;background:#f8fafc;color:#0f172a">' +
+            '<div style="max-width:520px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:20px">' +
+            '<div style="font-size:15px;font-weight:600;color:#b91c1c">' + title + "</div>" +
+            '<div style="margin-top:8px;font-size:12px;line-height:1.6;color:#475569;word-break:break-all">' + detail + "</div>" +
+            '<div style="margin-top:12px;font-size:12px;line-height:1.6;color:#475569">' +
+            "常见原因：静态资源 404（浏览器或网关缓存了旧的 index.html）。<br/>" +
+            "处理：强制刷新（Ctrl/Cmd+Shift+R），或在网关侧清除该路径的缓存；" +
+            "仍不行请确认当前运行的二进制与前端产物是同一次构建。" +
+            "</div></div></div>";
+        }
+        window.addEventListener(
+          "error",
+          function (e) {
+            var t = e && e.target;
+            if (t && (t.tagName === "SCRIPT" || t.tagName === "LINK")) {
+              fail("静态资源加载失败", (t.src || t.href) + " 无法加载（多为 404）");
+            } else if (e && e.message) {
+              fail("前端脚本出错", String(e.message));
+            }
+          },
+          true,
+        );
+        window.addEventListener("unhandledrejection", function (e) {
+          fail("前端脚本出错", "未捕获的 Promise 错误：" + String(e && e.reason));
+        });
+        setTimeout(function () {
+          var r = document.getElementById("root");
+          if (r && r.childElementCount === 0 && !shown) {
+            fail("页面未能挂载", "根节点仍为空：脚本可能 404，或执行到一半失败。");
+          }
+        }, 8000);
+      })();
+    </script>
     <script type="module" src="./src/main.tsx"></script>
   </body>
 </html>

@@ -101,7 +101,11 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - `withBaseURL` 剥离前缀，**前缀外的请求 404**（不要放行裸路径）。
 - 新路由必须 `s.authed(...)`；WS 在 handler 内自行校验 token。
   `/api/settings` 三个端点（GET/PUT/POST test）都属于敏感路由，务必保持鉴权。
-- SPA：`index.html` 注入 `<base href>`，`no-cache`；`assets/**` 用 `immutable` 强缓存。
+- SPA：`index.html` 注入 `<base href>`，缓存头用 **`no-store`**；`assets/**` 用 `immutable` 强缓存。
+- **带扩展名的请求找不到时必须 404，不能回退到 index.html**：否则浏览器会拿到
+  200 + `text/html` 的"JS"，拒绝按模块执行，整页**白屏**，而且原因极难看出
+  （通常是浏览器/网关缓存了旧 index，它引用的哈希资源已不存在）。
+  只有无扩展名的前端路由才回退 index.html。
 - WS 写帧必须设 `WriteDeadline`；hub 广播失败会自动退订。
 
 ## 7. 测试要求

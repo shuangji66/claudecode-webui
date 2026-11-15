@@ -31,7 +31,15 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 		serveBytes(w, p, b)
 		return
 	}
-	// 找不到实体文件 → 交给前端路由处理。
+	// 带扩展名的请求（assets/*.js、favicon.ico 等）找不到就应当 404。
+	// 若这里回退到 index.html，浏览器会拿到 200 + text/html 的"JS"，
+	// 拒绝按模块执行 → 整页白屏，且原因极难看出（旧缓存 index 引用了已不存在的哈希）。
+	if path.Ext(p) != "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	// 其余（前端路由）才回退到 index.html。
 	b, err := fs.ReadFile(root, "index.html")
 	if err != nil {
 		http.NotFound(w, r)
@@ -64,7 +72,10 @@ func rewriteBase(body []byte, base string) []byte {
 func cacheControlFor(name string) string {
 	switch {
 	case strings.HasSuffix(name, ".html"):
-		return "no-cache, must-revalidate"
+		// 必须 no-store：index.html 在响应时才注入 <base>，且它引用的资源名带
+		// 内容哈希——一旦被浏览器或中间层存住，下次构建后旧哈希资源已不存在，
+		// 页面会直接白屏。no-cache 仍允许"存下来再问我"，no-store 更彻底。
+		return "no-store, must-revalidate"
 	case strings.HasPrefix(path.Clean(name), "assets/"):
 		return "public, max-age=31536000, immutable"
 	default:

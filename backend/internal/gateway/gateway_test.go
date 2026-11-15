@@ -234,7 +234,7 @@ func TestRewriteBaseNoopWithoutPrefix(t *testing.T) {
 
 func TestCacheControlFor(t *testing.T) {
 	cases := map[string]string{
-		"index.html":          "no-cache, must-revalidate",
+		"index.html":          "no-store, must-revalidate",
 		"assets/index-abc.js": "public, max-age=31536000, immutable",
 		"favicon.ico":         "public, max-age=86400",
 	}
@@ -243,6 +243,24 @@ func TestCacheControlFor(t *testing.T) {
 			t.Fatalf("cacheControlFor(%q) = %q, want %q", name, got, want)
 		}
 	}
+}
+
+// 缺失的静态资源必须 404，不能回退成 index.html —— 否则浏览器拿到
+// text/html 的"JS"，模块加载失败，整页白屏。
+func TestMissingAssetReturns404(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/index-oldhash.js", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("缺失资源应 404，实际 %d（body 前 40 字节：%s）", rec.Code, rec.Body.String()[:min(40, rec.Body.Len())])
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func TestUnknownRoute(t *testing.T) {
