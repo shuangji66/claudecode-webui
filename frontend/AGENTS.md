@@ -1,0 +1,102 @@
+# frontend/AGENTS.md — 前端规范
+
+技术栈：**React 19 + TypeScript + Vite 7 + Tailwind CSS v4 + zustand + Vitest**。
+不引 UI 组件库（消息外壳、气泡、折叠、Markdown 都是自研），保持包体小、便于内嵌。
+
+## 1. 目录职责
+
+```
+src/
+  main.tsx             挂载入口
+  App.tsx              壳层：加载 / 令牌门 / 侧边栏 / 内容区
+  transport/types.ts   与后端、claude 的线上协议类型（唯一真源）
+  transport/client.ts  WebSocket 客户端（只管收发，不含业务）
+  lib/model.ts         渲染模型（Item 联合类型）
+  lib/normalize.ts     CLI 原始消息 → Item（纯函数，最重要的可测单元）
+  lib/diff.ts          Edit 卡片的 diff 构造
+  lib/runtime.ts       baseurl / token / fetch 封装
+  store/useAppStore.ts zustand 全局状态（只做状态搬运）
+  components/          layout / chat / tools / permission / common
+```
+
+**分层规则**：组件不直接调 `fetch` 或 `WebSocket`；一律经 store；
+协议解析一律进 `lib/`，组件只消费 `Item`。
+
+## 2. 不可破坏的约定
+
+1. **路径必须经 `runtimeBase()`**。不要写 `/api/...` 绝对路径，也不要用 `import.meta.env.BASE_URL`
+   —— 前缀是运行期由后端 `<base href>` 注入的。
+2. **`lib/normalize.ts` 的「替换而非追加」不能退化**。流式增量与完整消息是两套数据，
+   追加会导致每句话重复显示。
+3. **工具卡片必须保留 `GenericCard` 兜底**。工具集会随 CLI 版本漂移，
+   禁止硬编码工具清单；新增工具只在 `ToolCardHost` 的 registry 加一行。
+4. **未知消息类型静默忽略**，不要 throw —— 协议会演进。
+5. **令牌只存 localStorage**，并通过 `?token=` 传给 WS（浏览器限制，无法设头）。
+6. **不要用 `dangerouslySetInnerHTML`**。Markdown 渲染走 React 节点（`common/Markdown.tsx`）。
+7. 所有用户可见文案用中文，与后端日志风格一致。
+
+## 3. 状态管理（zustand）
+
+- 每个会话的消息独立存 `items[sid]`，切换会话不重新拉取；
+- WebSocket 实例放在**模块级 `Map`**，不进 store（避免被当成可序列化数据）；
+- store 的 action 只做三件事：调 API、转发命令、把事件交给纯函数；
+- 新增事件类型：先改 `transport/types.ts` → 再在 `applyEvent` 里分支 → 最后补测试。
+
+## 4. 消息模型（Item）
+
+| kind | 来源 | 渲染 |
+|---|---|---|
+| `user` | 本地插入 / CLI 回显去重 | 右对齐蓝色气泡 |
+| `assistant` | `assistant.content[].text` 或 `stream_event` 增量 | 左对齐气泡 + Markdown，`streaming` 时显示光标 |
+| `thinking` | `assistant.content[].thinking` | 折叠块 |
+| `tool` | `assistant.content[].tool_use` + `user.content[].tool_result` | 按工具名分派卡片 |
+| `result` | `result` 消息 | 耗时/成本/被拒数 |
+| `system` | `system`（非 init/status） | 等宽小字，需清洗 ANSI |
+| `error` | 后端 `error` 事件 / 连接关闭 | 红色提示 |
+
+`tool_use` 与 `tool_result` 靠 `tool_use_id` 配对，卡片在结果到达前显示「运行中…」。
+
+## 5. 审批面板
+
+`PermissionPanel` 的按钮**由后端的 `permission_suggestions` 决定**，不要凭空生成：
+
+- 总有「仅此次允许」`{allow:true}`、或「拒绝」`{allow:false,message}`；
+- 有 `addRules` → 显示「始终允许 xxx」，回包带 `updatedPermissions`；
+- 有 `setMode` 且无 `addRules` → 显示「切到 xxx 模式」，同时发一条 `permission_mode`；
+- 「编辑后运行」：把 `input` 当 JSON 编辑，回包带 `updatedInput`（后端会透传给 CLI）。
+
+不要把它做成简单的「是/否」——那会丢掉本项目相对 TUI 的增强点。
+
+## 6. 样式
+
+- Tailwind v4（`@tailwindcss/vite` + `@import "tailwindcss"`），无 `tailwind.config.js`。
+- 颜色一律用 slate 系 + 语义色（blue 主色、emerald 允许、rose 拒绝、amber 警告）。
+- 移动端优先：侧边栏在 `md` 以下变成抽屉；输入框用 `max-h` 限制高度。
+- 长输出必须折叠或限高（`max-h-80 overflow-auto`），否则会毁掉滚动体验。
+
+## 7. 测试
+
+```bash
+cd frontend && npx vitest run      # 全部
+npx vitest run src/lib             # 只跑纯函数
+npx tsc --noEmit                   # 类型检查（构建也依赖它）
+```
+
+要求：
+
+- **`lib/` 下的纯函数必须有单测**：`normalize`（流式去重、tool 配对、ANSI 清洗、
+  未知类型忽略）、`diff`（结构化补丁 / old-new 兜底 / null 降级）、`runtime`（base、wsUrl、token）。
+- **组件用 Testing Library**，断言用户可见的结果（文本、按钮），不要断言内部 state。
+- 改 `normalize` 时先写一个会失败的用例，再改实现。
+- 不要写依赖 `Date.now()` 精确值的断言。
+
+## 8. 常见错误对照
+
+| 现象 | 原因 |
+|---|---|
+| 每句话显示两遍 | 流式增量与完整消息都被追加了 |
+| 工具卡片永远「运行中…」 | `tool_use_id` 没对上，或结果消息被当成纯文本 |
+| 新工具显示空白 | 忘了 `GenericCard` 兜底 / 没注册 |
+| 部署到子路径后资源 404 | 用了绝对路径，没走 `runtimeBase()` |
+| 审批按钮点了没反应 | WS 未连接（`conn !== "open"`），或 `request_id` 传丢 |
+| 类型检查报 CSS 导入 | 缺 `src/vite-env.d.ts` |

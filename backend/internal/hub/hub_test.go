@@ -1,0 +1,119 @@
+package hub
+
+import (
+	"errors"
+	"sync"
+	"testing"
+)
+
+type fakeClient struct {
+	mu     sync.Mutex
+	got    []any
+	failOn bool
+}
+
+func (f *fakeClient) SendJSON(v any) error {
+	if f.failOn {
+		return errors.New("boom")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.got = append(f.got, v)
+	return nil
+}
+
+func (f *fakeClient) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.got)
+}
+
+func TestBroadcastReachesAllSubscribers(t *testing.T) {
+	h := New()
+	a, b := &fakeClient{}, &fakeClient{}
+	h.Subscribe("s1", a)
+	h.Subscribe("s1", b)
+
+	if n := h.Broadcast("s1", "hi"); n != 0 {
+		t.Fatalf("失败数 = %d", n)
+	}
+	if a.count() != 1 || b.count() != 1 {
+		t.Fatalf("a=%d b=%d，期望各 1", a.count(), b.count())
+	}
+	if h.Count("s1") != 2 {
+		t.Fatalf("Count = %d", h.Count("s1"))
+	}
+}
+
+func TestBroadcastIsolatesTopics(t *testing.T) {
+	h := New()
+	a, b := &fakeClient{}, &fakeClient{}
+	h.Subscribe("s1", a)
+	h.Subscribe("s2", b)
+
+	h.Broadcast("s1", "x")
+	if a.count() != 1 {
+		t.Fatalf("a 应收到 1 条，实际 %d", a.count())
+	}
+	if b.count() != 0 {
+		t.Fatalf("s2 不应收到事件，实际 %d", b.count())
+	}
+}
+
+func TestBroadcastDropsFailingClients(t *testing.T) {
+	h := New()
+	bad := &fakeClient{failOn: true}
+	good := &fakeClient{}
+	h.Subscribe("s1", bad)
+	h.Subscribe("s1", good)
+
+	if n := h.Broadcast("s1", "x"); n != 1 {
+		t.Fatalf("失败数 = %d, want 1", n)
+	}
+	// 失败的订阅者应被自动移除，避免死连接长期占位。
+	if h.Count("s1") != 1 {
+		t.Fatalf("Count = %d, want 1", h.Count("s1"))
+	}
+	if good.count() != 1 {
+		t.Fatalf("正常订阅者应收到: %d", good.count())
+	}
+}
+
+func TestUnsubscribeRemovesTopicWhenEmpty(t *testing.T) {
+	h := New()
+	c := &fakeClient{}
+	h.Subscribe("s1", c)
+	h.Unsubscribe("s1", c)
+	if h.Count("s1") != 0 {
+		t.Fatalf("Count = %d", h.Count("s1"))
+	}
+	if len(h.Topics()) != 0 {
+		t.Fatalf("空 topic 应被删除: %v", h.Topics())
+	}
+}
+
+func TestSubscribeIgnoresEmptyTopic(t *testing.T) {
+	h := New()
+	h.Subscribe("", &fakeClient{})
+	if len(h.Topics()) != 0 {
+		t.Fatalf("空 topic 不应被记录: %v", h.Topics())
+	}
+}
+
+func TestTopicIsolationAfterFailure(t *testing.T) {
+	h := New()
+	bad := &fakeClient{failOn: true}
+	other := &fakeClient{}
+	h.Subscribe("s1", bad)
+	h.Subscribe("s2", other)
+
+	h.Broadcast("s1", "x")
+	h.Broadcast("s2", "y")
+
+	if h.Count("s1") != 0 {
+		t.Fatalf("s1 应被清空，实际 %d", h.Count("s1"))
+	}
+	if h.Count("s2") != 1 {
+		t.Fatalf("s2 不应受影响，实际 %d", h.Count("s2"))
+	}
+}

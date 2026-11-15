@@ -1,0 +1,407 @@
+package session
+
+import (
+	"bufio"
+	"encoding/json"
+	"io"
+	"os"
+	"sync"
+	"testing"
+	"time"
+)
+
+// duplex 把一对 os.Pipe 拼成双向通道。
+// 刻意不用 net.Pipe：后者是无缓冲的同步管道，写会一直阻塞到对端读，
+// 测试里「先 Prompt 再读对端」的写法会自锁。os.Pipe 有内核缓冲，没这个问题。
+type duplex struct {
+	r *os.File
+	w *os.File
+}
+
+func (d *duplex) Read(b []byte) (int, error)  { return d.r.Read(b) }
+func (d *duplex) Write(b []byte) (int, error) { return d.w.Write(b) }
+func (d *duplex) Close() error {
+	err1 := d.r.Close()
+	err2 := d.w.Close()
+	if err1 != nil {
+		return err1
+	}
+	return err2
+}
+
+// newDuplex 返回 (会话侧, 对端侧) 的双向通道。
+func newDuplex(t *testing.T) (*duplex, *duplex) {
+	t.Helper()
+	sessR, cliW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	cliR, sessW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	t.Cleanup(func() {
+		sessR.Close()
+		sessW.Close()
+		cliR.Close()
+		cliW.Close()
+	})
+	return &duplex{r: sessR, w: sessW}, &duplex{r: cliR, w: cliW}
+}
+
+// recorder 收集会话抛出的事件，供断言使用。
+type recorder struct {
+	mu  sync.Mutex
+	evs []Event
+}
+
+func (r *recorder) emit(ev Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.evs = append(r.evs, ev)
+}
+
+// find 返回第一个满足条件的事件。
+func (r *recorder) find(kind string) (Event, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ev := range r.evs {
+		if ev.Kind == kind {
+			return ev, true
+		}
+	}
+	return Event{}, false
+}
+
+// wait 轮询等待某类事件出现（读循环是异步的，发完立刻断言会漏）。
+func (r *recorder) wait(kind string, timeout time.Duration) (Event, bool) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if ev, ok := r.find(kind); ok {
+			return ev, true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return Event{}, false
+}
+
+func (r *recorder) count(kind string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, ev := range r.evs {
+		if ev.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// fakeCLI 是测试用的对端，负责读取客户端写入的行并回包。
+type fakeCLI struct {
+	t    *testing.T
+	conn io.ReadWriter
+	sc   *bufio.Scanner
+}
+
+func newFakeCLI(t *testing.T, conn io.ReadWriter) *fakeCLI {
+	sc := bufio.NewScanner(conn)
+	sc.Buffer(make([]byte, 0, 4096), 1<<20)
+	return &fakeCLI{t: t, conn: conn, sc: sc}
+}
+
+// next 读一行并解析成 map。
+func (f *fakeCLI) next() map[string]any {
+	f.t.Helper()
+	if !f.sc.Scan() {
+		f.t.Fatalf("对端未收到预期消息: %v", f.sc.Err())
+	}
+	var m map[string]any
+	if err := json.Unmarshal(f.sc.Bytes(), &m); err != nil {
+		f.t.Fatalf("解析失败: %v (%s)", err, f.sc.Text())
+	}
+	return m
+}
+
+func (f *fakeCLI) send(v any) {
+	f.t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		f.t.Fatalf("marshal: %v", err)
+	}
+	if _, err := f.conn.Write(append(b, '\n')); err != nil {
+		f.t.Fatalf("write: %v", err)
+	}
+}
+
+// respond 按真实协议回包：request_id 嵌在 response.request_id。
+func (f *fakeCLI) respond(requestID string, payload any) {
+	f.send(map[string]any{
+		"type": "control_response",
+		"response": map[string]any{
+			"subtype":    "success",
+			"request_id": requestID,
+			"response":   payload,
+		},
+	})
+}
+
+// handshake 走完 initialize 握手。
+func (f *fakeCLI) handshake() {
+	f.t.Helper()
+	msg := f.next()
+	if msg["type"] != "control_request" {
+		f.t.Fatalf("首条消息类型 = %v, want control_request", msg["type"])
+	}
+	req := msg["request"].(map[string]any)
+	if req["subtype"] != "initialize" {
+		f.t.Fatalf("首条控制请求 subtype = %v, want initialize", req["subtype"])
+	}
+	f.respond(msg["request_id"].(string), map[string]any{
+		"claude_code_version": "2.1.325",
+		"commands":            []any{},
+		"models":              []any{map[string]any{"value": "opus"}},
+	})
+}
+
+// startSession 建立 net.Pipe 会话并完成握手。
+func startSession(t *testing.T) (*Session, *fakeCLI, *recorder) {
+	t.Helper()
+	old := InitTimeout
+	InitTimeout = 2 * time.Second
+	t.Cleanup(func() { InitTimeout = old })
+
+	sessSide, cliSide := newDuplex(t)
+	server := sessSide
+	rec := &recorder{}
+	sess := New("s1", "/tmp/work", server, rec.emit)
+	fc := newFakeCLI(t, cliSide)
+
+	done := make(chan error, 1)
+	go func() { done <- sess.Start() }()
+	fc.handshake()
+	if err := <-done; err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	return sess, fc, rec
+}
+
+func TestStartHandshakeThenReady(t *testing.T) {
+	sess, _, rec := startSession(t)
+	defer sess.Close()
+
+	if sess.State() != StateReady {
+		t.Fatalf("state = %q, want ready", sess.State())
+	}
+	ev, ok := rec.find(KindSessionReady)
+	if !ok {
+		t.Fatal("未收到 session.ready 事件")
+	}
+	if !json.Valid(ev.Data) {
+		t.Fatalf("session.ready 数据不是合法 JSON: %s", ev.Data)
+	}
+	// initialize 回包必须能取出 claude 版本，供前端做协议兼容性提示。
+	if got := sess.InitPayload(); len(got) == 0 || !json.Valid(got) {
+		t.Fatalf("init payload 异常: %s", got)
+	}
+}
+
+func TestPromptSendsUserMessageAndMarksBusy(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.Prompt("你好"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	msg := fc.next()
+	if msg["type"] != "user" {
+		t.Fatalf("type = %v, want user", msg["type"])
+	}
+	if _, ok := msg["session_id"]; !ok {
+		t.Fatal("session_id 字段必须存在（新会话为 null）")
+	}
+	if sess.State() != StateBusy {
+		t.Fatalf("state = %q, want busy", sess.State())
+	}
+
+	// result 到达后应回到 ready，允许继续下一轮。
+	fc.send(map[string]any{"type": "result", "subtype": "success"})
+	waitState(t, sess, StateReady)
+}
+
+func TestPermissionRequestIsForwardedAndReplied(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{
+		"type":       "control_request",
+		"request_id": "p1",
+		"request": map[string]any{
+			"subtype":                "can_use_tool",
+			"tool_name":              "Bash",
+			"input":                  map[string]any{"command": "rm -rf /tmp/x"},
+			"blocked_path":           "/tmp/x",
+			"permission_suggestions": []any{map[string]any{"type": "setMode", "mode": "acceptEdits"}},
+		},
+	})
+
+	ev, ok := rec.wait(KindPermission, 2*time.Second)
+	if !ok {
+		t.Fatal("未收到 permission 事件")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(ev.Data, &payload); err != nil {
+		t.Fatalf("permission 事件解析失败: %v", err)
+	}
+	if payload["tool_name"] != "Bash" || payload["request_id"] != "p1" {
+		t.Fatalf("permission 载荷 = %v", payload)
+	}
+
+	// 允许后应写出一条 allow 控制响应，且 updatedInput 被带上。
+	if err := sess.ReplyPermission("p1", PermissionReply{Allow: true, UpdatedInput: json.RawMessage(`{"command":"rm -rf ./x"}`)}); err != nil {
+		t.Fatalf("ReplyPermission: %v", err)
+	}
+	resp := fc.next()
+	if resp["type"] != "control_response" {
+		t.Fatalf("type = %v", resp["type"])
+	}
+	inner := resp["response"].(map[string]any)
+	if inner["request_id"] != "p1" {
+		t.Fatalf("request_id = %v", inner["request_id"])
+	}
+	body := inner["response"].(map[string]any)
+	if body["behavior"] != "allow" {
+		t.Fatalf("behavior = %v", body["behavior"])
+	}
+	if body["updatedInput"] == nil {
+		t.Fatal("updatedInput 应被透传（支持『编辑后运行』）")
+	}
+}
+
+func TestDenyReply(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.ReplyPermission("p2", PermissionReply{Allow: false, Message: "太危险"}); err != nil {
+		t.Fatalf("ReplyPermission: %v", err)
+	}
+	resp := fc.next()
+	body := resp["response"].(map[string]any)["response"].(map[string]any)
+	if body["behavior"] != "deny" || body["message"] != "太危险" {
+		t.Fatalf("deny 载荷 = %v", body)
+	}
+}
+
+// TestUnknownControlRequestGetsUnsupported 保证未实现的子类型不会让 CLI 干等。
+func TestUnknownControlRequestGetsUnsupported(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{
+		"type":       "control_request",
+		"request_id": "weird",
+		"request":    map[string]any{"subtype": "some_future_thing"},
+	})
+	resp := fc.next()
+	inner := resp["response"].(map[string]any)
+	if inner["request_id"] != "weird" {
+		t.Fatalf("request_id = %v", inner["request_id"])
+	}
+	if inner["subtype"] != "error" || inner["error_code"] != "unsupported_request" {
+		t.Fatalf("应回 unsupported_request，实际 %v", inner)
+	}
+}
+
+func TestInterruptAndSetModel(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.Interrupt(); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	msg := fc.next()
+	req := msg["request"].(map[string]any)
+	if req["subtype"] != "interrupt" {
+		t.Fatalf("subtype = %v", req["subtype"])
+	}
+
+	if err := sess.SetModel("sonnet"); err != nil {
+		t.Fatalf("SetModel: %v", err)
+	}
+	msg = fc.next()
+	req = msg["request"].(map[string]any)
+	if req["subtype"] != "set_model" || req["model"] != "sonnet" {
+		t.Fatalf("set_model 载荷 = %v", req)
+	}
+}
+
+func TestHandshakeTimeout(t *testing.T) {
+	old := InitTimeout
+	InitTimeout = 150 * time.Millisecond
+	defer func() { InitTimeout = old }()
+
+	sessSide, cliSide := newDuplex(t)
+	sess := New("s2", "/tmp/work", sessSide, func(Event) {})
+	// 不回复初始化，等超时
+	err := sess.Start()
+	if err == nil {
+		t.Fatal("期望握手超时错误")
+	}
+	sess.Close()
+	_ = cliSide.Close()
+	if sess.State() != StateClosed {
+		t.Fatalf("超时后 state = %q, want closed", sess.State())
+	}
+}
+
+func TestCloseIsIdempotent(t *testing.T) {
+	sess, _, _ := startSession(t)
+	if err := sess.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatalf("重复 Close 不应报错: %v", err)
+	}
+}
+
+func TestPermPayloadKeepsSuggestions(t *testing.T) {
+	// permission_suggestions 是前端「始终允许 / 切模式」按钮的数据源，不能丢。
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+	fc.send(map[string]any{
+		"type":       "control_request",
+		"request_id": "p3",
+		"request": map[string]any{
+			"subtype":   "can_use_tool",
+			"tool_name": "Edit",
+			"permission_suggestions": []any{
+				map[string]any{"type": "addRules", "destination": "localSettings"},
+			},
+		},
+	})
+	ev, ok := rec.wait(KindPermission, 2*time.Second)
+	if !ok {
+		t.Fatal("未收到 permission 事件")
+	}
+	var payload struct {
+		Suggestions []map[string]any `json:"permission_suggestions"`
+	}
+	if err := json.Unmarshal(ev.Data, &payload); err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if len(payload.Suggestions) != 1 || payload.Suggestions[0]["type"] != "addRules" {
+		t.Fatalf("suggestions = %v", payload.Suggestions)
+	}
+}
+
+func waitState(t *testing.T, s *Session, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.State() == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("等待状态 %q 超时，当前 %q", want, s.State())
+}

@@ -1,0 +1,21 @@
+# 构建产物
+/bin/
+/.gocache/
+/.gomodcache/
+/.npmcache/
+
+# 前端依赖与产物
+/frontend/node_modules/
+/frontend/dist/
+
+# 后端内嵌的前端产物（embed/index.html 是占位文件，需保留在仓库里）
+/backend/internal/webui/embed/assets/
+/backend/internal/webui/embed/*.js
+/backend/internal/webui/embed/*.css
+/backend/internal/webui/embed/*.svg
+/backend/internal/webui/embed/*.ico
+/backend/internal/webui/embed/*.png
+
+# 运行期
+*.log
+.DS_Store

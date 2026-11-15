@@ -1,0 +1,153 @@
+package protocol
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestDecodeControlRequestUsesTopLevelID(t *testing.T) {
+	line := []byte(`{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash"}}`)
+	env, err := Decode(line)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if env.Type != TypeControlRequest {
+		t.Fatalf("type = %q", env.Type)
+	}
+	if env.RequestID != "r1" {
+		t.Fatalf("RequestID = %q, want r1", env.RequestID)
+	}
+	if env.Subtype != SubtypeCanUseTool {
+		t.Fatalf("Subtype = %q", env.Subtype)
+	}
+	if len(env.Raw) == 0 {
+		t.Fatal("Raw 不应为空（需要原样透传给前端）")
+	}
+}
+
+// TestDecodeControlResponseNestedID 覆盖本项目踩过的坑：
+// control_response 的 request_id 在 response.request_id，不在顶层。
+func TestDecodeControlResponseNestedID(t *testing.T) {
+	line := []byte(`{"type":"control_response","response":{"subtype":"success","request_id":"init","response":{"models":[]}}}`)
+	env, err := Decode(line)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if env.RequestID != "" {
+		t.Fatalf("顶层 RequestID 应为空，实际 %q", env.RequestID)
+	}
+	if env.RespRequestID != "init" {
+		t.Fatalf("RespRequestID = %q, want init", env.RespRequestID)
+	}
+	payload := env.ResponsePayload()
+	if string(payload) != `{"models":[]}` {
+		t.Fatalf("payload = %s", payload)
+	}
+}
+
+func TestDecodeInvalid(t *testing.T) {
+	if _, err := Decode([]byte("not json")); err == nil {
+		t.Fatal("期望解析错误")
+	}
+}
+
+func TestInitializeShape(t *testing.T) {
+	var got map[string]any
+	if err := json.Unmarshal(Initialize("rid"), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["type"] != TypeControlRequest || got["request_id"] != "rid" {
+		t.Fatalf("顶层字段不对: %v", got)
+	}
+	req := got["request"].(map[string]any)
+	if req["subtype"] != SubtypeInitialize {
+		t.Fatalf("subtype = %v", req["subtype"])
+	}
+	// hooks/agents 必须显式存在（null），否则某些版本会拒绝握手。
+	if _, ok := req["hooks"]; !ok {
+		t.Fatal("request 缺少 hooks 字段")
+	}
+	if _, ok := req["agents"]; !ok {
+		t.Fatal("request 缺少 agents 字段")
+	}
+}
+
+func TestUserTextShape(t *testing.T) {
+	var got map[string]any
+	if err := json.Unmarshal(UserText("你好"), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["type"] != TypeUser {
+		t.Fatalf("type = %v", got["type"])
+	}
+	if got["session_id"] != nil {
+		t.Fatalf("session_id 应为 null，实际 %v", got["session_id"])
+	}
+	msg := got["message"].(map[string]any)
+	content := msg["content"].([]any)
+	block := content[0].(map[string]any)
+	if block["type"] != "text" || block["text"] != "你好" {
+		t.Fatalf("content block = %v", block)
+	}
+}
+
+func TestAllowAndDeny(t *testing.T) {
+	var allow map[string]any
+	_ = json.Unmarshal(Allow("r1", json.RawMessage(`{"command":"ls"}`)), &allow)
+	resp := allow["response"].(map[string]any)
+	if resp["request_id"] != "r1" || resp["subtype"] != "success" {
+		t.Fatalf("response = %v", resp)
+	}
+	inner := resp["response"].(map[string]any)
+	if inner["behavior"] != "allow" {
+		t.Fatalf("behavior = %v", inner["behavior"])
+	}
+	if inner["updatedInput"] == nil {
+		t.Fatal("updatedInput 应被透传")
+	}
+
+	var deny map[string]any
+	_ = json.Unmarshal(Deny("r2", "太危险"), &deny)
+	inner = deny["response"].(map[string]any)["response"].(map[string]any)
+	if inner["behavior"] != "deny" || inner["message"] != "太危险" {
+		t.Fatalf("deny = %v", inner)
+	}
+}
+
+func TestParsePermission(t *testing.T) {
+	line := []byte(`{"type":"control_request","request_id":"p1","request":{
+		"subtype":"can_use_tool","tool_name":"Bash","display_name":"Bash",
+		"input":{"command":"rm -rf /tmp/x"},"blocked_path":"/tmp/x","tool_use_id":"tu1",
+		"permission_suggestions":[{"type":"setMode","mode":"acceptEdits"}]}}`)
+	env, err := Decode(line)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	p, ok := ParsePermission(env)
+	if !ok {
+		t.Fatal("应识别为权限请求")
+	}
+	if p.RequestID != "p1" || p.ToolName != "Bash" || p.BlockedPath != "/tmp/x" {
+		t.Fatalf("解析结果不对: %+v", p)
+	}
+	if len(p.PermissionSuggestions) == 0 {
+		t.Fatal("permission_suggestions 应原样保留")
+	}
+}
+
+func TestParsePermissionRejectsOtherSubtypes(t *testing.T) {
+	line := []byte(`{"type":"control_request","request_id":"x","request":{"subtype":"interrupt"}}`)
+	env, _ := Decode(line)
+	if _, ok := ParsePermission(env); ok {
+		t.Fatal("非 can_use_tool 不应被识别")
+	}
+}
+
+func TestUnsupportedHasErrorCode(t *testing.T) {
+	var got map[string]any
+	_ = json.Unmarshal(Unsupported("bad"), &got)
+	resp := got["response"].(map[string]any)
+	if resp["subtype"] != "error" || resp["error_code"] != "unsupported_request" {
+		t.Fatalf("response = %v", resp)
+	}
+}
