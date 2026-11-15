@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -43,6 +44,54 @@ func TestParseModelsStripsGeminiPrefix(t *testing.T) {
 	}
 	if got[0].ID != "gemini-1.5-pro" {
 		t.Fatalf("ID = %q", got[0].ID)
+	}
+}
+
+// 真实中转的模型条目很大（description / modalities / context_window 全带），
+// 整份响应经常超过 4KB。曾经把小上限用于读取，导致合法 JSON 被截断后误报
+// 「不是合法 JSON」——这条是回归测试。
+func TestFetchModelsLargeResponseNotTruncated(t *testing.T) {
+	entry := func(i int) string {
+		return fmt.Sprintf(`{
+			"id":"cn:deepseek-v4.1-flash-%d",
+			"name":"DeepSeek-V4.1-Flash",
+			"object":"model",
+			"created":1753600000,
+			"owned_by":"workbuddy",
+			"description":"[x0.11 credit] 已更新至 V4.1-Flash-1017 最新版，支持 1M 上下文窗口，原生多模态；这是一段足够长的中文描述用来把响应体撑大，模拟真实网关的返回。",
+			"credits":"x0.11",
+			"promo_label":"夜间折扣",
+			"can_disable_thinking":true,
+			"only_reasoning":true,
+			"context_length":1000000,
+			"context_window":{"default":300000,"supported":[300000,600000,1000000]},
+			"limit":{"context":1000000,"output":128000},
+			"max_allowed_size":1000000,
+			"max_output_tokens":128000,
+			"modalities":{"input":["text","image"],"output":["text"]}
+		}`, i)
+	}
+	parts := make([]string, 0, 12)
+	for i := 0; i < 12; i++ {
+		parts = append(parts, entry(i))
+	}
+	body := `{"data":[` + strings.Join(parts, ",") + `]}`
+	if len(body) <= readLimitSmall {
+		t.Fatalf("测试响应应大于小上限，实际 %d 字节", len(body))
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "k"})
+	if len(res.Models) != 12 {
+		t.Fatalf("应解析出 12 个模型，实际 %d（detail=%s）", len(res.Models), res.Detail)
+	}
+	if res.Models[0].ID != "cn:deepseek-v4.1-flash-0" {
+		t.Fatalf("首个模型 = %q", res.Models[0].ID)
 	}
 }
 

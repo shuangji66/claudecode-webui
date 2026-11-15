@@ -154,13 +154,16 @@ func FetchModels(ctx context.Context, v Settings) ModelsResult {
 	res.Tried = []string{display}
 
 	client := &http.Client{Timeout: ProbeTimeout}
-	status, body, err := doAuth(ctx, client, http.MethodGet, url, v, nil, authKind(protocol))
+	status, body, truncated, err := doAuth(ctx, client, http.MethodGet, url, v, nil, authKind(protocol))
 	res.Status = status
 	attempt := Attempt{Path: display, Status: status}
 
 	switch {
 	case err != nil:
 		attempt.Note = "请求失败：" + err.Error()
+	case status >= 200 && status < 300 && truncated:
+		// 明确区分「被我们截断」与「不是 JSON」——两者原因完全不同。
+		attempt.Note = fmt.Sprintf("响应超过 %d 字节被截断，无法解析", readLimitModels)
 	case status >= 200 && status < 300:
 		models, perr := parseModels(body)
 		if perr != nil {
@@ -178,7 +181,7 @@ func FetchModels(ctx context.Context, v Settings) ModelsResult {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		// 同一把密钥换成 Bearer 再试一次：不少中转只认 Bearer。
 		if v.APIKey != "" && v.AuthToken == "" && protocol != ProtocolGemini {
-			if s2, b2, e2 := doAuth(ctx, client, http.MethodGet, url, v, nil, "bearer"); e2 == nil {
+			if s2, b2, _, e2 := doAuth(ctx, client, http.MethodGet, url, v, nil, "bearer"); e2 == nil {
 				res.Auth.BearerFallback = true
 				if models, perr := parseModels(b2); perr == nil && len(models) > 0 {
 					attempt.Status = s2
@@ -205,20 +208,22 @@ func FetchModels(ctx context.Context, v Settings) ModelsResult {
 }
 
 // doAuth 按指定的鉴权方式发请求。
-func doAuth(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, kind string) (int, []byte, error) {
+// 模型列表可能很大，这里统一用 readLimitModels，并回传是否被截断。
+func doAuth(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, kind string) (int, []byte, bool, error) {
 	switch kind {
 	case "bearer":
 		cp := v
 		cp.AuthToken = firstNonEmpty(v.AuthToken, v.APIKey)
 		cp.APIKey = ""
-		return doJSONAuth(ctx, c, method, url, cp, body, false)
+		return doJSONAuthLimit(ctx, c, method, url, cp, body, false, readLimitModels)
 	case "google":
 		cp := v
 		cp.APIKey = ""
 		cp.AuthToken = ""
-		return doJSONHeader(ctx, c, method, url, cp, body, map[string]string{"x-goog-api-key": firstNonEmpty(v.APIKey, v.AuthToken)})
+		return doJSONHeaderLimit(ctx, c, method, url, cp, body,
+			map[string]string{"x-goog-api-key": firstNonEmpty(v.APIKey, v.AuthToken)}, readLimitModels)
 	default:
-		return doJSONAuth(ctx, c, method, url, v, body, false)
+		return doJSONAuthLimit(ctx, c, method, url, v, body, false, readLimitModels)
 	}
 }
 

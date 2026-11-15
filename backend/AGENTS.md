@@ -79,6 +79,11 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   清除必须 `clear_api_key` / `clear_auth_token`。
 - 注入子进程的环境变量追加在 `CleanEnv` 之后，保证覆盖宿主同名变量。
 - 改完设置只影响**新建**会话；运行中的进程环境不可变。
+- **读响应体必须有明确上限，且上限要按用途区分**：错误体用 4KB 足够，
+  但模型列表可能几十 KB（真实中转的条目带 description / modalities / context_window），
+  用 4KB 读会把合法 JSON 截断，然后误报「不是合法 JSON」。
+  `readLimitSmall` / `readLimitModels` 就是为此分开的；被截断时要明确说「被截断」，
+  不要让它伪装成解析失败。
 
 ## 6. 网关规则（`internal/gateway`）
 

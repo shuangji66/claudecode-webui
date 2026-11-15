@@ -99,6 +99,13 @@ func doJSON(ctx context.Context, c *http.Client, method, url string, v Settings,
 	return doJSONAuth(ctx, c, method, url, v, body, false)
 }
 
+// 响应读取上限。模型列表可能很大（单个模型带 description / modalities 就几百字节），
+// 用小上限会导致 JSON 被截断而误报「不是合法 JSON」——这是踩过的坑。
+const (
+	readLimitSmall  = 4 << 10 // 错误体、探测：够用且省内存
+	readLimitModels = 4 << 20 // 模型列表：与 DSH 的 MAX_RESPONSE_BYTES 一致
+)
+
 // newRequest 构造一个带通用头的请求。
 func newRequest(ctx context.Context, method, url string, body []byte) (*http.Request, error) {
 	var rdr io.Reader
@@ -116,38 +123,57 @@ func newRequest(ctx context.Context, method, url string, body []byte) (*http.Req
 	return req, nil
 }
 
-// sendRequest 发出请求并读取有限长度的响应体。
-func sendRequest(c *http.Client, req *http.Request) (int, []byte, error) {
+// sendRequest 发出请求并读取响应体。
+// limit 是硬上限；返回 truncated 表示响应确实被截断（调用方据此给出准确提示，
+// 而不是把「截断导致的解析失败」说成「不是合法 JSON」）。
+func sendRequest(c *http.Client, req *http.Request, limit int64) (int, []byte, bool, error) {
 	resp, err := c.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, false, err
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return resp.StatusCode, b, nil
+	if limit <= 0 {
+		limit = readLimitSmall
+	}
+	// 多读 1 字节用于判断是否还有剩余内容。
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if int64(len(b)) > limit {
+		return resp.StatusCode, b[:limit], true, nil
+	}
+	return resp.StatusCode, b, false, nil
 }
 
 // doJSONHeader 用调用方给定的鉴权头发请求（如 Gemini 的 x-goog-api-key）。
 func doJSONHeader(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, extra map[string]string) (int, []byte, error) {
+	st, b, _, err := doJSONHeaderLimit(ctx, c, method, url, v, body, extra, readLimitSmall)
+	return st, b, err
+}
+
+func doJSONHeaderLimit(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, extra map[string]string, limit int64) (int, []byte, bool, error) {
 	req, err := newRequest(ctx, method, url, body)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, false, err
 	}
 	for k, val := range extra {
 		if val != "" {
 			req.Header.Set(k, val)
 		}
 	}
-	return sendRequest(c, req)
+	return sendRequest(c, req, limit)
 }
 
 // doJSONAuth 按 Claude Code 的两种鉴权方式发请求。
 // forceBearer=true 时把 APIKey 当作 Bearer 令牌发送（不发送 x-api-key）——
 // 不少中转的模型列表只认 Authorization: Bearer，不认 x-api-key。
 func doJSONAuth(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, forceBearer bool) (int, []byte, error) {
+	st, b, _, err := doJSONAuthLimit(ctx, c, method, url, v, body, forceBearer, readLimitSmall)
+	return st, b, err
+}
+
+func doJSONAuthLimit(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, forceBearer bool, limit int64) (int, []byte, bool, error) {
 	req, err := newRequest(ctx, method, url, body)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, false, err
 	}
 	if forceBearer {
 		if v.APIKey != "" {
@@ -161,7 +187,7 @@ func doJSONAuth(ctx context.Context, c *http.Client, method, url string, v Setti
 	if v.AuthToken != "" && !forceBearer {
 		req.Header.Set("authorization", "Bearer "+v.AuthToken)
 	}
-	return sendRequest(c, req)
+	return sendRequest(c, req, limit)
 }
 
 func snippet(b []byte) string {
