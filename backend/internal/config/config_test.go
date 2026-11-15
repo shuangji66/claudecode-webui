@@ -11,6 +11,7 @@ func TestLoadDefaults(t *testing.T) {
 	for _, k := range []string{
 		"ADMIN_SOCK", "BASEURL", "CLAUDE_BIN", "AUTH_TOKEN", "PROJECTS_ROOT",
 		"DATA_DIR", "HOME", "MAX_SESSIONS", "IDLE_TIMEOUT", "PERMISSION_MODE", "MODEL",
+		"WORKSPACES_FILE", "AUTO_START",
 	} {
 		t.Setenv(EnvPrefix+k, "")
 	}
@@ -39,9 +40,10 @@ func TestLoadDefaults(t *testing.T) {
 func assertUnderDataDir(t *testing.T, cfg Config) {
 	t.Helper()
 	for name, p := range map[string]string{
-		"AdminSock":    cfg.AdminSock,
-		"SettingsFile": cfg.SettingsFile,
-		"ClaudeHome":   cfg.ClaudeHome,
+		"AdminSock":      cfg.AdminSock,
+		"SettingsFile":   cfg.SettingsFile,
+		"WorkspacesFile": cfg.WorkspacesFile,
+		"ClaudeHome":     cfg.ClaudeHome,
 	} {
 		rel, err := filepath.Rel(cfg.DataDir, p)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
@@ -60,6 +62,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(EnvPrefix+"PERMISSION_MODE", "acceptEdits")
 	t.Setenv(EnvPrefix+"MODEL", "sonnet")
 	t.Setenv(EnvPrefix+"DATA_DIR", "/var/lib/ccweb")
+	t.Setenv(EnvPrefix+"AUTO_START", "false")
 
 	cfg := Load("v2")
 	if cfg.AdminSock != "/run/ccweb/app.sock" {
@@ -84,6 +87,12 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.SettingsFile != "/var/lib/ccweb/settings.json" {
 		t.Fatalf("SettingsFile = %q", cfg.SettingsFile)
+	}
+	if cfg.WorkspacesFile != "/var/lib/ccweb/workspaces.json" {
+		t.Fatalf("WorkspacesFile = %q", cfg.WorkspacesFile)
+	}
+	if cfg.AutoStart {
+		t.Fatal("AUTO_START=false 应关闭自动启动")
 	}
 }
 

@@ -64,3 +64,57 @@ func Validate(path string) (string, error) {
 	}
 	return abs, nil
 }
+
+// Dir 是目录选择器里的一行。
+type Dir struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// BrowseResult 是目录选择器的一次浏览结果。
+type BrowseResult struct {
+	Path    string `json:"path"`
+	Parent  string `json:"parent"`
+	Entries []Dir  `json:"entries"`
+}
+
+// Browse 列出一个目录下的直接子目录，供「添加授权目录」的浏览弹窗使用。
+// hidden 为 true 时连同以点开头的目录一起返回；不可读的条目跳过而不是整体失败，
+// 因为 NAS 上常有 root 专属目录，用户仍然应该能进入其余目录。
+func Browse(path string, hidden bool, limit int) (BrowseResult, error) {
+	abs, err := Validate(path)
+	if err != nil {
+		return BrowseResult{}, err
+	}
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		return BrowseResult{}, err
+	}
+	out := BrowseResult{Path: abs, Parent: filepath.Dir(abs), Entries: make([]Dir, 0, len(entries))}
+	for _, e := range entries {
+		if len(out.Entries) >= limit {
+			break
+		}
+		name := e.Name()
+		if !hidden && strings.HasPrefix(name, ".") {
+			continue
+		}
+		child := filepath.Join(abs, name)
+		isDir := e.IsDir()
+		if e.Type()&os.ModeSymlink != 0 {
+			// 符号链接指向目录时也允许进入；Stat 失败则按普通文件跳过。
+			if st, statErr := os.Stat(child); statErr == nil && st.IsDir() {
+				isDir = true
+			}
+		}
+		if !isDir {
+			continue
+		}
+		out.Entries = append(out.Entries, Dir{Name: name, Path: child})
+	}
+	sort.Slice(out.Entries, func(i, j int) bool { return out.Entries[i].Name < out.Entries[j].Name })
+	return out, nil
+}

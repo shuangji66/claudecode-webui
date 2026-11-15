@@ -43,6 +43,10 @@ type Manager struct {
 	store *settings.Store
 	emit  func(sessionID string, ev session.Event)
 
+	// createMu 串行化「检查是否已有同目录会话 + 启动新进程」。
+	// 没有它时，后端自动拉起与前端同时到达的 ensure 会各起一个 claude。
+	createMu sync.Mutex
+
 	mu       sync.Mutex
 	sessions map[string]*session.Session
 	procs    map[string]*process.Proc
@@ -77,22 +81,80 @@ func (m *Manager) Binary() string { return m.bin }
 
 // Create 新建一个会话并完成握手。
 func (m *Manager) Create(cwd, model, permissionMode string) (Info, error) {
+	abs, err := normalizeCwd(cwd)
+	if err != nil {
+		return Info{}, err
+	}
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+	return m.create(abs, model, permissionMode)
+}
+
+// Ensure 返回 cwd 下已存在的会话；没有则新建。
+//
+// 「APP 启动自动拉起」与「切换工作区」都走这里：并发调用会串行化，
+// 前端即便在自动启动完成前也发了一次 ensure，也不会多起 claude。
+func (m *Manager) Ensure(cwd, model, permissionMode string) (Info, error) {
+	abs, err := normalizeCwd(cwd)
+	if err != nil {
+		return Info{}, err
+	}
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+
+	if info, ok := m.findByCwd(abs); ok {
+		return info, nil
+	}
+	return m.create(abs, model, permissionMode)
+}
+
+// findByCwd 返回该目录下最近活跃的存活会话。
+func (m *Manager) findByCwd(abs string) (Info, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var best *session.Session
+	for _, s := range m.sessions {
+		if filepath.Clean(s.Cwd) != abs || s.State() == session.StateClosed {
+			continue
+		}
+		if best == nil || s.LastActive().After(best.LastActive()) {
+			best = s
+		}
+	}
+	if best == nil {
+		return Info{}, false
+	}
+	info := infoOf(best)
+	if mt, ok := m.metas[best.ID]; ok {
+		info.Provider = mt.Provider
+		info.Model = mt.Model
+	}
+	return info, true
+}
+
+// normalizeCwd 校验并归一化工作目录。
+func normalizeCwd(cwd string) (string, error) {
 	if cwd == "" {
-		return Info{}, errors.New("manager: cwd 不能为空")
+		return "", errors.New("manager: cwd 不能为空")
 	}
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
-		return Info{}, fmt.Errorf("manager: 解析 cwd: %w", err)
+		return "", fmt.Errorf("manager: 解析 cwd: %w", err)
 	}
 	st, err := os.Stat(abs)
 	if err != nil {
-		return Info{}, fmt.Errorf("manager: 工作目录不可用: %w", err)
+		return "", fmt.Errorf("manager: 工作目录不可用: %w", err)
 	}
 	if !st.IsDir() {
-		return Info{}, fmt.Errorf("manager: %s 不是目录", abs)
+		return "", fmt.Errorf("manager: %s 不是目录", abs)
 	}
+	return abs, nil
+}
 
+// create 在 createMu 已持有的前提下启动会话。
+func (m *Manager) create(abs, model, permissionMode string) (Info, error) {
 	m.reapIdle()
+	m.pruneClosed()
 
 	m.mu.Lock()
 	if len(m.sessions) >= m.cfg.MaxSessions {
@@ -185,6 +247,20 @@ func (m *Manager) List() []Info {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out
+}
+
+// pruneClosed 清理已经退出但还占着槽位的会话。
+func (m *Manager) pruneClosed() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, s := range m.sessions {
+		if s.State() != session.StateClosed {
+			continue
+		}
+		delete(m.sessions, id)
+		delete(m.procs, id)
+		delete(m.metas, id)
+	}
 }
 
 // Close 关闭并移除一个会话。

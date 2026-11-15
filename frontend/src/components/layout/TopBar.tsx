@@ -1,132 +1,122 @@
-import type { InitPayload, PublicSettings, SessionInfo } from "../../transport/types";
+import type { ReactNode } from "react";
+import type { SessionInfo } from "../../transport/types";
+import type { ConnInfo } from "../../store/useAppStore";
+import { clockTime, permissionLabel } from "../../lib/labels";
+import { IconFolder, IconMore, IconPanel } from "../common/Icons";
+
+export type ChatTab = "chat" | "overview";
 
 interface Props {
   session: SessionInfo | null;
-  init: InitPayload | undefined;
-  settings: PublicSettings | null;
-  conn: string;
+  title: string;
+  conn: ConnInfo;
   busy: boolean;
-  onInterrupt: () => void;
-  onPermissionMode: (m: string) => void;
-  onSelectModel: (provider: string, model: string) => void;
+  tab: ChatTab;
+  mode: string;
+  onTab: (tab: ChatTab) => void;
   onToggleSidebar: () => void;
+  onToggleCollapse: () => void;
   onOpenSettings: () => void;
 }
 
-const PERMISSION_MODES = ["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
+const CONN_TEXT: Record<string, string> = {
+  idle: "未连接",
+  connecting: "连接中",
+  open: "已连接",
+  reconnecting: "重连中",
+  closed: "已断开",
+};
 
-export function TopBar({
-  session,
-  init,
-  settings,
-  conn,
-  busy,
-  onInterrupt,
-  onPermissionMode,
-  onSelectModel,
-  onToggleSidebar,
-  onOpenSettings,
-}: Props) {
-  const currentMode = init?.current_permission_mode ?? "default";
+const CONN_DOT: Record<string, string> = {
+  idle: "bg-faint",
+  connecting: "bg-warn",
+  open: "bg-ok",
+  reconnecting: "bg-warn",
+  closed: "bg-danger",
+};
 
-  // 聊天页只列「已添加的第三方模型」——CLI 固定用默认模型，不再暴露内置模型列表。
-  const options = (settings?.providers ?? []).flatMap((p) =>
-    (p.models ?? []).map((m) => ({ provider: p.id, model: m, label: `${m} · ${p.name || p.id}` })),
-  );
-  const selected = settings?.selected;
-  // 注意：后端在「未选择」时返回 {provider:"", model:""} —— 这是个真值对象，
-  // 直接拼成 "/" 会匹配不到任何 option，浏览器就回落到第一项，
-  // 看起来像"已选中模型"，实际什么都没选。必须两个字段都非空才算选中。
-  const selectedKey =
-    selected && selected.provider && selected.model ? `${selected.provider}/${selected.model}` : "";
-
-  // 会话创建时绑定的提供商与当前选择不一致 → 需要新建会话
-  const mismatch = Boolean(session?.provider) && Boolean(selected?.provider) && session!.provider !== selected!.provider;
+export function TopBar({ session, title, conn, busy, tab, mode, onTab, onToggleSidebar, onToggleCollapse, onOpenSettings }: Props) {
+  const connText = CONN_TEXT[conn.state] ?? "未连接";
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
-      <button
-        type="button"
-        onClick={onToggleSidebar}
-        className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 md:hidden dark:hover:bg-slate-800"
-        aria-label="切换会话列表"
-      >
-        ☰
-      </button>
-      <div className="min-w-0 flex-1">
-        <div className="truncate font-mono text-xs text-slate-600 dark:text-slate-300" title={session?.cwd}>
-          {session?.cwd ?? "未选择会话"}
-        </div>
-        <div className="flex items-center gap-2 text-[11px] text-slate-400">
-          <span
-            className={`inline-block h-1.5 w-1.5 rounded-full ${
-              conn === "open" ? "bg-emerald-500" : conn === "closed" ? "bg-rose-500" : "bg-slate-400"
-            }`}
-          />
-          <span>{conn === "open" ? "已连接" : conn === "closed" ? "已断开" : "连接中"}</span>
-          {init?.claude_code_version && <span>CLI {init.claude_code_version}</span>}
-          {session?.model && <span className="truncate">会话模型 {session.model}</span>}
-        </div>
-      </div>
-
-      <label className="flex items-center gap-1 text-[11px] text-slate-500">
-        模型
-        <select
-          value={selectedKey}
-          onChange={(e) => {
-            const opt = options.find((o) => `${o.provider}/${o.model}` === e.target.value);
-            if (opt) onSelectModel(opt.provider, opt.model);
-          }}
-          className="max-w-[16rem] rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-        >
-          {options.length === 0 && <option value="">未添加模型</option>}
-          {options.length > 0 && !selectedKey && <option value="">未选择模型</option>}
-          {options.map((o) => (
-            <option key={`${o.provider}/${o.model}`} value={`${o.provider}/${o.model}`}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label className="flex items-center gap-1 text-[11px] text-slate-500">
-        权限
-        <select
-          value={currentMode}
-          onChange={(e) => onPermissionMode(e.target.value)}
-          className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-        >
-          {PERMISSION_MODES.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      {busy && (
+    <header className="safe-top shrink-0 border-b border-line bg-canvas md:pt-0">
+      <div className="flex h-[56px] items-center gap-2 px-3 md:px-4">
         <button
           type="button"
-          onClick={onInterrupt}
-          className="rounded-lg bg-rose-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-rose-700"
+          onClick={onToggleSidebar}
+          className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink md:hidden"
+          aria-label="打开侧栏"
         >
-          中断
+          <IconPanel size={18} />
         </button>
-      )}
-      <button
-        type="button"
-        onClick={onOpenSettings}
-        className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
-        aria-label="设置"
-      >
-        ⚙
-      </button>
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          className="hidden rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink md:inline-flex"
+          aria-label="收起侧栏"
+          title="收起侧栏"
+        >
+          <IconPanel size={17} />
+        </button>
 
-      {mismatch && (
-        <div className="w-full rounded-lg bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
-          当前会话使用的是「{session?.provider}」，与所选模型的提供商不同。切提供商的模型需要新建会话。
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <h1 className="truncate text-[14px] font-semibold text-ink">{session ? title : "新对话"}</h1>
+            <span className="hidden shrink-0 items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[10px] text-muted sm:inline-flex">
+              <span className="h-1.5 w-1.5 rounded-full bg-brand" />
+              {permissionLabel(mode)}
+            </span>
+            {busy && <span className="thinking-dot h-1.5 w-1.5 shrink-0 rounded-full bg-brand sm:hidden" />}
+          </div>
+          <div className="flex min-w-0 items-center gap-1 text-[10.5px] text-faint">
+            <IconFolder size={11} className="shrink-0" />
+            <span className="truncate font-mono" title={session?.cwd}>
+              {session?.cwd ?? "选择工作区开始"}
+            </span>
+            {session?.last_active && <span className="hidden shrink-0 sm:inline">· {clockTime(Date.parse(session.last_active))}</span>}
+          </div>
         </div>
-      )}
-    </div>
+
+        <span className="hidden items-center gap-1.5 text-[11px] text-muted sm:flex" title={conn.reason}>
+          <span className={`h-1.5 w-1.5 rounded-full ${CONN_DOT[conn.state] ?? "bg-faint"}`} />
+          {connText}
+        </span>
+        <span className={`h-1.5 w-1.5 rounded-full sm:hidden ${CONN_DOT[conn.state] ?? "bg-faint"}`} title={connText} />
+
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+          aria-label="设置"
+          title="设置"
+        >
+          <IconMore size={17} />
+        </button>
+      </div>
+
+      <div className="flex h-[38px] items-end gap-1 px-3 md:px-4">
+        <TabButton active={tab === "chat"} onClick={() => onTab("chat")}>
+          对话
+        </TabButton>
+        <TabButton active={tab === "overview"} onClick={() => onTab("overview")}>
+          概览
+        </TabButton>
+      </div>
+    </header>
+  );
+}
+
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative px-1.5 pb-2 text-[12.5px] transition ${
+        active ? "font-medium text-ink" : "text-muted hover:text-ink"
+      }`}
+    >
+      {children}
+      {active && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-brand" />}
+    </button>
   );
 }

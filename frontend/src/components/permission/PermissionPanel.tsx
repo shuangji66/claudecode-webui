@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { PermissionPayload, PermissionSuggestion } from "../../transport/types";
+import { IconAlert, IconShield } from "../common/Icons";
 
 export interface PermissionReply {
   allow: boolean;
@@ -55,45 +56,51 @@ export function PermissionPanel({ perm, onReply }: Props) {
     <div
       role="dialog"
       aria-label="工具调用审批"
-      className="rounded-xl border border-amber-300 bg-amber-50 p-3 shadow-sm dark:border-amber-700 dark:bg-amber-950/40"
+      className="overflow-hidden rounded-2xl border border-amber-300/70 bg-amber-50/80 shadow-soft dark:border-amber-800/60 dark:bg-amber-950/20"
     >
-      <div className="flex items-center gap-2 text-sm font-semibold text-amber-900 dark:text-amber-200">
-        <span aria-hidden>⚠️</span>
+      <div className="flex items-center gap-2 px-3.5 pt-3 text-[13px] font-semibold text-amber-900 dark:text-amber-200">
+        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+          <IconAlert size={15} />
+        </span>
         <span>需要授权：{perm.display_name || perm.tool_name}</span>
+        <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-100/70 px-2 py-0.5 text-[10px] font-normal text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+          <IconShield size={11} />
+          待确认
+        </span>
       </div>
-      {perm.description && <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">{perm.description}</p>}
+      {perm.description && <p className="px-3.5 pt-1 text-[11.5px] leading-relaxed text-amber-800 dark:text-amber-300">{perm.description}</p>}
       {perm.blocked_path && (
-        <p className="mt-1 break-all font-mono text-[11px] text-amber-700 dark:text-amber-400">路径：{perm.blocked_path}</p>
+        <p className="px-3.5 pt-1 break-all font-mono text-[10.5px] text-amber-700 dark:text-amber-400">路径：{perm.blocked_path}</p>
       )}
 
-      <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-white/70 p-2 text-[11px] text-slate-700 dark:bg-slate-900/60 dark:text-slate-300">
+      <pre className="mx-3.5 mt-2 max-h-40 overflow-auto rounded-xl border border-amber-200/60 bg-white/70 p-2.5 font-mono text-[11px] leading-relaxed text-ink-2 dark:border-amber-900/40 dark:bg-black/20">
         {safePretty(perm.input)}
       </pre>
 
       {editing && (
-        <div className="mt-2">
+        <div className="mx-3.5 mt-2">
           <textarea
-            className="h-32 w-full rounded-lg border border-amber-300 bg-white p-2 font-mono text-[11px] dark:border-amber-700 dark:bg-slate-900 dark:text-slate-100"
+            className="h-32 w-full rounded-xl border border-amber-300 bg-canvas p-2.5 font-mono text-[11px] outline-none dark:border-amber-800 dark:text-ink"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
           />
-          {editError && <p className="text-[11px] text-rose-600">{editError}</p>}
-          <div className="mt-1 flex gap-2">
-            <button type="button" onClick={allowEdited} className="rounded bg-emerald-600 px-3 py-1 text-xs text-white">
+          {editError && <p className="mt-1 text-[11px] text-danger">{editError}</p>}
+          <div className="mt-1.5 flex gap-2">
+            <button type="button" onClick={allowEdited} className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[11.5px] font-medium text-white hover:bg-emerald-700">
               执行修改后的输入
             </button>
-            <button type="button" onClick={() => setEditing(false)} className="rounded px-3 py-1 text-xs text-slate-600">
+            <button type="button" onClick={() => setEditing(false)} className="rounded-lg px-3 py-1.5 text-[11.5px] text-muted hover:bg-black/5">
               取消编辑
             </button>
           </div>
         </div>
       )}
 
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-amber-200/60 px-3.5 py-3 dark:border-amber-900/40">
         <button
           type="button"
           onClick={allowOnce}
-          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-700"
+          className="rounded-lg bg-ink px-3 py-1.5 text-[11.5px] font-medium text-canvas hover:opacity-90"
         >
           仅此次允许
         </button>
@@ -101,7 +108,7 @@ export function PermissionPanel({ perm, onReply }: Props) {
           <button
             type="button"
             onClick={allowForever}
-            className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 ring-1 ring-emerald-300 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:text-emerald-300"
+            className="rounded-lg bg-emerald-50 px-3 py-1.5 text-[11.5px] font-medium text-emerald-800 ring-1 ring-emerald-300 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-800"
           >
             始终允许 {ruleLabel}
           </button>
@@ -110,7 +117,7 @@ export function PermissionPanel({ perm, onReply }: Props) {
           <button
             type="button"
             onClick={switchMode}
-            className="rounded-lg bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-800 ring-1 ring-sky-300 hover:bg-sky-100 dark:bg-sky-950/50 dark:text-sky-300"
+            className="rounded-lg bg-sky-50 px-3 py-1.5 text-[11.5px] font-medium text-sky-800 ring-1 ring-sky-300 hover:bg-sky-100 dark:bg-sky-950/40 dark:text-sky-300 dark:ring-sky-800"
           >
             切到 {setMode.mode} 模式
           </button>
@@ -119,7 +126,7 @@ export function PermissionPanel({ perm, onReply }: Props) {
           <button
             type="button"
             onClick={() => setEditing(true)}
-            className="rounded-lg px-3 py-1.5 text-xs text-slate-600 ring-1 ring-slate-300 hover:bg-white dark:text-slate-300 dark:ring-slate-600"
+            className="rounded-lg px-3 py-1.5 text-[11.5px] text-muted ring-1 ring-line-strong hover:bg-canvas hover:text-ink"
           >
             编辑后运行
           </button>
@@ -127,7 +134,7 @@ export function PermissionPanel({ perm, onReply }: Props) {
         <button
           type="button"
           onClick={deny}
-          className="ml-auto rounded-lg px-3 py-1.5 text-xs font-medium text-rose-700 ring-1 ring-rose-300 hover:bg-rose-50 dark:text-rose-300 dark:ring-rose-700"
+          className="ml-auto rounded-lg px-3 py-1.5 text-[11.5px] font-medium text-danger ring-1 ring-rose-300 hover:bg-rose-50 dark:ring-rose-900"
         >
           拒绝
         </button>

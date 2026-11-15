@@ -21,6 +21,7 @@ import (
 	"ccweb/backend/internal/gateway"
 	"ccweb/backend/internal/hub"
 	"ccweb/backend/internal/settings"
+	"ccweb/backend/internal/workspace"
 )
 
 // version 由 -ldflags "-X main.version=..." 注入。
@@ -36,6 +37,13 @@ func main() {
 
 	// 持久化配置：第三方端点 / 密钥 / 默认模型。文件落在 CCWEB_DATA_DIR 下。
 	store, err := settings.Open(cfg.SettingsFile)
+	if err != nil {
+		logger.Printf("启动失败: %v", err)
+		os.Exit(1)
+	}
+
+	// 授权目录 + 当前工作区：首次启动把 CCWEB_PROJECTS_ROOT 作为默认工作区。
+	wsStore, err := workspace.Open(cfg.WorkspacesFile, cfg.ProjectsRoot)
 	if err != nil {
 		logger.Printf("启动失败: %v", err)
 		os.Exit(1)
@@ -57,10 +65,27 @@ func main() {
 		Manager:       mgr,
 		HistoryDir:    filepath.Join(cfg.ClaudeHome, ".claude", "projects"),
 		Settings:      store,
+		Workspaces:    wsStore,
 		ProjectsRoot:  cfg.ProjectsRoot,
 		ClaudeVersion: probeClaudeVersion(mgr.Binary()),
 		StartedAt:     time.Now(),
 	}, logger)
+
+	// APP 启动即拉起 claude：异步执行，握手慢不能拖住 socket 监听。
+	// 前端如果先连上，会再调一次 /api/session/ensure，manager 内部串行化去重。
+	if cfg.AutoStart {
+		go func() {
+			cwd := wsStore.AutoStartPath()
+			if cwd == "" {
+				return
+			}
+			if _, err := mgr.Ensure(cwd, "", ""); err != nil {
+				logger.Printf("自动启动会话失败（%s）: %v", cwd, err)
+				return
+			}
+			wsStore.Touch(cwd)
+		}()
+	}
 
 	// 收到 TERM/INT 时优雅退出：关掉全部子进程，避免 claude 变孤儿。
 	stop := make(chan os.Signal, 1)

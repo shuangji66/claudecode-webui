@@ -85,23 +85,21 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
   );
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end bg-black/30" onClick={onClose}>
+    <div className="fixed inset-0 z-40 flex justify-end bg-black/35" onClick={onClose}>
       <div
-        className="h-full w-full max-w-lg overflow-y-auto bg-white p-4 shadow-xl dark:bg-slate-900"
+        className="dsh-scroll h-full w-full max-w-lg overflow-y-auto bg-canvas px-4 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] pt-4 shadow-2xl md:max-w-xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-label="设置"
       >
-        <div className="flex items-center gap-2">
+        <div className="sticky top-0 z-10 -mx-4 -mt-4 mb-4 flex items-center gap-2 border-b border-line bg-canvas px-4 py-3">
+          <h2 className="text-[15px] font-semibold text-ink">设置</h2>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg px-2 py-1 text-xs font-medium text-blue-700 hover:bg-slate-100 dark:text-blue-300 dark:hover:bg-slate-800"
+            className="ml-auto rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+            aria-label="关闭设置"
           >
-            ← 返回对话
-          </button>
-          <h2 className="ml-auto text-sm font-semibold text-slate-700 dark:text-slate-200">设置</h2>
-          <button type="button" onClick={onClose} aria-label="关闭设置" className="text-slate-500">
             ✕
           </button>
         </div>
@@ -118,7 +116,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             </button>
           </div>
           <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
-            每家提供商填自己的协议、地址与密钥，勾选要添加的模型。对话时在聊天页顶部选择用哪个。
+            每家提供商填自己的协议、地址与密钥，勾选要添加的模型。对话时在输入框下方的模型选择器里切换。
           </p>
 
           {forms.length === 0 && (

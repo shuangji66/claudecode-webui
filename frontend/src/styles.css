@@ -1,22 +1,287 @@
 @import "tailwindcss";
 
-/* 移动端优先：整页高度用 dvh，避免 iOS 地址栏收合时出现半屏空白。 */
+/* 设计令牌对齐官方 DSH：中性底、细分隔线、蓝色业务主色、大圆角输入卡。 */
+@theme inline {
+  --color-canvas: var(--c-canvas);
+  --color-panel: var(--c-panel);
+  --color-panel-strong: var(--c-panel-strong);
+  --color-ink: var(--c-ink);
+  --color-ink-2: var(--c-ink-2);
+  --color-muted: var(--c-muted);
+  --color-faint: var(--c-faint);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-brand: var(--c-brand);
+  --color-brand-hover: var(--c-brand-hover);
+  --color-brand-soft: var(--c-brand-soft);
+  --color-bubble: var(--c-bubble);
+  --color-danger: var(--c-danger);
+  --color-warn: var(--c-warn);
+  --color-ok: var(--c-ok);
+  --radius-panel: var(--r-panel);
+  --radius-card: var(--r-card);
+  --shadow-soft: var(--sh-soft);
+}
+
+:root {
+  color-scheme: light;
+  --c-canvas: #ffffff;
+  --c-panel: #f7f7f8;
+  --c-panel-strong: #f1f1f3;
+  --c-ink: #1a1a1a;
+  --c-ink-2: #374151;
+  --c-muted: #6b7280;
+  --c-faint: #9ca3af;
+  --c-line: #ececee;
+  --c-line-strong: #dedee2;
+  --c-brand: #4d6bfe;
+  --c-brand-hover: #3c5af0;
+  --c-brand-soft: #eef2ff;
+  --c-bubble: #eef2f8;
+  --c-danger: #dc2626;
+  --c-warn: #b45309;
+  --c-ok: #059669;
+  --c-scroll: #d6d6da;
+  --c-scroll-hover: #b9b9bf;
+  --r-panel: 20px;
+  --r-card: 14px;
+  --sh-soft: 0 1px 2px rgba(16, 24, 40, 0.04), 0 10px 28px rgba(16, 24, 40, 0.07);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --c-canvas: #0f1115;
+    --c-panel: #15171c;
+    --c-panel-strong: #1c1f26;
+    --c-ink: #e8eaed;
+    --c-ink-2: #c7cad1;
+    --c-muted: #9aa0aa;
+    --c-faint: #717782;
+    --c-line: #262a31;
+    --c-line-strong: #333842;
+    --c-brand: #7d93ff;
+    --c-brand-hover: #93a5ff;
+    --c-brand-soft: #1c2440;
+    --c-bubble: #1d2433;
+    --c-danger: #f87171;
+    --c-warn: #fbbf24;
+    --c-ok: #34d399;
+    --c-scroll: #3a3f48;
+    --c-scroll-hover: #4b515d;
+    --sh-soft: 0 1px 2px rgba(0, 0, 0, 0.35), 0 12px 32px rgba(0, 0, 0, 0.35);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
 html,
 body,
 #root {
   height: 100%;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   margin: 0;
+  overflow: hidden;
+  background: var(--c-canvas);
+  color: var(--c-ink);
   font-family:
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC",
     "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior: none;
 }
 
-/* 代码块内的等宽字体统一在这里定义，卡片组件直接用 font-mono。 */
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--c-brand) 24%, transparent);
+}
+
 code,
 pre {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* 移动端 16px 起，避免 iOS 聚焦输入框时自动放大页面。 */
+@media (pointer: coarse) {
+  textarea,
+  input,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* 滚动条：默认细、悬停加深；聊天区与侧栏共用。 */
+.dsh-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-scroll) transparent;
+  overscroll-behavior: contain;
+}
+
+.dsh-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dsh-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.dsh-scroll::-webkit-scrollbar-thumb {
+  background: var(--c-scroll);
+  border-radius: 999px;
+}
+
+.dsh-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--c-scroll-hover);
+}
+
+/* 移动端安全区：对话框下方必须给 Home Indicator 留出空间。 */
+@layer components {
+  .safe-bottom {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  }
+
+  .safe-top {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+}
+
+@supports not (padding: env(safe-area-inset-bottom)) {
+  .safe-bottom {
+    padding-bottom: 12px;
+  }
+}
+
+/* 输入卡：大圆角 + 细线 + 柔和阴影，聚焦时线色变蓝。 */
+.composer-card {
+  border: 1px solid var(--c-line-strong);
+  border-radius: var(--r-panel);
+  background: var(--c-canvas);
+  box-shadow: var(--sh-soft);
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.composer-card:focus-within {
+  border-color: color-mix(in srgb, var(--c-brand) 55%, var(--c-line-strong));
+  box-shadow:
+    var(--sh-soft),
+    0 0 0 3px color-mix(in srgb, var(--c-brand) 12%, transparent);
+}
+
+.composer-textarea {
+  field-sizing: content;
+  max-height: 168px;
+  min-height: 26px;
+  resize: none;
+}
+
+.composer-textarea::placeholder {
+  color: var(--c-faint);
+}
+
+/* 发送按钮：DSH 的圆形箭头。 */
+.send-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--c-brand);
+  color: #fff;
+  transition:
+    background 120ms ease,
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.send-button:hover:not(:disabled) {
+  background: var(--c-brand-hover);
+}
+
+.send-button:disabled {
+  opacity: 0.38;
+}
+
+.send-button.is-stop {
+  background: var(--c-ink);
+  color: var(--c-canvas);
+}
+
+/* 侧栏工作区/会话行。放进 components 层，页面上的 items-start 等工具类才能覆盖。 */
+@layer components {
+  .side-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    border-radius: 10px;
+    padding: 6px 8px;
+    text-align: left;
+    transition: background 100ms ease;
+  }
+
+  .side-row:hover {
+    background: color-mix(in srgb, var(--c-ink) 5%, transparent);
+  }
+
+  .side-row[data-active="true"] {
+    background: color-mix(in srgb, var(--c-ink) 7%, transparent);
+  }
+}
+
+/* 消息进入时轻微上浮，避免流式内容闪跳。 */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
+.animate-rise {
+  animation: rise-in 160ms ease-out;
+}
+
+@keyframes soft-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.thinking-dot {
+  animation: soft-pulse 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .thinking-dot {
+    animation: none;
+  }
+  * {
+    scroll-behavior: auto !important;
+  }
 }

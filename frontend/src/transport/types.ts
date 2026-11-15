@@ -165,3 +165,34 @@ export interface ModelsResult {
   /** 每个候选路径的探测结果。 */
   attempts?: { path: string; status: number; note: string }[];
 }
+
+/** 一条已授权目录（工作区）。 */
+export interface WorkspaceEntry {
+  path: string;
+  name: string;
+  last_used: string;
+  /** 读取时实时探测：目录可能被移动 / 卸载。 */
+  exists: boolean;
+}
+
+/** GET /api/workspaces 的响应。 */
+export interface WorkspacesPayload {
+  workspaces: WorkspaceEntry[];
+  current: string;
+  /** CCWEB_PROJECTS_ROOT，目录选择器的默认起点。 */
+  root: string;
+}
+
+/** 目录选择器里的一行。 */
+export interface FsEntry {
+  name: string;
+  path: string;
+}
+
+/** GET /api/fs/list 的响应。 */
+export interface FsListing {
+  path: string;
+  parent: string;
+  entries: FsEntry[];
+  roots: string[];
+}

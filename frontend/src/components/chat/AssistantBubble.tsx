@@ -1,12 +1,32 @@
+import { useState } from "react";
 import { Markdown } from "../common/Markdown";
+import { IconCopy } from "../common/Icons";
 
-export function AssistantBubble({ text, streaming }: { text: string; streaming: boolean }) {
+export function AssistantBubble({ text, streaming }: { text: string; streaming: boolean; ts?: number }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* 忽略 */
+    }
+  };
   return (
-    <div className="flex justify-start">
-      <div className="max-w-[92%] rounded-2xl rounded-bl-sm bg-slate-100 px-4 py-2 text-slate-800 dark:bg-slate-800 dark:text-slate-100">
+    <div className="group relative">
+      <div className="text-ink">
         <Markdown text={text} />
-        {streaming && <span className="ml-1 inline-block h-3 w-1.5 animate-pulse bg-slate-400 align-middle" />}
+        {streaming && <span className="thinking-dot ml-0.5 inline-block h-3.5 w-1.5 translate-y-0.5 rounded-sm bg-brand" />}
       </div>
+      {!streaming && text.trim() && (
+        <div className="mt-1 flex h-4 items-center gap-1 text-[10px] text-faint opacity-0 transition group-hover:opacity-100">
+          <button type="button" onClick={() => void copy()} className="rounded p-0.5 hover:text-ink" aria-label="复制回复">
+            <IconCopy size={12} />
+          </button>
+          {copied && <span>已复制</span>}
+        </div>
+      )}
     </div>
   );
 }

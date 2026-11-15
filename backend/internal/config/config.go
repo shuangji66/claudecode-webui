@@ -34,6 +34,10 @@ type Config struct {
 	ClaudeHome string
 	// SettingsFile 是持久化配置（含第三方端点与密钥）的路径（CCWEB_SETTINGS_FILE）。
 	SettingsFile string
+	// WorkspacesFile 是授权目录 / 当前工作区的持久化路径（CCWEB_WORKSPACES_FILE）。
+	WorkspacesFile string
+	// AutoStart 为 true 时，进程启动后自动在当前工作区拉起一个 claude 会话（CCWEB_AUTO_START）。
+	AutoStart bool
 	// MaxSessions 是最多同时常驻的 claude 子进程数（CCWEB_MAX_SESSIONS）。
 	MaxSessions int
 	// IdleTimeout 是会话空闲多久后被回收（CCWEB_IDLE_TIMEOUT）。
@@ -57,6 +61,21 @@ func EnvOr(key, def string) string {
 // defaultDataDir 返回默认的可写数据目录。
 func defaultDataDir() string {
 	return filepath.Join(os.TempDir(), "ccweb")
+}
+
+// envBool 解析布尔型环境变量；空值取默认，无法识别时也取默认。
+func envBool(key string, def bool) bool {
+	v := strings.ToLower(strings.TrimSpace(EnvOr(key, "")))
+	switch v {
+	case "":
+		return def
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
 }
 
 // Load 解析环境变量并返回配置。version 由调用方注入。
@@ -98,6 +117,8 @@ func Load(version string) Config {
 		DataDir:        dataDir,
 		ClaudeHome:     claudeHome,
 		SettingsFile:   EnvOr("SETTINGS_FILE", filepath.Join(dataDir, "settings.json")),
+		WorkspacesFile: EnvOr("WORKSPACES_FILE", filepath.Join(dataDir, "workspaces.json")),
+		AutoStart:      envBool("AUTO_START", true),
 		MaxSessions:    maxSessions,
 		IdleTimeout:    idle,
 		PermissionMode: EnvOr("PERMISSION_MODE", ""),

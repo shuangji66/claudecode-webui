@@ -1,18 +1,60 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { CommandInfo } from "../../transport/types";
+import { permissionLabel } from "../../lib/labels";
+import { IconChevronDown, IconPlus, IconSend, IconShield, IconSpark, IconStop } from "../common/Icons";
+
+export interface ModelOption {
+  provider: string;
+  model: string;
+  label: string;
+}
 
 interface Props {
   disabled: boolean;
+  /** 连接断开时只禁用发送，保留输入框里的草稿与焦点。 */
+  sendBlocked: boolean;
+  starting: boolean;
   commands: CommandInfo[];
+  busy: boolean;
+  placeholder?: string;
+  modelOptions: ModelOption[];
+  selectedKey: string;
+  permissionMode: string;
+  onSelectModel: (provider: string, model: string) => void;
+  onPermissionMode: (mode: string) => void;
   onSend: (text: string) => void;
   onInterrupt: () => void;
-  busy: boolean;
+  footer?: ReactNode;
 }
 
-/** 输入框：Enter 发送、Shift+Enter 换行；输入 "/" 时给出斜杠命令补全。 */
-export function Composer({ disabled, commands, onSend, onInterrupt, busy }: Props) {
+const PERMISSION_MODES = ["", "default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
+
+/** 输入卡：Enter 发送、Shift+Enter 换行；"/" 唤起命令补全。 */
+export function Composer({
+  disabled,
+  sendBlocked,
+  starting,
+  commands,
+  busy,
+  placeholder,
+  modelOptions,
+  selectedKey,
+  permissionMode,
+  onSelectModel,
+  onPermissionMode,
+  onSend,
+  onInterrupt,
+  footer,
+}: Props) {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 168)}px`;
+  }, [text]);
 
   const suggestions = useMemo(() => {
     if (!text.startsWith("/") || text.includes(" ")) return [];
@@ -25,12 +67,22 @@ export function Composer({ disabled, commands, onSend, onInterrupt, busy }: Prop
     if (!t || disabled) return;
     onSend(t);
     setText("");
+    const el = ref.current;
+    if (el) el.style.height = "auto";
   };
 
+  const hint = starting
+    ? "正在启动 Claude…"
+    : sendBlocked
+      ? "连接断开，正在自动重连…"
+      : disabled
+        ? (placeholder ?? "连接未就绪")
+        : "输入消息，/ 命令";
+
   return (
-    <div className="border-t border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
+    <div className="w-full">
       {suggestions.length > 0 && (
-        <div className="mb-2 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div className="mb-2 max-h-56 overflow-y-auto rounded-xl border border-line bg-canvas p-1 shadow-soft">
           {suggestions.map((c) => (
             <button
               key={c.name}
@@ -39,16 +91,17 @@ export function Composer({ disabled, commands, onSend, onInterrupt, busy }: Prop
                 setText(`/${c.name} `);
                 ref.current?.focus();
               }}
-              className="block w-full px-3 py-1.5 text-left text-xs hover:bg-slate-50 dark:hover:bg-slate-700"
+              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] hover:bg-panel-strong"
             >
-              <span className="font-mono font-medium text-slate-700 dark:text-slate-200">/{c.name}</span>
-              {c.argumentHint && <span className="ml-1 text-slate-400">{c.argumentHint}</span>}
-              {c.description && <span className="ml-2 text-slate-400">{c.description.slice(0, 60)}</span>}
+              <span className="font-mono font-medium text-ink">/{c.name}</span>
+              {c.argumentHint && <span className="text-faint">{c.argumentHint}</span>}
+              {c.description && <span className="ml-auto max-w-[55%] truncate text-[11px] text-muted">{c.description}</span>}
             </button>
           ))}
         </div>
       )}
-      <div className="flex items-end gap-2">
+
+      <div className="composer-card px-3 pb-2.5 pt-2">
         <textarea
           ref={ref}
           rows={1}
@@ -61,28 +114,100 @@ export function Composer({ disabled, commands, onSend, onInterrupt, busy }: Prop
               submit();
             }
           }}
-          placeholder={disabled ? "会话未连接" : "输入消息，Enter 发送，Shift+Enter 换行，/ 唤起命令"}
-          className="max-h-40 min-h-[42px] flex-1 resize-y rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+          placeholder={hint}
+          aria-label="消息输入框"
+          className="composer-textarea w-full bg-transparent px-1 text-[14px] leading-6 text-ink outline-none placeholder:text-faint disabled:cursor-not-allowed"
         />
-        {busy ? (
+
+        <div className="mt-1.5 flex items-center gap-1.5">
           <button
             type="button"
-            onClick={onInterrupt}
-            className="h-[42px] rounded-xl bg-rose-600 px-4 text-sm font-medium text-white hover:bg-rose-700"
+            onClick={() => {
+              setText((t) => (t ? t : "/"));
+              ref.current?.focus();
+            }}
+            disabled={disabled}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted hover:bg-panel-strong hover:text-ink disabled:opacity-40"
+            aria-label="斜杠命令"
+            title="斜杠命令"
           >
-            中断
+            <IconPlus size={17} />
           </button>
-        ) : (
-          <button
-            type="button"
-            onClick={submit}
-            disabled={disabled || !text.trim()}
-            className="h-[42px] rounded-xl bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
-          >
-            发送
-          </button>
-        )}
+
+          <label className="relative flex min-w-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] text-muted hover:bg-panel-strong" title="权限模式">
+            <IconShield size={13} className="shrink-0" />
+            <span className="max-w-[7rem] truncate">{permissionLabel(permissionMode)}</span>
+            <IconChevronDown size={11} className="shrink-0 opacity-60" />
+            <select
+              value={permissionMode}
+              onChange={(e) => onPermissionMode(e.target.value)}
+              disabled={disabled}
+              className="absolute inset-0 cursor-pointer appearance-none opacity-0"
+              aria-label="权限模式"
+            >
+              {PERMISSION_MODES.map((m) => (
+                <option key={m || "default"} value={m}>
+                  {permissionLabel(m)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="relative flex min-w-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] text-muted hover:bg-panel-strong" title="模型">
+            <IconSpark size={13} className="shrink-0" />
+            <span className="max-w-[9rem] truncate">
+              {modelOptions.find((o) => `${o.provider}/${o.model}` === selectedKey)?.model ?? "未添加模型"}
+            </span>
+            <IconChevronDown size={11} className="shrink-0 opacity-60" />
+            <select
+              value={selectedKey}
+              onChange={(e) => {
+                const opt = modelOptions.find((o) => `${o.provider}/${o.model}` === e.target.value);
+                if (opt) onSelectModel(opt.provider, opt.model);
+              }}
+              disabled={disabled || modelOptions.length === 0}
+              className="absolute inset-0 cursor-pointer appearance-none opacity-0"
+              aria-label="模型"
+            >
+              {modelOptions.length === 0 && <option value="">未添加模型</option>}
+              {modelOptions.length > 0 && !selectedKey && <option value="">未选择模型</option>}
+              {modelOptions.map((o) => (
+                <option key={`${o.provider}/${o.model}`} value={`${o.provider}/${o.model}`}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="ml-auto flex items-center gap-1.5">
+            {busy ? (
+              <button
+                type="button"
+                onClick={onInterrupt}
+                disabled={sendBlocked}
+                className="send-button is-stop disabled:opacity-40"
+                aria-label="中断本轮"
+                title="中断"
+              >
+                <IconStop size={15} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={submit}
+                disabled={disabled || sendBlocked || !text.trim()}
+                className="send-button"
+                aria-label="发送"
+                title="发送（Enter）"
+              >
+                <IconSend size={17} />
+              </button>
+            )}
+          </div>
+        </div>
       </div>
+
+      {footer && <div className="mt-1.5 flex items-center justify-between gap-3 px-1 text-[10px] text-faint">{footer}</div>}
     </div>
   );
 }

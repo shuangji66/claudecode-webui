@@ -1,0 +1,36 @@
+import { describe, expect, it } from "vitest";
+import { baseName, permissionLabel, relativeTime, sessionTitle } from "./labels";
+import type { Item } from "./model";
+
+describe("labels", () => {
+  it("baseName 取路径末段", () => {
+    expect(baseName("/a/b/c")).toBe("c");
+    expect(baseName("/")).toBe("/");
+  });
+
+  it("sessionTitle 用第一条用户消息", () => {
+    const items: Item[] = [
+      { id: "1", seq: 0, ts: 0, kind: "assistant", text: "hi", streaming: false },
+      { id: "2", seq: 1, ts: 0, kind: "user", text: "  帮我修一下构建  " },
+    ];
+    expect(sessionTitle("/data/proj", items)).toBe("帮我修一下构建");
+  });
+
+  it("sessionTitle 没有消息时用目录名", () => {
+    expect(sessionTitle("/data/proj", [])).toBe("proj");
+  });
+
+  it("relativeTime 覆盖分钟/小时/天", () => {
+    const now = Date.parse("2026-01-02T00:00:00Z");
+    expect(relativeTime("2026-01-01T23:59:30Z", now)).toBe("刚刚");
+    expect(relativeTime("2026-01-01T23:30:00Z", now)).toBe("30 分钟前");
+    expect(relativeTime("2026-01-01T21:00:00Z", now)).toBe("3 小时前");
+    expect(relativeTime("2025-12-31T00:00:00Z", now)).toBe("2 天前");
+  });
+
+  it("permissionLabel 映射已知模式", () => {
+    expect(permissionLabel("")).toBe("标准模式");
+    expect(permissionLabel("acceptEdits")).toBe("接受编辑");
+    expect(permissionLabel("custom")).toBe("custom");
+  });
+});

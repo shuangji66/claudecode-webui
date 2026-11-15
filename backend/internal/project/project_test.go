@@ -76,3 +76,32 @@ func TestValidateRejects(t *testing.T) {
 		t.Fatal("不存在的路径应被拒绝")
 	}
 }
+
+func TestBrowseSkipsFilesAndHidden(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{"alpha", "beta", ".hidden"} {
+		if err := os.Mkdir(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	_ = os.WriteFile(filepath.Join(root, "note.txt"), []byte("x"), 0o644)
+
+	got, err := Browse(root, false, 0)
+	if err != nil {
+		t.Fatalf("Browse: %v", err)
+	}
+	if got.Path != root || got.Parent != filepath.Dir(root) {
+		t.Fatalf("browse = %+v", got)
+	}
+	if len(got.Entries) != 2 || got.Entries[0].Name != "alpha" || got.Entries[1].Name != "beta" {
+		t.Fatalf("entries = %+v", got.Entries)
+	}
+
+	got, err = Browse(root, true, 0)
+	if err != nil {
+		t.Fatalf("Browse hidden: %v", err)
+	}
+	if len(got.Entries) != 3 || got.Entries[0].Name != ".hidden" {
+		t.Fatalf("hidden entries = %+v", got.Entries)
+	}
+}

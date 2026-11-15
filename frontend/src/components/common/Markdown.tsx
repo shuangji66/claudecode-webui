@@ -28,13 +28,13 @@ export function renderInline(s: string, keyPrefix = "i"): ReactNode[] {
     const key = `${keyPrefix}-${i}`;
     if (p.startsWith("`") && p.endsWith("`") && p.length > 1) {
       return (
-        <code key={key} className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.85em] dark:bg-slate-800">
+        <code key={key} className="rounded-md bg-panel-strong px-1 py-0.5 font-mono text-[0.86em] text-ink-2">
           {p.slice(1, -1)}
         </code>
       );
     }
     if (p.startsWith("**") && p.endsWith("**") && p.length > 4) {
-      return <strong key={key}>{p.slice(2, -2)}</strong>;
+      return <strong key={key} className="font-semibold text-ink">{p.slice(2, -2)}</strong>;
     }
     return <span key={key}>{p}</span>;
   });
@@ -44,10 +44,10 @@ export function renderInline(s: string, keyPrefix = "i"): ReactNode[] {
 export function Markdown({ text }: { text: string }) {
   const segments = useMemo(() => splitFences(text), [text]);
   return (
-    <div className="space-y-2 text-sm leading-relaxed">
+    <div className="space-y-3 text-[14.5px] leading-[1.75]">
       {segments.map((seg, i) =>
         seg.type === "code" ? (
-          <pre key={i} className="overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs text-slate-100">
+          <pre key={i} className="overflow-x-auto rounded-xl border border-line bg-[#0f1115] p-3 text-[12px] leading-relaxed text-[#e5e7eb]">
             <code>{seg.content.replace(/\n$/, "")}</code>
           </pre>
         ) : (

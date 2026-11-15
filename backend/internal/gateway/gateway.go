@@ -21,6 +21,7 @@ import (
 	"ccweb/backend/internal/config"
 	"ccweb/backend/internal/hub"
 	"ccweb/backend/internal/settings"
+	"ccweb/backend/internal/workspace"
 )
 
 // WireEvent 是推给前端的事件信封。
@@ -35,6 +36,7 @@ type WireEvent struct {
 type SessionManager interface {
 	Binary() string
 	Create(cwd, model, permissionMode string) (manager.Info, error)
+	Ensure(cwd, model, permissionMode string) (manager.Info, error)
 	Get(id string) (*session.Session, bool)
 	List() []manager.Info
 	Close(id string) error
@@ -49,6 +51,7 @@ type Deps struct {
 	HistoryDir    string
 	ProjectsRoot  string
 	Settings      *settings.Store
+	Workspaces    *workspace.Store
 	ClaudeVersion string
 	StartedAt     time.Time
 }
@@ -75,8 +78,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/info", s.authed(s.handleInfo))
 	s.mux.HandleFunc("GET /api/sessions", s.authed(s.handleListSessions))
 	s.mux.HandleFunc("POST /api/session", s.authed(s.handleCreateSession))
+	s.mux.HandleFunc("POST /api/session/ensure", s.authed(s.handleEnsureSession))
 	s.mux.HandleFunc("DELETE /api/session", s.authed(s.handleCloseSession))
 	s.mux.HandleFunc("GET /api/projects", s.authed(s.handleListProjects))
+	s.mux.HandleFunc("GET /api/workspaces", s.authed(s.handleListWorkspaces))
+	s.mux.HandleFunc("POST /api/workspaces", s.authed(s.handleAddWorkspace))
+	s.mux.HandleFunc("DELETE /api/workspaces", s.authed(s.handleRemoveWorkspace))
+	s.mux.HandleFunc("POST /api/workspaces/current", s.authed(s.handleSetCurrentWorkspace))
+	s.mux.HandleFunc("GET /api/fs/list", s.authed(s.handleBrowseDirs))
 	s.mux.HandleFunc("GET /api/history", s.authed(s.handleListHistory))
 	s.mux.HandleFunc("GET /api/settings", s.authed(s.handleGetSettings))
 	s.mux.HandleFunc("PUT /api/settings", s.authed(s.handlePutSettings))

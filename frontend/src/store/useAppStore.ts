@@ -1,17 +1,19 @@
-// 全局状态：会话列表、消息流、权限队列、连接状态、第三方模型配置。
+// 全局状态：会话列表、消息流、权限队列、连接状态、工作区与第三方模型配置。
 //
 // 设计取舍：
 //   - 每个会话的消息列表独立存在 items[sid] 里，切换会话不重新拉取；
 //   - WebSocket 实例放在模块级 Map 里（不进 state，避免被当成可序列化数据）；
 //   - 所有协议归一化逻辑放 lib/normalize.ts，这里只做状态搬运；
-//   - 「当前选中模型」是全局唯一值，它就是 claude CLI 的默认模型。
+//   - 「当前选中模型」是全局唯一值，它就是 claude CLI 的默认模型；
+//   - 工作区 = 已授权目录；切换工作区会 ensure 一个 claude 会话。
 
 import { create } from "zustand";
 import { apiFetch } from "../lib/runtime";
 import { appendError, appendUser, applyCLI } from "../lib/normalize";
 import type { Item } from "../lib/model";
-import { ClaudeClient } from "../transport/client";
+import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
 import type {
+  FsListing,
   GatewayModel,
   InitPayload,
   ModelsResult,
@@ -19,9 +21,14 @@ import type {
   ProbeResult,
   PublicSettings,
   Selection,
+  SessionInfo,
   WireEvent,
+  WorkspaceEntry,
+  WorkspacesPayload,
 } from "../transport/types";
 import { normalizeSettings, type ProviderForm } from "../lib/providerForm";
+
+export type { SessionInfo } from "../transport/types";
 
 export interface InfoResponse {
   version: string;
@@ -33,21 +40,13 @@ export interface InfoResponse {
   data_dir: string;
   claude_home: string;
   settings_file: string;
+  workspaces_file: string;
+  auto_start: boolean;
+  current_workspace: string;
   auth_required: boolean;
   frontend: boolean;
   max_sessions: number;
   started_at: string;
-}
-
-export interface SessionInfo {
-  id: string;
-  cwd: string;
-  state: string;
-  /** 创建该会话时选中的提供商；跨提供商切换模型需要新建会话。 */
-  provider?: string;
-  model?: string;
-  created_at?: string;
-  last_active?: string;
 }
 
 export interface ProjectEntry {
@@ -65,7 +64,9 @@ export interface HistorySession {
   project: string;
 }
 
-type ConnState = "idle" | "open" | "closed";
+export interface ConnInfo extends StatusDetail {
+  state: ConnStatus | "idle";
+}
 
 /** 设置补丁（与后端 settings.Patch 对应）。 */
 export interface SettingsPatch {
@@ -81,6 +82,12 @@ interface AppState {
   settings: PublicSettings | null;
   settingsSaving: boolean;
 
+  workspaces: WorkspaceEntry[];
+  workspaceRoot: string;
+  currentWorkspace: string;
+  workspaceBusy: boolean;
+  starting: boolean;
+
   projects: ProjectEntry[];
   history: HistorySession[];
   sessions: SessionInfo[];
@@ -90,7 +97,7 @@ interface AppState {
   perms: Record<string, PermissionPayload[]>;
   inits: Record<string, InitPayload>;
   states: Record<string, string>;
-  conns: Record<string, ConnState>;
+  conns: Record<string, ConnInfo>;
 
   // 「获取可用模型」的临时结果（按提供商分别保存会太啰嗦，这里只留最近一次）
   modelsFor: string;
@@ -114,13 +121,20 @@ interface AppState {
 
   refreshSessions: () => Promise<void>;
   refreshHistory: () => Promise<void>;
-  createSession: (cwd: string) => Promise<void>;
+  refreshWorkspaces: () => Promise<void>;
+  addWorkspace: (path: string) => Promise<boolean>;
+  removeWorkspace: (path: string) => Promise<boolean>;
+  switchWorkspace: (path: string) => Promise<void>;
+  browseDirs: (path: string, hidden: boolean) => Promise<FsListing>;
+  ensureSession: (cwd?: string) => Promise<SessionInfo | null>;
+  createSession: (cwd?: string) => Promise<void>;
   closeSession: (id: string) => Promise<void>;
   setActive: (id: string | null) => void;
   connect: (id: string) => void;
   disconnect: (id: string) => void;
+  retryConnection: (id: string) => void;
 
-  sendPrompt: (text: string) => void;
+  sendPrompt: (text: string) => Promise<void>;
   interrupt: () => void;
   setPermissionMode: (mode: string) => void;
   replyPermission: (
@@ -136,12 +150,33 @@ interface AppState {
 }
 
 const clients = new Map<string, ClaudeClient>();
+const ensurePromises = new Map<string, Promise<SessionInfo | null>>();
+const recovering = new Set<string>();
+const ACTIVE_KEY = "ccweb-active-session";
+let bootstrapPromise: Promise<void> | null = null;
 
 function token(): string {
   try {
     return localStorage.getItem("ccweb-token") ?? "";
   } catch {
     return "";
+  }
+}
+
+function readActiveId(): string {
+  try {
+    return localStorage.getItem(ACTIVE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeActiveId(id: string | null): void {
+  try {
+    if (id) localStorage.setItem(ACTIVE_KEY, id);
+    else localStorage.removeItem(ACTIVE_KEY);
+  } catch {
+    // 隐私模式忽略
   }
 }
 
@@ -157,10 +192,49 @@ function providerRef(form: ProviderForm) {
   };
 }
 
+function errText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * 服务端重启后旧会话 id 已消失：WebSocket 会一直重连到 404。
+ * 重试若干次后核对一次会话列表，旧 id 不在就切到当前工作区的 ensure 会话。
+ */
+async function recoverSession(id: string, get: () => AppState): Promise<void> {
+  if (recovering.has(id)) return;
+  recovering.add(id);
+  try {
+    const r = await apiFetch<{ sessions: SessionInfo[] }>("/api/sessions");
+    const sessions = r.sessions ?? [];
+    if (sessions.some((s) => s.id === id)) return;
+
+    const wasActive = get().activeId === id;
+    const cwd = get().sessions.find((s) => s.id === id)?.cwd || get().currentWorkspace;
+    get().disconnect(id);
+    useAppStore.setState({ sessions });
+    if (!wasActive) return;
+    get().setActive(null);
+    writeActiveId(null);
+    if (cwd) {
+      const info = await get().ensureSession(cwd);
+      if (info && !get().activeId) get().setActive(info.id);
+    }
+  } catch {
+    // 网络还没恢复：留给下一轮重试
+  } finally {
+    recovering.delete(id);
+  }
+}
+
 export const useAppStore = create<AppState>()((set, get) => ({
   info: null,
   settings: null,
   settingsSaving: false,
+  workspaces: [],
+  workspaceRoot: "",
+  currentWorkspace: "",
+  workspaceBusy: false,
+  starting: false,
   projects: [],
   history: [],
   sessions: [],
@@ -183,31 +257,58 @@ export const useAppStore = create<AppState>()((set, get) => ({
   clearError: () => set({ error: null }),
 
   bootstrap: async () => {
-    set({ loading: true, error: null });
-    try {
-      const info = await apiFetch<InfoResponse>("/api/info");
-      const [projects, sessions, history] = await Promise.all([
-        apiFetch<{ projects: ProjectEntry[] }>("/api/projects").catch(() => ({ projects: [] })),
-        apiFetch<{ sessions: SessionInfo[] }>("/api/sessions").catch(() => ({ sessions: [] })),
-        apiFetch<{ history: HistorySession[] }>("/api/history").catch(() => ({ history: [] })),
-      ]);
-      const settings = normalizeSettings(await apiFetch<PublicSettings>("/api/settings").catch(() => null));
-      set({
-        info,
-        settings,
-        projects: projects.projects,
-        sessions: sessions.sessions,
-        history: history.history,
-        loading: false,
-      });
-      const first = sessions.sessions[0];
-      if (first && !get().activeId) {
-        get().setActive(first.id);
-        get().connect(first.id);
+    if (bootstrapPromise) return bootstrapPromise;
+    bootstrapPromise = (async () => {
+      set({ loading: true, error: null });
+      try {
+        const info = await apiFetch<InfoResponse>("/api/info");
+        const [settings, ws, sessions, history] = await Promise.all([
+          apiFetch<PublicSettings>("/api/settings").catch(() => null),
+          apiFetch<WorkspacesPayload>("/api/workspaces").catch(() => null),
+          apiFetch<{ sessions: SessionInfo[] }>("/api/sessions").catch(() => ({ sessions: [] })),
+          apiFetch<{ history: HistorySession[] }>("/api/history").catch(() => ({ history: [] })),
+        ]);
+        const workspacePayload: WorkspacesPayload = ws ?? {
+          workspaces: [],
+          current: info.current_workspace ?? "",
+          root: info.projects_root ?? "",
+        };
+        const list = sessions.sessions ?? [];
+        set({
+          info,
+          settings: normalizeSettings(settings),
+          workspaces: workspacePayload.workspaces ?? [],
+          workspaceRoot: workspacePayload.root ?? info.projects_root ?? "",
+          currentWorkspace: workspacePayload.current ?? "",
+          sessions: list,
+          history: history.history ?? [],
+          loading: false,
+        });
+
+        // 优先恢复上次打开的会话；否则选当前工作区里最新的一条；再否则第一条。
+        const saved = readActiveId();
+        const pick =
+          list.find((s) => s.id === saved)?.id ??
+          list.find((s) => s.cwd === workspacePayload.current)?.id ??
+          list[0]?.id ??
+          null;
+        if (pick) {
+          get().setActive(pick);
+          get().connect(pick);
+          return;
+        }
+
+        // APP 启动自动拉起 claude：后端通常已经开始拉；这里再 ensure 一次去重。
+        if (info.auto_start && workspacePayload.current) {
+          void get().ensureSession(workspacePayload.current);
+        }
+      } catch (e) {
+        set({ loading: false, error: errText(e) });
+      } finally {
+        bootstrapPromise = null;
       }
-    } catch (e) {
-      set({ loading: false, error: e instanceof Error ? e.message : String(e) });
-    }
+    })();
+    return bootstrapPromise;
   },
 
   loadSettings: async () => {
@@ -215,7 +316,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const s = normalizeSettings(await apiFetch<PublicSettings>("/api/settings"));
       set({ settings: s });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : String(e) });
+      set({ error: errText(e) });
     }
   },
 
@@ -229,7 +330,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set({ settings: normalizeSettings(s), settingsSaving: false });
       return true;
     } catch (e) {
-      set({ settingsSaving: false, error: e instanceof Error ? e.message : String(e) });
+      set({ settingsSaving: false, error: errText(e) });
       return false;
     }
   },
@@ -255,8 +356,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
 
     // 提供商不同（含「会话创建时还没选模型」这种 provider 为空的情况）：
-    // 地址与密钥在进程启动时就已经固定，改不了。必须重建会话，
-    // 否则会带着旧地址 / 没有密钥继续跑，表现就是「Not logged in」。
+    // 地址与密钥在进程启动时就已经固定，改不了。必须重建会话。
     if ((get().states[id] ?? sess.state) === "busy") {
       set({ error: "本轮还在运行，无法切换提供商；等这一轮结束再切，或先点中断" });
       return;
@@ -284,7 +384,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         });
       }
     } catch (e) {
-      set({ gatewayModels: [], modelsError: e instanceof Error ? e.message : String(e), modelsRaw: "" });
+      set({ gatewayModels: [], modelsError: errText(e), modelsRaw: "" });
     }
   },
 
@@ -300,7 +400,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set({ verify: { key, result: r } });
     } catch (e) {
       set({
-        verify: { key, result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: e instanceof Error ? e.message : String(e) } },
+        verify: {
+          key,
+          result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: errText(e) },
+        },
       });
     }
   },
@@ -316,7 +419,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set({ probe: { key, result: r } });
     } catch (e) {
       set({
-        probe: { key, result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: e instanceof Error ? e.message : String(e) } },
+        probe: {
+          key,
+          result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: errText(e) },
+        },
       });
     }
   },
@@ -326,7 +432,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const r = await apiFetch<{ sessions: SessionInfo[] }>("/api/sessions");
       set({ sessions: r.sessions ?? [] });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : String(e) });
+      set({ error: errText(e) });
     }
   },
 
@@ -339,18 +445,147 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
   },
 
+  refreshWorkspaces: async () => {
+    try {
+      const r = await apiFetch<WorkspacesPayload>("/api/workspaces");
+      set({
+        workspaces: r.workspaces ?? [],
+        currentWorkspace: r.current ?? "",
+        workspaceRoot: r.root ?? get().workspaceRoot,
+      });
+    } catch (e) {
+      set({ error: errText(e) });
+    }
+  },
+
+  addWorkspace: async (path) => {
+    set({ workspaceBusy: true, error: null });
+    try {
+      const r = await apiFetch<WorkspacesPayload>("/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({ path }),
+      });
+      set({
+        workspaces: r.workspaces ?? [],
+        currentWorkspace: r.current ?? "",
+        workspaceRoot: r.root ?? get().workspaceRoot,
+      });
+      await get().ensureSession(r.current);
+      return true;
+    } catch (e) {
+      set({ error: errText(e) });
+      return false;
+    } finally {
+      set({ workspaceBusy: false });
+    }
+  },
+
+  removeWorkspace: async (path) => {
+    set({ workspaceBusy: true, error: null });
+    const previous = get().currentWorkspace;
+    try {
+      const r = await apiFetch<WorkspacesPayload>(`/api/workspaces?path=${encodeURIComponent(path)}`, {
+        method: "DELETE",
+      });
+      set({
+        workspaces: r.workspaces ?? [],
+        currentWorkspace: r.current ?? "",
+        workspaceRoot: r.root ?? get().workspaceRoot,
+      });
+      // 只有移除的正好是当前工作区时才自动拉起下一个；移除别的目录
+      // 不应打断用户当前会话。
+      if (r.current && r.current !== previous) await get().ensureSession(r.current);
+      return true;
+    } catch (e) {
+      set({ error: errText(e) });
+      return false;
+    } finally {
+      set({ workspaceBusy: false });
+    }
+  },
+
+  switchWorkspace: async (path) => {
+    if (!path || path === get().currentWorkspace) {
+      await get().ensureSession(path || get().currentWorkspace);
+      return;
+    }
+    set({ workspaceBusy: true, error: null });
+    try {
+      const r = await apiFetch<WorkspacesPayload>("/api/workspaces/current", {
+        method: "POST",
+        body: JSON.stringify({ path }),
+      });
+      set({
+        workspaces: r.workspaces ?? [],
+        currentWorkspace: r.current ?? path,
+        workspaceRoot: r.root ?? get().workspaceRoot,
+      });
+      await get().ensureSession(r.current || path);
+    } catch (e) {
+      set({ error: errText(e) });
+    } finally {
+      set({ workspaceBusy: false });
+    }
+  },
+
+  browseDirs: async (path, hidden) => {
+    const q = new URLSearchParams();
+    if (path) q.set("path", path);
+    if (hidden) q.set("hidden", "1");
+    return apiFetch<FsListing>(`/api/fs/list?${q.toString()}`);
+  },
+
+  ensureSession: async (cwd) => {
+    const dir = cwd || get().currentWorkspace;
+    if (!dir) {
+      set({ error: "请先添加并选择一个授权目录" });
+      return null;
+    }
+    const pending = ensurePromises.get(dir);
+    if (pending) return pending;
+
+    set({ starting: true, error: null });
+    const promise = (async () => {
+      try {
+        const info = await apiFetch<SessionInfo>("/api/session/ensure", {
+          method: "POST",
+          body: JSON.stringify({ cwd: dir }),
+        });
+        await get().refreshSessions();
+        get().setActive(info.id);
+        get().connect(info.id);
+        return info;
+      } catch (e) {
+        set({ error: errText(e) });
+        return null;
+      } finally {
+        ensurePromises.delete(dir);
+        set({ starting: false });
+      }
+    })();
+    ensurePromises.set(dir, promise);
+    return promise;
+  },
+
   createSession: async (cwd) => {
-    set({ error: null });
+    const dir = cwd || get().currentWorkspace;
+    if (!dir) {
+      set({ error: "请先添加并选择一个授权目录" });
+      return;
+    }
+    set({ starting: true, error: null });
     try {
       const info = await apiFetch<SessionInfo>("/api/session", {
         method: "POST",
-        body: JSON.stringify({ cwd }),
+        body: JSON.stringify({ cwd: dir }),
       });
       await get().refreshSessions();
       get().setActive(info.id);
       get().connect(info.id);
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : String(e) });
+      set({ error: errText(e) });
+    } finally {
+      set({ starting: false });
     }
   },
 
@@ -358,14 +593,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
     try {
       await apiFetch(`/api/session?id=${encodeURIComponent(id)}`, { method: "DELETE" });
     } catch (e) {
-      set({ error: e instanceof Error ? e.message : String(e) });
+      set({ error: errText(e) });
     }
     get().disconnect(id);
     const sessions = get().sessions.filter((s) => s.id !== id);
     set({ sessions });
     if (get().activeId === id) {
-      const next = sessions[0]?.id ?? null;
-      set({ activeId: next });
+      const next = sessions.find((s) => s.cwd === get().currentWorkspace)?.id ?? sessions[0]?.id ?? null;
+      get().setActive(next);
       if (next) get().connect(next);
     }
     await get().refreshSessions();
@@ -373,25 +608,39 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setActive: (id) => {
     set({ activeId: id });
+    writeActiveId(id);
     if (id && !clients.has(id)) get().connect(id);
   },
 
   connect: (id) => {
     if (clients.has(id)) return;
+    set((s) => ({ conns: { ...s.conns, [id]: { state: "connecting" } } }));
     const client = new ClaudeClient(id, token(), {
       onEvent: (ev) => get().applyEvent(id, ev),
-      onOpen: () => set((s) => ({ conns: { ...s.conns, [id]: "open" } })),
-      onClose: (reason) => {
-        clients.delete(id);
-        set((s) => ({
-          conns: { ...s.conns, [id]: "closed" },
-          items: { ...s.items, [id]: appendError(s.items[id] ?? [], reason) },
-        }));
+      onStatus: (status, detail) => {
+        set((s) => ({ conns: { ...s.conns, [id]: { state: status, ...detail } } }));
+        if (status === "open") {
+          // 重连后服务端可能已经重启并换了会话 id：核对一次。
+          void get()
+            .refreshSessions()
+            .then(() => {
+              if (!get().sessions.some((s) => s.id === id)) {
+                void recoverSession(id, get);
+              }
+            })
+            .catch(() => {
+              /* refreshSessions 已把错误放进 state */
+            });
+        }
+        if (status === "reconnecting") {
+          // 第一次重连就核对会话是否还在：服务端重启后旧 id 已不存在，
+          // 早一点发现就能早一点 ensure 新会话，而不是等退避到 10s。
+          void recoverSession(id, get);
+        }
       },
     });
     clients.set(id, client);
     client.connect();
-    set((s) => ({ conns: { ...s.conns, [id]: "idle" } }));
   },
 
   disconnect: (id) => {
@@ -399,16 +648,27 @@ export const useAppStore = create<AppState>()((set, get) => ({
     clients.delete(id);
   },
 
-  sendPrompt: (text) => {
-    const id = get().activeId;
+  retryConnection: (id) => {
+    clients.get(id)?.retryNow();
+  },
+
+  sendPrompt: async (text) => {
+    let id = get().activeId;
+    if (!id) {
+      const info = await get().ensureSession();
+      id = info?.id ?? null;
+    }
     if (!id) return;
     const client = clients.get(id);
-    if (!client) {
-      set({ error: "会话未连接" });
+    if (!client?.ready) {
+      set({ error: "连接尚未就绪，正在自动重连；稍后再发送即可" });
       return;
     }
-    set((s) => ({ items: { ...s.items, [id]: appendUser(s.items[id] ?? [], text) } }));
-    client.send({ kind: "prompt", text });
+    if (!client.send({ kind: "prompt", text })) {
+      set({ error: "发送失败：连接已断开" });
+      return;
+    }
+    set((s) => ({ items: { ...s.items, [id!]: appendUser(s.items[id!] ?? [], text) } }));
   },
 
   interrupt: () => {
@@ -473,7 +733,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return;
       }
       case "closed": {
-        set((s) => ({ states: { ...s.states, [sid]: "closed" } }));
+        set((s) => ({
+          states: { ...s.states, [sid]: "closed" },
+          conns: { ...s.conns, [sid]: { state: "closed" } },
+        }));
+        // 会话进程已退出，WS 再留着只会让界面显示「已连接」却发不出消息。
+        clients.get(sid)?.close();
+        clients.delete(sid);
         return;
       }
       case "cli": {
@@ -485,3 +751,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
   },
 }));
+
+/** 供 UI 读取当前会话连接状态。 */
+export function connState(s: AppState, id: string | null): ConnInfo {
+  if (!id) return { state: "idle" };
+  return s.conns[id] ?? { state: "idle" };
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,7 +15,9 @@ import (
 	"ccweb/backend/internal/authz"
 	"ccweb/backend/internal/config"
 	"ccweb/backend/internal/hub"
+	"ccweb/backend/internal/project"
 	"ccweb/backend/internal/settings"
+	"ccweb/backend/internal/workspace"
 )
 
 type fakeMgr struct {
@@ -31,6 +34,10 @@ func (f *fakeMgr) Create(cwd, model, mode string) (manager.Info, error) {
 	}
 	f.created = append(f.created, cwd)
 	return manager.Info{ID: "sess-1", Cwd: cwd, State: "ready"}, nil
+}
+
+func (f *fakeMgr) Ensure(cwd, model, mode string) (manager.Info, error) {
+	return f.Create(cwd, model, mode)
 }
 
 func (f *fakeMgr) Get(id string) (*session.Session, bool) {
@@ -65,6 +72,11 @@ func newTestServer(t *testing.T, token string) (*Server, *fakeMgr) {
 	if err != nil {
 		t.Fatalf("settings.Open: %v", err)
 	}
+	root := t.TempDir()
+	ws, err := workspace.Open(filepath.Join(t.TempDir(), "workspaces.json"), root)
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
 	deps := Deps{
 		Cfg: config.Config{
 			BaseURL:     "",
@@ -76,8 +88,9 @@ func newTestServer(t *testing.T, token string) (*Server, *fakeMgr) {
 		Hub:           hub.New(),
 		Manager:       mgr,
 		HistoryDir:    t.TempDir(),
-		ProjectsRoot:  t.TempDir(),
+		ProjectsRoot:  root,
 		Settings:      store,
+		Workspaces:    ws,
 		ClaudeVersion: "2.1.325",
 		StartedAt:     time.Now(),
 	}
@@ -135,7 +148,10 @@ func TestCreateSessionValidatesCwd(t *testing.T) {
 
 func TestCreateSessionHappyPath(t *testing.T) {
 	srv, mgr := newTestServer(t, "")
-	dir := t.TempDir()
+	dir := filepath.Join(srv.d.ProjectsRoot, "proj")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	body := `{"cwd":"` + dir + `"}`
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/session", strings.NewReader(body)))
@@ -149,6 +165,37 @@ func TestCreateSessionHappyPath(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &info)
 	if info.ID != "sess-1" {
 		t.Fatalf("id = %q", info.ID)
+	}
+}
+
+func TestCreateSessionRejectsUnauthorizedDir(t *testing.T) {
+	srv, mgr := newTestServer(t, "")
+	dir := t.TempDir() // 在 ProjectsRoot 之外，且未加入授权列表
+	body := `{"cwd":"` + dir + `"}`
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/session", strings.NewReader(body)))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("未授权目录应 403，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(mgr.created) != 0 {
+		t.Fatal("未授权目录不应创建会话")
+	}
+}
+
+func TestEnsureSessionUsesAuthorizedWorkspace(t *testing.T) {
+	srv, mgr := newTestServer(t, "")
+	dir := filepath.Join(srv.d.ProjectsRoot, "proj")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"cwd":"` + dir + `"}`
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/session/ensure", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(mgr.created) != 1 || mgr.created[0] != dir {
+		t.Fatalf("created = %v", mgr.created)
 	}
 }
 
@@ -398,5 +445,110 @@ func TestInfoExposesDataDir(t *testing.T) {
 		if _, ok := info[k]; !ok {
 			t.Fatalf("/api/info 缺少 %s", k)
 		}
+	}
+}
+
+func decodeWorkspaces(t *testing.T, rec *httptest.ResponseRecorder) ([]workspace.Entry, string) {
+	t.Helper()
+	var body struct {
+		Workspaces []workspace.Entry `json:"workspaces"`
+		Current    string            `json:"current"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("解析 workspaces: %v", err)
+	}
+	return body.Workspaces, body.Current
+}
+
+func TestWorkspacesListAddSwitchRemove(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/workspaces", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET code = %d", rec.Code)
+	}
+	items, current := decodeWorkspaces(t, rec)
+	if len(items) != 1 || current != srv.d.ProjectsRoot {
+		t.Fatalf("初始 workspaces = %+v current = %q", items, current)
+	}
+
+	added := filepath.Join(t.TempDir(), "authorized")
+	if err := os.Mkdir(added, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/workspaces", strings.NewReader(`{"path":"`+added+`"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST code = %d: %s", rec.Code, rec.Body.String())
+	}
+	items, current = decodeWorkspaces(t, rec)
+	if len(items) != 2 || current != added {
+		t.Fatalf("添加后 workspaces = %+v current = %q", items, current)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/workspaces/current", strings.NewReader(`{"path":"`+srv.d.ProjectsRoot+`"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("switch code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, current = decodeWorkspaces(t, rec); current != srv.d.ProjectsRoot {
+		t.Fatalf("current = %q", current)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/workspaces?path="+added, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE code = %d: %s", rec.Code, rec.Body.String())
+	}
+	items, _ = decodeWorkspaces(t, rec)
+	if len(items) != 1 || items[0].Path != srv.d.ProjectsRoot {
+		t.Fatalf("删除后 workspaces = %+v", items)
+	}
+}
+
+func TestWorkspaceCannotRemoveWithRunningSession(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	// fakeMgr.List 固定返回 /tmp 的会话，因此移除 /tmp 应被拒绝。
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/workspaces?path=/tmp", nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestBrowseDirs(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	sub := filepath.Join(srv.d.ProjectsRoot, "alpha")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/fs/list?path="+srv.d.ProjectsRoot, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Path    string        `json:"path"`
+		Parent  string        `json:"parent"`
+		Entries []project.Dir `json:"entries"`
+		Roots   []string      `json:"roots"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Path != srv.d.ProjectsRoot || len(body.Entries) != 1 || body.Entries[0].Name != "alpha" {
+		t.Fatalf("body = %+v", body)
+	}
+	if len(body.Roots) == 0 || body.Roots[0] != srv.d.ProjectsRoot {
+		t.Fatalf("roots = %+v", body.Roots)
+	}
+}
+
+func TestBrowseDirsRejectsMissingPath(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/fs/list?path=/definitely/not/here", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d", rec.Code)
 	}
 }
