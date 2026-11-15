@@ -92,6 +92,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/settings/test", s.authed(s.handleTestProvider))
 	s.mux.HandleFunc("POST /api/settings/models", s.authed(s.handleFetchModels))
 	s.mux.HandleFunc("POST /api/settings/verify", s.authed(s.handleVerifyModel))
+	s.mux.HandleFunc("POST /api/settings/proxy", s.authed(s.handleApplyProxy))
 	s.mux.HandleFunc("GET /ws", s.handleWS)
 	s.mux.HandleFunc("/", s.handleSPA)
 }

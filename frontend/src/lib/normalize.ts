@@ -187,11 +187,39 @@ function applyUser(items: Item[], m: Raw): Item[] {
     return out;
   }
 
+  // 附件消息会被 CLI 原样回显（图片/PDF 是 image/document block，文本文件是
+  // 额外的 text block）。本地气泡只显示提示词与文件名，不能按文本内容精确
+  // 去重，否则会出现两条用户消息。
+  const textBlocks = blocks.filter((b) => asRecord(b)?.type === "text");
+  const hasFileBlock = textBlocks.some((b) => {
+    const value = asRecord(b)?.text;
+    return typeof value === "string" && value.startsWith("<file name=");
+  });
+  const attachmentEcho =
+    blocks.some((b) => asRecord(b)?.type !== "text") || textBlocks.length > 1 || hasFileBlock;
+  if (attachmentEcho) {
+    const last = items[items.length - 1];
+    if (last && last.kind === "user") return items;
+    const firstText = textOfContent(textBlocks);
+    return [
+      ...items,
+      { id: nextId(), seq: seqOf(items), ts: Date.now(), kind: "user", text: firstText || "附件" },
+    ];
+  }
+
   // 纯用户文本：本地发送时已经插过一条，这里按内容去重，避免重复。
   const text = textOfContent(content);
   if (!text) return items;
   const last = items[items.length - 1];
-  if (last && last.kind === "user" && last.text === text) return items;
+  if (
+    last &&
+    last.kind === "user" &&
+    (last.text === text ||
+      last.text.startsWith(`${text}\n附件：`) ||
+      last.text.startsWith(`${text}\nFile: `))
+  ) {
+    return items;
+  }
   return [...items, { id: nextId(), seq: seqOf(items), ts: Date.now(), kind: "user", text }];
 }
 

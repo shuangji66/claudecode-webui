@@ -148,7 +148,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
               : "border-amber-200 bg-amber-50 text-warn dark:border-amber-900/50 dark:bg-amber-950/25"
           }`}
         >
-          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${conn.state === "closed" ? "bg-danger" : "thinking-dot bg-warn"}`} />
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${conn.state === "closed" ? "bg-danger" : "bg-warn"}`} />
           <span className="min-w-0 truncate">
             {conn.state === "closed"
               ? t("连接已关闭", "Connection closed")
@@ -262,7 +262,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
                   setModeState(m);
                   setPermissionMode(m);
                 }}
-                onSend={(text) => void sendPrompt(text)}
+                onSend={(text, attachments) => void sendPrompt(text, attachments, t("附件：", "File: "))}
                 onInterrupt={interrupt}
                 footer={footer}
               />

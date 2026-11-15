@@ -113,6 +113,18 @@ var strippedEnvKeys = map[string]bool{
 	// 且按「后者生效」的规则被继承值悄悄覆盖（本地项目踩过这个坑）。
 	"HOME": true,
 	"PWD":  true,
+	// 代理由设置页统一控制：空 = 直连，不能悄悄继承宿主机代理。
+	"HTTP_PROXY":         true,
+	"HTTPS_PROXY":        true,
+	"ALL_PROXY":          true,
+	"SOCKS_PROXY":        true,
+	"NO_PROXY":           true,
+	"NODE_USE_ENV_PROXY": true,
+	"http_proxy":         true,
+	"https_proxy":        true,
+	"all_proxy":          true,
+	"socks_proxy":        true,
+	"no_proxy":           true,
 }
 
 // CleanEnv 构造子进程环境：剔除会干扰启动的继承变量，并强制 HOME/PWD。

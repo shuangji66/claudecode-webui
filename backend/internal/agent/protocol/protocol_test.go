@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -149,5 +150,43 @@ func TestUnsupportedHasErrorCode(t *testing.T) {
 	resp := got["response"].(map[string]any)
 	if resp["subtype"] != "error" || resp["error_code"] != "unsupported_request" {
 		t.Fatalf("response = %v", resp)
+	}
+}
+
+func TestUserMessageAttachments(t *testing.T) {
+	line := UserMessage("看图", []Attachment{
+		{Name: "a.png", MediaType: "image/png", Data: []byte("png")},
+		{Name: "a.pdf", MediaType: "application/pdf", Data: []byte("pdf")},
+		{Name: "a.txt", MediaType: "text/plain", Data: []byte("hello")},
+	})
+	var msg struct {
+		Message struct {
+			Content []struct {
+				Type   string `json:"type"`
+				Text   string `json:"text"`
+				Source struct {
+					MediaType string `json:"media_type"`
+					Data      string `json:"data"`
+				} `json:"source"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(line, &msg); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.Message.Content) != 4 {
+		t.Fatalf("blocks = %+v", msg.Message.Content)
+	}
+	if msg.Message.Content[0].Type != "text" || msg.Message.Content[0].Text != "看图" {
+		t.Fatalf("首块 = %+v", msg.Message.Content[0])
+	}
+	if msg.Message.Content[1].Type != "image" || msg.Message.Content[1].Source.MediaType != "image/png" {
+		t.Fatalf("图片块 = %+v", msg.Message.Content[1])
+	}
+	if msg.Message.Content[2].Type != "document" || msg.Message.Content[2].Source.MediaType != "application/pdf" {
+		t.Fatalf("PDF 块 = %+v", msg.Message.Content[2])
+	}
+	if msg.Message.Content[3].Type != "text" || !strings.Contains(msg.Message.Content[3].Text, "hello") {
+		t.Fatalf("文本文件块 = %+v", msg.Message.Content[3])
 	}
 }

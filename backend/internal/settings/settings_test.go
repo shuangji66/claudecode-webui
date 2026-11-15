@@ -422,3 +422,65 @@ func TestPreferencesPatchAndDefaults(t *testing.T) {
 		t.Fatal("非法字号应报错")
 	}
 }
+
+func TestProxyURLPersistAndEnv(t *testing.T) {
+	s, path := openTemp(t)
+	if _, err := s.Apply(Patch{ProxyURL: strPtr("socks5://127.0.0.1:1080")}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Get().ProxyURL; got != "socks5://127.0.0.1:1080" {
+		t.Fatalf("ProxyURL = %q", got)
+	}
+	env := strings.Join(reopened.Get().Env(), ",")
+	for _, want := range []string{
+		"HTTPS_PROXY=socks5://127.0.0.1:1080",
+		"ALL_PROXY=socks5://127.0.0.1:1080",
+		"NO_PROXY=localhost,127.0.0.1,::1",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("Env 缺少 %q: %v", want, env)
+		}
+	}
+	if strings.Contains(env, "NODE_USE_ENV_PROXY") {
+		t.Fatalf("socks5 不应设置 Node 内置代理开关: %v", env)
+	}
+	// 清空代理后不应再注入代理变量。
+	if _, err := s.Apply(Patch{ProxyURL: strPtr("")}); err != nil {
+		t.Fatal(err)
+	}
+	if env := strings.Join(s.Get().Env(), ","); strings.Contains(env, "PROXY=") {
+		t.Fatalf("空代理仍注入变量: %v", env)
+	}
+}
+
+func TestHTTPProxyEnablesNodeEnvProxy(t *testing.T) {
+	v := Settings{ProxyURL: "http://127.0.0.1:7890"}
+	env := strings.Join(v.Env(), ",")
+	if !strings.Contains(env, "NODE_USE_ENV_PROXY=1") {
+		t.Fatalf("HTTP 代理应启用 Node 内置代理: %v", env)
+	}
+}
+
+func TestProxyURLValidation(t *testing.T) {
+	if got, err := NormalizeProxyURL(""); err != nil || got != "" {
+		t.Fatalf("空串 = %q, %v", got, err)
+	}
+	for _, ok := range []string{"http://127.0.0.1:7890", "https://proxy.example:443", "socks5://127.0.0.1:1080", "socks5h://proxy.example:1080"} {
+		if _, err := NormalizeProxyURL(ok); err != nil {
+			t.Fatalf("%q 应合法: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"127.0.0.1:1080", "ftp://x:1", "socks5://", "http://"} {
+		if _, err := NormalizeProxyURL(bad); err == nil {
+			t.Fatalf("%q 应被拒绝", bad)
+		}
+	}
+	s, _ := openTemp(t)
+	if _, err := s.Apply(Patch{ProxyURL: strPtr("socks4://x:1")}); err == nil {
+		t.Fatal("不支持的协议应报错")
+	}
+}

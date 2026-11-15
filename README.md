@@ -86,10 +86,25 @@ location /app/ccweb/ {
 
 - **通用**：主题（浅色 / 深色 / 跟随系统）、界面语言（简体中文 / English）、
   会话字号（12–20px）、新建会话的默认权限模式；修改即时写入 `settings.json`。
+- **代理**：为 claude 子进程设置 HTTP/HTTPS/SOCKS5 代理，留空直连。保存后
+  `POST /api/settings/proxy` 会重启所有运行中的 claude 会话，使代理变量立即生效；
+  代理同时写入 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `SOCKS_PROXY`（大小写都有），
+  `localhost` 与 `127.0.0.1` 自动走 `NO_PROXY`。
 - **模型**：按协议管理提供商；每个模型可配置显示名、**推理强度档位**（`low` / `medium` /
   `high` / `xhigh` / `max`）、默认推理强度和**图片输入支持**。选中的推理强度会作为
   `--effort` 传给新建的 claude 进程；对已有会话修改强度会在输入框下方提示「将在新会话生效」。
 - 设置页不再展示运行环境 / 数据目录等诊断信息。
+
+### 附件
+
+输入框左侧的 `+` 可以选择文件或图片，发送时随 prompt 一起传给 claude：
+
+- 图片：PNG / JPEG / GIF / WebP（单张 5MB），按 Anthropic `image` content block 发送；
+- PDF：单文件 8MB，按 `document` content block 发送；
+- 文本文件：单文件 1MB，服务端按 UTF-8 校验后作为文本块附加；
+- 所有附件合计 10MB；WebSocket 帧上限已相应提高到 16MB。
+
+不支持的类型、超过限制或非 UTF-8 文本会在输入框上方直接报错。
 
 ## 第三方模型 / 中继接入
 
@@ -103,7 +118,6 @@ location /app/ccweb/ {
 | 协议 | 决定「获取可用模型」用哪种列表地址与鉴权（见下表） |
 | API 地址 | 该提供商的基础地址，列表与对话都用它 |
 | API 密钥 | 对话时注入 `ANTHROPIC_API_KEY`（`x-api-key`）；留空表示不修改，清除要点「清除」再保存 |
-| 模型列表路径 | 可留空；知道确切路径（如 `/api/models`）就填，省去按协议推导 |
 | 模型 | 勾选添加后出现，可单独移除或点 ✓ 验证 |
 
 协议 → 列表地址与鉴权（规则与 DSH 的 discovery 一致）：

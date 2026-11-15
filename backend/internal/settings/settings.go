@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,6 +125,9 @@ type Settings struct {
 	Locale   string `json:"locale"`
 	FontSize int    `json:"font_size"`
 
+	// ProxyURL 是派给 claude 子进程的 HTTP/HTTPS/SOCKS5 代理；空表示直连。
+	ProxyURL string `json:"proxy_url"`
+
 	// 以下字段已废弃，仅用于把旧配置迁移成 provider；迁移后会被清空。
 	LegacyBaseURL   string `json:"base_url,omitempty"`
 	LegacyAPIKey    string `json:"api_key,omitempty"`
@@ -149,6 +153,8 @@ type Public struct {
 	Theme    string `json:"theme"`
 	Locale   string `json:"locale"`
 	FontSize int    `json:"font_size"`
+
+	ProxyURL string `json:"proxy_url"`
 
 	// Path 是配置文件路径，方便在 NAS 上备份。
 	Path string `json:"path"`
@@ -192,6 +198,7 @@ type Patch struct {
 	Theme                     *string          `json:"theme"`
 	Locale                    *string          `json:"locale"`
 	FontSize                  *int             `json:"font_size"`
+	ProxyURL                  *string          `json:"proxy_url"`
 }
 
 // Store 是带锁的内存态 + 磁盘持久化。
@@ -231,6 +238,36 @@ func normalizePreferences(v *Settings) {
 	if v.FontSize < MinFontSize || v.FontSize > MaxFontSize {
 		v.FontSize = DefaultFontSize
 	}
+	if v.ProxyURL != "" {
+		proxy, err := NormalizeProxyURL(v.ProxyURL)
+		if err != nil {
+			v.ProxyURL = ""
+		} else {
+			v.ProxyURL = proxy
+		}
+	}
+}
+
+// NormalizeProxyURL 校验并归一化代理地址；空串表示直连。
+// 只接受 http/https/socks5/socks5h，避免把任意字符串塞给 CLI 的环境变量。
+func NormalizeProxyURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	u, err := neturl.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("settings: 代理地址无法解析: %w", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "socks5", "socks5h":
+	default:
+		return "", fmt.Errorf("settings: 不支持的代理协议 %q（支持 http/https/socks5/socks5h）", u.Scheme)
+	}
+	if u.Host == "" {
+		return "", errors.New("settings: 代理地址缺少主机")
+	}
+	return raw, nil
 }
 
 // migrateLegacy 把旧的「单端点 + 别名槽位」配置转成一个 provider。
@@ -387,6 +424,23 @@ func (v Settings) Env() []string {
 	if v.DisableUnknownModelWindow {
 		out = append(out, "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1")
 	}
+	if proxy := strings.TrimSpace(v.ProxyURL); proxy != "" {
+		// 大小写都写：Node / curl / 各家 CLI 读的变量名不完全一致。
+		for _, key := range []string{
+			"HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "SOCKS_PROXY",
+			"https_proxy", "http_proxy", "all_proxy", "socks_proxy",
+		} {
+			out = append(out, key+"="+proxy)
+		}
+		// 本地中继（ANTHROPIC_BASE_URL=127.0.0.1）不能绕到外部代理。
+		out = append(out, "NO_PROXY=localhost,127.0.0.1,::1")
+		out = append(out, "no_proxy=localhost,127.0.0.1,::1")
+		// Node 内置 fetch 只认 HTTP 代理；socks5 交给 CLI 自己的 proxy-agent。
+		scheme := strings.ToLower(strings.SplitN(proxy, ":", 2)[0])
+		if scheme == "http" || scheme == "https" {
+			out = append(out, "NODE_USE_ENV_PROXY=1")
+		}
+	}
 	return out
 }
 
@@ -411,6 +465,7 @@ func (s *Store) Public() Public {
 		Theme:                     cur.Theme,
 		Locale:                    cur.Locale,
 		FontSize:                  cur.FontSize,
+		ProxyURL:                  cur.ProxyURL,
 		Path:                      s.path,
 	}
 	for _, p := range cur.Providers {
@@ -485,6 +540,14 @@ func (s *Store) Apply(p Patch) (Public, error) {
 			return Public{}, fmt.Errorf("settings: 字号必须在 %d–%d px 之间", MinFontSize, MaxFontSize)
 		}
 		next.FontSize = *p.FontSize
+	}
+	if p.ProxyURL != nil {
+		proxy, err := NormalizeProxyURL(*p.ProxyURL)
+		if err != nil {
+			s.mu.Unlock()
+			return Public{}, err
+		}
+		next.ProxyURL = proxy
 	}
 
 	// 选中的提供商被删掉时清空选择，避免悬空引用。

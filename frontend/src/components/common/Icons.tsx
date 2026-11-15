@@ -1,5 +1,6 @@
 // 自绘线性图标：不引图标库，保持内嵌体积与视觉一致。
 import type { SVGProps } from "react";
+import claudeCodeMark from "../../assets/claude-code.svg";
 
 type Props = SVGProps<SVGSVGElement> & { size?: number };
 
@@ -238,6 +239,15 @@ export function IconMonitor(props: Props) {
   );
 }
 
+export function IconFile(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M6 3.5h7l5 5V20a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 5 20V5a1.5 1.5 0 0 1 1-1.5z" />
+      <path d="M13 3.5V9h5" />
+    </Svg>
+  );
+}
+
 export function IconImage(props: Props) {
   return (
     <Svg {...props}>
@@ -293,13 +303,15 @@ export function IconHistory(props: Props) {
   );
 }
 
-/** 品牌标记：终端提示符 + 光标，避免借用官方鲸鱼商标。 */
+/** 品牌标记：使用项目提供的 Claude Code 像素图标（256×161）。 */
 export function BrandMark({ size = 24, className }: { size?: number; className?: string }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" className={className} aria-hidden="true">
-      <rect width="24" height="24" rx="7" fill="currentColor" />
-      <path d="m7 8.5 3 3-3 3" stroke="var(--canvas)" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-      <path d="M13 15h4" stroke="var(--canvas)" strokeWidth="1.9" strokeLinecap="round" />
-    </svg>
+    <img
+      src={claudeCodeMark}
+      alt=""
+      aria-hidden="true"
+      className={className}
+      style={{ height: size, width: (size * 256) / 161 }}
+    />
   );
 }

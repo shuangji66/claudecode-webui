@@ -22,6 +22,7 @@ import type {
   PublicSettings,
   Selection,
   SessionInfo,
+  WireAttachment,
   WireEvent,
   WorkspaceEntry,
   WorkspacesPayload,
@@ -78,6 +79,7 @@ export interface SettingsPatch {
   theme?: string;
   locale?: string;
   font_size?: number;
+  proxy_url?: string;
 }
 
 interface AppState {
@@ -121,6 +123,7 @@ interface AppState {
   fetchModelsFor: (form: ProviderForm) => Promise<void>;
   verifyModelFor: (form: ProviderForm, model: string) => Promise<void>;
   probeProvider: (form: ProviderForm) => Promise<void>;
+  applyProxy: (url: string) => Promise<{ ok: boolean; warning?: string }>;
 
   refreshSessions: () => Promise<void>;
   refreshHistory: () => Promise<void>;
@@ -137,7 +140,7 @@ interface AppState {
   disconnect: (id: string) => void;
   retryConnection: (id: string) => void;
 
-  sendPrompt: (text: string) => Promise<void>;
+  sendPrompt: (text: string, attachments?: WireAttachment[], attachmentLabel?: string) => Promise<void>;
   interrupt: () => void;
   setPermissionMode: (mode: string) => void;
   replyPermission: (
@@ -411,6 +414,38 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
   },
 
+  applyProxy: async (url) => {
+    set({ settingsSaving: true, error: null });
+    const oldActive = get().activeId;
+    const oldCwd = get().sessions.find((s) => s.id === oldActive)?.cwd || get().currentWorkspace;
+    try {
+      const res = await apiFetch<{ settings: PublicSettings; sessions: SessionInfo[]; warning?: string }>("/api/settings/proxy", {
+        method: "POST",
+        body: JSON.stringify({ proxy_url: url }),
+      });
+      set({
+        settings: normalizeSettings(res.settings),
+        sessions: res.sessions ?? [],
+        settingsSaving: false,
+        error: res.warning || null,
+      });
+      if (oldActive) {
+        clients.get(oldActive)?.close();
+        clients.delete(oldActive);
+      }
+      const next =
+        (res.sessions ?? []).find((s) => s.cwd === oldCwd) ??
+        (res.sessions ?? [])[0] ??
+        null;
+      get().setActive(next?.id ?? null);
+      if (next) get().connect(next.id);
+      return { ok: !res.warning, warning: res.warning };
+    } catch (e) {
+      set({ settingsSaving: false, error: errText(e) });
+      return { ok: false, warning: errText(e) };
+    }
+  },
+
   probeProvider: async (form) => {
     const key = form.id;
     set({ probe: { key, result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: "探测中…" } } });
@@ -655,7 +690,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     clients.get(id)?.retryNow();
   },
 
-  sendPrompt: async (text) => {
+  sendPrompt: async (text, attachments = [], attachmentLabel = "附件：") => {
+    if (!text.trim() && attachments.length === 0) return;
     let id = get().activeId;
     if (!id) {
       const info = await get().ensureSession();
@@ -667,11 +703,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set({ error: "连接尚未就绪，正在自动重连；稍后再发送即可" });
       return;
     }
-    if (!client.send({ kind: "prompt", text })) {
+    if (!client.send({ kind: "prompt", text, attachments: attachments.length > 0 ? attachments : undefined })) {
       set({ error: "发送失败：连接已断开" });
       return;
     }
-    set((s) => ({ items: { ...s.items, [id!]: appendUser(s.items[id!] ?? [], text) } }));
+    const display = [text.trim(), ...attachments.map((a) => `${attachmentLabel}${a.name}`)].filter(Boolean).join("\n");
+    set((s) => ({ items: { ...s.items, [id!]: appendUser(s.items[id!] ?? [], display) } }));
   },
 
   interrupt: () => {

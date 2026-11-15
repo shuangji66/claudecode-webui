@@ -10,8 +10,10 @@
 package protocol
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // 消息类型常量。
@@ -118,14 +120,66 @@ func Initialize(requestID string) []byte {
 	})
 }
 
-// UserText 构造一条用户文本消息。
+// Attachment 是一条随用户消息发送的文件。
+type Attachment struct {
+	Name      string
+	MediaType string
+	Data      []byte
+}
+
+// UserText 构造一条纯文本用户消息。
 func UserText(text string) []byte {
+	return UserMessage(text, nil)
+}
+
+// UserMessage 构造带附件的用户消息。
+//
+// 图片走 Anthropic 的 image content block，PDF 走 document block；
+// 文本文件在服务端解码后作为 text block 附在提示词后面。这样 CLI 与
+// 上游 API 都按原生多模态消息处理，不需要把文件塞进 JSON 字符串。
+func UserMessage(text string, attachments []Attachment) []byte {
+	content := make([]map[string]any, 0, len(attachments)+1)
+	if text != "" {
+		content = append(content, map[string]any{"type": "text", "text": text})
+	}
+	for _, a := range attachments {
+		mediaType := strings.ToLower(strings.TrimSpace(a.MediaType))
+		switch {
+		case strings.HasPrefix(mediaType, "image/"):
+			content = append(content, map[string]any{
+				"type": "image",
+				"source": map[string]any{
+					"type":       "base64",
+					"media_type": mediaType,
+					"data":       base64.StdEncoding.EncodeToString(a.Data),
+				},
+			})
+		case mediaType == "application/pdf":
+			content = append(content, map[string]any{
+				"type": "document",
+				"source": map[string]any{
+					"type":       "base64",
+					"media_type": mediaType,
+					"data":       base64.StdEncoding.EncodeToString(a.Data),
+				},
+			})
+		default:
+			name := strings.NewReplacer("\"", "'", "\n", " ", "\r", " ").Replace(a.Name)
+			content = append(content, map[string]any{
+				"type": "text",
+				"text": fmt.Sprintf("<file name=%q>\n%s\n</file>", name, string(a.Data)),
+			})
+		}
+	}
+	if len(content) == 0 {
+		content = append(content, map[string]any{"type": "text", "text": text})
+	}
 	return mustMarshal(map[string]any{
 		"type":       TypeUser,
 		"session_id": nil,
 		"message": map[string]any{
 			"role":    "user",
-			"content": []map[string]any{{"type": "text", "text": text}},
+			"content": content,
 		},
 		"parent_tool_use_id": nil,
 	})

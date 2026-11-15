@@ -134,3 +134,23 @@ func TestArgsEffort(t *testing.T) {
 		t.Fatalf("空 Effort 不应传参: %s", args)
 	}
 }
+
+func TestCleanEnvStripsProxy(t *testing.T) {
+	env := CleanEnv([]string{
+		"HTTPS_PROXY=http://host:1",
+		"https_proxy=http://host:1",
+		"ALL_PROXY=socks5://host:2",
+		"NO_PROXY=example.com",
+		"NODE_USE_ENV_PROXY=1",
+		"PATH=/bin",
+	}, "/home/u", "/work")
+	joined := strings.Join(env, ",")
+	for _, key := range []string{"HTTPS_PROXY", "https_proxy", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY"} {
+		if strings.Contains(joined, key+"=") {
+			t.Fatalf("继承代理未剔除 %s: %v", key, env)
+		}
+	}
+	if !strings.Contains(joined, "PATH=/bin") {
+		t.Fatalf("普通环境变量不应被误删: %v", env)
+	}
+}

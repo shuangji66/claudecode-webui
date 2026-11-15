@@ -67,7 +67,7 @@ export function TopBar({ session, title, conn, busy, tab, mode, onTab, onToggleS
               <span className="h-1.5 w-1.5 rounded-full bg-brand" />
               {permissionLabel(mode, locale)}
             </span>
-            {busy && <span className="thinking-dot h-1.5 w-1.5 shrink-0 rounded-full bg-brand sm:hidden" />}
+            {busy && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand sm:hidden" />}
           </div>
           <div className="flex min-w-0 items-center gap-1 text-[10.5px] text-faint">
             <IconFolder size={11} className="shrink-0" />

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -593,5 +594,54 @@ func TestSettingsModelMetaAndPreferences(t *testing.T) {
 	m := pub.Providers[0].ModelMeta["m1"]
 	if m.Name != "模型一" || !m.SupportsImage || m.DefaultEffort != "high" || len(m.Efforts) != 2 {
 		t.Fatalf("model meta = %+v", m)
+	}
+}
+
+func TestApplyProxyPersistsAndRestartsSessions(t *testing.T) {
+	srv, mgr := newTestServer(t, "")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/settings/proxy", strings.NewReader(`{"proxy_url":"socks5://127.0.0.1:1080"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Settings struct {
+			ProxyURL string `json:"proxy_url"`
+		} `json:"settings"`
+		Sessions []manager.Info `json:"sessions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Settings.ProxyURL != "socks5://127.0.0.1:1080" {
+		t.Fatalf("proxy_url = %q", body.Settings.ProxyURL)
+	}
+	if len(mgr.closed) != 1 || mgr.closed[0] != "sess-1" {
+		t.Fatalf("旧会话应被关闭: %v", mgr.closed)
+	}
+	if len(mgr.created) != 1 || mgr.created[0] != "/tmp" {
+		t.Fatalf("应按原目录重启: %v", mgr.created)
+	}
+	if len(body.Sessions) != 1 {
+		t.Fatalf("sessions = %+v", body.Sessions)
+	}
+}
+
+func TestDecodeAttachments(t *testing.T) {
+	atts, err := decodeAttachments([]wireAttachment{
+		{Name: "a.png", MediaType: "image/png", Data: base64.StdEncoding.EncodeToString([]byte("png"))},
+		{Name: "a.txt", MediaType: "text/plain", Data: base64.StdEncoding.EncodeToString([]byte("hello"))},
+	})
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(atts) != 2 || string(atts[0].Data) != "png" || string(atts[1].Data) != "hello" {
+		t.Fatalf("atts = %+v", atts)
+	}
+	if _, err := decodeAttachments([]wireAttachment{{Name: "x.zip", MediaType: "application/zip", Data: "AAAA"}}); err == nil {
+		t.Fatal("不支持的类型应报错")
+	}
+	if _, err := decodeAttachments([]wireAttachment{{Name: "x.txt", MediaType: "text/plain", Data: "不是 base64"}}); err == nil {
+		t.Fatal("非法 base64 应报错")
 	}
 }

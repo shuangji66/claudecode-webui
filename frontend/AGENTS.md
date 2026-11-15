@@ -18,6 +18,8 @@ src/
   lib/i18n.tsx         极简双语（useT(中文, English)）
   lib/theme.ts         主题/字号/语言的 DOM 应用与缓存
   lib/providerForm.ts  提供商/模型元数据表单转换
+  lib/attachments.ts   附件类型/大小/读取
+  assets/claude-code.svg 左侧栏品牌图标
   store/useAppStore.ts zustand 全局状态（只做状态搬运）
   components/          layout / chat / tools / permission / settings / common
 ```
@@ -42,6 +44,8 @@ src/
    禁止再用 `@media (prefers-color-scheme: dark)` 覆盖设计令牌。
 9. 强调色是陶土色 `#D97757`，统一用 `bg-brand/text-brand/border-brand`。
 10. 移动端输入区必须保留 `env(safe-area-inset-bottom)`；设置页底部操作栏同样要留安全区。
+11. 不要加呼吸灯/无限 pulse 动画；状态点用静态圆点，流式光标也不闪烁。
+12. 输入框 `+` 是附件入口（文件/图片），不要再改回插入 `/`；" / " 命令仍由用户键入触发补全。
 
 ## 3. 状态管理（zustand）
 
@@ -83,8 +87,8 @@ src/
 - 移动端优先：侧边栏在 `md` 以下变成抽屉；输入框用 `max-h` 限制高度；
   输入区、设置页底部栏都要留 `env(safe-area-inset-bottom)`。
 - 长输出必须折叠或限高（`max-h-80 overflow-auto`），否则会毁掉滚动体验。
-- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型」；通用设置即时保存，
-  模型配置在底部「保存模型设置」统一提交。
+- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 代理」；通用设置即时保存，
+  模型配置在底部「保存模型设置」统一提交，代理保存后重启所有 claude 会话。
 
 ## 7. 测试
 
@@ -98,7 +102,8 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
 
 - **`lib/` 下的纯函数必须有单测**：`normalize`（流式去重、tool 配对、ANSI 清洗、
   未知类型忽略）、`diff`（结构化补丁 / old-new 兜底 / null 降级）、`runtime`（base、wsUrl、token）、
-  `providerForm`（模型元数据/补丁/强度回落）、`theme`（system 解析/字号夹取）、`labels`（中英）。
+  `providerForm`（模型元数据/补丁/强度回落）、`theme`（system 解析/字号夹取）、`labels`（中英）、
+  `attachments`（类型/大小/格式化）。
 - **组件用 Testing Library**，断言用户可见的结果（文本、按钮），不要断言内部 state。
 - 改 `normalize` 时先写一个会失败的用例，再改实现。
 - 不要写依赖 `Date.now()` 精确值的断言。

@@ -23,13 +23,14 @@ import {
   IconPlus,
   IconSearch,
   IconSettings,
+  IconShield,
   IconSpark,
   IconSun,
   IconTrash,
   IconType,
 } from "../common/Icons";
 
-type Tab = "general" | "models";
+type Tab = "general" | "models" | "proxy";
 
 const PERMISSION_MODES = ["", "default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
 const THEMES = ["light", "dark", "system"] as const;
@@ -79,6 +80,9 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             <NavItem active={tab === "models"} icon={<IconSpark size={16} />} onClick={() => setTab("models")}>
               {t("模型", "Models")}
             </NavItem>
+            <NavItem active={tab === "proxy"} icon={<IconShield size={16} />} onClick={() => setTab("proxy")}>
+              {t("代理", "Proxy")}
+            </NavItem>
           </nav>
 
           <div className="min-h-0 flex-1">
@@ -93,6 +97,15 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             </div>
             <div className={tab === "models" ? "flex h-full min-h-0 flex-col px-4 pt-4 md:px-8 md:pt-6" : "hidden"}>
               <ModelsSettings />
+            </div>
+            <div
+              className={
+                tab === "proxy"
+                  ? "dsh-scroll h-full overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4 md:px-8 md:pb-8 md:pt-6"
+                  : "hidden"
+              }
+            >
+              <ProxySettings />
             </div>
           </div>
         </div>
@@ -373,6 +386,111 @@ function ModelsSettings() {
   );
 }
 
+function ProxySettings() {
+  const t = useT();
+  const settings = useAppStore((s) => s.settings);
+  const sessions = useAppStore((s) => s.sessions);
+  const saving = useAppStore((s) => s.settingsSaving);
+  const applyProxy = useAppStore((s) => s.applyProxy);
+  const [url, setUrl] = useState(settings?.proxy_url ?? "");
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setUrl(settings?.proxy_url ?? "");
+    setSavedAt(null);
+    setLocalError(null);
+  }, [settings?.proxy_url]);
+
+  const save = async () => {
+    if (sessions.length > 0 && !window.confirm(t(`保存后需要重启 ${sessions.length} 个 claude 会话，当前对话上下文会丢失。继续？`, `Saving will restart ${sessions.length} claude session(s); current context will be lost. Continue?`))) {
+      return;
+    }
+    setLocalError(null);
+    const result = await applyProxy(url.trim());
+    if (result.ok) setSavedAt(Date.now());
+    else if (result.warning) setLocalError(result.warning);
+  };
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-6">
+      <div>
+        <h3 className="text-[15px] font-semibold text-ink">{t("代理", "Proxy")}</h3>
+        <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
+          {t("为 claude 子进程设置 HTTP / HTTPS / SOCKS5 代理；留空表示直连。保存后会重启所有正在运行的 claude 会话。", "Set an HTTP / HTTPS / SOCKS5 proxy for the claude subprocess. Leave blank for direct access. Saving restarts all running claude sessions.")}
+        </p>
+      </div>
+
+      <Section title={t("代理地址", "Proxy URL")} desc={t("支持 http://、https://、socks5://、socks5h://；可包含用户名密码。", "Supports http://, https://, socks5://, socks5h://; credentials are allowed.")}>
+        <input
+          value={url}
+          onChange={(e) => {
+            setUrl(e.target.value);
+            setSavedAt(null);
+            setLocalError(null);
+          }}
+          placeholder="socks5://127.0.0.1:1080"
+          spellCheck={false}
+          className="w-full rounded-lg border border-line-strong bg-canvas px-2.5 py-2 font-mono text-[12px] outline-none placeholder:text-faint focus:border-brand/60"
+          aria-label={t("代理地址", "Proxy URL")}
+        />
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {[
+            ["HTTP", "http://127.0.0.1:7890"],
+            ["HTTPS", "https://127.0.0.1:7890"],
+            ["SOCKS5", "socks5://127.0.0.1:1080"],
+          ].map(([label, value]) => (
+            <button
+              key={label}
+              type="button"
+              onClick={() => {
+                setUrl(value);
+                setSavedAt(null);
+                setLocalError(null);
+              }}
+              className="rounded-full border border-line-strong px-2 py-0.5 text-[10.5px] text-muted hover:bg-panel-strong hover:text-ink"
+            >
+              {label}
+            </button>
+          ))}
+          {url && (
+            <button
+              type="button"
+              onClick={() => {
+                setUrl("");
+                setSavedAt(null);
+                setLocalError(null);
+              }}
+              className="rounded-full border border-line-strong px-2 py-0.5 text-[10.5px] text-muted hover:bg-panel-strong hover:text-ink"
+            >
+              {t("直连", "Direct")}
+            </button>
+          )}
+        </div>
+        <p className="mt-2 text-[10.5px] leading-relaxed text-faint">
+          {t("代理变量会同时写入 HTTPS_PROXY / HTTP_PROXY / ALL_PROXY；localhost 与 127.0.0.1 自动直连。", "The proxy is written to HTTPS_PROXY / HTTP_PROXY / ALL_PROXY; localhost and 127.0.0.1 bypass it automatically.")}
+        </p>
+      </Section>
+
+      <div className="flex items-center gap-3">
+        <span className="text-[10.5px] text-faint">
+          {saving ? t("保存并重启中…", "Saving and restarting…") : savedAt ? t("已保存并重启 Claude", "Saved and restarted Claude") : sessions.length > 0 ? t(`当前有 ${sessions.length} 个会话`, `${sessions.length} session(s) running`) : t("当前没有运行中的会话", "No running sessions")}
+        </span>
+        <button
+          type="button"
+          onClick={() => void save()}
+          disabled={saving}
+          className="ml-auto flex items-center gap-1.5 rounded-lg bg-brand px-4 py-2 text-[12px] font-medium text-white hover:bg-brand-hover disabled:opacity-40"
+        >
+          <IconCheck size={14} />
+          {t("保存并重启 Claude", "Save & restart Claude")}
+        </button>
+      </div>
+      {localError && <p className="rounded-lg bg-rose-50 px-3 py-2 text-[11px] text-danger dark:bg-rose-950/30">{localError}</p>}
+    </div>
+  );
+}
+
 function ProviderCard({ provider, onChange, onRemove }: { provider: ProviderForm; onChange: (patch: Partial<ProviderForm>) => void; onRemove: () => void }) {
   const t = useT();
   const fetchModelsFor = useAppStore((s) => s.fetchModelsFor);
@@ -435,29 +553,18 @@ function ProviderCard({ provider, onChange, onRemove }: { provider: ProviderForm
       </div>
 
       <div className="space-y-2.5 px-3 py-3">
-        <div className="grid gap-2 sm:grid-cols-2">
-          <label className="block">
-            <span className="block text-[10.5px] text-faint">{t("协议", "Protocol")}</span>
-            <select
-              value={provider.protocol}
-              onChange={(e) => onChange({ protocol: e.target.value })}
-              className="mt-0.5 w-full rounded-lg border border-line-strong bg-canvas px-2 py-1.5 text-[12px] outline-none focus:border-brand/60"
-            >
-              {PROTOCOLS.map((p) => (
-                <option key={p.value} value={p.value}>{p.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="block text-[10.5px] text-faint">{t("模型列表路径（可留空）", "Models path (optional)")}</span>
-            <input
-              value={provider.modelsPath}
-              onChange={(e) => onChange({ modelsPath: e.target.value })}
-              placeholder={t("按协议自动", "Auto by protocol")}
-              className="mt-0.5 w-full rounded-lg border border-line-strong bg-canvas px-2 py-1.5 font-mono text-[11.5px] outline-none focus:border-brand/60"
-            />
-          </label>
-        </div>
+        <label className="block">
+          <span className="block text-[10.5px] text-faint">{t("协议", "Protocol")}</span>
+          <select
+            value={provider.protocol}
+            onChange={(e) => onChange({ protocol: e.target.value })}
+            className="mt-0.5 w-full rounded-lg border border-line-strong bg-canvas px-2 py-1.5 text-[12px] outline-none focus:border-brand/60"
+          >
+            {PROTOCOLS.map((p) => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+          </select>
+        </label>
 
         <label className="block">
           <span className="block text-[10.5px] text-faint">{t("API 地址", "API base URL")}</span>

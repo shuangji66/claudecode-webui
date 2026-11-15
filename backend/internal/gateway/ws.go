@@ -2,15 +2,19 @@ package gateway
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
+	"ccweb/backend/internal/agent/protocol"
 	"ccweb/backend/internal/agent/session"
 	"ccweb/backend/internal/wsframe"
 )
@@ -62,17 +66,25 @@ func (c *wsClient) close() {
 	_ = c.conn.Close()
 }
 
+// wireAttachment 是前端上行的一条附件（base64 编码）。
+type wireAttachment struct {
+	Name      string `json:"name"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+}
+
 // clientCmd 是前端上行命令。
 type clientCmd struct {
-	Kind               string          `json:"kind"`
-	Text               string          `json:"text,omitempty"`
-	Model              string          `json:"model,omitempty"`
-	Mode               string          `json:"mode,omitempty"`
-	RequestID          string          `json:"request_id,omitempty"`
-	Allow              *bool           `json:"allow,omitempty"`
-	UpdatedInput       json.RawMessage `json:"updated_input,omitempty"`
-	UpdatedPermissions json.RawMessage `json:"updated_permissions,omitempty"`
-	Message            string          `json:"message,omitempty"`
+	Kind               string           `json:"kind"`
+	Text               string           `json:"text,omitempty"`
+	Attachments        []wireAttachment `json:"attachments,omitempty"`
+	Model              string           `json:"model,omitempty"`
+	Mode               string           `json:"mode,omitempty"`
+	RequestID          string           `json:"request_id,omitempty"`
+	Allow              *bool            `json:"allow,omitempty"`
+	UpdatedInput       json.RawMessage  `json:"updated_input,omitempty"`
+	UpdatedPermissions json.RawMessage  `json:"updated_permissions,omitempty"`
+	Message            string           `json:"message,omitempty"`
 }
 
 // handleWS 处理 /ws?id=<session>。
@@ -163,11 +175,16 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 	var err error
 	switch cmd.Kind {
 	case "prompt":
-		if cmd.Text == "" {
+		if cmd.Text == "" && len(cmd.Attachments) == 0 {
 			s.sendError(c, "prompt 不能为空")
 			return
 		}
-		err = sess.Prompt(cmd.Text)
+		atts, attErr := decodeAttachments(cmd.Attachments)
+		if attErr != nil {
+			s.sendError(c, attErr.Error())
+			return
+		}
+		err = sess.PromptWithAttachments(cmd.Text, atts)
 	case "interrupt":
 		err = sess.Interrupt()
 	case "model":
@@ -194,6 +211,61 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 	if err != nil {
 		s.sendError(c, err.Error())
 	}
+}
+
+// decodeAttachments 校验并解码前端附件。
+//
+// 只接受图片、PDF 与文本；总解码体积 10MB，单文件图片 5MB / 文本 1MB，
+// 与前端限制保持一致。文本必须能按 UTF-8 解码，避免把二进制塞给模型。
+func decodeAttachments(in []wireAttachment) ([]protocol.Attachment, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	const maxTotal = 10 << 20
+	total := 0
+	out := make([]protocol.Attachment, 0, len(in))
+	for _, a := range in {
+		name := strings.TrimSpace(a.Name)
+		if name == "" {
+			name = "attachment"
+		}
+		if len(name) > 200 {
+			name = name[:200]
+		}
+		mediaType := strings.ToLower(strings.TrimSpace(a.MediaType))
+		okImage := mediaType == "image/png" || mediaType == "image/jpeg" || mediaType == "image/gif" || mediaType == "image/webp"
+		okType := okImage || mediaType == "application/pdf" || strings.HasPrefix(mediaType, "text/")
+		if !okType {
+			return nil, fmt.Errorf("不支持的附件类型: %s", mediaType)
+		}
+		data, err := base64.StdEncoding.DecodeString(a.Data)
+		if err != nil {
+			return nil, fmt.Errorf("附件 %s 解码失败: %w", name, err)
+		}
+		if len(data) == 0 {
+			return nil, fmt.Errorf("附件 %s 为空", name)
+		}
+		if okImage && len(data) > 5<<20 {
+			return nil, fmt.Errorf("图片 %s 超过 5MB", name)
+		}
+		if strings.HasPrefix(mediaType, "text/") {
+			if len(data) > 1<<20 {
+				return nil, fmt.Errorf("文本文件 %s 超过 1MB", name)
+			}
+			if !utf8.Valid(data) {
+				return nil, fmt.Errorf("文本文件 %s 不是 UTF-8", name)
+			}
+		}
+		if mediaType == "application/pdf" && len(data) > 8<<20 {
+			return nil, fmt.Errorf("PDF %s 超过 8MB", name)
+		}
+		total += len(data)
+		if total > maxTotal {
+			return nil, errors.New("附件总大小超过 10MB")
+		}
+		out = append(out, protocol.Attachment{Name: name, MediaType: mediaType, Data: data})
+	}
+	return out, nil
 }
 
 func (s *Server) sendError(c *wsClient, msg string) {

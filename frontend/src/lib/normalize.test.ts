@@ -155,3 +155,49 @@ describe("stripAnsi", () => {
     expect(stripAnsi("\u001b[32mok\u001b[0m")).toBe("ok");
   });
 });
+
+describe("附件回显去重", () => {
+  it("文件/图片用户消息回显不重复追加本地气泡", () => {
+    let items: Item[] = [];
+    items = appendUser(items, "看看这张图\n附件：a.png");
+    items = applyCLI(items, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "看看这张图" },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "AAA" } },
+        ],
+      },
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "user", text: "看看这张图\n附件：a.png" });
+  });
+
+  it("仅文本文件、无提示词时也不重复", () => {
+    let items: Item[] = appendUser([], "附件：a.txt");
+    items = applyCLI(items, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: '<file name="a.txt">\nhi\n</file>' }],
+      },
+    });
+    expect(items).toHaveLength(1);
+  });
+
+  it("文本文件回显（多个 text block）同样不重复", () => {
+    let items: Item[] = appendUser([], "读一下\n附件：a.txt");
+    items = applyCLI(items, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "读一下" },
+          { type: "text", text: '<file name="a.txt">\nhi\n</file>' },
+        ],
+      },
+    });
+    expect(items).toHaveLength(1);
+  });
+});

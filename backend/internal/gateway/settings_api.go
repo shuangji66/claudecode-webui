@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"ccweb/backend/internal/settings"
 )
@@ -131,4 +132,42 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), settings.ProbeTimeout)
 	defer cancel()
 	writeJSON(w, settings.Probe(ctx, p))
+}
+
+type proxyReq struct {
+	ProxyURL string `json:"proxy_url"`
+}
+
+// handleApplyProxy 保存代理设置并重启全部 claude 会话。
+//
+// 代理变量只在进程启动时注入，改完必须换进程才能实时生效；这里先关掉
+// 所有会话，再按原目录 ensure 一个新的。前端拿到响应里的 sessions 后
+// 直接切换到新会话，不必等 WS 重连兜底。
+func (s *Server) handleApplyProxy(w http.ResponseWriter, r *http.Request) {
+	var req proxyReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeErr(w, "请求体解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	pub, err := s.d.Settings.Apply(settings.Patch{ProxyURL: &req.ProxyURL})
+	if err != nil {
+		writeErr(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	infos := s.d.Manager.List()
+	for _, info := range infos {
+		_ = s.d.Manager.Close(info.ID)
+	}
+	warnings := make([]string, 0, 1)
+	for _, info := range infos {
+		if _, err := s.d.Manager.Ensure(info.Cwd, "", ""); err != nil {
+			warnings = append(warnings, info.Cwd+": "+err.Error())
+		}
+	}
+	writeJSON(w, map[string]any{
+		"settings": pub,
+		"sessions": s.d.Manager.List(),
+		"warning":  strings.Join(warnings, "; "),
+	})
 }

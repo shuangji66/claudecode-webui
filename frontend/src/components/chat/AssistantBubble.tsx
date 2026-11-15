@@ -19,7 +19,7 @@ export function AssistantBubble({ text, streaming }: { text: string; streaming: 
     <div className="group relative">
       <div className="text-ink">
         <Markdown text={text} />
-        {streaming && <span className="thinking-dot ml-0.5 inline-block h-3.5 w-1.5 translate-y-0.5 rounded-sm bg-brand" />}
+        {streaming && <span className="ml-0.5 inline-block h-3.5 w-1.5 translate-y-0.5 rounded-sm bg-brand opacity-80" />}
       </div>
       {!streaming && text.trim() && (
         <div className="mt-1 flex h-4 items-center gap-1 text-[10px] text-faint opacity-0 transition group-hover:opacity-100">

@@ -98,8 +98,12 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   新增字段时保持老配置（只有 `models: ["id"]`）可读。
 - 推理强度没有控制请求，只在 `process.Args` 里用 `--effort` 固定；已有会话改强度
   只能提示「新会话生效」，不要假装热切换。
-- 界面偏好 `theme`（system/light/dark）、`locale`（zh/en）、`font_size`（12–20）也落在
-  `settings.json`；`Open` 时补默认值，`Apply` 时校验，非法值直接报错。
+- 界面偏好 `theme`（system/light/dark）、`locale`（zh/en）、`font_size`（12–20）、
+  `proxy_url`（http/https/socks5/socks5h，空=直连）也落在 `settings.json`；
+  `Open` 时补默认值，`Apply` 时校验，非法值直接报错。
+- 代理只在进程启动时生效：`POST /api/settings/proxy` 保存后关闭全部会话并 `Ensure`
+  原目录的新会话；`Settings.Env()` 注入大小写两套 proxy 变量和 localhost `NO_PROXY`，
+  `process.CleanEnv` 必须剔除继承的代理变量，保证空值=直连。
 - **对话地址与列表地址不是同一个**：CLI 自己拼 `/v1/messages`，而 OpenAI/Gemini 协议的
   base 习惯带 `/v1`。`Provider.ChatBaseURL()` 对非 Anthropic 协议剥掉尾部 `/v1`，
   `Env()` 必须用它，否则会拼成 `/v1/v1/messages`（404）。
@@ -120,6 +124,8 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `/api/settings` 三个端点（GET/PUT/POST test）都属于敏感路由，务必保持鉴权。
 - 工作区路由：`GET/POST/DELETE /api/workspaces`、`POST /api/workspaces/current`、
   `GET /api/fs/list`。目录浏览是只读但能枚举宿主目录，必须保持鉴权。
+- `POST /api/settings/proxy` 是敏感路由；先 Apply 设置，再重启全部会话，并返回
+  `{settings, sessions, warning}` 供前端直接切换。
 - `POST /api/session` 与 `/api/session/ensure` 必须先 `project.Validate`，再
   `s.ensureCwdAuthorized`；移除工作区时若仍有会话在用要返回 409。
 - SPA：`index.html` 注入 `<base href>`，缓存头用 **`no-store`**；`assets/**` 用 `immutable` 强缓存。
@@ -137,6 +143,8 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   假 CLI 按真实协议回包。
 - **网关用 fake manager**：`gateway_test.go` 里的 `fakeMgr` 实现 `SessionManager`
   （含 `Ensure`），这样不依赖 claude 二进制。
+- 附件：`protocol.UserMessage` 负责 image/document/text content block；`gateway/ws.go`
+  的 `decodeAttachments` 负责类型/大小/UTF-8 校验。WS 单帧上限 16MB，前端总附件 10MB。
 - `workspace` 的种子、增删、嵌套最长匹配、`Allows/ AutoStartPath` 必须有表驱动测试。
 - 表驱动 + `t.Helper()`；断言失败信息要带实际值。
 - 新增导出的行为必须带测试；修 bug 先写复现测试。

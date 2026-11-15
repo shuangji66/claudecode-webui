@@ -159,10 +159,18 @@ func (s *Session) setState(st string) {
 
 // Prompt 发送一条用户文本消息。
 func (s *Session) Prompt(text string) error {
+	return s.PromptWithAttachments(text, nil)
+}
+
+// PromptWithAttachments 发送文本 + 文件/图片（图片走原生 image block）。
+func (s *Session) PromptWithAttachments(text string, attachments []protocol.Attachment) error {
 	if s.State() == StateClosed {
 		return errors.New("session: 会话已关闭")
 	}
-	if err := s.writeLine(protocol.UserText(text)); err != nil {
+	if text == "" && len(attachments) == 0 {
+		return errors.New("session: 消息不能为空")
+	}
+	if err := s.writeLine(protocol.UserMessage(text, attachments)); err != nil {
 		return err
 	}
 	s.setState(StateBusy)

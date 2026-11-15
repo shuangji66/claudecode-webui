@@ -89,9 +89,16 @@ export interface SnapshotPayload {
   init?: InitPayload;
 }
 
+/** 随 prompt 发送的文件（base64）。 */
+export interface WireAttachment {
+  name: string;
+  media_type: string;
+  data: string;
+}
+
 /** 前端上行命令。 */
 export type ClientCommand =
-  | { kind: "prompt"; text: string }
+  | { kind: "prompt"; text: string; attachments?: WireAttachment[] }
   | { kind: "interrupt" }
   | { kind: "model"; model: string }
   | { kind: "permission_mode"; mode: string }
@@ -146,6 +153,7 @@ export interface PublicSettings {
   theme?: "system" | "light" | "dark" | string;
   locale?: "zh" | "en" | string;
   font_size?: number;
+  proxy_url?: string;
   path: string;
 }
 

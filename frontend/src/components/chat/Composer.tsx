@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { CommandInfo } from "../../transport/types";
+import type { CommandInfo, WireAttachment } from "../../transport/types";
 import { permissionLabel } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
 import type { ModelOption } from "../../lib/providerForm";
-import { IconChevronDown, IconGauge, IconImage, IconPlus, IconSend, IconShield, IconSpark, IconStop } from "../common/Icons";
+import {
+  ATTACHMENT_ACCEPT,
+  MAX_TOTAL_BYTES,
+  formatBytes,
+  readAttachment,
+  toWireAttachment,
+  type PendingAttachment,
+} from "../../lib/attachments";
+import { IconChevronDown, IconClose, IconFile, IconGauge, IconImage, IconPlus, IconSend, IconShield, IconSpark, IconStop } from "../common/Icons";
 
 interface Props {
   disabled: boolean;
@@ -20,7 +28,7 @@ interface Props {
   onSelectModel: (provider: string, model: string) => void;
   onSelectEffort: (effort: string) => void;
   onPermissionMode: (mode: string) => void;
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments: WireAttachment[]) => void;
   onInterrupt: () => void;
   footer?: ReactNode;
 }
@@ -49,7 +57,10 @@ export function Composer({
   const t = useT();
   const locale = useLocale();
   const [text, setText] = useState("");
+  const [files, setFiles] = useState<PendingAttachment[]>([]);
+  const [fileError, setFileError] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const el = ref.current;
@@ -68,12 +79,36 @@ export function Composer({
   const efforts = selectedModel?.spec.reasoning_efforts ?? [];
 
   const submit = () => {
-    const t = text.trim();
-    if (!t || disabled) return;
-    onSend(t);
+    const value = text.trim();
+    if ((!value && files.length === 0) || disabled) return;
+    onSend(value, files.map(toWireAttachment));
     setText("");
+    setFiles([]);
+    setFileError(null);
     const el = ref.current;
     if (el) el.style.height = "auto";
+  };
+
+  const pickFiles = async (list: FileList | null) => {
+    if (!list || list.length === 0) return;
+    setFileError(null);
+    let total = files.reduce((sum, f) => sum + f.size, 0);
+    const next = [...files];
+    for (const file of Array.from(list)) {
+      try {
+        const attachment = await readAttachment(file, locale);
+        if (total + attachment.size > MAX_TOTAL_BYTES) {
+          setFileError(t("附件总大小不能超过 10MB", "Attachments cannot exceed 10MB in total"));
+          break;
+        }
+        next.push(attachment);
+        total += attachment.size;
+      } catch (e) {
+        setFileError(e instanceof Error ? e.message : String(e));
+      }
+    }
+    setFiles(next);
+    if (fileRef.current) fileRef.current.value = "";
   };
 
   const hint = starting
@@ -107,6 +142,50 @@ export function Composer({
       )}
 
       <div className="composer-card px-3 pb-2.5 pt-2">
+        {files.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {files.map((f) => (
+              <div key={f.id} className="flex max-w-full items-center gap-1.5 rounded-lg border border-line bg-panel/60 px-1.5 py-1">
+                {f.kind === "image" ? (
+                  <img
+                    src={`data:${f.mediaType};base64,${f.data}`}
+                    alt=""
+                    className="h-7 w-7 shrink-0 rounded object-cover"
+                  />
+                ) : (
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-canvas text-muted">
+                    <IconFile size={15} />
+                  </span>
+                )}
+                <span className="min-w-0">
+                  <span className="block max-w-[10rem] truncate text-[10.5px] text-ink">{f.name}</span>
+                  <span className="block text-[9px] text-faint">{formatBytes(f.size)}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFiles((prev) => prev.filter((x) => x.id !== f.id));
+                    setFileError(null);
+                  }}
+                  className="rounded p-0.5 text-faint hover:text-danger"
+                  aria-label={t(`移除 ${f.name}`, `Remove ${f.name}`)}
+                >
+                  <IconClose size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {fileError && <p className="mb-1.5 text-[10.5px] text-danger">{fileError}</p>}
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          hidden
+          accept={ATTACHMENT_ACCEPT}
+          disabled={disabled}
+          onChange={(e) => void pickFiles(e.target.files)}
+        />
         <textarea
           ref={ref}
           rows={1}
@@ -127,14 +206,11 @@ export function Composer({
         <div className="mt-1.5 flex items-center gap-1 sm:gap-1.5">
           <button
             type="button"
-            onClick={() => {
-              setText((t) => (t ? t : "/"));
-              ref.current?.focus();
-            }}
+            onClick={() => fileRef.current?.click()}
             disabled={disabled}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted hover:bg-panel-strong hover:text-ink disabled:opacity-40"
-            aria-label={t("斜杠命令", "Slash command")}
-            title={t("斜杠命令", "Slash command")}
+            aria-label={t("添加文件或图片", "Add file or image")}
+            title={t("添加文件或图片", "Add file or image")}
           >
             <IconPlus size={17} />
           </button>
@@ -229,7 +305,7 @@ export function Composer({
               <button
                 type="button"
                 onClick={submit}
-                disabled={disabled || sendBlocked || !text.trim()}
+                disabled={disabled || sendBlocked || (!text.trim() && files.length === 0)}
                 className="send-button"
                 aria-label={t("发送", "Send")}
                 title={t("发送（Enter）", "Send (Enter)")}

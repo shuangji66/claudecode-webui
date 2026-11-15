@@ -31,8 +31,9 @@ const (
 const acceptGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 // DefaultMaxMessageBytes 是单条消息（聚合后）的上限。
-// 前端发来的只有命令 JSON，4MB 足够，且能挡住「长度字段打爆内存」的入口。
-const DefaultMaxMessageBytes = 4 << 20
+// 除了命令 JSON，还要容纳图片/PDF 的 base64（前端总大小限制为 10MB），
+// 因此设为 16MB；仍然能挡住「长度字段打爆内存」的入口。
+const DefaultMaxMessageBytes = 16 << 20
 
 // MaxControlPayload 是控制帧载荷上限（RFC 6455 规定 125 字节）。
 const MaxControlPayload = 125
