@@ -80,7 +80,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/history", s.authed(s.handleListHistory))
 	s.mux.HandleFunc("GET /api/settings", s.authed(s.handleGetSettings))
 	s.mux.HandleFunc("PUT /api/settings", s.authed(s.handlePutSettings))
-	s.mux.HandleFunc("POST /api/settings/test", s.authed(s.handleTestSettings))
+	s.mux.HandleFunc("POST /api/settings/test", s.authed(s.handleTestProvider))
 	s.mux.HandleFunc("POST /api/settings/models", s.authed(s.handleFetchModels))
 	s.mux.HandleFunc("POST /api/settings/verify", s.authed(s.handleVerifyModel))
 	s.mux.HandleFunc("GET /ws", s.handleWS)

@@ -25,9 +25,13 @@ var ErrTooMany = errors.New("manager: 常驻会话数已达上限，请先关闭
 
 // Info 是会话的对外描述。
 type Info struct {
-	ID         string    `json:"id"`
-	Cwd        string    `json:"cwd"`
-	State      string    `json:"state"`
+	ID    string `json:"id"`
+	Cwd   string `json:"cwd"`
+	State string `json:"state"`
+	// Provider 是创建该会话时选中的提供商 id，前端据此判断能否热切换模型
+	// （跨提供商切换需要新建会话，因为地址与密钥在进程启动时就定死了）。
+	Provider   string    `json:"provider,omitempty"`
+	Model      string    `json:"model,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	LastActive time.Time `json:"last_active"`
 }
@@ -42,6 +46,7 @@ type Manager struct {
 	mu       sync.Mutex
 	sessions map[string]*session.Session
 	procs    map[string]*process.Proc
+	metas    map[string]meta
 
 	closing chan struct{}
 }
@@ -60,6 +65,7 @@ func New(cfg config.Config, exePath string, store *settings.Store, emit func(str
 		emit:     emit,
 		sessions: make(map[string]*session.Session),
 		procs:    make(map[string]*process.Proc),
+		metas:    make(map[string]meta),
 		closing:  make(chan struct{}),
 	}
 	go m.reapLoop()
@@ -95,10 +101,10 @@ func (m *Manager) Create(cwd, model, permissionMode string) (Info, error) {
 	}
 	m.mu.Unlock()
 
-	// 运行期设置优先于启动期环境变量：设置页改完之后新会话立刻用新值。
+	// 运行期设置优先：设置页选中的模型就是 CLI 的默认模型。
 	cfgSet := m.store.Get()
 	if model == "" {
-		model = cfgSet.Model
+		model = cfgSet.DefaultModel()
 	}
 	if model == "" {
 		model = m.cfg.Model
@@ -116,7 +122,7 @@ func (m *Manager) Create(cwd, model, permissionMode string) (Info, error) {
 	})
 	// 先净化继承环境，再追加设置里的 ANTHROPIC_*（后者生效，从而覆盖宿主机同名变量）。
 	env := process.CleanEnv(os.Environ(), m.cfg.ClaudeHome, abs)
-	env = append(env, m.store.Env()...)
+	env = append(env, cfgSet.Env()...)
 
 	proc, err := process.Spawn(m.bin, args, abs, env)
 	if err != nil {
@@ -133,12 +139,14 @@ func (m *Manager) Create(cwd, model, permissionMode string) (Info, error) {
 	m.mu.Lock()
 	m.sessions[id] = sess
 	m.procs[id] = proc
+	m.metas[id] = meta{Provider: cfgSet.Selected.Provider, Model: model}
 	m.mu.Unlock()
 
 	if err := sess.Start(); err != nil {
 		m.mu.Lock()
 		delete(m.sessions, id)
 		delete(m.procs, id)
+		delete(m.metas, id)
 		m.mu.Unlock()
 		tail := proc.StderrTail()
 		_ = proc.Close()
@@ -148,7 +156,10 @@ func (m *Manager) Create(cwd, model, permissionMode string) (Info, error) {
 		return Info{}, err
 	}
 
-	return infoOf(sess), nil
+	info := infoOf(sess)
+	info.Provider = cfgSet.Selected.Provider
+	info.Model = model
+	return info, nil
 }
 
 // Get 按 id 取会话。
@@ -164,8 +175,13 @@ func (m *Manager) List() []Info {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]Info, 0, len(m.sessions))
-	for _, s := range m.sessions {
-		out = append(out, infoOf(s))
+	for id, s := range m.sessions {
+		info := infoOf(s)
+		if mt, ok := m.metas[id]; ok {
+			info.Provider = mt.Provider
+			info.Model = mt.Model
+		}
+		out = append(out, info)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out
@@ -178,6 +194,7 @@ func (m *Manager) Close(id string) error {
 	proc := m.procs[id]
 	delete(m.sessions, id)
 	delete(m.procs, id)
+	delete(m.metas, id)
 	m.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("manager: 会话 %s 不存在", id)
@@ -230,6 +247,12 @@ func (m *Manager) reapIdle() {
 	for _, id := range victims {
 		_ = m.Close(id)
 	}
+}
+
+// meta 记录会话创建时的提供商与模型（session 本身不关心这些）。
+type meta struct {
+	Provider string
+	Model    string
 }
 
 func infoOf(s *session.Session) Info {

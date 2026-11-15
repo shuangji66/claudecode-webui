@@ -258,11 +258,16 @@ func TestUnknownRoute(t *testing.T) {
 	}
 }
 
-func TestGetSettingsMasksSecret(t *testing.T) {
-	srv, _ := newTestServer(t, "")
-	body := `{"base_url":"https://relay.example.com","api_key":"sk-ant-supersecret-value"}`
+func putSettings(t *testing.T, srv *Server, body string) *httptest.ResponseRecorder {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body)))
+	return rec
+}
+
+func TestPutSettingsProvidersPersistAndMask(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	rec := putSettings(t, srv, `{"providers":[{"id":"gw","name":"网关","protocol":"anthropic-messages","base_url":"https://relay.example","api_key":"sk-ant-supersecret-value","models":["m1","m2"]}],"selected":{"provider":"gw","model":"m1"}}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT code = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -275,58 +280,84 @@ func TestGetSettingsMasksSecret(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET code = %d", rec.Code)
 	}
-	var pub map[string]any
-	_ = json.Unmarshal(rec.Body.Bytes(), &pub)
-	if pub["api_key_set"] != true {
-		t.Fatalf("api_key_set 应为 true: %v", pub)
-	}
-	if pub["base_url"] != "https://relay.example.com" {
-		t.Fatalf("base_url = %v", pub["base_url"])
-	}
 	if strings.Contains(rec.Body.String(), "supersecret") {
 		t.Fatalf("GET 响应泄露密钥: %s", rec.Body.String())
 	}
+	var pub struct {
+		Providers []struct {
+			ID        string   `json:"id"`
+			APIKeySet bool     `json:"api_key_set"`
+			Models    []string `json:"models"`
+		} `json:"providers"`
+		Selected struct {
+			Provider string `json:"provider"`
+			Model    string `json:"model"`
+		} `json:"selected"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pub); err != nil {
+		t.Fatalf("解析: %v", err)
+	}
+	if len(pub.Providers) != 1 || !pub.Providers[0].APIKeySet {
+		t.Fatalf("providers = %+v", pub.Providers)
+	}
+	if len(pub.Providers[0].Models) != 2 {
+		t.Fatalf("models = %v", pub.Providers[0].Models)
+	}
+	if pub.Selected.Model != "m1" {
+		t.Fatalf("selected = %+v", pub.Selected)
+	}
 }
 
+// 只改模型列表时，密钥留空不能把已存密钥抹掉。
 func TestPutSettingsKeepsSecretWhenEmpty(t *testing.T) {
 	srv, _ := newTestServer(t, "")
-	put := func(body string) {
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body)))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("PUT code = %d: %s", rec.Code, rec.Body.String())
-		}
+	if rec := putSettings(t, srv, `{"providers":[{"id":"gw","api_key":"sk-keep-me"}]}`); rec.Code != http.StatusOK {
+		t.Fatalf("PUT code = %d: %s", rec.Code, rec.Body.String())
 	}
-	put(`{"api_key":"sk-keep-me"}`)
-	put(`{"api_key":"","model":"claude-opus-5-5"}`)
+	if rec := putSettings(t, srv, `{"providers":[{"id":"gw","api_key":"","models":["m1"]}]}`); rec.Code != http.StatusOK {
+		t.Fatalf("PUT code = %d", rec.Code)
+	}
 
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
-	var pub map[string]any
+	var pub struct {
+		Providers []struct {
+			APIKeySet bool     `json:"api_key_set"`
+			Models    []string `json:"models"`
+		} `json:"providers"`
+	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &pub)
-	if pub["api_key_set"] != true {
+	if len(pub.Providers) != 1 || !pub.Providers[0].APIKeySet {
 		t.Fatal("空串不应清空已保存的密钥")
 	}
-	if pub["model"] != "claude-opus-5-5" {
-		t.Fatalf("model 未更新: %v", pub["model"])
+	if len(pub.Providers[0].Models) != 1 {
+		t.Fatalf("models 未更新: %v", pub.Providers[0].Models)
 	}
 }
 
-func TestPutSettingsClearExplicit(t *testing.T) {
+func TestPutSettingsClearKeyExplicit(t *testing.T) {
 	srv, _ := newTestServer(t, "")
-	for _, body := range []string{`{"api_key":"sk-x"}`, `{"clear_api_key":true}`} {
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body)))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("PUT code = %d", rec.Code)
-		}
-	}
+	putSettings(t, srv, `{"providers":[{"id":"gw","api_key":"sk-x"}]}`)
+	putSettings(t, srv, `{"providers":[{"id":"gw","clear_key":true}]}`)
+
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
-	var pub map[string]any
+	var pub struct {
+		Providers []struct {
+			APIKeySet bool `json:"api_key_set"`
+		} `json:"providers"`
+	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &pub)
-	if pub["api_key_set"] != false {
+	if pub.Providers[0].APIKeySet {
 		t.Fatal("显式清除后 api_key_set 应为 false")
+	}
+}
+
+func TestPutSettingsRejectsDuplicateProvider(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	rec := putSettings(t, srv, `{"providers":[{"id":"a"},{"id":"a"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("重复 ID 应 400，实际 %d", rec.Code)
 	}
 }
 

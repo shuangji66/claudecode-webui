@@ -76,6 +76,9 @@ export interface SessionInfo {
   id: string;
   cwd: string;
   state: string;
+  /** 创建会话时选中的提供商 / 模型（后端记录，用于判断能否热切换）。 */
+  provider?: string;
+  model?: string;
   created_at?: string;
   last_active?: string;
 }
@@ -101,24 +104,32 @@ export type ClientCommand =
     }
   | { kind: "ping" };
 
-/** 后端 /api/settings 的脱敏视图（密钥永不回传）。 */
-export interface PublicSettings {
+/** 一个第三方模型提供商的脱敏视图。 */
+export interface PublicProvider {
+  id: string;
+  name: string;
+  protocol: string;
   base_url: string;
   api_key_set: boolean;
   api_key_masked: string;
   auth_token_set: boolean;
-  auth_token_masked: string;
+  models_path: string;
+  models: string[];
+}
+
+/** 当前选中的模型（= claude CLI 的默认模型）。 */
+export interface Selection {
+  provider: string;
   model: string;
-  opus_model: string;
-  sonnet_model: string;
-  haiku_model: string;
+}
+
+/** 后端 /api/settings 的脱敏视图（密钥永不回传）。 */
+export interface PublicSettings {
+  providers: PublicProvider[];
+  selected: Selection;
   permission_mode: string;
   auto_compact_window: string;
   disable_unknown_model_window: boolean;
-  models_path: string;
-  manual_models: string;
-  api_protocol: string;
-  known_models: string;
   path: string;
 }
 

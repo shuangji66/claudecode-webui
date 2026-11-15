@@ -14,6 +14,8 @@ type Model struct {
 	ID      string `json:"id"`
 	Display string `json:"display_name,omitempty"`
 	OwnedBy string `json:"owned_by,omitempty"`
+	// ContextLength 是条目的上下文窗口（部分网关提供），用于回填压缩窗口。
+	ContextLength int `json:"context_length,omitempty"`
 }
 
 // AuthInfo 描述一次请求携带的鉴权方式（只报类型，不含值）。
@@ -44,40 +46,20 @@ type ModelsResult struct {
 	Supported bool      `json:"supported"`
 }
 
-// 协议常量，与 DSH 的命名保持一致。
-const (
-	ProtocolAnthropic = "anthropic-messages"
-	ProtocolOpenAI    = "openai-completions"
-	ProtocolResponses = "openai-responses"
-	ProtocolGemini    = "google-generative-ai"
-)
-
-// listableProtocols 是支持自动获取模型列表的协议。
-// 其它协议（Azure、Codex OAuth 等）直接提示手动录入，避免把鉴权失败误报成「没有模型」。
-var listableProtocols = map[string]bool{
-	ProtocolAnthropic: true,
-	ProtocolOpenAI:    true,
-	ProtocolResponses: true,
-	ProtocolGemini:    true,
-}
-
-// APIProtocol 返回生效的协议（未配置时用 Anthropic Messages）。
-func (v Settings) APIProtocolOrDefault() string {
-	if p := strings.TrimSpace(v.APIProtocol); p != "" {
-		return p
-	}
-	return DefaultAPIProtocol
-}
-
-// ListingURL 按协议拼出模型列表地址。
+// ListingURL 按协议拼出模型列表地址（规则与 DSH 的 discovery 一致）：
+//   - anthropic-messages：`{root}/v1/models?limit=1000`，root 会去掉一层尾部 `/v1`
+//   - openai-completions / openai-responses：`{base}/models`
+//   - google-generative-ai：`{base}/models?pageSize=1000`
 //
-// 规则与 DSH 的 discovery 保持一致：
-//   - anthropic-messages：`{root}/v1/models?limit=1000`，root 是 base 去掉尾部斜杠、
-//     再去掉一层尾部 `/v1`（网关文档两种写法都有，只有列表地址做这个归一化）。
-//   - openai-completions / openai-responses：`{base}/models`（base 已含 `/v1`）。
-//   - google-generative-ai：`{base}/models?pageSize=1000`（base 已含 API 版本）。
-func ListingURL(baseURL, protocol string) string {
+// override 非空时直接用 `{base}{override}`，便于覆盖各家不统一的路径。
+func ListingURL(baseURL, protocol, override string) string {
 	base := strings.TrimRight(baseURL, "/")
+	if o := strings.TrimSpace(override); o != "" {
+		if !strings.HasPrefix(o, "/") {
+			o = "/" + o
+		}
+		return base + o
+	}
 	switch protocol {
 	case ProtocolGemini:
 		return base + "/models?pageSize=1000"
@@ -92,58 +74,31 @@ func ListingURL(baseURL, protocol string) string {
 	}
 }
 
-// authKind 决定用哪种鉴权头。
-func authKind(protocol string) string {
-	switch protocol {
-	case ProtocolGemini:
-		return "google"
-	case ProtocolAnthropic:
-		return "anthropic"
-	default:
-		return "bearer"
-	}
-}
-
 const rawPreviewBytes = 600
 
-// FetchModels 按配置的协议询问端点「你提供哪些模型」。
+// FetchModels 按提供商的协议询问端点「你提供哪些模型」。
 //
-// 这是一条**尽力而为**的便利路径：端点用什么格式作答由它自己决定，
-// 拿不到时手动填写模型名效果完全一样（DSH 的文档也是这么说的）。
-func FetchModels(ctx context.Context, v Settings) ModelsResult {
-	protocol := v.APIProtocolOrDefault()
+// 这是尽力而为的便利路径：端点用什么格式作答由它自己决定，
+// 拿不到时手动输入模型名效果相同。
+func FetchModels(ctx context.Context, p Provider) ModelsResult {
+	protocol := p.ProtocolOrDefault()
 	res := ModelsResult{
 		Protocol:  protocol,
 		Supported: listableProtocols[protocol],
-		Auth:      AuthInfo{APIKeySent: v.APIKey != "", AuthTokenSent: v.AuthToken != ""},
+		Endpoint:  p.Root(),
+		Auth:      AuthInfo{APIKeySent: p.APIKey != "", AuthTokenSent: p.AuthToken != ""},
 	}
-
-	base := strings.TrimRight(v.BaseURL, "/")
-	if base == "" {
-		base = DefaultBaseURL
-	}
-	res.Endpoint = base
-	if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+	if !strings.HasPrefix(res.Endpoint, "http://") && !strings.HasPrefix(res.Endpoint, "https://") {
 		res.Detail = "地址必须以 http:// 或 https:// 开头"
 		return res
 	}
-
-	// 手动指定路径时优先（便于覆盖协议默认规则）。
-	var url string
-	if p := strings.TrimSpace(v.ModelsPath); p != "" {
-		if !strings.HasPrefix(p, "/") {
-			p = "/" + p
-		}
-		url = base + p
-	} else if res.Supported {
-		url = ListingURL(base, protocol)
-	} else {
+	if !res.Supported {
 		res.Detail = fmt.Sprintf("协议 %s 不支持自动获取模型列表，请手动填写模型名", protocol)
 		return res
 	}
 
-	// 展示用路径相对于主机根，而不是相对 base —— 否则 base 带 /v1 时
-	// 界面会显示 /models，与真实请求地址对不上，排查时会误导。
+	url := ListingURL(res.Endpoint, protocol, p.ModelsPath)
+	// 展示用路径相对主机根，避免 base 带 /v1 时显示成 /models 而误导排查。
 	display := url
 	if u, err := neturl.Parse(url); err == nil {
 		display = u.Path
@@ -154,7 +109,7 @@ func FetchModels(ctx context.Context, v Settings) ModelsResult {
 	res.Tried = []string{display}
 
 	client := &http.Client{Timeout: ProbeTimeout}
-	status, body, truncated, err := doAuth(ctx, client, http.MethodGet, url, v, nil, authKind(protocol))
+	status, body, truncated, err := doAuth(ctx, client, http.MethodGet, url, p, nil, authKind(protocol))
 	res.Status = status
 	attempt := Attempt{Path: display, Status: status}
 
@@ -162,26 +117,28 @@ func FetchModels(ctx context.Context, v Settings) ModelsResult {
 	case err != nil:
 		attempt.Note = "请求失败：" + err.Error()
 	case status >= 200 && status < 300 && truncated:
-		// 明确区分「被我们截断」与「不是 JSON」——两者原因完全不同。
 		attempt.Note = fmt.Sprintf("响应超过 %d 字节被截断，无法解析", readLimitModels)
 	case status >= 200 && status < 300:
 		models, perr := parseModels(body)
-		if perr != nil {
+		switch {
+		case perr != nil:
 			attempt.Note = "200，但不是模型列表（" + perr.Error() + "）"
-		} else if len(models) == 0 {
+		case len(models) == 0:
 			attempt.Note = "200，但没有模型条目"
-		} else {
+		default:
 			attempt.Note = fmt.Sprintf("200，%d 个模型", len(models))
 			res.Models = models
 			res.Attempts = []Attempt{attempt}
-			res.Raw = ""
 			res.Detail = fmt.Sprintf("共 %d 个模型（%s，%s）", len(models), display, protocol)
 			return res
 		}
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		// 同一把密钥换成 Bearer 再试一次：不少中转只认 Bearer。
-		if v.APIKey != "" && v.AuthToken == "" && protocol != ProtocolGemini {
-			if s2, b2, _, e2 := doAuth(ctx, client, http.MethodGet, url, v, nil, "bearer"); e2 == nil {
+		if p.APIKey != "" && p.AuthToken == "" && protocol != ProtocolGemini {
+			alt := p
+			alt.AuthToken = p.APIKey
+			alt.APIKey = ""
+			if s2, b2, _, e2 := doAuth(ctx, client, http.MethodGet, url, alt, nil, "bearer"); e2 == nil {
 				res.Auth.BearerFallback = true
 				if models, perr := parseModels(b2); perr == nil && len(models) > 0 {
 					attempt.Status = s2
@@ -205,35 +162,6 @@ func FetchModels(ctx context.Context, v Settings) ModelsResult {
 	res.Raw = preview(body)
 	res.Detail = fmt.Sprintf("未能获取模型列表（%s → %s）", display, attempt.Note) + hintFor(res.Raw)
 	return res
-}
-
-// doAuth 按指定的鉴权方式发请求。
-// 模型列表可能很大，这里统一用 readLimitModels，并回传是否被截断。
-func doAuth(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, kind string) (int, []byte, bool, error) {
-	switch kind {
-	case "bearer":
-		cp := v
-		cp.AuthToken = firstNonEmpty(v.AuthToken, v.APIKey)
-		cp.APIKey = ""
-		return doJSONAuthLimit(ctx, c, method, url, cp, body, false, readLimitModels)
-	case "google":
-		cp := v
-		cp.APIKey = ""
-		cp.AuthToken = ""
-		return doJSONHeaderLimit(ctx, c, method, url, cp, body,
-			map[string]string{"x-goog-api-key": firstNonEmpty(v.APIKey, v.AuthToken)}, readLimitModels)
-	default:
-		return doJSONAuthLimit(ctx, c, method, url, v, body, false, readLimitModels)
-	}
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // hintFor 依据原始响应给出下一步提示。
@@ -262,12 +190,10 @@ func preview(b []byte) string {
 	return s
 }
 
-// parseModels 解析模型列表。
+// parseModels 宽松解析模型列表：不假定外层键，递归查找「像模型数组」的节点。
 //
-// 支持 DSH 文档提到的两种形态以及 Gemini：
-//   - `data` 数组（OpenAI / Anthropic 标准）
-//   - `models` 映射或数组（部分兼容网关的「富」格式）
-//   - Gemini 的 `models` 数组，条目 `name` 形如 `models/gemini-x`
+// 支持 `data` 数组（OpenAI / Anthropic）、`models` 数组或映射、Gemini 的
+// `models` 数组（条目名形如 models/gemini-x）。
 func parseModels(body []byte) ([]Model, error) {
 	trimmed := strings.TrimSpace(string(body))
 	if trimmed == "" {
@@ -301,12 +227,12 @@ func findModels(v any, depth int) []Model {
 			}
 		}
 	case map[string]any:
-		// 常见键优先；`models` 既可能是数组，也可能是 id→元数据的映射。
 		for _, k := range []string{"data", "models", "model_list", "modelList", "items", "list", "result", "results"} {
 			child, ok := t[k]
 			if !ok {
 				continue
 			}
+			// `models` 可能是 id→元数据的映射而不是数组。
 			if mm, isMap := child.(map[string]any); isMap && k == "models" {
 				if ms := findModelsFromMap(mm); len(ms) > 0 {
 					return ms
@@ -329,8 +255,8 @@ func findModels(v any, depth int) []Model {
 func decodeItems(items []any) []Model {
 	out := make([]Model, 0, len(items))
 	seen := make(map[string]bool, len(items))
-	add := func(id, display, owned string) {
-		id = strings.TrimSuffix(strings.TrimSpace(id), "/")
+	add := func(id, display, owned string, ctxLen int) {
+		id = strings.TrimSpace(id)
 		// Gemini 的条目名形如 models/gemini-1.5-pro，对外只留模型名。
 		if i := strings.LastIndex(id, "/"); i >= 0 {
 			id = id[i+1:]
@@ -339,13 +265,13 @@ func decodeItems(items []any) []Model {
 			return
 		}
 		seen[id] = true
-		out = append(out, Model{ID: id, Display: display, OwnedBy: owned})
+		out = append(out, Model{ID: id, Display: display, OwnedBy: owned, ContextLength: ctxLen})
 	}
 
 	for _, item := range items {
 		switch el := item.(type) {
 		case string:
-			add(el, "", "")
+			add(el, "", "", 0)
 		case map[string]any:
 			id := firstString(el, "id", "name", "model", "model_id", "modelId", "slug")
 			if id == "" {
@@ -358,10 +284,31 @@ func decodeItems(items []any) []Model {
 			}
 			add(id,
 				firstString(el, "display_name", "displayName", "title", "label", "description"),
-				firstString(el, "owned_by", "ownedBy", "provider", "owner"))
+				firstString(el, "owned_by", "ownedBy", "provider", "owner"),
+				contextLengthOf(el))
 		}
 	}
 	return out
+}
+
+// contextLengthOf 从常见的几个字段里取上下文窗口。
+func contextLengthOf(el map[string]any) int {
+	for _, k := range []string{"context_length", "context_window", "contextWindow", "max_input_tokens"} {
+		if n, ok := el[k].(float64); ok && n > 0 {
+			return int(n)
+		}
+		if obj, ok := el[k].(map[string]any); ok {
+			if n, ok := obj["default"].(float64); ok && n > 0 {
+				return int(n)
+			}
+		}
+	}
+	if lim, ok := el["limit"].(map[string]any); ok {
+		if n, ok := lim["context"].(float64); ok && n > 0 {
+			return int(n)
+		}
+	}
+	return 0
 }
 
 // findModelsFromMap 处理 `models` 是映射的情况（键为模型 id）。
@@ -372,7 +319,7 @@ func findModelsFromMap(m map[string]any) []Model {
 		if obj, ok := meta.(map[string]any); ok {
 			display = firstString(obj, "display_name", "displayName", "name")
 		}
-		if id != "" {
+		if strings.TrimSpace(id) != "" {
 			out = append(out, Model{ID: id, Display: display})
 		}
 	}
@@ -384,27 +331,6 @@ func firstString(m map[string]any, keys ...string) string {
 		if v, ok := m[k].(string); ok && strings.TrimSpace(v) != "" {
 			return strings.TrimSpace(v)
 		}
-	}
-	return ""
-}
-
-// BuiltinAliases 是 Claude Code 内置的模型别名，也是「伪装」的目标槽位。
-var BuiltinAliases = []string{"default", "opus", "sonnet", "haiku"}
-
-// ResolveAlias 返回某个别名当前会被解析到的网关模型（空表示未映射）。
-func (v Settings) ResolveAlias(alias string) string {
-	switch alias {
-	case "default":
-		if v.Model != "" {
-			return v.Model
-		}
-		return v.OpusModel
-	case "opus":
-		return v.OpusModel
-	case "sonnet":
-		return v.SonnetModel
-	case "haiku":
-		return v.HaikuModel
 	}
 	return ""
 }

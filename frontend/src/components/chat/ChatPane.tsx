@@ -14,9 +14,10 @@ export function ChatPane({ onToggleSidebar, onOpenSettings }: { onToggleSidebar:
   const inits = useAppStore((s) => s.inits);
   const states = useAppStore((s) => s.states);
   const conns = useAppStore((s) => s.conns);
+  const settings = useAppStore((s) => s.settings);
   const sendPrompt = useAppStore((s) => s.sendPrompt);
   const interrupt = useAppStore((s) => s.interrupt);
-  const setModel = useAppStore((s) => s.setModel);
+  const selectModel = useAppStore((s) => s.selectModel);
   const setPermissionMode = useAppStore((s) => s.setPermissionMode);
   const replyPermission = useAppStore((s) => s.replyPermission);
 
@@ -51,11 +52,12 @@ export function ChatPane({ onToggleSidebar, onOpenSettings }: { onToggleSidebar:
       <TopBar
         session={session}
         init={init}
+        settings={settings}
         conn={conn}
         busy={busy}
         onInterrupt={interrupt}
-        onModel={setModel}
         onPermissionMode={setPermissionMode}
+        onSelectModel={(provider, model) => void selectModel(provider, model)}
         onToggleSidebar={onToggleSidebar}
         onOpenSettings={onOpenSettings}
       />

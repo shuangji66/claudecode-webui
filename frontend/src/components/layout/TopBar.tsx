@@ -1,13 +1,14 @@
-import type { InitPayload, SessionInfo } from "../../transport/types";
+import type { InitPayload, PublicSettings, SessionInfo } from "../../transport/types";
 
 interface Props {
   session: SessionInfo | null;
   init: InitPayload | undefined;
+  settings: PublicSettings | null;
   conn: string;
   busy: boolean;
   onInterrupt: () => void;
-  onModel: (m: string) => void;
   onPermissionMode: (m: string) => void;
+  onSelectModel: (provider: string, model: string) => void;
   onToggleSidebar: () => void;
   onOpenSettings: () => void;
 }
@@ -17,16 +18,26 @@ const PERMISSION_MODES = ["default", "acceptEdits", "plan", "dontAsk", "bypassPe
 export function TopBar({
   session,
   init,
+  settings,
   conn,
   busy,
   onInterrupt,
-  onModel,
   onPermissionMode,
+  onSelectModel,
   onToggleSidebar,
   onOpenSettings,
 }: Props) {
-  const models = init?.models ?? [];
   const currentMode = init?.current_permission_mode ?? "default";
+
+  // 聊天页只列「已添加的第三方模型」——CLI 固定用默认模型，不再暴露内置模型列表。
+  const options = (settings?.providers ?? []).flatMap((p) =>
+    p.models.map((m) => ({ provider: p.id, model: m, label: `${m} · ${p.name || p.id}` })),
+  );
+  const selected = settings?.selected;
+  const selectedKey = selected ? `${selected.provider}/${selected.model}` : "";
+
+  // 会话创建时绑定的提供商与当前选择不一致 → 需要新建会话
+  const mismatch = Boolean(session?.provider) && Boolean(selected?.provider) && session!.provider !== selected!.provider;
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-900">
@@ -50,20 +61,25 @@ export function TopBar({
           />
           <span>{conn === "open" ? "已连接" : conn === "closed" ? "已断开" : "连接中"}</span>
           {init?.claude_code_version && <span>CLI {init.claude_code_version}</span>}
+          {session?.model && <span className="truncate">会话模型 {session.model}</span>}
         </div>
       </div>
 
       <label className="flex items-center gap-1 text-[11px] text-slate-500">
         模型
         <select
-          value=""
-          onChange={(e) => e.target.value && onModel(e.target.value)}
-          className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+          value={selectedKey}
+          onChange={(e) => {
+            const opt = options.find((o) => `${o.provider}/${o.model}` === e.target.value);
+            if (opt) onSelectModel(opt.provider, opt.model);
+          }}
+          className="max-w-[16rem] rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
         >
-          <option value="">默认</option>
-          {models.map((m) => (
-            <option key={m.value} value={m.value}>
-              {m.displayName ?? m.value}
+          {options.length === 0 && <option value="">未添加模型</option>}
+          {options.length > 0 && !selectedKey && <option value="">未选择</option>}
+          {options.map((o) => (
+            <option key={`${o.provider}/${o.model}`} value={`${o.provider}/${o.model}`}>
+              {o.label}
             </option>
           ))}
         </select>
@@ -101,6 +117,12 @@ export function TopBar({
       >
         ⚙
       </button>
+
+      {mismatch && (
+        <div className="w-full rounded-lg bg-amber-50 px-2 py-1 text-[11px] text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+          当前会话使用的是「{session?.provider}」，与所选模型的提供商不同。切提供商的模型需要新建会话。
+        </div>
+      )}
     </div>
   );
 }

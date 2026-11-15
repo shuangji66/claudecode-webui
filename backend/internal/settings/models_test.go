@@ -86,7 +86,7 @@ func TestFetchModelsLargeResponseNotTruncated(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "k"})
+	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, APIKey: "k"})
 	if len(res.Models) != 12 {
 		t.Fatalf("应解析出 12 个模型，实际 %d（detail=%s）", len(res.Models), res.Detail)
 	}
@@ -121,7 +121,7 @@ func TestListingURLPerProtocol(t *testing.T) {
 		{"https://gw.example/v1beta", ProtocolGemini, "https://gw.example/v1beta/models?pageSize=1000"},
 	}
 	for _, c := range cases {
-		if got := ListingURL(c.base, c.protocol); got != c.want {
+		if got := ListingURL(c.base, c.protocol, ""); got != c.want {
 			t.Fatalf("ListingURL(%q,%q) = %q, want %q", c.base, c.protocol, got, c.want)
 		}
 	}
@@ -142,7 +142,7 @@ func TestFetchModelsAnthropicUsesKeyHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "k1"})
+	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, APIKey: "k1"})
 	if len(res.Models) != 1 {
 		t.Fatalf("应拿到模型: %+v", res)
 	}
@@ -174,7 +174,7 @@ func TestFetchModelsOpenAIUsesBearer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "k2", APIProtocol: ProtocolOpenAI})
+	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, APIKey: "k2", Protocol: ProtocolOpenAI})
 	if len(res.Models) != 1 {
 		t.Fatalf("应拿到模型: %+v", res)
 	}
@@ -199,7 +199,7 @@ func TestFetchModelsGeminiUsesGoogHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "g1", APIProtocol: ProtocolGemini})
+	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, APIKey: "g1", Protocol: ProtocolGemini})
 	if len(res.Models) != 1 || res.Models[0].ID != "gemini-1.5-pro" {
 		t.Fatalf("应拿到 Gemini 模型: %+v", res)
 	}
@@ -210,7 +210,7 @@ func TestFetchModelsGeminiUsesGoogHeader(t *testing.T) {
 
 // 不支持的协议应直接提示手动录入，而不是发请求后报「没有模型」。
 func TestFetchModelsUnsupportedProtocol(t *testing.T) {
-	res := FetchModels(t.Context(), Settings{BaseURL: "https://gw.example", APIProtocol: "azure-openai"})
+	res := FetchModels(t.Context(), Provider{BaseURL: "https://gw.example", Protocol: "azure-openai"})
 	if res.Supported {
 		t.Fatal("Supported 应为 false")
 	}
@@ -235,7 +235,7 @@ func TestFetchModelsRetriesWithBearer(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "sk-relay"})
+	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, APIKey: "sk-relay"})
 	if len(res.Models) != 1 {
 		t.Fatalf("Bearer 重试应成功: %+v", res)
 	}
@@ -252,7 +252,7 @@ func TestFetchModelsHTMLGivesActionableError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL})
+	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL})
 	if len(res.Models) != 0 {
 		t.Fatalf("不应解析出模型: %+v", res)
 	}
@@ -271,7 +271,7 @@ func TestFetchModelsUnauthorized(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "wrong"})
+	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, APIKey: "wrong"})
 	if !strings.Contains(res.Detail, "鉴权失败") {
 		t.Fatalf("提示 = %q", res.Detail)
 	}
@@ -286,7 +286,7 @@ func TestFetchModelsManualPathOverride(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, ModelsPath: "/api/models"})
+	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, ModelsPath: "/api/models"})
 	if gotPath != "/api/models" {
 		t.Fatalf("应走手动指定的路径，实际 %q", gotPath)
 	}
@@ -296,25 +296,39 @@ func TestFetchModelsManualPathOverride(t *testing.T) {
 }
 
 func TestFetchModelsRejectsBadScheme(t *testing.T) {
-	res := FetchModels(t.Context(), Settings{BaseURL: "relay.local"})
+	res := FetchModels(t.Context(), Provider{BaseURL: "relay.local"})
 	if len(res.Models) != 0 || !strings.Contains(res.Detail, "http") {
 		t.Fatalf("应提示协议头: %+v", res)
 	}
 }
 
-func TestResolveAlias(t *testing.T) {
-	v := Settings{Model: "gw-default", OpusModel: "gw-opus", SonnetModel: "gw-sonnet"}
-	if got := v.ResolveAlias("default"); got != "gw-default" {
-		t.Fatalf("default = %q", got)
+// 别名槽位已废弃：选中的模型就是 CLI 的默认模型。
+func TestDefaultModelAndEnv(t *testing.T) {
+	v := Settings{
+		Providers: []Provider{
+			{ID: "gw", Name: "GW", Protocol: ProtocolAnthropic, BaseURL: "https://gw.example", APIKey: "sk-1", Models: []string{"cn:deepseek"}},
+		},
+		Selected: Selection{Provider: "gw", Model: "cn:deepseek"},
 	}
-	if got := v.ResolveAlias("opus"); got != "gw-opus" {
-		t.Fatalf("opus = %q", got)
+	env := strings.Join(v.Env(), ",")
+	for _, want := range []string{
+		"ANTHROPIC_BASE_URL=https://gw.example",
+		"ANTHROPIC_API_KEY=sk-1",
+		"ANTHROPIC_MODEL=cn:deepseek",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("Env 缺少 %q：%v", want, env)
+		}
 	}
-	if got := v.ResolveAlias("haiku"); got != "" {
-		t.Fatalf("未映射的 haiku 应为空: %q", got)
+	if got := v.DefaultModel(); got != "cn:deepseek" {
+		t.Fatalf("DefaultModel = %q", got)
 	}
-	if got := (Settings{OpusModel: "gw-opus"}).ResolveAlias("default"); got != "gw-opus" {
-		t.Fatalf("default 应跟随 opus: %q", got)
+}
+
+func TestEnvEmptyWhenNothingSelected(t *testing.T) {
+	env := Settings{}.Env()
+	if len(env) != 0 {
+		t.Fatalf("未选模型时不应注入任何变量: %v", env)
 	}
 }
 
@@ -332,15 +346,15 @@ func TestVerifyModel(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ok := VerifyModel(t.Context(), Settings{BaseURL: srv.URL, APIKey: "k"}, "gw-good")
+	ok := VerifyModel(t.Context(), Provider{BaseURL: srv.URL, APIKey: "k"}, "gw-good")
 	if !ok.OK {
 		t.Fatalf("应验证通过: %+v", ok)
 	}
-	bad := VerifyModel(t.Context(), Settings{BaseURL: srv.URL, APIKey: "wrong"}, "gw-good")
+	bad := VerifyModel(t.Context(), Provider{BaseURL: srv.URL, APIKey: "wrong"}, "gw-good")
 	if bad.OK || !strings.Contains(bad.Detail, "不可用") {
 		t.Fatalf("错误凭据应失败: %+v", bad)
 	}
-	empty := VerifyModel(t.Context(), Settings{BaseURL: srv.URL}, "")
+	empty := VerifyModel(t.Context(), Provider{BaseURL: srv.URL}, "")
 	if empty.OK || !strings.Contains(empty.Detail, "为空") {
 		t.Fatalf("空模型名应失败: %+v", empty)
 	}

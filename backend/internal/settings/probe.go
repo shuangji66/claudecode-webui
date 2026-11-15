@@ -11,11 +11,18 @@ import (
 	"time"
 )
 
-// ProbeTimeout 是连通性探测的整体上限。
+// ProbeTimeout 是连接测试的整体上限。
 const ProbeTimeout = 15 * time.Second
 
-// DefaultBaseURL 是未配置 BaseURL 时使用的官方地址。
+// DefaultBaseURL 是未配置地址时使用的官方地址。
 const DefaultBaseURL = "https://api.anthropic.com"
+
+// 响应读取上限。模型列表可能很大（单个模型带 description / modalities 就几百字节），
+// 用小上限会导致 JSON 被截断而误报「不是合法 JSON」——这是踩过的坑。
+const (
+	readLimitSmall  = 4 << 10
+	readLimitModels = 4 << 20
+)
 
 // ProbeResult 描述一次端点探测的结果。
 type ProbeResult struct {
@@ -27,84 +34,130 @@ type ProbeResult struct {
 	Detail    string `json:"detail"`
 }
 
-// Probe 检查「端点 + 凭据」是否可用。
-//
-// 优先 GET /v1/models（不消耗 token）；不支持该端点时退回一次
-// POST /v1/messages（max_tokens=1，成本可忽略）。401/403 视为鉴权失败直接返回，
-// 不再继续尝试，避免把错误凭据反复打到对端。
-func Probe(ctx context.Context, v Settings) ProbeResult {
-	base := strings.TrimRight(v.BaseURL, "/")
+// 协议是否支持自动获取模型列表。
+var listableProtocols = map[string]bool{
+	ProtocolAnthropic: true,
+	ProtocolOpenAI:    true,
+	ProtocolResponses: true,
+	ProtocolGemini:    true,
+}
+
+// ProtocolOrDefault 返回生效的协议。
+func (p Provider) ProtocolOrDefault() string {
+	if v := strings.TrimSpace(p.Protocol); v != "" {
+		return v
+	}
+	return DefaultAPIProtocol
+}
+
+// Root 返回去掉尾斜杠的地址。
+func (p Provider) Root() string {
+	base := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
 	if base == "" {
 		base = DefaultBaseURL
 	}
-	if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
-		return ProbeResult{OK: false, Endpoint: base, Detail: "地址必须以 http:// 或 https:// 开头"}
+	return base
+}
+
+// Probe 检查「地址 + 协议 + 凭据」是否可用。
+//
+// 先问模型列表（不计费）；不支持或失败时，用第一个已添加模型发一次
+// max_tokens=1 的请求。401/403 视为鉴权失败直接返回。
+func Probe(ctx context.Context, p Provider) ProbeResult {
+	res := ProbeResult{Endpoint: p.Root()}
+	if !strings.HasPrefix(res.Endpoint, "http://") && !strings.HasPrefix(res.Endpoint, "https://") {
+		res.Detail = "地址必须以 http:// 或 https:// 开头"
+		return res
 	}
 
 	start := time.Now()
 	client := &http.Client{Timeout: ProbeTimeout}
+	protocol := p.ProtocolOrDefault()
 
-	// 一、/v1/models
-	status, body, err := doJSON(ctx, client, http.MethodGet, base+"/v1/models?limit=1", v, nil)
-	if err == nil && status >= 200 && status < 300 {
-		return ProbeResult{
-			OK: true, Endpoint: base, Method: "GET /v1/models", Status: status,
-			LatencyMs: time.Since(start).Milliseconds(),
-			Detail:    fmt.Sprintf("端点可用，返回 %d 字节", len(body)),
+	if listableProtocols[protocol] {
+		url := ListingURL(p.Root(), protocol, p.ModelsPath)
+		status, body, _, err := doAuth(ctx, client, http.MethodGet, url, p, nil, authKind(protocol))
+		res.Method = "GET " + url
+		res.Status = status
+		res.LatencyMs = time.Since(start).Milliseconds()
+		switch {
+		case err != nil:
+			res.Detail = "请求失败：" + err.Error()
+			return res
+		case status >= 200 && status < 300:
+			if models, perr := parseModels(body); perr == nil && len(models) > 0 {
+				res.OK = true
+				res.Detail = fmt.Sprintf("端点可用，返回 %d 个模型", len(models))
+				return res
+			}
+		case status == http.StatusUnauthorized || status == http.StatusForbidden:
+			res.Detail = "鉴权失败：" + snippet(body)
+			return res
 		}
 	}
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		return ProbeResult{
-			OK: false, Endpoint: base, Method: "GET /v1/models", Status: status,
-			LatencyMs: time.Since(start).Milliseconds(),
-			Detail:    "鉴权失败：" + snippet(body),
-		}
-	}
 
-	// 二、退回一次最小请求
-	model := v.Model
-	if model == "" {
-		model = v.SonnetModel
+	// 退回一次最小对话请求
+	model := ""
+	if len(p.Models) > 0 {
+		model = p.Models[0]
 	}
 	if model == "" {
 		model = "claude-sonnet-4-5"
 	}
-	payload := map[string]any{
+	payload, _ := json.Marshal(map[string]any{
 		"model":      model,
 		"max_tokens": 1,
 		"messages":   []map[string]any{{"role": "user", "content": "ping"}},
-	}
-	raw, _ := json.Marshal(payload)
-	status2, body2, err2 := doJSON(ctx, client, http.MethodPost, base+"/v1/messages", v, raw)
-	res := ProbeResult{
-		Endpoint: base, Method: "POST /v1/messages", Status: status2,
-		LatencyMs: time.Since(start).Milliseconds(),
-	}
+	})
+	status, body, _, err := doAuth(ctx, client, http.MethodPost, p.Root()+"/v1/messages", p, payload, authKind(protocol))
+	res.Method = "POST /v1/messages"
+	res.Status = status
+	res.LatencyMs = time.Since(start).Milliseconds()
 	switch {
-	case err2 != nil:
-		res.Detail = "请求失败：" + err2.Error()
-		return res
-	case status2 >= 200 && status2 < 300:
+	case err != nil:
+		res.Detail = "请求失败：" + err.Error()
+	case status >= 200 && status < 300:
 		res.OK = true
-		res.Detail = fmt.Sprintf("端点与凭据均可用于 %s", model)
-		return res
+		res.Detail = fmt.Sprintf("端点与凭据可用（模型 %s）", model)
 	default:
-		res.Detail = fmt.Sprintf("模型 %s 调用失败：%s", model, snippet(body2))
+		res.Detail = fmt.Sprintf("模型 %s 调用失败：%s", model, snippet(body))
+	}
+	return res
+}
+
+// VerifyModel 用指定模型名发一次最小请求，确认「地址 + 凭据 + 模型名」可用。
+func VerifyModel(ctx context.Context, p Provider, model string) ProbeResult {
+	res := ProbeResult{Endpoint: p.Root(), Method: "POST /v1/messages"}
+	if !strings.HasPrefix(res.Endpoint, "http://") && !strings.HasPrefix(res.Endpoint, "https://") {
+		res.Detail = "地址必须以 http:// 或 https:// 开头"
 		return res
 	}
-}
+	if strings.TrimSpace(model) == "" {
+		res.Detail = "模型名为空"
+		return res
+	}
 
-// doJSON 发一个请求并读取有限长度的响应体。
-func doJSON(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte) (int, []byte, error) {
-	return doJSONAuth(ctx, c, method, url, v, body, false)
+	payload, _ := json.Marshal(map[string]any{
+		"model":      model,
+		"max_tokens": 1,
+		"messages":   []map[string]any{{"role": "user", "content": "ping"}},
+	})
+	start := time.Now()
+	client := &http.Client{Timeout: ProbeTimeout}
+	status, body, _, err := doAuth(ctx, client, http.MethodPost, p.Root()+"/v1/messages", p, payload, authKind(p.ProtocolOrDefault()))
+	res.Status = status
+	res.LatencyMs = time.Since(start).Milliseconds()
+	switch {
+	case err != nil:
+		res.Detail = "请求失败：" + err.Error()
+	case status >= 200 && status < 300:
+		res.OK = true
+		res.Detail = "模型 " + model + " 可用"
+	default:
+		res.Detail = fmt.Sprintf("模型 %s 不可用：%s", model, snippet(body))
+	}
+	return res
 }
-
-// 响应读取上限。模型列表可能很大（单个模型带 description / modalities 就几百字节），
-// 用小上限会导致 JSON 被截断而误报「不是合法 JSON」——这是踩过的坑。
-const (
-	readLimitSmall  = 4 << 10 // 错误体、探测：够用且省内存
-	readLimitModels = 4 << 20 // 模型列表：与 DSH 的 MAX_RESPONSE_BYTES 一致
-)
 
 // newRequest 构造一个带通用头的请求。
 func newRequest(ctx context.Context, method, url string, body []byte) (*http.Request, error) {
@@ -124,7 +177,7 @@ func newRequest(ctx context.Context, method, url string, body []byte) (*http.Req
 }
 
 // sendRequest 发出请求并读取响应体。
-// limit 是硬上限；返回 truncated 表示响应确实被截断（调用方据此给出准确提示，
+// limit 是硬上限；truncated 表示响应确实被截断（调用方据此给出准确提示，
 // 而不是把「截断导致的解析失败」说成「不是合法 JSON」）。
 func sendRequest(c *http.Client, req *http.Request, limit int64) (int, []byte, bool, error) {
 	resp, err := c.Do(req)
@@ -135,7 +188,6 @@ func sendRequest(c *http.Client, req *http.Request, limit int64) (int, []byte, b
 	if limit <= 0 {
 		limit = readLimitSmall
 	}
-	// 多读 1 字节用于判断是否还有剩余内容。
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if int64(len(b)) > limit {
 		return resp.StatusCode, b[:limit], true, nil
@@ -143,51 +195,61 @@ func sendRequest(c *http.Client, req *http.Request, limit int64) (int, []byte, b
 	return resp.StatusCode, b, false, nil
 }
 
-// doJSONHeader 用调用方给定的鉴权头发请求（如 Gemini 的 x-goog-api-key）。
-func doJSONHeader(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, extra map[string]string) (int, []byte, error) {
-	st, b, _, err := doJSONHeaderLimit(ctx, c, method, url, v, body, extra, readLimitSmall)
-	return st, b, err
-}
-
-func doJSONHeaderLimit(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, extra map[string]string, limit int64) (int, []byte, bool, error) {
+// doAuth 按指定鉴权方式发请求（同时用于列表与对话测试）。
+func doAuth(ctx context.Context, c *http.Client, method, url string, p Provider, body []byte, kind string) (int, []byte, bool, error) {
 	req, err := newRequest(ctx, method, url, body)
 	if err != nil {
 		return 0, nil, false, err
 	}
-	for k, val := range extra {
-		if val != "" {
-			req.Header.Set(k, val)
+	switch kind {
+	case "bearer":
+		key := firstNonEmpty(p.AuthToken, p.APIKey)
+		if key != "" {
+			req.Header.Set("authorization", "Bearer "+key)
+		}
+	case "google":
+		key := firstNonEmpty(p.APIKey, p.AuthToken)
+		if key != "" {
+			req.Header.Set("x-goog-api-key", key)
+		}
+	case "anthropic":
+		if p.APIKey != "" {
+			req.Header.Set("x-api-key", p.APIKey)
+		}
+		if p.AuthToken != "" {
+			req.Header.Set("authorization", "Bearer "+p.AuthToken)
+		}
+	default:
+		if p.APIKey != "" {
+			req.Header.Set("x-api-key", p.APIKey)
 		}
 	}
-	return sendRequest(c, req, limit)
+	return sendRequest(c, req, readLimitModels)
 }
 
-// doJSONAuth 按 Claude Code 的两种鉴权方式发请求。
-// forceBearer=true 时把 APIKey 当作 Bearer 令牌发送（不发送 x-api-key）——
-// 不少中转的模型列表只认 Authorization: Bearer，不认 x-api-key。
-func doJSONAuth(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, forceBearer bool) (int, []byte, error) {
-	st, b, _, err := doJSONAuthLimit(ctx, c, method, url, v, body, forceBearer, readLimitSmall)
+// doAuthSmall 用于错误体等小响应。
+func doAuthSmall(ctx context.Context, c *http.Client, method, url string, p Provider, body []byte, kind string) (int, []byte, error) {
+	req, err := newRequest(ctx, method, url, body)
+	if err != nil {
+		return 0, nil, err
+	}
+	if p.APIKey != "" {
+		req.Header.Set("x-api-key", p.APIKey)
+	}
+	if p.AuthToken != "" {
+		req.Header.Set("authorization", "Bearer "+p.AuthToken)
+	}
+	st, b, _, err := sendRequest(c, req, readLimitSmall)
 	return st, b, err
 }
 
-func doJSONAuthLimit(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, forceBearer bool, limit int64) (int, []byte, bool, error) {
-	req, err := newRequest(ctx, method, url, body)
-	if err != nil {
-		return 0, nil, false, err
-	}
-	if forceBearer {
-		if v.APIKey != "" {
-			req.Header.Set("authorization", "Bearer "+v.APIKey)
-		}
-	} else {
-		if v.APIKey != "" {
-			req.Header.Set("x-api-key", v.APIKey)
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
 		}
 	}
-	if v.AuthToken != "" && !forceBearer {
-		req.Header.Set("authorization", "Bearer "+v.AuthToken)
-	}
-	return sendRequest(c, req, limit)
+	return ""
 }
 
 func snippet(b []byte) string {
@@ -202,45 +264,14 @@ func snippet(b []byte) string {
 	return s
 }
 
-// VerifyModel 用指定模型名发一次最小请求，验证「网关 + 凭据 + 模型名」三者是否可用。
-//
-// 有些网关压根没有 /v1/models（直接 404），这时用户只能手输模型名，
-// 这个接口就是给他确认输入是否正确用的。
-func VerifyModel(ctx context.Context, v Settings, model string) ProbeResult {
-	base := strings.TrimRight(v.BaseURL, "/")
-	if base == "" {
-		base = DefaultBaseURL
-	}
-	res := ProbeResult{Endpoint: base, Method: "POST /v1/messages"}
-	if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
-		res.Detail = "地址必须以 http:// 或 https:// 开头"
-		return res
-	}
-	if strings.TrimSpace(model) == "" {
-		res.Detail = "模型名为空"
-		return res
-	}
-
-	payload := map[string]any{
-		"model":      model,
-		"max_tokens": 1,
-		"messages":   []map[string]any{{"role": "user", "content": "ping"}},
-	}
-	raw, _ := json.Marshal(payload)
-
-	start := time.Now()
-	client := &http.Client{Timeout: ProbeTimeout}
-	status, body, err := doJSON(ctx, client, http.MethodPost, base+"/v1/messages", v, raw)
-	res.Status = status
-	res.LatencyMs = time.Since(start).Milliseconds()
-	switch {
-	case err != nil:
-		res.Detail = "请求失败：" + err.Error()
-	case status >= 200 && status < 300:
-		res.OK = true
-		res.Detail = "模型 " + model + " 可用"
+// authKind 决定用哪种鉴权头。
+func authKind(protocol string) string {
+	switch protocol {
+	case ProtocolGemini:
+		return "google"
+	case ProtocolAnthropic:
+		return "anthropic"
 	default:
-		res.Detail = fmt.Sprintf("模型 %s 不可用：%s", model, snippet(body))
+		return "bearer"
 	}
-	return res
 }

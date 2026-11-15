@@ -70,20 +70,30 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - `Spawn()` 必须持续排空 stderr（否则管道写满会卡住子进程），只保留尾部用于报错。
 - `Close()` 幂等：关 stdin → Kill → Wait。
 
-## 5.1 设置与密钥（`internal/settings`）
+## 5.1 第三方模型与密钥（`internal/settings`）
+
+数据模型（对齐 DSH 模型页）：
+
+- `Provider`：id / name / 协议 / baseURL / 密钥 / models[]（该提供商下已添加的模型）
+- `Selection{Provider, Model}`：全局唯一的「当前选中模型」，就是 CLI 的默认模型
+- **没有别名槽位**：`default/opus/sonnet/haiku` 那套映射已废弃，不要再加回来
+
+不变量：
 
 - **所有持久化文件落在 `CCWEB_DATA_DIR` 下**，路径由 `config.SettingsFile` 决定。
 - 写盘必须 `tmp + rename` 原子替换，权限 **0600**（文件里有密钥）。
 - `Public()` 是唯一对外视图：密钥只给 `*_set` 与脱敏串，**任何响应都不得回传明文**。
-- `Patch` 用指针区分「不改」与「清空」；**密钥空串 = 不改**（前端密码框回填的是占位），
-  清除必须 `clear_api_key` / `clear_auth_token`。
-- 注入子进程的环境变量追加在 `CleanEnv` 之后，保证覆盖宿主同名变量。
-- 改完设置只影响**新建**会话；运行中的进程环境不可变。
-- **读响应体必须有明确上限，且上限要按用途区分**：错误体用 4KB 足够，
-  但模型列表可能几十 KB（真实中转的条目带 description / modalities / context_window），
-  用 4KB 读会把合法 JSON 截断，然后误报「不是合法 JSON」。
-  `readLimitSmall` / `readLimitModels` 就是为此分开的；被截断时要明确说「被截断」，
-  不要让它伪装成解析失败。
+- 提供商数组是**整体替换**语义；单个提供商的密钥空串 = 不改（前端密码框回填的是占位），
+  清除必须 `clear_key`。ID 为空或重复要报错。
+- 删除提供商后若 `Selection` 悬空，必须清空 Selection。
+- `Env()` 只注入选中提供商的值：`ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY`（或无 key 时
+  `ANTHROPIC_AUTH_TOKEN`）/ `ANTHROPIC_MODEL`，并把三个别名变量也指向同一模型，
+  使 CLI「固定使用默认模型」。
+- **读响应体上限要按用途区分**：错误体 4KB 够用，模型列表要 4MB（真实中转条目带
+  description / modalities，一份列表常超 4KB）。被截断时要明说「被截断」，
+  不要伪装成解析失败。
+- 旧配置（顶层 base_url/api_key + 四个别名）在 `Open()` 时自动迁移成一个 provider，
+  迁移后清空旧字段。
 
 ## 6. 网关规则（`internal/gateway`）
 

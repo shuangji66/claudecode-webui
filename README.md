@@ -63,28 +63,20 @@ location /app/ccweb/ {
 
 ## 第三方模型 / 中继接入
 
-设置页（右上角 ⚙）里可以直接填 **API 地址 + 密钥**，无需环境变量。保存后写进
-`$CCWEB_DATA_DIR/settings.json`（0600），并以 `ANTHROPIC_*` 环境变量注入**新建**的 claude 进程：
+设置页（右上角 ⚙）里按**协议**添加「提供商」，每家填自己的 API 地址与密钥，
+然后从它那里获取模型列表、勾选要添加的模型。
 
-| 设置项 | 注入的环境变量 |
+### 添加提供商
+
+| 字段 | 说明 |
 |---|---|
-| API 地址 | `ANTHROPIC_BASE_URL` |
-| API 密钥 | `ANTHROPIC_API_KEY`（`x-api-key` 头） |
-| Bearer 令牌 | `ANTHROPIC_AUTH_TOKEN`（`Authorization: Bearer`） |
-| 默认模型 | `ANTHROPIC_MODEL` |
-| Opus / Sonnet / Haiku 别名 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` |
-| 默认权限模式 | `--permission-mode` 启动参数 |
+| 协议 | 决定「获取可用模型」用哪种列表地址与鉴权（见下表） |
+| API 地址 | 该提供商的基础地址，列表与对话都用它 |
+| API 密钥 | 对话时注入 `ANTHROPIC_API_KEY`（`x-api-key`）；留空表示不修改，清除要点「清除」再保存 |
+| 模型列表路径 | 可留空；知道确切路径（如 `/api/models`）就填，省去按协议推导 |
+| 模型 | 勾选添加后出现，可单独移除或点 ✓ 验证 |
 
-要点：
-
-- 设置优先于宿主环境变量（追加在后面，后者生效），因此可以在同一台机器上给本应用单独配置中转。
-- **只对新建会话生效**；已在跑的进程环境变量改不了，需要关掉重开。
-- 密钥经接口返回时一律脱敏；输入框留空表示「不修改」，清除要点「清除」再保存。
-- 「测试连接」先 `GET /v1/models`（不计费），不支持时退回一次 `POST /v1/messages`（max_tokens=1）。
-
-### 获取可用模型（按协议探测）
-
-设置页的「获取可用模型」按**协议**决定列表地址与鉴权头，规则与 DSH 的 discovery 一致：
+协议 → 列表地址与鉴权（规则与 DSH 的 discovery 一致）：
 
 | 协议 | 列表地址 | 鉴权 |
 |---|---|---|
@@ -92,52 +84,23 @@ location /app/ccweb/ {
 | `openai-completions` / `openai-responses` | `{base}/models` | `Authorization: Bearer` |
 | `google-generative-ai` | `{base}/models?pageSize=1000` | `x-goog-api-key` |
 
-工具名以 `models/` 开头的条目（Gemini）会自动剥掉前缀。其余协议直接提示手动录入，
-以免把鉴权失败误报成「没有模型」。
+**对话始终走 Anthropic Messages**——claude CLI 只支持这一种协议；协议在这里只决定
+「从哪个地址、用哪种鉴权去问模型列表」。401 时会自动用同一把密钥换 `Bearer` 再试一次。
 
-结果进一个**可搜索多选框**：勾选后点「更新列表」写入补全候选（`known_models`），
-端点没列出但已配置的模型保持不变。
+获取不到列表是正常情况：端点什么格式由它自己决定，手动输入模型名效果完全相同。
 
-**探测失败是正常情况。** 这与 DSH 的立场一致：端点用什么格式作答由它自己决定，
-拿不到列表时手动填写模型名效果完全相同——映射与对话都不依赖这个接口。
+### 在聊天页选择模型
 
-### 把网关模型挂到内置别名（重要）
+已添加的模型汇总到聊天页顶部的**模型选择器**。选中的那个就是 claude CLI 的
+**默认模型**——后端把它写进 `ANTHROPIC_MODEL`（同时把 opus/sonnet/haiku 三个别名
+也指向它），CLI 因此固定使用它，不再暴露内置模型列表。
 
-Claude Code 只会**按内置别名**发请求（`default` / `opus` / `sonnet` / `haiku`），
-默认解析成 `claude-opus-5-5` 这类官方模型名。绝大多数中转网关没有这些模型，会直接 404：
+- **同一提供商内**切换：直接对当前会话发 `set_model`，立即生效，无需重开；
+- **跨提供商**切换：地址与密钥在进程启动时就固定了，需要**新建会话**才会生效
+  （界面会提示）。
 
-```
-There's an issue with the selected model (claude-opus-5-5).
-```
-
-处理方式：在设置页点「获取模型列表」（依次尝试 `/v1/models`、`/models`），
-再把网关里的模型填进对应的别名槽位。保存后新建会话即可，CLI 的请求会被重定向到网关模型。
-
-底层用的就是官方支持的变量：
-
-| 别名 | 环境变量 |
-|---|---|
-| 默认 | `ANTHROPIC_MODEL` |
-| opus | `ANTHROPIC_DEFAULT_OPUS_MODEL` |
-| sonnet | `ANTHROPIC_DEFAULT_SONNET_MODEL` |
-| haiku | `ANTHROPIC_DEFAULT_HAIKU_MODEL` |
-
-`default` 未单独设置时跟随 `opus` 槽位（与 CLI 行为一致）。
-
-**拉不到列表怎么办。** 各家中转对该端点的实现差别很大，程序已尽量兼容：
-
-- 外层结构不限定（`data[]` / `models[]` / `data.models[]` / 任意嵌套 / 纯字符串数组）；
-- 元素字段认 `id` / `name` / `model` / `model_id`；
-- 401 时会用同一个密钥换成 `Authorization: Bearer` 再试一次（很多中转只认这种）；
-- **模型列表路径可配置**：不同中转把模型接口放在不同位置（`/api/models`、`/v1/model/list`…），
-  留空会自动探测一批候选路径，知道确切路径就在「模型列表路径」里填上；
-- 失败时界面会逐个列出**每个候选路径的响应**，并回显**网关返回的原文片段**。
-  如果是 HTML，说明该网关根本没实现 `/v1/models`（被前端路由兜底了），
-  直接在下面的输入框手动填写模型名即可——映射与对话都不依赖这个接口。
-
-自定义模型名不在 CLI 内置表里时，它会**按 1M token 估算上下文**并给出警告。
-设置页「高级」里可以填 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（如 `200k`），
-或勾选关闭未知模型窗口推断（`CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1`）。
+> 早期版本用「default/opus/sonnet/haiku 四个别名槽位」手动映射，那套已废弃：
+> 现在只有「已添加模型 + 当前选中」，不再需要手填别名。
 
 ## 数据目录
 

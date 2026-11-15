@@ -1,9 +1,10 @@
-// 全局状态：会话列表、消息流、权限队列、连接状态。
+// 全局状态：会话列表、消息流、权限队列、连接状态、第三方模型配置。
 //
 // 设计取舍：
 //   - 每个会话的消息列表独立存在 items[sid] 里，切换会话不重新拉取；
 //   - WebSocket 实例放在模块级 Map 里（不进 state，避免被当成可序列化数据）；
-//   - 所有协议归一化逻辑放 lib/normalize.ts，这里只做状态搬运。
+//   - 所有协议归一化逻辑放 lib/normalize.ts，这里只做状态搬运；
+//   - 「当前选中模型」是全局唯一值，它就是 claude CLI 的默认模型。
 
 import { create } from "zustand";
 import { apiFetch } from "../lib/runtime";
@@ -17,9 +18,10 @@ import type {
   PermissionPayload,
   ProbeResult,
   PublicSettings,
+  Selection,
   WireEvent,
 } from "../transport/types";
-import type { SettingsPatch } from "../lib/settingsForm";
+import type { ProviderForm } from "../lib/providerForm";
 
 export interface InfoResponse {
   version: string;
@@ -41,6 +43,9 @@ export interface SessionInfo {
   id: string;
   cwd: string;
   state: string;
+  /** 创建该会话时选中的提供商；跨提供商切换模型需要新建会话。 */
+  provider?: string;
+  model?: string;
   created_at?: string;
   last_active?: string;
 }
@@ -62,17 +67,20 @@ export interface HistorySession {
 
 type ConnState = "idle" | "open" | "closed";
 
+/** 设置补丁（与后端 settings.Patch 对应）。 */
+export interface SettingsPatch {
+  providers?: unknown;
+  selected?: Selection;
+  permission_mode?: string;
+  auto_compact_window?: string;
+  disable_unknown_model_window?: boolean;
+}
+
 interface AppState {
   info: InfoResponse | null;
   settings: PublicSettings | null;
   settingsSaving: boolean;
-  probe: ProbeResult | null;
-  gatewayModels: GatewayModel[];
-  modelsError: string | null;
-  modelsRaw: string;
-  modelsTried: string[];
-  modelsAttempts: { path: string; status: number; note: string }[];
-  verify: { model: string; result: ProbeResult } | null;
+
   projects: ProjectEntry[];
   history: HistorySession[];
   sessions: SessionInfo[];
@@ -84,23 +92,29 @@ interface AppState {
   states: Record<string, string>;
   conns: Record<string, ConnState>;
 
+  // 「获取可用模型」的临时结果（按提供商分别保存会太啰嗦，这里只留最近一次）
+  modelsFor: string;
+  gatewayModels: GatewayModel[];
+  modelsError: string | null;
+  modelsRaw: string;
+  modelsAttempts: { path: string; status: number; note: string }[];
+  verify: { key: string; result: ProbeResult } | null;
+  probe: { key: string; result: ProbeResult } | null;
+
   loading: boolean;
   error: string | null;
 
   bootstrap: () => Promise<void>;
   loadSettings: () => Promise<void>;
   saveSettings: (patch: SettingsPatch) => Promise<boolean>;
-  testConnection: () => Promise<void>;
-  fetchGatewayModels: (
-    baseUrl: string,
-    apiKey: string,
-    modelsPath?: string,
-    apiProtocol?: string,
-  ) => Promise<void>;
-  verifyModel: (model: string) => Promise<void>;
+  selectModel: (provider: string, model: string) => Promise<void>;
+  fetchModelsFor: (form: ProviderForm) => Promise<void>;
+  verifyModelFor: (form: ProviderForm, model: string) => Promise<void>;
+  probeProvider: (form: ProviderForm) => Promise<void>;
+
   refreshSessions: () => Promise<void>;
   refreshHistory: () => Promise<void>;
-  createSession: (cwd: string, model?: string) => Promise<void>;
+  createSession: (cwd: string) => Promise<void>;
   closeSession: (id: string) => Promise<void>;
   setActive: (id: string | null) => void;
   connect: (id: string) => void;
@@ -108,7 +122,6 @@ interface AppState {
 
   sendPrompt: (text: string) => void;
   interrupt: () => void;
-  setModel: (model: string) => void;
   setPermissionMode: (mode: string) => void;
   replyPermission: (
     req: PermissionPayload,
@@ -132,17 +145,22 @@ function token(): string {
   }
 }
 
+/** 把草稿提供商转成 /api/settings/models 需要的入参。 */
+function providerRef(form: ProviderForm) {
+  return {
+    provider_id: form.isNew ? "" : form.id,
+    protocol: form.protocol,
+    base_url: form.baseUrl,
+    api_key: form.apiKey,
+    auth_token: form.authToken,
+    models_path: form.modelsPath,
+  };
+}
+
 export const useAppStore = create<AppState>()((set, get) => ({
   info: null,
   settings: null,
   settingsSaving: false,
-  probe: null,
-  gatewayModels: [],
-  modelsError: null,
-  modelsRaw: "",
-  modelsTried: [],
-  modelsAttempts: [],
-  verify: null,
   projects: [],
   history: [],
   sessions: [],
@@ -152,6 +170,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
   inits: {},
   states: {},
   conns: {},
+  modelsFor: "",
+  gatewayModels: [],
+  modelsError: null,
+  modelsRaw: "",
+  modelsAttempts: [],
+  verify: null,
+  probe: null,
   loading: false,
   error: null,
 
@@ -175,7 +200,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
         history: history.history,
         loading: false,
       });
-      // 有运行中的会话就自动接上第一个，省一次点击。
       const first = sessions.sessions[0];
       if (first && !get().activeId) {
         get().setActive(first.id);
@@ -210,69 +234,74 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
   },
 
-  testConnection: async () => {
-    set({ probe: null, error: null });
-    try {
-      const r = await apiFetch<ProbeResult>("/api/settings/test", { method: "POST" });
-      set({ probe: r });
-    } catch (e) {
-      set({ error: e instanceof Error ? e.message : String(e) });
+  // 选中模型 = 动态指定 CLI 的默认模型。
+  // 同一提供商下可以热切换（发 set_model）；跨提供商必须新建会话，
+  // 因为地址与密钥在进程启动时就固定了。
+  selectModel: async (provider, model) => {
+    const ok = await get().saveSettings({ selected: { provider, model } });
+    if (!ok) return;
+    const id = get().activeId;
+    if (!id) return;
+    const sess = get().sessions.find((s) => s.id === id);
+    if (sess?.provider && sess.provider !== provider) {
+      set({ error: "已切换提供商：该会话仍连在旧提供商上，请新建会话后生效" });
+      return;
     }
+    clients.get(id)?.send({ kind: "model", model });
+    await get().refreshSessions();
   },
 
-  fetchGatewayModels: async (baseUrl, apiKey, modelsPath = "", apiProtocol = "") => {
-    set({ modelsError: null, error: null, modelsAttempts: [] });
+  fetchModelsFor: async (form) => {
+    set({ modelsFor: form.id, modelsError: null, modelsRaw: "", modelsAttempts: [], error: null });
     try {
       const r = await apiFetch<ModelsResult>("/api/settings/models", {
         method: "POST",
-        body: JSON.stringify({
-          base_url: baseUrl,
-          api_key: apiKey,
-          models_path: modelsPath,
-          api_protocol: apiProtocol,
-        }),
+        body: JSON.stringify(providerRef(form)),
       });
       if (r.models && r.models.length > 0) {
-        set({
-          gatewayModels: r.models,
-          modelsRaw: "",
-          modelsTried: r.tried ?? [],
-          modelsAttempts: r.attempts ?? [],
-        });
+        set({ gatewayModels: r.models, modelsAttempts: r.attempts ?? [] });
       } else {
         set({
           gatewayModels: [],
           modelsError: r.detail || "未获取到模型",
           modelsRaw: r.raw ?? "",
-          modelsTried: r.tried ?? [],
           modelsAttempts: r.attempts ?? [],
         });
       }
     } catch (e) {
+      set({ gatewayModels: [], modelsError: e instanceof Error ? e.message : String(e), modelsRaw: "" });
+    }
+  },
+
+  verifyModelFor: async (form, model) => {
+    if (!model.trim()) return;
+    const key = `${form.id}/${model}`;
+    set({ verify: { key, result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: "验证中…" } } });
+    try {
+      const r = await apiFetch<ProbeResult>("/api/settings/verify", {
+        method: "POST",
+        body: JSON.stringify({ ...providerRef(form), model }),
+      });
+      set({ verify: { key, result: r } });
+    } catch (e) {
       set({
-        gatewayModels: [],
-        modelsError: e instanceof Error ? e.message : String(e),
-        modelsRaw: "",
-        modelsAttempts: [],
+        verify: { key, result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: e instanceof Error ? e.message : String(e) } },
       });
     }
   },
 
-  verifyModel: async (model) => {
-    if (!model.trim()) return;
-    set({ verify: { model, result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: "验证中…" } } });
+  probeProvider: async (form) => {
+    const key = form.id;
+    set({ probe: { key, result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: "探测中…" } } });
     try {
-      const r = await apiFetch<ProbeResult>("/api/settings/verify", {
+      const r = await apiFetch<ProbeResult>("/api/settings/test", {
         method: "POST",
-        body: JSON.stringify({ model }),
+        body: JSON.stringify(providerRef(form)),
       });
-      set({ verify: { model, result: r } });
+      set({ probe: { key, result: r } });
     } catch (e) {
       set({
-        verify: {
-          model,
-          result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: e instanceof Error ? e.message : String(e) },
-        },
+        probe: { key, result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: e instanceof Error ? e.message : String(e) } },
       });
     }
   },
@@ -295,12 +324,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
   },
 
-  createSession: async (cwd, model) => {
+  createSession: async (cwd) => {
     set({ error: null });
     try {
       const info = await apiFetch<SessionInfo>("/api/session", {
         method: "POST",
-        body: JSON.stringify({ cwd, model }),
+        body: JSON.stringify({ cwd }),
       });
       await get().refreshSessions();
       get().setActive(info.id);
@@ -371,12 +400,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const id = get().activeId;
     if (!id) return;
     clients.get(id)?.send({ kind: "interrupt" });
-  },
-
-  setModel: (model) => {
-    const id = get().activeId;
-    if (!id) return;
-    clients.get(id)?.send({ kind: "model", model });
   },
 
   setPermissionMode: (mode) => {
