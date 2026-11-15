@@ -41,9 +41,10 @@ func (s *Server) handleTestSettings(w http.ResponseWriter, r *http.Request) {
 // fetchModelsReq 允许用「尚未保存」的地址/密钥先拉一次列表。
 // 密钥留空则沿用已保存的值（与保存语义一致）。
 type fetchModelsReq struct {
-	BaseURL    string `json:"base_url"`
-	APIKey     string `json:"api_key"`
-	ModelsPath string `json:"models_path"`
+	BaseURL     string `json:"base_url"`
+	APIKey      string `json:"api_key"`
+	ModelsPath  string `json:"models_path"`
+	APIProtocol string `json:"api_protocol"`
 }
 
 // handleFetchModels 从网关拉取可用模型列表，供设置页把网关模型挂到内置别名上。
@@ -67,6 +68,9 @@ func (s *Server) handleFetchModels(w http.ResponseWriter, r *http.Request) {
 	// 想回到自动探测，用户清空后先保存一次，再点获取。
 	if req.ModelsPath != "" {
 		v.ModelsPath = req.ModelsPath
+	}
+	if req.APIProtocol != "" {
+		v.APIProtocol = req.APIProtocol
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), settings.ProbeTimeout)

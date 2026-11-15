@@ -5,11 +5,22 @@ import {
   EMPTY_FORM,
   buildPatch,
   formFromPublic,
+  mergeModels,
   secretPlaceholder,
+  splitModels,
   type SettingsFormState,
 } from "../../lib/settingsForm";
+import type { GatewayModel } from "../../transport/types";
 
 const PERMISSION_MODES = ["", "default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
+
+/** 支持的协议；与后端 settings 包常量一致。 */
+const PROTOCOLS = [
+  { value: "anthropic-messages", label: "Anthropic Messages" },
+  { value: "openai-completions", label: "OpenAI Chat Completions" },
+  { value: "openai-responses", label: "OpenAI Responses" },
+  { value: "google-generative-ai", label: "Gemini API" },
+];
 
 /** 内置别名 → 表单字段的映射。CLI 只会请求这些别名，所以要在这里重定向到网关模型。 */
 const ALIAS_FIELDS: { alias: string; label: string; key: keyof SettingsFormState; env: string }[] = [
@@ -27,7 +38,6 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
   const models = useAppStore((s) => s.gatewayModels);
   const modelsError = useAppStore((s) => s.modelsError);
   const modelsRaw = useAppStore((s) => s.modelsRaw);
-  const modelsTried = useAppStore((s) => s.modelsTried);
   const modelsAttempts = useAppStore((s) => s.modelsAttempts);
   const verify = useAppStore((s) => s.verify);
   const verifyModel = useAppStore((s) => s.verifyModel);
@@ -41,6 +51,9 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
   const [token, setTokenDraft] = useState(getToken());
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [advOpen, setAdvOpen] = useState(false);
+  // 「获取可用模型」的多选状态（照 DSH：默认勾选已知/已配置的，其余不勾）
+  const [pickerSearch, setPickerSearch] = useState("");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
 
   // 打开时用后端脱敏值回填（密钥字段保持空，避免把占位当值提交）。
   useEffect(() => {
@@ -52,6 +65,13 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
   }, [open, settings]);
 
   if (!open) return null;
+
+  // 补全候选 = 已知模型 + 本次探测结果
+  const knownList = splitModels(form.knownModels);
+  const modelOptions = mergeModels(knownList, models.map((m) => m.id));
+  const filteredModels = models.filter((m) =>
+    pickerSearch.trim() === "" ? true : m.id.toLowerCase().includes(pickerSearch.trim().toLowerCase()),
+  );
 
   const set = <K extends keyof SettingsFormState>(k: K, v: SettingsFormState[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -171,10 +191,10 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">模型映射</h3>
             <button
               type="button"
-              onClick={() => fetchModels(form.baseUrl, form.apiKey, form.modelsPath)}
+              onClick={() => fetchModels(form.baseUrl, form.apiKey, form.modelsPath, form.apiProtocol)}
               className="ml-auto rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
             >
-              获取模型列表
+              获取可用模型
             </button>
           </div>
           <p className="mt-1 text-[11px] leading-relaxed text-slate-400">
@@ -182,25 +202,40 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             把网关里的模型挂到对应槽位即可——CLI 会被重定向过去。
           </p>
 
-          <label className="mt-2 block text-[11px] font-medium text-slate-500">
-            模型列表路径
-          </label>
-          <input
-            value={form.modelsPath}
-            onChange={(e) => set("modelsPath", e.target.value)}
-            placeholder="留空自动探测（/v1/models、/models、/api/models…）"
-            className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-          />
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <label className="block">
+              <span className="block text-[11px] font-medium text-slate-500">API 协议</span>
+              <select
+                value={form.apiProtocol}
+                onChange={(e) => set("apiProtocol", e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+              >
+                {PROTOCOLS.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="block text-[11px] font-medium text-slate-500">模型列表路径（可留空）</span>
+              <input
+                value={form.modelsPath}
+                onChange={(e) => set("modelsPath", e.target.value)}
+                placeholder="按协议自动"
+                className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+              />
+            </label>
+          </div>
           <p className="mt-1 text-[11px] text-slate-400">
-            不同中转的模型接口路径不一样。知道确切路径就填这里（如 /api/models），省去自动探测。
+            协议决定列表地址与鉴权头：Anthropic 用 `/v1/models` + `x-api-key`，
+            OpenAI 用 `/models` + `Bearer`，Gemini 用 `/models` + `x-goog-api-key`。
           </p>
 
-          {models.length > 0 && (
+          {modelOptions.length > 0 && (
             <datalist id="gateway-models">
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.display_name || m.id}
-                </option>
+              {modelOptions.map((id) => (
+                <option key={id} value={id} />
               ))}
             </datalist>
           )}
@@ -208,6 +243,10 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
           {modelsError && (
             <div className="mt-2 rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
               <p>{modelsError}</p>
+              <p className="mt-0.5 opacity-70">
+                协议 {form.apiProtocol}
+                {settings?.api_key_set ? " · 已携带保存的密钥" : " · 未配置密钥"}
+              </p>
               {modelsAttempts.length > 0 && (
                 <ul className="mt-1 space-y-0.5 font-mono text-[10px] opacity-80">
                   {modelsAttempts.map((a) => (
@@ -216,9 +255,6 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
                     </li>
                   ))}
                 </ul>
-              )}
-              {modelsTried.length > 0 && modelsAttempts.length === 0 && (
-                <p className="mt-1 opacity-70">已尝试：{modelsTried.join("、")}</p>
               )}
               {modelsRaw && (
                 <details className="mt-1">
@@ -230,19 +266,65 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
               )}
             </div>
           )}
+
+          {/* 可搜索多选框：照 DSH 的「获取可用模型」交互 */}
           {models.length > 0 && (
-            <p className="mt-2 text-[11px] text-emerald-700 dark:text-emerald-400">
-              已获取 {models.length} 个模型，下面的输入框可直接下拉选择或点「验证」确认可用。
-            </p>
+            <div className="mt-2 rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+              <div className="flex items-center gap-2">
+                <input
+                  value={pickerSearch}
+                  onChange={(e) => setPickerSearch(e.target.value)}
+                  placeholder="搜索模型…"
+                  className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1 text-[11px] dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    // 勾选的加入已知列表；端点没列出但已配置的保持不变
+                    const checked = [...picked];
+                    const preserved = knownList.filter((m) => !models.some((x) => x.id === m));
+                    set("knownModels", mergeModels(preserved, checked).join("\n"));
+                    setPickerSearch("");
+                  }}
+                  className="shrink-0 rounded-lg bg-blue-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-blue-700"
+                >
+                  更新列表
+                </button>
+              </div>
+              <div className="mt-1 max-h-40 overflow-y-auto">
+                {filteredModels.length === 0 && <p className="px-1 py-1 text-[11px] text-slate-400">没有匹配的模型</p>}
+                {filteredModels.map((m: GatewayModel) => (
+                  <label key={m.id} className="flex items-center gap-2 px-1 py-0.5 text-[11px]">
+                    <input
+                      type="checkbox"
+                      checked={picked.has(m.id)}
+                      onChange={(e) => {
+                        const next = new Set(picked);
+                        if (e.target.checked) next.add(m.id);
+                        else next.delete(m.id);
+                        setPicked(next);
+                      }}
+                    />
+                    <span className="font-mono text-slate-700 dark:text-slate-300">{m.id}</span>
+                    {m.display_name && m.display_name !== m.id && (
+                      <span className="truncate text-slate-400">{m.display_name}</span>
+                    )}
+                  </label>
+                ))}
+              </div>
+              <p className="mt-1 text-[10px] text-slate-400">
+                共 {models.length} 个，已勾选 {picked.size} 个。勾选后点「更新列表」写入补全候选。
+              </p>
+            </div>
           )}
 
           <div className="mt-2 space-y-2">
             {ALIAS_FIELDS.map(({ alias, label, key, env }) => (
               <div key={alias}>
                 <div className="flex items-center gap-2">
-                  <span className="w-28 shrink-0 text-[11px] text-slate-500">{label}</span>
+                  <span className="w-24 shrink-0 text-[11px] text-slate-500">{label}</span>
                   <input
-                    list={models.length > 0 ? "gateway-models" : undefined}
+                    list={modelOptions.length > 0 ? "gateway-models" : undefined}
                     value={String(form[key] ?? "")}
                     onChange={(e) => set(key, e.target.value)}
                     placeholder={env}
@@ -272,7 +354,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
                 </div>
                 {verify && verify.model === String(form[key] ?? "") && (
                   <p
-                    className={`ml-28 mt-0.5 text-[10px] ${
+                    className={`ml-24 mt-0.5 text-[10px] ${
                       verify.result.detail === "验证中…"
                         ? "text-slate-400"
                         : verify.result.ok
@@ -290,9 +372,21 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
               </div>
             ))}
           </div>
+
+          <details className="mt-2">
+            <summary className="cursor-pointer text-[11px] text-slate-500">手动补充模型名（每行一个）</summary>
+            <textarea
+              value={form.knownModels}
+              onChange={(e) => set("knownModels", e.target.value)}
+              rows={3}
+              placeholder={"cn:deepseek-v4.1-flash\ncn:qwen-max"}
+              className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-1.5 font-mono text-[11px] dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+            />
+          </details>
+
           <p className="mt-1 text-[11px] text-slate-400">
             `default` 未单独设置时跟随 `opus` 槽位（与 CLI 行为一致）。留空则使用 CLI 内置模型名。
-            「验证」会发一次 max_tokens=1 的真实请求（需先保存）。
+            获取不到列表属正常——手动填写效果相同；「验证」会发一次 max_tokens=1 的真实请求。
           </p>
         </section>
 

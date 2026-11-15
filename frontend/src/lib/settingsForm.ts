@@ -17,6 +17,8 @@ export interface SettingsPatch {
   auto_compact_window?: string;
   disable_unknown_model_window?: boolean;
   models_path?: string;
+  api_protocol?: string;
+  known_models?: string;
 }
 
 export interface SettingsFormState {
@@ -31,6 +33,8 @@ export interface SettingsFormState {
   autoCompactWindow: string;
   disableUnknownModelWindow: boolean;
   modelsPath: string;
+  apiProtocol: string;
+  knownModels: string;
 }
 
 export const EMPTY_FORM: SettingsFormState = {
@@ -45,6 +49,8 @@ export const EMPTY_FORM: SettingsFormState = {
   autoCompactWindow: "",
   disableUnknownModelWindow: false,
   modelsPath: "",
+  apiProtocol: "anthropic-messages",
+  knownModels: "",
 };
 
 /** 从后端脱敏视图填充表单；密钥字段保持为空。 */
@@ -58,6 +64,8 @@ export function formFromPublic(p: {
   auto_compact_window?: string;
   disable_unknown_model_window?: boolean;
   models_path?: string;
+  api_protocol?: string;
+  known_models?: string;
 }): SettingsFormState {
   return {
     ...EMPTY_FORM,
@@ -70,6 +78,8 @@ export function formFromPublic(p: {
     autoCompactWindow: p.auto_compact_window ?? "",
     disableUnknownModelWindow: p.disable_unknown_model_window ?? false,
     modelsPath: p.models_path ?? "",
+    apiProtocol: p.api_protocol || "anthropic-messages",
+    knownModels: p.known_models ?? "",
   };
 }
 
@@ -85,6 +95,8 @@ export function buildPatch(form: SettingsFormState, clear: { apiKey?: boolean; a
     auto_compact_window: form.autoCompactWindow.trim(),
     disable_unknown_model_window: form.disableUnknownModelWindow,
     models_path: form.modelsPath.trim(),
+    api_protocol: form.apiProtocol,
+    known_models: form.knownModels,
   };
   const apiKey = form.apiKey.trim();
   if (apiKey) patch.api_key = apiKey;
@@ -101,4 +113,24 @@ export function buildPatch(form: SettingsFormState, clear: { apiKey?: boolean; a
 export function secretPlaceholder(set: boolean, masked: string): string {
   if (!set) return "未设置";
   return masked ? `已设置：${masked}（留空则不修改）` : "已设置（留空则不修改）";
+}
+
+/** 把多行文本拆成模型名列表（去空、去重）。 */
+export function splitModels(text: string): string[] {
+  return [...new Set(text.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean))];
+}
+
+/** 合并多来源模型名，保序去重。 */
+export function mergeModels(...lists: (string[] | undefined)[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const list of lists) {
+    for (const m of list ?? []) {
+      if (m && !seen.has(m)) {
+        seen.add(m);
+        out.push(m);
+      }
+    }
+  }
+  return out;
 }

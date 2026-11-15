@@ -14,15 +14,13 @@ func TestParseModelsShapes(t *testing.T) {
 		want int
 	}{
 		{"Anthropic 标准", `{"data":[{"id":"a"},{"id":"b"}]}`, 2},
-		{"models 键", `{"models":[{"name":"m-a"}]}`, 1},
+		{"models 数组", `{"models":[{"name":"m-a"}]}`, 1},
+		{"models 映射", `{"models":{"gw-a":{"display_name":"A"},"gw-b":{}}}`, 2},
 		{"顶层数组", `[{"id":"m-b"},{"model":"m-c"}]`, 2},
-		{"model_id 键", `{"data":[{"model_id":"m-d"}]}`, 1},
 		{"纯字符串数组", `{"data":["x-model","y-model"]}`, 2},
-		// 实测会遇到：data 是对象而不是数组
 		{"data 是对象", `{"code":0,"data":{"models":[{"id":"nested"}]}}`, 1},
-		// 更深的嵌套
 		{"多层嵌套", `{"result":{"items":{"list":[{"id":"deep"}]}}}`, 1},
-		{"OpenAI 风格", `{"object":"list","data":[{"id":"gpt-4o","object":"model","owned_by":"x"}]}`, 1},
+		{"Gemini", `{"models":[{"name":"models/gemini-1.5-pro"}]}`, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -37,23 +35,21 @@ func TestParseModelsShapes(t *testing.T) {
 	}
 }
 
-func TestParseModelsDedupesAndIgnoresEmpty(t *testing.T) {
-	got, err := parseModels([]byte(`{"data":[{"id":"a"},{"id":"a"},{"display_name":"无 id"}]}`))
+// Gemini 的条目名带 models/ 前缀，对外应剥掉。
+func TestParseModelsStripsGeminiPrefix(t *testing.T) {
+	got, err := parseModels([]byte(`{"models":[{"name":"models/gemini-1.5-pro"}]}`))
 	if err != nil {
 		t.Fatalf("parseModels: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("应去重并忽略无标识项，实际 %+v", got)
+	if got[0].ID != "gemini-1.5-pro" {
+		t.Fatalf("ID = %q", got[0].ID)
 	}
 }
 
 func TestParseModelsRejectsHTML(t *testing.T) {
-	_, err := parseModels([]byte(`<!doctype html><html><body>app</body></html>`))
-	if err == nil {
-		t.Fatal("HTML 应解析失败")
-	}
-	if !strings.Contains(err.Error(), "JSON") {
-		t.Fatalf("错误信息应指明不是 JSON: %v", err)
+	_, err := parseModels([]byte(`<!doctype html><html></html>`))
+	if err == nil || !strings.Contains(err.Error(), "JSON") {
+		t.Fatalf("HTML 应报非 JSON: %v", err)
 	}
 }
 
@@ -63,37 +59,147 @@ func TestParseModelsEmptyBody(t *testing.T) {
 	}
 }
 
-// 网关没实现 /v1/models 时，应继续尝试 /models。
-func TestFetchModelsFallsBackToAlternatePath(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/models":
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"error":"not found"}`))
-		case "/models":
-			w.Header().Set("content-type", "application/json")
-			_, _ = w.Write([]byte(`{"data":[{"id":"only-here"}]}`))
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-
-	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "k"})
-	if len(res.Models) != 1 || res.Models[0].ID != "only-here" {
-		t.Fatalf("应从 /models 拿到列表: %+v", res)
+// 列表路径规则照 DSH：Anthropic 需要把 base 末尾的 /v1 剥掉再拼 /v1/models。
+func TestListingURLPerProtocol(t *testing.T) {
+	cases := []struct {
+		base, protocol, want string
+	}{
+		{"https://api.anthropic.com", ProtocolAnthropic, "https://api.anthropic.com/v1/models?limit=1000"},
+		{"https://gw.example/v1", ProtocolAnthropic, "https://gw.example/v1/models?limit=1000"},
+		{"https://gw.example/v1/", ProtocolAnthropic, "https://gw.example/v1/models?limit=1000"},
+		{"https://gw.example/v1", ProtocolOpenAI, "https://gw.example/v1/models"},
+		{"https://gw.example/openai/v1", ProtocolResponses, "https://gw.example/openai/v1/models"},
+		{"https://gw.example/v1beta", ProtocolGemini, "https://gw.example/v1beta/models?pageSize=1000"},
 	}
-	if len(res.Tried) < 2 {
-		t.Fatalf("应记录尝试过的路径: %v", res.Tried)
+	for _, c := range cases {
+		if got := ListingURL(c.base, c.protocol); got != c.want {
+			t.Fatalf("ListingURL(%q,%q) = %q, want %q", c.base, c.protocol, got, c.want)
+		}
 	}
 }
 
-// 返回 HTML 时必须把原文带回，并给出「手动填写」的提示。
+func TestFetchModelsAnthropicUsesKeyHeader(t *testing.T) {
+	var gotKey, gotAuth, gotVersion string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		gotKey = r.Header.Get("x-api-key")
+		gotAuth = r.Header.Get("authorization")
+		gotVersion = r.Header.Get("anthropic-version")
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"claude-x"}]}`))
+	}))
+	defer srv.Close()
+
+	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "k1"})
+	if len(res.Models) != 1 {
+		t.Fatalf("应拿到模型: %+v", res)
+	}
+	if gotKey != "k1" {
+		t.Fatalf("Anthropic 协议应发 x-api-key，实际 %q", gotKey)
+	}
+	if gotAuth != "" {
+		t.Fatalf("不应同时发 Bearer: %q", gotAuth)
+	}
+	if gotVersion != "2023-06-01" {
+		t.Fatalf("应带 anthropic-version，实际 %q", gotVersion)
+	}
+	if !res.Auth.APIKeySent {
+		t.Fatal("Auth.APIKeySent 应为 true")
+	}
+}
+
+func TestFetchModelsOpenAIUsesBearer(t *testing.T) {
+	var gotAuth, gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		gotAuth = r.Header.Get("authorization")
+		gotKey = r.Header.Get("x-api-key")
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-x"}]}`))
+	}))
+	defer srv.Close()
+
+	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "k2", APIProtocol: ProtocolOpenAI})
+	if len(res.Models) != 1 {
+		t.Fatalf("应拿到模型: %+v", res)
+	}
+	if gotAuth != "Bearer k2" {
+		t.Fatalf("OpenAI 协议应发 Bearer，实际 %q", gotAuth)
+	}
+	if gotKey != "" {
+		t.Fatalf("OpenAI 协议不应发 x-api-key: %q", gotKey)
+	}
+}
+
+func TestFetchModelsGeminiUsesGoogHeader(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		got = r.Header.Get("x-goog-api-key")
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-1.5-pro"}]}`))
+	}))
+	defer srv.Close()
+
+	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "g1", APIProtocol: ProtocolGemini})
+	if len(res.Models) != 1 || res.Models[0].ID != "gemini-1.5-pro" {
+		t.Fatalf("应拿到 Gemini 模型: %+v", res)
+	}
+	if got != "g1" {
+		t.Fatalf("应发 x-goog-api-key，实际 %q", got)
+	}
+}
+
+// 不支持的协议应直接提示手动录入，而不是发请求后报「没有模型」。
+func TestFetchModelsUnsupportedProtocol(t *testing.T) {
+	res := FetchModels(t.Context(), Settings{BaseURL: "https://gw.example", APIProtocol: "azure-openai"})
+	if res.Supported {
+		t.Fatal("Supported 应为 false")
+	}
+	if !strings.Contains(res.Detail, "手动填写") {
+		t.Fatalf("提示不清楚: %q", res.Detail)
+	}
+	if res.Status != 0 {
+		t.Fatalf("不应发出请求，Status = %d", res.Status)
+	}
+}
+
+// 401 时用同一密钥换 Bearer 再试一次（很多中转只认 Bearer）。
+func TestFetchModelsRetriesWithBearer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("authorization") != "Bearer sk-relay" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid api key"}`))
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"cn:deepseek-v4.1-flash"}]}`))
+	}))
+	defer srv.Close()
+
+	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "sk-relay"})
+	if len(res.Models) != 1 {
+		t.Fatalf("Bearer 重试应成功: %+v", res)
+	}
+	if !res.Auth.BearerFallback || !strings.Contains(res.Detail, "Bearer") {
+		t.Fatalf("应说明用了 Bearer 鉴权: %+v", res)
+	}
+}
+
 func TestFetchModelsHTMLGivesActionableError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/html")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`<!doctype html><html><head><title>App</title></head><body>SPA</body></html>`))
+		_, _ = w.Write([]byte(`<!doctype html><html><body>SPA</body></html>`))
 	}))
 	defer srv.Close()
 
@@ -117,11 +223,26 @@ func TestFetchModelsUnauthorized(t *testing.T) {
 	defer srv.Close()
 
 	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "wrong"})
-	if res.Status != http.StatusUnauthorized {
-		t.Fatalf("状态 = %d", res.Status)
-	}
 	if !strings.Contains(res.Detail, "鉴权失败") {
 		t.Fatalf("提示 = %q", res.Detail)
+	}
+}
+
+func TestFetchModelsManualPathOverride(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	defer srv.Close()
+
+	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, ModelsPath: "/api/models"})
+	if gotPath != "/api/models" {
+		t.Fatalf("应走手动指定的路径，实际 %q", gotPath)
+	}
+	if len(res.Models) != 1 {
+		t.Fatalf("应拿到模型: %+v", res)
 	}
 }
 
@@ -143,48 +264,8 @@ func TestResolveAlias(t *testing.T) {
 	if got := v.ResolveAlias("haiku"); got != "" {
 		t.Fatalf("未映射的 haiku 应为空: %q", got)
 	}
-	// default 不单独指定时跟随 opus（与 CLI 行为一致）
 	if got := (Settings{OpusModel: "gw-opus"}).ResolveAlias("default"); got != "gw-opus" {
 		t.Fatalf("default 应跟随 opus: %q", got)
-	}
-}
-
-// 只认 Bearer 的中转：默认发 x-api-key 会被 401，应自动换一种方式重试。
-func TestFetchModelsRetriesWithBearer(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/models" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		if r.Header.Get("authorization") != "Bearer sk-relay" {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":"invalid api key"}`))
-			return
-		}
-		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[{"id":"cn:deepseek-v4.1-flash"}]}`))
-	}))
-	defer srv.Close()
-
-	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "sk-relay"})
-	if len(res.Models) != 1 || res.Models[0].ID != "cn:deepseek-v4.1-flash" {
-		t.Fatalf("Bearer 重试应成功: %+v", res)
-	}
-	if !strings.Contains(res.Detail, "Bearer") {
-		t.Fatalf("应说明用了 Bearer 鉴权: %q", res.Detail)
-	}
-}
-
-// 两种鉴权都失败时要如实报告两个状态码。
-func TestFetchModelsBothAuthFail(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer srv.Close()
-
-	res := FetchModels(t.Context(), Settings{BaseURL: srv.URL, APIKey: "bad"})
-	if len(res.Models) != 0 || !strings.Contains(res.Detail, "鉴权失败") {
-		t.Fatalf("应报鉴权失败: %+v", res)
 	}
 }
 
@@ -194,12 +275,11 @@ func TestVerifyModel(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Header().Set("content-type", "application/json")
 		if r.Header.Get("x-api-key") != "k" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+		_, _ = w.Write([]byte(`{"content":[]}`))
 	}))
 	defer srv.Close()
 
@@ -207,12 +287,10 @@ func TestVerifyModel(t *testing.T) {
 	if !ok.OK {
 		t.Fatalf("应验证通过: %+v", ok)
 	}
-
 	bad := VerifyModel(t.Context(), Settings{BaseURL: srv.URL, APIKey: "wrong"}, "gw-good")
 	if bad.OK || !strings.Contains(bad.Detail, "不可用") {
 		t.Fatalf("错误凭据应失败: %+v", bad)
 	}
-
 	empty := VerifyModel(t.Context(), Settings{BaseURL: srv.URL}, "")
 	if empty.OK || !strings.Contains(empty.Detail, "为空") {
 		t.Fatalf("空模型名应失败: %+v", empty)

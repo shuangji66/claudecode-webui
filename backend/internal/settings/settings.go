@@ -18,6 +18,9 @@ import (
 	"sync"
 )
 
+// DefaultAPIProtocol 是未指定协议时的默认值（Claude Code 走 Anthropic Messages）。
+const DefaultAPIProtocol = "anthropic-messages"
+
 // Settings 是全部可持久化配置。
 type Settings struct {
 	// BaseURL 是 Anthropic 兼容端点（ANTHROPIC_BASE_URL）。空 = 官方地址。
@@ -47,6 +50,17 @@ type Settings struct {
 	// ModelsPath 是拉取模型列表的路径（如 /api/models）。
 	// 留空表示自动探测。不同中转的实现路径差异极大，必须允许手填。
 	ModelsPath string `json:"models_path"`
+
+	// ManualModels 是手动导入的模型名（每行一个），用于网关没有任何列表接口时
+	// 仍能获得下拉补全。与自动拉取的结果在前端合并。
+	ManualModels string `json:"manual_models"`
+
+	// APIProtocol 决定「获取可用模型」按哪种协议探测与鉴权：
+	// anthropic-messages / openai-completions / openai-responses / google-generative-ai。
+	APIProtocol string `json:"api_protocol"`
+
+	// KnownModels 是用户采纳过的模型名（每行一个），供下拉补全使用。
+	KnownModels string `json:"known_models"`
 }
 
 // Public 是脱敏后的视图，用于回传前端。
@@ -64,6 +78,9 @@ type Public struct {
 	AutoCompactWindow         string `json:"auto_compact_window"`
 	DisableUnknownModelWindow bool   `json:"disable_unknown_model_window"`
 	ModelsPath                string `json:"models_path"`
+	ManualModels              string `json:"manual_models"`
+	APIProtocol               string `json:"api_protocol"`
+	KnownModels               string `json:"known_models"`
 	// Path 是配置文件路径，方便用户在 NAS 上备份。
 	Path string `json:"path"`
 }
@@ -84,6 +101,9 @@ type Patch struct {
 	AutoCompactWindow         *string `json:"auto_compact_window"`
 	DisableUnknownModelWindow *bool   `json:"disable_unknown_model_window"`
 	ModelsPath                *string `json:"models_path"`
+	ManualModels              *string `json:"manual_models"`
+	APIProtocol               *string `json:"api_protocol"`
+	KnownModels               *string `json:"known_models"`
 }
 
 // Store 是带锁的内存态 + 磁盘持久化。
@@ -137,6 +157,9 @@ func (s *Store) Public() Public {
 		AutoCompactWindow:         cur.AutoCompactWindow,
 		DisableUnknownModelWindow: cur.DisableUnknownModelWindow,
 		ModelsPath:                cur.ModelsPath,
+		ManualModels:              cur.ManualModels,
+		APIProtocol:               cur.APIProtocol,
+		KnownModels:               cur.KnownModels,
 		Path:                      s.path,
 	}
 	return p
@@ -190,6 +213,15 @@ func (s *Store) Apply(p Patch) (Public, error) {
 	if p.ModelsPath != nil {
 		next.ModelsPath = strings.TrimSpace(*p.ModelsPath)
 	}
+	if p.ManualModels != nil {
+		next.ManualModels = strings.TrimSpace(*p.ManualModels)
+	}
+	if p.APIProtocol != nil {
+		next.APIProtocol = strings.TrimSpace(*p.APIProtocol)
+	}
+	if p.KnownModels != nil {
+		next.KnownModels = strings.TrimSpace(*p.KnownModels)
+	}
 
 	if err := writeAtomic(s.path, next); err != nil {
 		return Public{}, err
@@ -210,6 +242,9 @@ func (s *Store) Apply(p Patch) (Public, error) {
 		AutoCompactWindow:         next.AutoCompactWindow,
 		DisableUnknownModelWindow: next.DisableUnknownModelWindow,
 		ModelsPath:                next.ModelsPath,
+		ManualModels:              next.ManualModels,
+		APIProtocol:               next.APIProtocol,
+		KnownModels:               next.KnownModels,
 		Path:                      s.path,
 	}, nil
 }

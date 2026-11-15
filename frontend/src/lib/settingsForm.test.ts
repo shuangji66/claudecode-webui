@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_FORM, buildPatch, formFromPublic, secretPlaceholder } from "./settingsForm";
+import { EMPTY_FORM, buildPatch, formFromPublic, mergeModels, secretPlaceholder, splitModels } from "./settingsForm";
 
 describe("formFromPublic", () => {
   it("回填非密钥字段，密钥字段保持为空", () => {
@@ -69,5 +69,27 @@ describe("secretPlaceholder", () => {
     expect(secretPlaceholder(false, "")).toBe("未设置");
     expect(secretPlaceholder(true, "sk-•••abcd")).toContain("已设置");
     expect(secretPlaceholder(true, "sk-•••abcd")).toContain("留空则不修改");
+  });
+});
+
+describe("模型列表工具", () => {
+  it("splitModels 按行/逗号拆分并去重", () => {
+    expect(splitModels("a\nb, c\n\na")).toEqual(["a", "b", "c"]);
+    expect(splitModels("   ")).toEqual([]);
+  });
+
+  it("mergeModels 保序去重", () => {
+    expect(mergeModels(["a", "b"], ["b", "c"], undefined)).toEqual(["a", "b", "c"]);
+  });
+
+  it("协议与已知模型会随表单提交", () => {
+    const p = buildPatch({ ...EMPTY_FORM, apiProtocol: "openai-completions", knownModels: "gw-a\ngw-b" });
+    expect(p.api_protocol).toBe("openai-completions");
+    expect(p.known_models).toBe("gw-a\ngw-b");
+  });
+
+  it("默认协议为 anthropic-messages", () => {
+    const f = formFromPublic({});
+    expect(f.apiProtocol).toBe("anthropic-messages");
   });
 });

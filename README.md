@@ -82,6 +82,25 @@ location /app/ccweb/ {
 - 密钥经接口返回时一律脱敏；输入框留空表示「不修改」，清除要点「清除」再保存。
 - 「测试连接」先 `GET /v1/models`（不计费），不支持时退回一次 `POST /v1/messages`（max_tokens=1）。
 
+### 获取可用模型（按协议探测）
+
+设置页的「获取可用模型」按**协议**决定列表地址与鉴权头，规则与 DSH 的 discovery 一致：
+
+| 协议 | 列表地址 | 鉴权 |
+|---|---|---|
+| `anthropic-messages` | `{root}/v1/models?limit=1000`（base 末尾的 `/v1` 会先剥掉） | `x-api-key` + `anthropic-version` |
+| `openai-completions` / `openai-responses` | `{base}/models` | `Authorization: Bearer` |
+| `google-generative-ai` | `{base}/models?pageSize=1000` | `x-goog-api-key` |
+
+工具名以 `models/` 开头的条目（Gemini）会自动剥掉前缀。其余协议直接提示手动录入，
+以免把鉴权失败误报成「没有模型」。
+
+结果进一个**可搜索多选框**：勾选后点「更新列表」写入补全候选（`known_models`），
+端点没列出但已配置的模型保持不变。
+
+**探测失败是正常情况。** 这与 DSH 的立场一致：端点用什么格式作答由它自己决定，
+拿不到列表时手动填写模型名效果完全相同——映射与对话都不依赖这个接口。
+
 ### 把网关模型挂到内置别名（重要）
 
 Claude Code 只会**按内置别名**发请求（`default` / `opus` / `sonnet` / `haiku`），

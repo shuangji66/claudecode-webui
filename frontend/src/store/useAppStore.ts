@@ -91,7 +91,12 @@ interface AppState {
   loadSettings: () => Promise<void>;
   saveSettings: (patch: SettingsPatch) => Promise<boolean>;
   testConnection: () => Promise<void>;
-  fetchGatewayModels: (baseUrl: string, apiKey: string, modelsPath?: string) => Promise<void>;
+  fetchGatewayModels: (
+    baseUrl: string,
+    apiKey: string,
+    modelsPath?: string,
+    apiProtocol?: string,
+  ) => Promise<void>;
   verifyModel: (model: string) => Promise<void>;
   refreshSessions: () => Promise<void>;
   refreshHistory: () => Promise<void>;
@@ -215,12 +220,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
   },
 
-  fetchGatewayModels: async (baseUrl, apiKey, modelsPath = "") => {
+  fetchGatewayModels: async (baseUrl, apiKey, modelsPath = "", apiProtocol = "") => {
     set({ modelsError: null, error: null, modelsAttempts: [] });
     try {
       const r = await apiFetch<ModelsResult>("/api/settings/models", {
         method: "POST",
-        body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, models_path: modelsPath }),
+        body: JSON.stringify({
+          base_url: baseUrl,
+          api_key: apiKey,
+          models_path: modelsPath,
+          api_protocol: apiProtocol,
+        }),
       });
       if (r.models && r.models.length > 0) {
         set({

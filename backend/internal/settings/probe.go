@@ -99,23 +99,56 @@ func doJSON(ctx context.Context, c *http.Client, method, url string, v Settings,
 	return doJSONAuth(ctx, c, method, url, v, body, false)
 }
 
-// doJSONAuth 是 doJSON 的可指定鉴权方式版本。
-// forceBearer=true 时把 APIKey 当作 Bearer 令牌发送（不发送 x-api-key）——
-// 不少中转的 /v1/models 只认 Authorization: Bearer，不认 x-api-key。
-func doJSONAuth(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, forceBearer bool) (int, []byte, error) {
+// newRequest 构造一个带通用头的请求。
+func newRequest(ctx context.Context, method, url string, body []byte) (*http.Request, error) {
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, url, rdr)
 	if err != nil {
-		return 0, nil, err
+		return nil, err
 	}
 	req.Header.Set("anthropic-version", "2023-06-01")
 	if body != nil {
 		req.Header.Set("content-type", "application/json")
 	}
-	// 两种鉴权方式二选一：官方用 x-api-key，部分中转只认 Bearer。
+	return req, nil
+}
+
+// sendRequest 发出请求并读取有限长度的响应体。
+func sendRequest(c *http.Client, req *http.Request) (int, []byte, error) {
+	resp, err := c.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return resp.StatusCode, b, nil
+}
+
+// doJSONHeader 用调用方给定的鉴权头发请求（如 Gemini 的 x-goog-api-key）。
+func doJSONHeader(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, extra map[string]string) (int, []byte, error) {
+	req, err := newRequest(ctx, method, url, body)
+	if err != nil {
+		return 0, nil, err
+	}
+	for k, val := range extra {
+		if val != "" {
+			req.Header.Set(k, val)
+		}
+	}
+	return sendRequest(c, req)
+}
+
+// doJSONAuth 按 Claude Code 的两种鉴权方式发请求。
+// forceBearer=true 时把 APIKey 当作 Bearer 令牌发送（不发送 x-api-key）——
+// 不少中转的模型列表只认 Authorization: Bearer，不认 x-api-key。
+func doJSONAuth(ctx context.Context, c *http.Client, method, url string, v Settings, body []byte, forceBearer bool) (int, []byte, error) {
+	req, err := newRequest(ctx, method, url, body)
+	if err != nil {
+		return 0, nil, err
+	}
 	if forceBearer {
 		if v.APIKey != "" {
 			req.Header.Set("authorization", "Bearer "+v.APIKey)
@@ -128,14 +161,7 @@ func doJSONAuth(ctx context.Context, c *http.Client, method, url string, v Setti
 	if v.AuthToken != "" && !forceBearer {
 		req.Header.Set("authorization", "Bearer "+v.AuthToken)
 	}
-
-	resp, err := c.Do(req)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return resp.StatusCode, b, nil
+	return sendRequest(c, req)
 }
 
 func snippet(b []byte) string {
