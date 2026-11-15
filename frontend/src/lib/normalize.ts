@@ -141,6 +141,12 @@ function applyAssistant(items: Item[], m: Raw): Item[] {
         { id: nextId(), seq: seqOf(out), ts: Date.now(), kind: "thinking", text: block.thinking },
       ];
     } else if (block.type === "tool_use" && typeof block.name === "string") {
+      const toolUseId = typeof block.id === "string" ? block.id : "";
+      // 防御性去重：同一 tool_use_id 若重复到达（重连回放、CLI 重试），
+      // 不应生成两张卡片——否则 tool_result 会被回填到两张卡上。
+      if (toolUseId && out.some((it) => it.kind === "tool" && it.toolUseId === toolUseId)) {
+        continue;
+      }
       out = [
         ...out,
         {
@@ -148,7 +154,7 @@ function applyAssistant(items: Item[], m: Raw): Item[] {
           seq: seqOf(out),
           ts: Date.now(),
           kind: "tool",
-          toolUseId: typeof block.id === "string" ? block.id : "",
+          toolUseId,
           name: block.name,
           input: block.input,
         },

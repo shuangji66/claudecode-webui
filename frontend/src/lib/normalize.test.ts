@@ -76,6 +76,19 @@ describe("normalize", () => {
     expect((items[0] as Extract<Item, { kind: "tool" }>).structured).toEqual({ structuredPatch: patch });
   });
 
+  // 同一 tool_use_id 重复到达（重连回放 / CLI 重试）不应生成两张卡片，
+  // 否则 tool_result 会被回填到两张卡上，UI 出现「两张都完成」的假象。
+  it("重复的 tool_use_id 只生成一张卡片", () => {
+    const msg = {
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: "dup", name: "Bash", input: { command: "ls" } }] },
+    };
+    let items: Item[] = applyCLI([], msg);
+    items = applyCLI(items, msg);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "tool", toolUseId: "dup" });
+  });
+
   it("thinking 块独立成项", () => {
     const items = applyCLI([], {
       type: "assistant",
