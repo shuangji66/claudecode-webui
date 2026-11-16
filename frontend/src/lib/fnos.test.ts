@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authorizeFnosDir, classifyAuthorizeResult, classifyPickResult } from "./fnos";
+import { authorizeFnosDir, classifyAuthorizeResult, classifyPickResult, isFnosApp } from "./fnos";
 
 describe("classifyAuthorizeResult", () => {
   it("code 0 + data true 视为授权成功", () => {
@@ -65,5 +65,19 @@ describe("classifyPickResult", () => {
       reason: "message",
       message: "仅管理员可进行此操作",
     });
+  });
+});
+
+describe("isFnosApp", () => {
+  it("认出飞牛 App WebView 的 UA", () => {
+    expect(isFnosApp("Mozilla/5.0 (iPhone) FNAppType/ios FNAppVer/1.38.0")).toBe(true);
+    expect(isFnosApp("Mozilla/5.0 (Linux; Android 14) FNOS/1.38.0")).toBe(true);
+    expect(isFnosApp("Mozilla/5.0 FNAppVer/1.40.1")).toBe(true);
+  });
+
+  it("普通浏览器 / 桌面 iframe 的 UA 不算 App", () => {
+    expect(isFnosApp("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120")).toBe(false);
+    expect(isFnosApp("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari/604.1")).toBe(false);
+    expect(isFnosApp("")).toBe(false);
   });
 });

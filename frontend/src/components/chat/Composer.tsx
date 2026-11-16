@@ -167,7 +167,11 @@ export function Composer({
       okText: t("选择", "Choose"),
     });
     if (picked.state === "skipped") {
-      setFileError(t("当前不在飞牛宿主中，无法打开飞牛文件选择器；可以用「本地文件/图片」。", "Not running inside fnOS, so the fnOS picker is unavailable; use a local file instead."));
+      setFileError(
+        picked.reason === "bridge"
+          ? t("飞牛宿主连接不可用，请稍后重试，或改用「本地文件/图片」。", "The fnOS host is not responding; retry later or use a local file.")
+          : t("当前不在飞牛宿主中，无法打开飞牛文件选择器；可以用「本地文件/图片」。", "Not running inside fnOS, so the fnOS picker is unavailable; use a local file instead."),
+      );
       return;
     }
     if (picked.state === "denied") {

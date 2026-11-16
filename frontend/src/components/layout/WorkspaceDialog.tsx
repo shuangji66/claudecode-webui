@@ -126,7 +126,11 @@ export function WorkspaceDialog({ open, onClose }: Props) {
         okText: t("选择", "Choose"),
       });
       if (picked.state === "skipped") {
-        setErr(t("当前不在飞牛宿主中，无法打开飞牛目录选择器；可在上方浏览目录后点「添加」。", "Not running inside fnOS, so the fnOS picker is unavailable; browse above and use Add instead."));
+        setErr(
+          picked.reason === "bridge"
+            ? t("飞牛宿主连接不可用，请稍后重试，或在上方浏览目录后点「添加」。", "The fnOS host is not responding; retry later, or browse above and use Add.")
+            : t("当前不在飞牛宿主中，无法打开飞牛目录选择器；可在上方浏览目录后点「添加」。", "Not running inside fnOS, so the fnOS picker is unavailable; browse above and use Add instead."),
+        );
         return;
       }
       if (picked.state === "denied") {

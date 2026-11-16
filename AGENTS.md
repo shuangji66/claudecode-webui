@@ -182,6 +182,13 @@ hub ── manager ── session ── process ── claude (NDJSON)
   宿主报错就不登记目录。拿不到宿主（直连端口 / `make dev`）才降级放行。
 - **握手要趁早**：宿主只在 iframe 挂载后 60 秒内应答 postMessage 握手，`main.tsx` 里
   `primeFnosSdk()` 必须在入口发起；超时后 SDK 会退化成永不 settle 的连接（按钮点了没反应）。
+- **飞牛 App 里也是宿主**：桌面微应用是 iframe（postMessage 桥接），App 里是**顶层 WebView**
+  （没有 parent，SDK 走 `flutter_inappwebview.callHandler`）。宿主判定必须三条都认：
+  `window.parent !== window`、`window.flutter_inappwebview` 已注入、UA 带
+  `FNOS/` / `FNAppType/` / `FNAppVer/`。只看 iframe 会把 App 判成「不在宿主」，
+  文件管理器、目录/文件选择器全部失效（报「当前不在飞牛宿主中」）。
+- **「不在宿主」和「宿主连不上」要分开说**：`standalone` 才提示不在宿主，
+  `bridge`（握手超时/加载失败）要说连接不可用，否则 App 里会得到一个完全误导的报错。
 - 不做版本分流：dsh 那边按飞牛 App 版本切网页授权页，本应用只跑微应用 iframe，不适用。
 - 「选择飞牛目录」（`pickUserFile`）本身就是授权入口：挑完只在弹窗里**进入该目录**，
   不自动登记、不关弹窗、不进新对话；用户点「添加」时探测已通过，不会再弹一次确认框。

@@ -860,9 +860,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (r.ok) return;
     set({
       error:
-        r.reason === "standalone" || r.reason === "bridge"
+        r.reason === "standalone"
           ? "当前不在飞牛宿主中，无法打开文件管理器"
-          : `打开目录失败：${r.reason ?? "未知错误"}`,
+          : r.reason === "bridge"
+            ? "飞牛宿主连接不可用，无法打开文件管理器"
+            : `打开目录失败：${r.reason ?? "未知错误"}`,
     });
   },
 

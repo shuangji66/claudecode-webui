@@ -6,9 +6,11 @@
 // 飞牛自己的确认页，用户确认后 trim_acl 才会写入。后端 API（trim.file.*）只能查/删
 // 授权，不能授权，所以这一步只能在前端做。
 //
-// 不做版本分流：dsh 的 utils/fnosApp.ts 按飞牛 App 版本分流（1.38.0 之前原生
-// pickUserFile 会把个人目录按共享授权处理），本应用只作为微应用跑在飞牛桌面 iframe
-// 里，走的是桌面宿主桥接，不存在那条 App 内 WebView 通路，因此一律直调。
+// 两条宿主通路都要认：飞牛桌面把微应用放在 iframe 里（postMessage 桥接），
+// 飞牛 App 里则是顶层 WebView（没有 parent），SDK 用 UA 判断后走
+// flutter_inappwebview 的 callHandler。只看 iframe 会让 App 内被误判成「不在宿主」。
+// 不做版本分流：dsh 的 utils/fnosApp.ts 按 App 版本分流（1.38.0 之前原生
+// pickUserFile 会把个人目录按共享授权处理），本应用一律直调。
 //
 // 拿不到宿主（直接开浏览器访问端口、本地 make dev）时不阻塞添加目录：返回 skipped，
 // 调用方按旧行为继续。理由是本项目也支持脱离飞牛网关直连，硬失败会让那种部署完全
@@ -27,9 +29,30 @@ const READY_TIMEOUT_MS = 10_000;
 let instance: TrimApp | null = null;
 let modulePromise: Promise<TrimAppModule> | null = null;
 
-/** 页面是否可能拿到飞牛宿主桥接：桌面把应用放在 iframe 里，桥接基于 postMessage。 */
+/** 页面是否在 iframe 里（飞牛桌面微应用）。 */
 function inHostFrame(): boolean {
   return typeof window !== "undefined" && window.parent !== window;
+}
+
+/**
+ * UA 里是否带飞牛 App 标识（`FNOS/1.2.3`、`FNAppType/xxx`、`FNAppVer/1.2.3`）。
+ *
+ * 判据与 `@trimjs/web-app` 同一组 token：SDK 就是靠它们决定走移动端
+ * （flutter_inappwebview.callHandler）还是 iframe 桥接。App 内是顶层页面、
+ * 没有 parent frame，只判断 iframe 会漏掉它。
+ */
+export function isFnosApp(userAgent: string = typeof navigator === "undefined" ? "" : navigator.userAgent): boolean {
+  return /FNOS\/\d|FNAppType\/|FNAppVer\//.test(userAgent);
+}
+
+/** 原生 WebView 桥是否已注入（Android 直接挂 window，iOS 在 platformReady 之后才有）。 */
+function hasFlutterBridge(): boolean {
+  return typeof window !== "undefined" && Boolean((window as unknown as { flutter_inappwebview?: unknown }).flutter_inappwebview);
+}
+
+/** 页面是否可能拿到飞牛宿主桥接：桌面 iframe，或飞牛 App 内 WebView。 */
+function inHost(): boolean {
+  return inHostFrame() || hasFlutterBridge() || isFnosApp();
 }
 
 function loadSdk(): Promise<TrimAppModule> {
@@ -46,7 +69,7 @@ function loadSdk(): Promise<TrimAppModule> {
  * 拖到用户点「添加授权目录」才 new 会静默握手失败，按钮点了没反应。
  */
 export function primeFnosSdk(): void {
-  if (!inHostFrame()) return;
+  if (!inHost()) return;
   void loadSdk()
     .then((mod) => {
       instance ??= new mod.TrimApp();
@@ -184,7 +207,7 @@ export function classifyPickPaths(res: AuthorizeResponseLike | null | undefined)
  * 消息，让 claude 自己用 Read 工具读——不做任意宿主文件读取。
  */
 export async function pickFnosFiles(params: FnosPickParams = {}): Promise<FnosFilesOutcome> {
-  if (!inHostFrame()) return { state: "skipped", reason: "standalone" };
+  if (!inHost()) return { state: "skipped", reason: "standalone" };
   const sdk = await trimReady();
   if (!sdk) return { state: "skipped", reason: "bridge" };
   try {
@@ -202,7 +225,7 @@ export async function pickFnosFiles(params: FnosPickParams = {}): Promise<FnosFi
   }
 }
 
-/** 跳过授权的原因：非 iframe（独立浏览器）/ 宿主桥接不可用。 */
+/** 跳过授权的原因：不在宿主里（独立浏览器）/ 宿主桥接不可用。 */
 export type FnosAuthSkipReason = "standalone" | "bridge";
 
 export type FnosAuthOutcome =
@@ -216,7 +239,7 @@ export type FnosAuthOutcome =
  * 继续登记目录即可；返回 denied 表示用户取消或宿主报错，必须停下来。
  */
 export async function authorizeFnosDir(path: string): Promise<FnosAuthOutcome> {
-  if (!inHostFrame()) return { state: "skipped", reason: "standalone" };
+  if (!inHost()) return { state: "skipped", reason: "standalone" };
   const sdk = await trimReady();
   if (!sdk) return { state: "skipped", reason: "bridge" };
   try {
@@ -236,7 +259,7 @@ export async function authorizeFnosDir(path: string): Promise<FnosAuthOutcome> {
  * 不会再弹第二次确认框。
  */
 export async function pickFnosDir(params: FnosPickParams = {}): Promise<FnosPickOutcome> {
-  if (!inHostFrame()) return { state: "skipped", reason: "standalone" };
+  if (!inHost()) return { state: "skipped", reason: "standalone" };
   const sdk = await trimReady();
   if (!sdk) return { state: "skipped", reason: "bridge" };
   try {
@@ -261,7 +284,7 @@ export interface FnosOpenOutcome {
 
 /** 在飞牛文件管理器里显示某个目录（「在文件夹显示」）。 */
 export async function openFnosFileManager(path: string): Promise<FnosOpenOutcome> {
-  if (!inHostFrame()) return { ok: false, reason: "standalone" };
+  if (!inHost()) return { ok: false, reason: "standalone" };
   const sdk = await trimReady();
   if (!sdk) return { ok: false, reason: "bridge" };
   try {
