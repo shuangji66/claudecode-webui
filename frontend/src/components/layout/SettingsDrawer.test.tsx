@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { SettingsDrawer } from "./SettingsDrawer";
 import { useAppStore } from "../../store/useAppStore";
 
@@ -50,5 +50,23 @@ describe("设置页凭证输入框的自动填充", () => {
     const key = screen.getByPlaceholderText("未设置");
     expect(key.getAttribute("data-1p-ignore")).toBe("true");
     expect(["off", "new-password"]).toContain(key.getAttribute("autocomplete"));
+  });
+
+  it("手动添加的模型默认勾上「支持图片输入」", async () => {
+    await act(async () => {
+      render(<SettingsDrawer open initialTab="models" onClose={() => {}} />);
+    });
+    const manual = screen.getByPlaceholderText("手动添加模型 ID");
+    await act(async () => {
+      fireEvent.change(manual, { target: { value: "my-model" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(manual, { key: "Enter" });
+    });
+    // 展开该模型的能力设置
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /my-model/ }));
+    });
+    expect(screen.getByRole("checkbox", { name: /支持图片输入/ })).toBeChecked();
   });
 });
