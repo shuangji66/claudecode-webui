@@ -1,6 +1,6 @@
 // Package webui 把前端构建产物打进二进制。
 //
-// 构建流程（见 Makefile / build.sh）：`vite build` 的产物拷到 embed/ 下，
+// 构建流程（见 Makefile）：`vite build` 的产物拷到 embed/ 下，
 // `go build` 时由 go:embed 收进二进制；运行时通过 gateway 的 SPA handler 提供。
 package webui
 
