@@ -28,8 +28,9 @@ type wsClient struct {
 	r     *bufio.Reader
 	topic string
 
-	wmu    sync.Mutex
-	closed atomic.Bool
+	wmu       sync.Mutex
+	closed    atomic.Bool
+	closeOnce sync.Once
 }
 
 // SendJSON 发送一条事件；实现 hub.Client。
@@ -56,14 +57,20 @@ func (c *wsClient) writeFrame(op byte, payload []byte) error {
 }
 
 func (c *wsClient) close() {
-	if c.closed.Swap(true) {
-		return
-	}
-	c.wmu.Lock()
-	_ = c.conn.SetWriteDeadline(time.Now().Add(time.Second))
-	_, _ = c.conn.Write(wsframe.EncodeClose(1000))
-	c.wmu.Unlock()
-	_ = c.conn.Close()
+	// 写失败会把 closed 置位（见 writeFrame）。此时 close() 仍然必须关闭 socket：
+	// hijack 出来的连接不归 net/http 管，没人关它就一直占着 fd，长期运行会把
+	// 进程的 fd 耗光（accept 报 too many open files，整个服务不可用）。
+	// 所以这里的 once 只管「socket 只关一次」，不拿 closed 当早退条件。
+	already := c.closed.Swap(true)
+	c.closeOnce.Do(func() {
+		if !already {
+			c.wmu.Lock()
+			_ = c.conn.SetWriteDeadline(time.Now().Add(time.Second))
+			_, _ = c.conn.Write(wsframe.EncodeClose(1000))
+			c.wmu.Unlock()
+		}
+		_ = c.conn.Close()
+	})
 }
 
 // wireAttachment 是前端上行的一条附件（base64 编码）。

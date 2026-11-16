@@ -510,3 +510,56 @@ func TestBackgroundTasksSendsControlRequest(t *testing.T) {
 		t.Fatalf("空 tool_use_id 不应出现: %+v", req)
 	}
 }
+
+// 回归：Close 与 initialize 回包并发到达时读循环不能 panic。
+//
+// 旧实现里 Close 会 close(pending[request_id])，而 handleLine 是「从 map 取出
+// channel、释放锁、再发送」。两者交错时向已关闭的 channel 发送会 panic，
+// 且 panic 发生在没有 recover 的读循环 goroutine 里 —— 整个进程会退出。
+func TestCloseRacingInitializeResponseNoPanic(t *testing.T) {
+	old := InitTimeout
+	InitTimeout = 2 * time.Second
+	t.Cleanup(func() { InitTimeout = old })
+
+	for i := 0; i < 30; i++ {
+		sessSide, cliSide := newDuplex(t)
+		sess := New("s-race", "/tmp/work", sessSide, func(Event) {})
+		go func() { _ = sess.Start() }()
+
+		// 先收 initialize 请求，拿到 request_id。
+		sc := bufio.NewScanner(cliSide)
+		sc.Buffer(make([]byte, 0, 4096), 1<<20)
+		if !sc.Scan() {
+			t.Fatalf("第 %d 轮：没收到 initialize: %v", i, sc.Err())
+		}
+		var req map[string]any
+		if err := json.Unmarshal(sc.Bytes(), &req); err != nil {
+			t.Fatalf("第 %d 轮：解析 initialize: %v", i, err)
+		}
+		requestID, _ := req["request_id"].(string)
+		if requestID == "" {
+			t.Fatalf("第 %d 轮：initialize 缺 request_id: %s", i, sc.Text())
+		}
+		line, err := json.Marshal(map[string]any{
+			"type": "control_response",
+			"response": map[string]any{
+				"subtype":    "success",
+				"request_id": requestID,
+				"response":   map[string]any{"claude_code_version": "2.1.325"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+
+		// 回包与 Close 同时发生，命中「已取出 ch、尚未发送」的窗口。
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; _, _ = cliSide.Write(append(line, '\n')) }()
+		go func() { defer wg.Done(); <-start; _ = sess.Close() }()
+		close(start)
+		wg.Wait()
+		_ = sess.Close()
+	}
+}

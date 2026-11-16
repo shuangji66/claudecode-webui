@@ -59,6 +59,17 @@ const (
 	KindClosed       = "closed"
 )
 
+// pendingCall 是一次等待回包的控制请求。
+//
+// ch 只由读循环写、由 request 读，**永远不被 close**；done 只由 Close 关闭。
+// 曾经在 Close 里 close(ch)，而读循环是「从 map 取出 ch 后就放手发送」，
+// 两者交错会 panic（send on closed channel），panic 发生在读循环 goroutine 里
+// 没有 recover，整个 ccweb 进程会跟着退出。现在关闭方只关 done，发送方 select 它。
+type pendingCall struct {
+	ch   chan json.RawMessage
+	done chan struct{}
+}
+
 // Session 是一条会话。
 type Session struct {
 	ID        string
@@ -70,7 +81,7 @@ type Session struct {
 
 	wmu     sync.Mutex // 串行化对 stdin 的写
 	pmu     sync.Mutex
-	pending map[string]chan json.RawMessage
+	pending map[string]*pendingCall
 
 	closeOnce sync.Once
 	done      chan struct{}
@@ -90,7 +101,7 @@ func New(id, cwd string, tr Transport, emit func(Event)) *Session {
 		CreatedAt: time.Now(),
 		tr:        tr,
 		emit:      emit,
-		pending:   make(map[string]chan json.RawMessage),
+		pending:   make(map[string]*pendingCall),
 		done:      make(chan struct{}),
 	}
 	s.state.Store(StateStarting)
@@ -244,8 +255,8 @@ func (s *Session) Close() error {
 		s.setState(StateClosed)
 		_ = s.tr.Close()
 		s.pmu.Lock()
-		for k, ch := range s.pending {
-			close(ch)
+		for k, call := range s.pending {
+			close(call.done)
 			delete(s.pending, k)
 		}
 		s.pmu.Unlock()
@@ -270,13 +281,13 @@ func (s *Session) writeLine(b []byte) error {
 
 // request 发送一条控制请求并等待其回包。
 func (s *Session) request(line []byte, requestID string, timeout time.Duration) (json.RawMessage, error) {
-	ch := make(chan json.RawMessage, 1)
+	call := &pendingCall{ch: make(chan json.RawMessage, 1), done: make(chan struct{})}
 	s.pmu.Lock()
 	if _, dup := s.pending[requestID]; dup {
 		s.pmu.Unlock()
 		return nil, fmt.Errorf("session: request_id %q 重复", requestID)
 	}
-	s.pending[requestID] = ch
+	s.pending[requestID] = call
 	s.pmu.Unlock()
 
 	if err := s.writeLine(line); err != nil {
@@ -285,10 +296,7 @@ func (s *Session) request(line []byte, requestID string, timeout time.Duration) 
 	}
 
 	select {
-	case resp, ok := <-ch:
-		if !ok {
-			return nil, errors.New("session: 会话在等待回包时关闭")
-		}
+	case resp := <-call.ch:
 		return resp, nil
 	case <-time.After(timeout):
 		s.removePending(requestID)
@@ -348,15 +356,17 @@ func (s *Session) handleLine(line []byte) {
 	case protocol.TypeControlResponse:
 		// request_id 在 response.request_id，不在顶层。
 		s.pmu.Lock()
-		ch, ok := s.pending[env.RespRequestID]
+		call, ok := s.pending[env.RespRequestID]
 		if ok {
 			delete(s.pending, env.RespRequestID)
 		}
 		s.pmu.Unlock()
 		if ok {
 			select {
-			case ch <- env.ResponsePayload():
-			default:
+			case call.ch <- env.ResponsePayload():
+			case <-call.done:
+				// 会话在回包到达前已关闭：丢弃这条回包即可。
+				// ch 从不被 close，这个 select 是「不会向已关闭 channel 发送」的唯一保证。
 			}
 		} else {
 			// 无人认领的回包（例如审批回包）转给前端做审计。

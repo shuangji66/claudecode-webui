@@ -301,6 +301,13 @@ func TestResolveTarball(t *testing.T) {
 	if _, err := resolveTarball("https://example.test/npm", "file:///etc/passwd"); err == nil {
 		t.Fatal("非 http/https 地址应被拒绝")
 	}
+	// 元数据可以指向任意主机；不校验 host 就等于允许镜像把下载引导到第三方。
+	if _, err := resolveTarball("https://example.test/npm", "https://evil.example/x.tgz"); err == nil {
+		t.Fatal("主机与下载源不一致的 tarball 应被拒绝")
+	}
+	if _, err := resolveTarball("https://example.test/npm", "//evil.example/x.tgz"); err == nil {
+		t.Fatal("协议相对地址不能逃到别的主机")
+	}
 }
 
 // 安装过程中可以取消：context 取消后任务进入终态，且不留下版本目录。
@@ -355,5 +362,37 @@ func TestCancelInstall(t *testing.T) {
 	// 没有任务时取消是幂等的。
 	if err := m.CancelInstall(); err != nil {
 		t.Fatalf("无任务时 CancelInstall 应幂等: %v", err)
+	}
+}
+
+// 回归：registry 不返回 dist.integrity 时必须直接失败。
+//
+// 旧实现把校验包在 `if Integrity != ""` 里，缺失时静默跳过，随后 verifyBinary
+// 会执行这个未校验的二进制 —— 等于把「镜像被换包」变成任意代码执行。
+func TestInstallRejectsMissingIntegrity(t *testing.T) {
+	const version = "2.1.325"
+	tgz := fakeTgz(t, version)
+	srv := fakeRegistry(t, version, tgz, "")
+
+	dir := t.TempDir()
+	m, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	m.platform = "linux-x64"
+	m.registries[SourceNpmmirror] = srv.URL
+
+	if err := m.StartInstall(version, ""); err != nil {
+		t.Fatalf("StartInstall: %v", err)
+	}
+	job := waitJob(t, m)
+	if job.Phase != PhaseError {
+		t.Fatalf("phase = %s, want %s（缺 integrity 必须失败）", job.Phase, PhaseError)
+	}
+	if !strings.Contains(job.Error, "integrity") {
+		t.Fatalf("错误信息未说明缺 integrity: %q", job.Error)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "claude", version, "claude")); err == nil {
+		t.Fatal("校验失败却落盘了二进制")
 	}
 }

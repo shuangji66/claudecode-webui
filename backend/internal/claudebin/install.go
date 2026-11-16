@@ -61,6 +61,11 @@ func (m *Manager) install(ctx context.Context, version, source string) error {
 	if man.Dist.Tarball == "" {
 		return errors.New("claudebin: registry 没有返回 tarball 地址")
 	}
+	// 没有 integrity 就等于「装上来路不明的二进制」——下载完会在 verifyBinary
+	// 里被执行。宁可装不上，也不能跳过校验。
+	if man.Dist.Integrity == "" {
+		return errors.New("claudebin: registry 没有提供 dist.integrity，拒绝安装未校验的二进制")
+	}
 	// 华为云等镜像返回的是相对路径（`/@anthropic-ai/...tgz`），直接请求会
 	// 报 unsupported protocol scheme；按当前源的地址解析成绝对 URL。
 	tarball, err := resolveTarball(m.registries[source], man.Dist.Tarball)
@@ -108,7 +113,14 @@ func (m *Manager) install(ctx context.Context, version, source string) error {
 // 只接受 http/https：源是内置白名单，但元数据来自网络，不能让它把下载
 // 引导到 file:// 之类的地方。
 func resolveTarball(registry, raw string) (string, error) {
-	u, err := neturl.Parse(strings.TrimSpace(raw))
+	raw = strings.TrimSpace(raw)
+	// 协议相对地址（`//host/path`）在这里语义含糊：Parse 会把 host 丢进 Host 字段、
+	// 只留下 Path，拼回源地址后看起来「正常」，实际是镜像在改写目标路径。
+	// 真实镜像只用绝对地址或 `/` 开头的相对地址，直接拒绝更安全。
+	if strings.HasPrefix(raw, "//") {
+		return "", errors.New("claudebin: tarball 地址不能是协议相对地址")
+	}
+	u, err := neturl.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("claudebin: 解析 tarball 地址: %w", err)
 	}
@@ -132,10 +144,19 @@ func resolveTarball(registry, raw string) (string, error) {
 	}
 	switch strings.ToLower(u.Scheme) {
 	case "http", "https":
-		return u.String(), nil
 	default:
 		return "", fmt.Errorf("claudebin: tarball 地址必须是 http/https，实际 %q", u.Scheme)
 	}
+	// 主机必须与当前下载源一致。元数据来自网络，镜像被换包时可以指向任意地址；
+	// sha512 校验只是第二道闸，不能让它成为唯一一道（integrity 缺失时它根本不成立）。
+	base, err := neturl.Parse(strings.TrimSpace(registry))
+	if err != nil {
+		return "", fmt.Errorf("claudebin: 解析下载源地址: %w", err)
+	}
+	if base.Host == "" || !strings.EqualFold(u.Host, base.Host) {
+		return "", fmt.Errorf("claudebin: tarball 主机 %q 与下载源 %q 不一致，拒绝下载", u.Host, base.Host)
+	}
+	return u.String(), nil
 }
 
 // fetchManifest 取单个版本的平台包元数据（只有几 KB，比整份 packument 便宜）。
@@ -282,11 +303,10 @@ func (m *Manager) downloadAndExtract(ctx context.Context, man manifest, dst stri
 	if !found {
 		return errors.New("claudebin: 压缩包里没有 claude 二进制")
 	}
-	if man.Dist.Integrity != "" {
-		got := "sha512-" + base64.StdEncoding.EncodeToString(hash.Sum(nil))
-		if got != man.Dist.Integrity {
-			return fmt.Errorf("claudebin: 完整性校验失败（期望 %s，实际 %s）；可能是镜像内容与官方不一致", man.Dist.Integrity, got)
-		}
+	// 走到这里 integrity 必定非空（install 已拦），校验无条件执行。
+	got := "sha512-" + base64.StdEncoding.EncodeToString(hash.Sum(nil))
+	if got != man.Dist.Integrity {
+		return fmt.Errorf("claudebin: 完整性校验失败（期望 %s，实际 %s）；可能是镜像内容与官方不一致", man.Dist.Integrity, got)
 	}
 	return nil
 }
