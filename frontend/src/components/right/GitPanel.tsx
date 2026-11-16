@@ -13,6 +13,7 @@ import {
 } from "../../lib/workspace";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { Select } from "../common/Select";
+import { FileIcon } from "../common/FileIcon";
 import { askConfirm } from "../common/SystemDialogs";
 import type { GitLogEntry } from "../../transport/types";
 import {
@@ -624,6 +625,7 @@ function ChangeGroup({ title, rows, side, busy, active, onOpen, onStage, onUnsta
                   title={row.entry.path}
                   className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-[3px] text-left hover:bg-black/[0.035]"
                 >
+                  <FileIcon name={name} size={13} className="shrink-0" />
                   <span
                     className={`inline-flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-[4px] border border-line-strong bg-panel font-mono text-[10px] font-semibold ${TONE_TEXT[row.status.tone]}`}
                     aria-hidden="true"
@@ -752,8 +754,9 @@ function DiffView({ state, busy, actions, onBack }: { state: DiffViewState; busy
           <IconChevronLeft size={15} />
         </button>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[11.5px] font-medium text-ink" title={state.title}>
-            {state.title}
+          <p className="flex min-w-0 items-center gap-1.5 truncate text-[11.5px] font-medium text-ink" title={state.title}>
+            <FileIcon name={state.title} size={13} className="shrink-0" />
+            <span className="truncate">{state.title}</span>
           </p>
           <p className="mt-0.5 flex items-center gap-1.5 truncate text-[9.5px] text-faint">
             <span className="truncate">{state.subtitle}</span>

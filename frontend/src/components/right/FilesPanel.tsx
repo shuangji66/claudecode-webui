@@ -14,12 +14,9 @@ import {
   IconExternal,
   IconEye,
   IconEyeOff,
-  IconFile,
-  IconFileText,
-  IconFolder,
-  IconImage,
   IconRetry,
 } from "../common/Icons";
+import { FileIcon, FolderIcon } from "../common/FileIcon";
 
 interface Props {
   cwd: string;
@@ -34,13 +31,6 @@ function baseName(path: string): string {
 function dirName(path: string): string {
   const idx = path.lastIndexOf("/");
   return idx > 0 ? path.slice(0, idx) : "";
-}
-
-function FileGlyph({ name, type }: { name: string; type: FsEntry["type"] }) {
-  if (type === "dir") return <IconFolder size={14} className="shrink-0 text-faint" />;
-  if (previewKind(name) === "image") return <IconImage size={14} className="shrink-0 text-faint" />;
-  if (previewKind(name) === "markdown") return <IconFileText size={14} className="shrink-0 text-faint" />;
-  return <IconFile size={14} className="shrink-0 text-faint" />;
 }
 
 /** 工作区文件树 + 简单预览。树按目录懒加载；预览替换树的显示但保留展开状态。 */
@@ -117,7 +107,7 @@ export function FilesPanel({ cwd, active }: Props) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-[42px] shrink-0 items-center gap-1 border-b border-line px-2">
-        <IconFolder size={14} className="ml-1 shrink-0 text-muted" />
+        <FolderIcon open size={14} className="ml-1 shrink-0" />
         <span className="min-w-0 truncate text-[12px] font-medium text-ink" title={cwd}>
           {rootLabel}
         </span>
@@ -235,7 +225,11 @@ function TreeNode({ entry, depth, levels, loading, errors, loadDir, onOpenFile }
         <span className="flex w-3.5 shrink-0 items-center justify-center text-faint">
           {isDir ? open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} /> : null}
         </span>
-        <FileGlyph name={entry.name} type={entry.type} />
+        {isDir ? (
+          <FolderIcon open={open} size={14} className="shrink-0" />
+        ) : (
+          <FileIcon name={entry.name} size={14} className="shrink-0" />
+        )}
         <span className="min-w-0 flex-1 truncate text-[12px]">{entry.name}</span>
         {isDir && isLoading && <span className="shrink-0 text-[10px] text-faint">…</span>}
         {entry.type === "file" && entry.size !== undefined && (
@@ -353,7 +347,7 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
           <>
             {file.binary && kind !== "image" && kind !== "pdf" ? (
               <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
-                <IconFile size={26} className="text-faint" />
+                <FileIcon name={name} size={26} />
                 <p className="text-[12px] font-medium text-ink">{t("二进制文件", "Binary file")}</p>
                 <p className="text-[11px] text-muted">
                   {t(`大小 ${formatBytes(file.size)}，不支持文本预览。`, `${formatBytes(file.size)}, no text preview.`)}

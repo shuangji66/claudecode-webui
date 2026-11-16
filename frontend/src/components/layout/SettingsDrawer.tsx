@@ -18,6 +18,7 @@ import { PROVIDER_PRESETS, findProviderPreset, presetFormFields } from "../../li
 import { DeploySettings } from "./DeploySettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { Select } from "../common/Select";
+import { isDangerousPermissionMode, permissionModeWarning } from "../../lib/permissionModes";
 import { Dialog } from "../common/Dialog";
 import { askConfirm } from "../common/SystemDialogs";
 import {
@@ -174,6 +175,23 @@ function GeneralSettings() {
   const locale = settings?.locale || "zh";
   const fontSize = settings?.font_size || 15;
 
+  /** 默认权限里的危险模式同样要二次确认：这里保存的是「以后新会话」的默认值。 */
+  const changeDefaultMode = async (next: string) => {
+    const current = settings?.permission_mode ?? "";
+    if (next !== current && isDangerousPermissionMode(next)) {
+      const warn = permissionModeWarning(next, locale as "zh" | "en");
+      const ok = await askConfirm({
+        title: warn.title,
+        message: warn.message,
+        danger: true,
+        confirmText: t("仍然设为默认", "Set as default anyway"),
+        cancelText: t("保持当前设置", "Keep current"),
+      });
+      if (!ok) return;
+    }
+    await save({ permission_mode: next });
+  };
+
   return (
     <div className="mx-auto max-w-2xl space-y-7">
       <div className="flex items-center gap-2">
@@ -190,8 +208,12 @@ function GeneralSettings() {
           className="max-w-xs"
           ariaLabel={t("默认权限", "Default permission")}
           value={settings?.permission_mode ?? ""}
-          onChange={(next) => void save({ permission_mode: next })}
-          options={PERMISSION_MODES.map((m) => ({ value: m, label: permissionLabel(m, locale as "zh" | "en") }))}
+          onChange={(next) => void changeDefaultMode(next)}
+          options={PERMISSION_MODES.map((m) => ({
+            value: m,
+            label: permissionLabel(m, locale as "zh" | "en"),
+            danger: isDangerousPermissionMode(m),
+          }))}
           menuWidth={200}
         />
       </Section>

@@ -12,6 +12,8 @@ import { IconCheck, IconChevronDown } from "./Icons";
 export interface SelectOption {
   value: string;
   label: ReactNode;
+  /** 危险选项：菜单项与选中后的触发器都用红色（权限模式里的「跳过权限」等）。 */
+  danger?: boolean;
 }
 
 interface Props {
@@ -123,6 +125,7 @@ export function Select({
     }
   };
 
+  const danger = current?.danger === true;
   const triggerContent = trigger ?? (
     <span className="min-w-0 flex-1 truncate">{current?.label ?? placeholder ?? ""}</span>
   );
@@ -139,7 +142,7 @@ export function Select({
         aria-haspopup="listbox"
         aria-expanded={open$}
         aria-controls={open$ ? listId : undefined}
-        className={`${TRIGGER_VARIANT[variant]} ${className}`}
+        className={`${TRIGGER_VARIANT[variant]} ${danger ? "text-danger" : ""} ${className}`}
       >
         {leading}
         {triggerContent}
@@ -173,8 +176,8 @@ export function Select({
                     onMouseEnter={() => setActive(index)}
                     onClick={() => commit(index)}
                     className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] ${
-                      index === active ? "bg-panel-strong text-ink" : "text-ink"
-                    } ${isSelected ? "font-medium" : ""}`}
+                      index === active ? "bg-panel-strong" : ""
+                    } ${option.danger ? "text-danger" : "text-ink"} ${isSelected ? "font-medium" : ""}`}
                   >
                     <span className="min-w-0 flex-1 truncate">{option.label}</span>
                     {isSelected && <IconCheck size={13} className="shrink-0 text-brand" />}

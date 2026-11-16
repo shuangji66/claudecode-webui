@@ -16,6 +16,8 @@ import {
   type PendingAttachment,
 } from "../../lib/attachments";
 import { Select } from "../common/Select";
+import { askConfirm } from "../common/SystemDialogs";
+import { isDangerousPermissionMode, permissionModeWarning } from "../../lib/permissionModes";
 import { Menu, type MenuItem } from "../common/Menu";
 import { IconClose, IconFile, IconFolder, IconPlus, IconSend, IconShield, IconStop } from "../common/Icons";
 import { ModelMenu } from "./ModelMenu";
@@ -93,6 +95,27 @@ export function Composer({
     setFileError(null);
     const el = ref.current;
     if (el) el.style.height = "auto";
+  };
+
+  /**
+   * 切换权限模式：危险模式先二次确认。
+   *
+   * 「不询问」「跳过权限」会让命令不经审批直接跑，误点一次就可能已经执行完了，
+   * 所以这里必须拦一道，并在弹窗里说清楚区别。
+   */
+  const changeMode = async (next: string) => {
+    if (next !== permissionMode && isDangerousPermissionMode(next)) {
+      const warn = permissionModeWarning(next, locale);
+      const ok = await askConfirm({
+        title: warn.title,
+        message: warn.message,
+        danger: true,
+        confirmText: t("仍然切换", "Switch anyway"),
+        cancelText: t("保持当前模式", "Keep current"),
+      });
+      if (!ok) return;
+    }
+    onPermissionMode(next);
   };
 
   const pickFiles = async (list: FileList | null) => {
@@ -334,10 +357,14 @@ export function Composer({
               variant="ghost"
               ariaLabel={t("权限模式", "Permission mode")}
               value={permissionMode}
-              onChange={onPermissionMode}
+              onChange={(next) => void changeMode(next)}
               disabled={disabled}
               leading={<IconShield size={13} className="shrink-0" />}
-              options={PERMISSION_MODES.map((m) => ({ value: m, label: permissionLabel(m, locale) }))}
+              options={PERMISSION_MODES.map((m) => ({
+                value: m,
+                label: permissionLabel(m, locale),
+                danger: isDangerousPermissionMode(m),
+              }))}
               menuWidth={176}
             />
           </span>

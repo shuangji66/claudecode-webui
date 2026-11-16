@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Composer } from "./Composer";
 import { useAppStore } from "../../store/useAppStore";
+import { SystemDialogs } from "../common/SystemDialogs";
 
 const pickFnosFiles = vi.fn();
 vi.mock("../../lib/fnos", () => ({
@@ -111,5 +112,64 @@ describe("Composer 添加菜单", () => {
     });
 
     expect(await screen.findByText(/无法打开飞牛文件选择器/)).toBeInTheDocument();
+  });
+});
+
+describe("Composer 权限模式", () => {
+  function setupMode() {
+    const onPermissionMode = vi.fn();
+    render(
+      <>
+        <SystemDialogs />
+        <Composer
+          disabled={false}
+          sendBlocked={false}
+          starting={false}
+          commands={COMMANDS}
+          busy={false}
+          modelOptions={[]}
+          selectedKey=""
+          selectedEffort=""
+          permissionMode=""
+          onSelectModel={vi.fn()}
+          onSelectEffort={vi.fn()}
+          onPermissionMode={onPermissionMode}
+          onSend={vi.fn()}
+          onInterrupt={vi.fn()}
+        />
+      </>,
+    );
+    return { onPermissionMode };
+  }
+
+  it("危险模式（跳过权限）先弹二次确认，确认后才切换", async () => {
+    const { onPermissionMode } = setupMode();
+    fireEvent.click(screen.getByLabelText("权限模式"));
+    fireEvent.click(screen.getByRole("option", { name: "跳过权限" }));
+
+    expect(await screen.findByText("切换到「跳过权限」？")).toBeInTheDocument();
+    expect(onPermissionMode).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("仍然切换"));
+    await waitFor(() => expect(onPermissionMode).toHaveBeenCalledWith("bypassPermissions"));
+  });
+
+  it("取消确认就不切换", async () => {
+    const { onPermissionMode } = setupMode();
+    fireEvent.click(screen.getByLabelText("权限模式"));
+    fireEvent.click(screen.getByRole("option", { name: "不询问" }));
+    expect(await screen.findByText("切换到「不询问」？")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("保持当前模式"));
+    await waitFor(() => expect(screen.queryByText("切换到「不询问」？")).toBeNull());
+    expect(onPermissionMode).not.toHaveBeenCalled();
+  });
+
+  it("安全模式直接切换，不弹窗", () => {
+    const { onPermissionMode } = setupMode();
+    fireEvent.click(screen.getByLabelText("权限模式"));
+    fireEvent.click(screen.getByRole("option", { name: "计划模式" }));
+    expect(onPermissionMode).toHaveBeenCalledWith("plan");
+    expect(screen.queryByText(/切换到「/)).toBeNull();
   });
 });

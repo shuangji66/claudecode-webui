@@ -54,3 +54,31 @@ describe("Select", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
   });
 });
+
+// 权限模式里的「不询问 / 跳过权限」：菜单项与选中后的触发器都要标红。
+describe("Select 危险选项", () => {
+  const DANGEROUS = [
+    { value: "default", label: "默认" },
+    { value: "dontAsk", label: "不询问", danger: true },
+    { value: "bypassPermissions", label: "跳过权限", danger: true },
+  ];
+
+  it("菜单里的危险项标红，安全项不标", () => {
+    render(<Select value="default" options={DANGEROUS} onChange={() => {}} ariaLabel="权限模式" />);
+    fireEvent.click(screen.getByRole("button", { name: "权限模式" }));
+
+    expect(screen.getByRole("option", { name: "不询问" })).toHaveClass("text-danger");
+    expect(screen.getByRole("option", { name: "跳过权限" })).toHaveClass("text-danger");
+    expect(screen.getByRole("option", { name: "默认" })).not.toHaveClass("text-danger");
+  });
+
+  it("选中危险项后触发器也标红", () => {
+    const { rerender } = render(
+      <Select value="default" options={DANGEROUS} onChange={() => {}} ariaLabel="权限模式" />,
+    );
+    expect(screen.getByRole("button", { name: "权限模式" })).not.toHaveClass("text-danger");
+
+    rerender(<Select value="bypassPermissions" options={DANGEROUS} onChange={() => {}} ariaLabel="权限模式" />);
+    expect(screen.getByRole("button", { name: "权限模式" })).toHaveClass("text-danger");
+  });
+});

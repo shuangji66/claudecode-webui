@@ -38,6 +38,7 @@ src/
   components/right/    RightSidebar（标签页）/ FilesPanel / GitPanel / TerminalView（单个终端会话）
                        / SubagentPanel（子代理对话，读旁路转录）
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
+                       / FileIcon（按扩展名给颜色的文件图标 + 文件夹图标）
   components/          layout / chat / tools / permission / settings
 ```
 
@@ -105,6 +106,13 @@ src/
     不自动登记 / 关弹窗 / 进新对话，登记仍由用户点「添加」；「新建文件夹」
     走 `mkdirDir` → `POST /api/fs/mkdir`。工作区行的「更多」菜单只有重命名 / 在文件夹显示 /
     删除工作区三项，别把会话菜单的归档/结束进程混进去。
+21. **文件图标走 `common/FileIcon`**（`FileIcon` / `FolderIcon` / `classifyFile`）：
+    颜色区分语言、形状区分类别（参考 DSH 的 `FileTypeIcon` + `classifyFileType`）。
+    文件树、Git 列表、预览标题都用它，不要再退回单一的 `IconFile`；图标一律 `aria-hidden`。
+22. **危险权限模式必须标红 + 二次确认**：`dontAsk`（不询问）与 `bypassPermissions`（跳过权限）
+    会让命令不经审批直接执行，误点一次就已经跑完了。`lib/permissionModes.ts` 是唯一判定入口，
+    下拉选项带 `danger`（触发器与菜单项都变红），切换前用 `askConfirm` 弹一句人话说明。
+    新增设置权限模式的入口也必须走同一套。
 
 ## 3. 状态管理（zustand）
 
