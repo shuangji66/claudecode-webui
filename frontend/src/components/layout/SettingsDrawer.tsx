@@ -186,7 +186,7 @@ function GeneralSettings() {
       </Section>
 
       <Section title={t("外观", "Appearance")} desc={t("选择浅色、深色，或跟随系统。", "Choose light, dark, or follow the system.")}>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="inline-flex rounded-lg border border-line-strong p-0.5">
           {THEMES.map((item) => {
             const active = theme === item;
             const Icon = item === "light" ? IconSun : item === "dark" ? IconMoon : IconMonitor;
@@ -197,11 +197,11 @@ function GeneralSettings() {
                 type="button"
                 aria-pressed={active}
                 onClick={() => void save({ theme: item })}
-                className={`flex flex-col items-center justify-center gap-1.5 rounded-xl border px-3 py-4 text-[12px] transition ${
-                  active ? "border-brand bg-brand-soft text-brand" : "border-line-strong text-ink-2 hover:bg-panel-strong"
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] ${
+                  active ? "bg-panel-strong font-medium text-ink" : "text-muted hover:text-ink"
                 }`}
               >
-                <Icon size={20} />
+                <Icon size={14} />
                 {label}
               </button>
             );
