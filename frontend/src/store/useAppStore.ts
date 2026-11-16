@@ -10,7 +10,16 @@
 
 import { create } from "zustand";
 import { apiFetch } from "../lib/runtime";
-import { appendError, appendUser, applyCLI, isTurnResult, prependSystem, subagentFrame } from "../lib/normalize";
+import {
+  appendError,
+  appendUser,
+  applyCLI,
+  attachTurnUsage,
+  isTurnResult,
+  prependSystem,
+  subagentFrame,
+  turnsFromTranscript,
+} from "../lib/normalize";
 import { applyUsageMessage, mergeUsage, usageFromTranscript, type UsageSnapshot } from "../lib/usage";
 import { openFnosFileManager } from "../lib/fnos";
 import type { Item } from "../lib/model";
@@ -1091,6 +1100,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
           const at = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : NaN;
           next = applyCLI(next, line, Number.isFinite(at) ? at : Date.now());
         }
+        // 转录里没有 result 行（claude 只把 result 写 stdout），所以「本轮耗时 ·
+        // 输出 tok」必须从 assistant / api-request 行自己推，否则刷新后全丢。
+        next = attachTurnUsage(next, turnsFromTranscript(tr.lines ?? []));
         // 后端只回放最近 20k 行 / 16MB；被截断时必须说出来，否则用户会以为
         // 这段对话本来就这么短。
         if (tr.truncated) next = prependSystem(next, "更早的消息已被省略（只保留最近一段转录）");

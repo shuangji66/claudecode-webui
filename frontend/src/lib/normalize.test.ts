@@ -1,6 +1,8 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import {
   applyCLI,
+  attachTurnUsage,
+  turnsFromTranscript,
   appendUser,
   __resetIds,
   imagesOfContent,
@@ -810,5 +812,97 @@ describe("流式气泡不在末尾时也要被替换", () => {
     expect(assistants[0]).toMatchObject({ text: "你好，世界", streaming: false });
     // 半截气泡不能残留
     expect(items.some((i) => i.kind === "assistant" && i.streaming)).toBe(false);
+  });
+});
+
+describe("转录回放的回合用量", () => {
+  // 转录里没有 result 行（claude 只把 result 写 stdout），重开对话时靠
+  // assistant / api-request 行自己推：否则刷新后「本轮耗时 · 输出 tok」全丢。
+  const lines = [
+    { type: "user", timestamp: "2026-01-02T00:00:00.000Z", message: { role: "user", content: "第一问" } },
+    { type: "api-request", timestamp: "2026-01-02T00:00:01.000Z" },
+    {
+      type: "assistant",
+      timestamp: "2026-01-02T00:00:03.000Z",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "先看代码" },
+          { type: "tool_use", id: "tu1", name: "Read", input: {} },
+        ],
+        usage: { input_tokens: 100, output_tokens: 200, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 },
+      },
+    },
+    {
+      type: "user",
+      timestamp: "2026-01-02T00:00:04.000Z",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu1", content: "ok" }] },
+    },
+    { type: "api-request", timestamp: "2026-01-02T00:00:05.000Z" },
+    {
+      type: "assistant",
+      timestamp: "2026-01-02T00:00:09.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "答案是 42" }],
+        usage: { input_tokens: 300, output_tokens: 900, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    },
+    { type: "user", timestamp: "2026-01-02T00:00:20.000Z", message: { role: "user", content: "第二问" } },
+    { type: "api-request", timestamp: "2026-01-02T00:00:21.000Z" },
+    {
+      type: "assistant",
+      timestamp: "2026-01-02T00:00:23.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "第二个答案" }],
+        usage: { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      },
+    },
+  ];
+
+  it("按「提问 → 本轮最后一条回答」推导耗时与输出 token", () => {
+    const turns = turnsFromTranscript(lines);
+    expect(turns).toHaveLength(2);
+    // 第一轮：提问 00:00 → 最后回答 00:00:09 = 9s；输出是最后那次请求的 900 tok。
+    expect(turns[0].turn).toMatchObject({ durationMs: 9000, usage: { outputTokens: 900, apiMs: 4000 } });
+    // 第二轮：00:00:20 → 00:00:23 = 3s。
+    expect(turns[1].turn).toMatchObject({ durationMs: 3000, usage: { outputTokens: 40, apiMs: 2000 } });
+    expect(turns[1].ts).toBe(Date.parse("2026-01-02T00:00:23.000Z"));
+  });
+
+  it("工具回包与本地命令回显不算新的一轮", () => {
+    const turns = turnsFromTranscript([
+      ...lines.slice(0, 5),
+      {
+        type: "user",
+        timestamp: "2026-01-02T00:00:06.000Z",
+        message: { role: "user", content: "<local-command-stdout>Set model</local-command-stdout>" },
+      },
+      ...lines.slice(5, 6),
+    ]);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].turn.durationMs).toBe(9000);
+  });
+
+  it("转录被截断（首轮没有提问时间）时整轮跳过，不编耗时", () => {
+    const turns = turnsFromTranscript(lines.slice(1));
+    // 第一条提问被截掉 → 第一个回答没有回合起点，只能推出第二轮。
+    expect(turns).toHaveLength(1);
+    expect(turns[0].turn.durationMs).toBe(3000);
+  });
+
+  it("贴回消息列表时只贴在每轮最后一条回答上", () => {
+    let items: Item[] = [];
+    for (const line of lines) {
+      const rec = line as { timestamp?: string };
+      items = applyCLI(items, line, Date.parse(rec.timestamp ?? ""));
+    }
+    const stamped = attachTurnUsage(items, turnsFromTranscript(lines));
+    const answers = stamped.filter((i): i is Extract<Item, { kind: "assistant" }> => i.kind === "assistant");
+    // 「先看代码」是本轮的过渡正文，不该带用量。
+    expect(answers[0].turn).toBeUndefined();
+    expect(answers[1].turn).toMatchObject({ durationMs: 9000 });
+    expect(answers[2].turn).toMatchObject({ durationMs: 3000 });
   });
 });

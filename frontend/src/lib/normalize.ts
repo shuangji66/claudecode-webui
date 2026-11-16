@@ -7,8 +7,15 @@
 //   2. tool_use ↔ tool_result 配对：结果消息里的 tool_use_id 必须回填到对应工具卡片。
 //   3. 未知消息类型原样忽略，不抛错（协议会随 CLI 版本漂移）。
 
-import { applyUsageMessage, formatTokens, type UsageSnapshot } from "./usage";
-import type { Item, SubagentInfo, ToolImage } from "./model";
+import {
+  applyUsageMessage,
+  cacheHitRate,
+  contextTokens,
+  formatTokens,
+  totalsFromUsage,
+  type UsageSnapshot,
+} from "./usage";
+import type { Item, SubagentInfo, ToolImage, TurnUsage } from "./model";
 
 let idCounter = 0;
 function nextId(): string {
@@ -543,6 +550,112 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
     return items;
   }
   return [...items, { id: nextId(), seq: seqOf(items), ts: at, kind: "user", text }];
+}
+
+/** 转录里推导出来的一轮用量；ts 与该回合最后一条回答的 item.ts 对齐。 */
+export interface TranscriptTurn {
+  ts: number;
+  turn: TurnUsage;
+}
+
+/**
+ * 从转录行推导每一轮回答的用量。
+ *
+ * 为什么需要它：实时帧里的 result 带 duration_ms / usage，normalize 会把它贴到
+ * 回答上；但重开对话走的是转录回放（`--resume` 不回放历史，界面自己读 jsonl），
+ * 转录里没有 result 行（claude 只把 result 写 stdout），于是「本轮耗时 · 输出 tok」
+ * 一刷新就没了。转录里其实有全部原料：
+ *   - `assistant` 行的 `message.usage`：那次请求的 input/cache/output；
+ *   - `api-request` 行 → 下一条 `assistant` 行的间隔 = 这次请求的 API 耗时；
+ *   - 用户提问行 → 本轮最后一条 assistant 行的时间差 = 整个回合的墙钟耗时
+ *     （与 result.duration_ms 同一个口径）。
+ *
+ * 拿不到的数不编：缺 prompt 时间（转录被截断）就整轮跳过，缺 usage 就跳过该轮。
+ */
+export function turnsFromTranscript(lines: unknown[]): TranscriptTurn[] {
+  const out: TranscriptTurn[] = [];
+  let promptAt: number | undefined;
+  let last: { ts: number; usage: UsageSnapshot } | undefined;
+  let requestAt: number | undefined;
+
+  const closeTurn = () => {
+    if (promptAt === undefined || !last) return;
+    out.push({ ts: last.ts, turn: { durationMs: Math.max(0, last.ts - promptAt), usage: last.usage } });
+  };
+
+  for (const raw of lines) {
+    const line = asRecord(raw);
+    if (!line) continue;
+    // 服务端已经过滤过 sidechain / meta，这里再挡一次：子代理的话不能当回合边界。
+    if (line.isSidechain === true || line.isMeta === true) continue;
+    const type = str(line.type);
+    const parsed = typeof line.timestamp === "string" ? Date.parse(line.timestamp) : Number.NaN;
+    const at = Number.isFinite(parsed) ? parsed : undefined;
+
+    if (type === "api-request") {
+      requestAt = at;
+      continue;
+    }
+    if (type === "user") {
+      if (!isPromptLine(line)) continue;
+      closeTurn();
+      promptAt = at;
+      last = undefined;
+      continue;
+    }
+    if (type === "assistant") {
+      const totals = totalsFromUsage(asRecord(line.message)?.usage);
+      if (!totals) continue;
+      const apiMs = at !== undefined && requestAt !== undefined && at >= requestAt ? at - requestAt : undefined;
+      requestAt = undefined;
+      last = {
+        ts: at ?? last?.ts ?? 0,
+        usage: {
+          contextTokens: contextTokens(totals),
+          cacheHitRate: cacheHitRate(totals),
+          outputTokens: totals.output,
+          apiMs,
+        },
+      };
+    }
+  }
+  closeTurn();
+  // 没有时间戳的行（极老转录）会导致 ts=0，贴上去只会把耗时算成 1970 年。
+  return out.filter((t) => t.ts > 0);
+}
+
+/** 这条 user 行是用户的提问，而不是工具回包 / 本地命令回显。 */
+function isPromptLine(line: Raw): boolean {
+  const content = asRecord(line.message)?.content;
+  if (typeof content === "string") return !isLocalCommandEcho(content) && content.trim() !== "";
+  if (!Array.isArray(content)) return false;
+  if (content.some((b) => asRecord(b)?.type === "tool_result")) return false;
+  const text = content.map((b) => str(asRecord(b)?.text)).join("");
+  return text.trim() !== "" && !isLocalCommandEcho(text);
+}
+
+/**
+ * 把推导出来的回合用量贴回消息列表：只贴该回合**最后一条**已完成回答。
+ *
+ * 同一个 ts 可能有多条 assistant（一条消息里的多个 text 块共享时间戳），
+ * 从后往前扫、每个 ts 只用一次，保证贴在「答案那一段」上。
+ */
+export function attachTurnUsage(items: Item[], turns: TranscriptTurn[]): Item[] {
+  if (turns.length === 0) return items;
+  const byTs = new Map<number, TurnUsage>();
+  for (const t of turns) byTs.set(t.ts, t.turn);
+  const used = new Set<number>();
+  let out = items;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const it = items[i];
+    if (it.kind !== "assistant" || it.streaming) continue;
+    const turn = byTs.get(it.ts);
+    if (!turn || used.has(it.ts)) continue;
+    used.add(it.ts);
+    if (out === items) out = items.slice();
+    out[i] = { ...it, turn };
+  }
+  return out;
 }
 
 /**
