@@ -8,6 +8,7 @@ import { TopBar } from "../layout/TopBar";
 import { PermissionPanel } from "../permission/PermissionPanel";
 import type { PermissionPayload } from "../../transport/types";
 import { conversationTitle } from "../../lib/labels";
+import { isNewChat } from "../../lib/newChat";
 import { effortFor, findOption, modelOptionsFromSettings } from "../../lib/providerForm";
 import { sessionToMarkdown } from "../../lib/sessionExport";
 import { copyText } from "../../lib/clipboard";
@@ -109,6 +110,10 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
   const selectedEffort = effortFor(selectedOption?.spec, selected?.effort);
   const mismatch = Boolean(session?.provider) && Boolean(selected?.provider) && session!.provider !== selected!.provider;
 
+  // 还没开始的新对话（点了「新对话」但一条消息都没发）也用居中布局，
+  // 否则新建后立刻掉回贴底布局，工作区选择器也跟着消失。
+  const newChat = isNewChat(conversation, itemList.length);
+
   const canSend = Boolean(activeId || currentWorkspace);
   const disabled = starting || !canSend;
   const sendBlocked = Boolean(activeId) && conn.state !== "open";
@@ -116,10 +121,12 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
     ? t("先添加一个授权目录", "Add an authorized directory first")
     : starting
       ? t("正在启动 Claude…", "Starting Claude…")
-      : sendBlocked
-        ? t("连接断开，正在自动重连…", "Disconnected, reconnecting…")
-        : !activeId
-          ? t("输入消息即可开始", "Type a message to start")
+      : newChat
+        ? activeId && sendBlocked
+          ? t("正在启动 Claude…", "Starting Claude…")
+          : t("输入消息即可开始", "Type a message to start")
+        : sendBlocked
+          ? t("连接断开，正在自动重连…", "Disconnected, reconnecting…")
           : undefined;
 
   const tools = itemList.filter((i) => i.kind === "tool").length;
@@ -208,7 +215,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
         </div>
       )}
 
-      {activeId && (
+      {activeId && !newChat && (
         <div className="min-h-0 flex-1 overflow-hidden">
           <MessageList items={itemList} empty={t("开始新的对话", "Start a new conversation")} />
         </div>
@@ -231,17 +238,17 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
         </div>
       )}
 
-      {/* 空态：输入框居中（参照 DSH 的新对话页），上方是品牌与工作区选择器；
-          有对话时回到常规布局，输入框贴底。 */}
+      {/* 新对话（含刚点「新对话」、一条消息都没发的空会话）：输入框居中（参照 DSH
+          的新对话页），上方是品牌与工作区选择器；已经有消息时才回到贴底布局。 */}
       <div
         className={
-          activeId
-            ? "shrink-0 px-3 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] pt-2 md:px-6 md:pb-4"
-            : "dsh-scroll flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-[calc(env(safe-area-inset-bottom,0px)+24px)] pt-6 md:px-6"
+          newChat
+            ? "dsh-scroll flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-[calc(env(safe-area-inset-bottom,0px)+24px)] pt-6 md:px-6"
+            : "shrink-0 px-3 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] pt-2 md:px-6 md:pb-4"
         }
       >
         <div className="mx-auto my-auto w-full max-w-[820px]">
-          {!activeId && (
+          {newChat && (
             <div className="mb-6 flex flex-col items-center gap-2 text-center">
               <div className="flex items-center gap-2.5">
                 <BrandMark size={30} />
@@ -258,7 +265,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
             </div>
           )}
 
-          {!activeId && (
+          {newChat && (
             <div className="mb-2 flex items-center gap-1.5">
               {/* 换工作区 = 在该目录开一条新对话：只切当前工作区会让首条消息落到
                   ensureSession 的「恢复最近对话」上，用户选了工作区却进了旧对话。 */}

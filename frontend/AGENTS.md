@@ -116,11 +116,14 @@ src/
   `ensureSession(dir, false)` 在没有对话时保持空态，不自动起 claude。
 - **已经在一个空的新对话里时，再点「新对话」是 no-op**：否则会新建进程再把旧空壳关掉，
   界面会闪一下。
-- **新建对话页居中**（参照 DSH）：没有 activeId 时 `ChatPane` 把品牌 / 工作区选择器 /
+- **新建对话页居中**（参照 DSH）：只要当前对话还没开始（`lib/newChat.ts` 的 `isNewChat`：
+  没有 activeId，或对话 `messages === 0 && !title` 且 items 为空）`ChatPane` 就把品牌 / 工作区选择器 /
   `Composer` 一起垂直居中（`flex-1` + `my-auto`，内容过高时回落成可滚动，不会裁掉顶部），
-  有对话时才回到贴底布局。上方 `WorkspacePicker` 选中工作区走既有的 `startConversationIn`
-  （切当前工作区 + 在该目录新建对话）：只切不建会让首条消息落到 `ensureSession` 的
-  「恢复最近对话」上，用户明明选了工作区却进了旧对话。
+  已经有消息时才回到贴底布局。**判定要看对话元数据，不能只看 items 是否为空**：
+  打开旧对话时转录是异步拉回来的，只看 items 会让每次点开历史对话先闪一下新对话页。
+  上方 `WorkspacePicker` 选中工作区走既有的 `startConversationIn`（切当前工作区 +
+  在该目录新建对话）：只切不建会让首条消息落到 `ensureSession` 的「恢复最近对话」上，
+  用户明明选了工作区却进了旧对话。
 - **Git 多仓库**：`loadRepos()` 拉 `/api/git/repos`，`pickRepo()`（纯函数，`lib/workspace.ts`）
   决定默认选中（保持当前 > 工作区根 > 第一个）；之后所有 git 请求的 cwd 都用
   `repo || cwd`（`gitCwd()`），文件树仍用工作区 `cwd`。
