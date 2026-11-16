@@ -96,8 +96,10 @@ describe("WorkspaceDialog", () => {
 
     await submit();
 
-    await waitFor(() => expect(authorizeFnosDir).toHaveBeenCalledWith("/vol1/1000/demo"));
-    await waitFor(() => expect(addWorkspace).toHaveBeenCalledWith("/vol1/1000/demo"));
+    // 全量跑时 jsdom worker 很挤，默认 1s 的 waitFor 偶尔不够（探测失败 → 授权 → 登记
+    // 是一条异步链），放宽到 3s，避免把调度延迟当成失败。
+    await waitFor(() => expect(authorizeFnosDir).toHaveBeenCalledWith("/vol1/1000/demo"), { timeout: 3000 });
+    await waitFor(() => expect(addWorkspace).toHaveBeenCalledWith("/vol1/1000/demo"), { timeout: 3000 });
   });
 
   it("用户取消飞牛授权时不登记工作区，并留在弹窗里提示", async () => {
