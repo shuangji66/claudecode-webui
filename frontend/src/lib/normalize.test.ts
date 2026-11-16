@@ -707,3 +707,27 @@ describe("多 tool_result 共用一条消息", () => {
     expect(tools[1].structured).toBeUndefined();
   });
 });
+
+describe("流式气泡不在末尾时也要被替换", () => {
+  it("增量与完整消息之间插入 system 行，正文不会显示两遍", () => {
+    let items: Item[] = [];
+    // 逐字增量
+    items = applyCLI(items, {
+      type: "stream_event",
+      event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "你好" } },
+    });
+    // 中间插一条 system 行（hook 输出 / compact 提示）
+    items = applyCLI(items, { type: "system", subtype: "hook", content: "hook output" });
+    // 完整消息到达
+    items = applyCLI(items, {
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "text", text: "你好，世界" }] },
+    });
+
+    const assistants = items.filter((i) => i.kind === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({ text: "你好，世界", streaming: false });
+    // 半截气泡不能残留
+    expect(items.some((i) => i.kind === "assistant" && i.streaming)).toBe(false);
+  });
+});

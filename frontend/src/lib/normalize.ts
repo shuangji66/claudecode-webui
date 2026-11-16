@@ -187,15 +187,23 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
 
   // 先把悬着的流式气泡摘掉：完整消息里带着全部内容块，按块顺序重建才能保住 CLI 的
   // 真实顺序（thinking → text → tool_use）。留着它会把正文永远排在思考之前。
-  let out = items;
+  // 摘掉**所有**流式气泡，而不只是最后一个：增量与完整消息之间可能插进别的条目
+  // （system 输出、task_started 占位卡、后端 error），那时气泡已不在末尾。
+  // 只认末尾会让它留在原位且 streaming 永远为 true（光标常驻），完整消息再追加
+  // 一份正文 —— 同一段话显示两遍。
+  let out: Item[] = [];
   let leftover = "";
-  const last = out[out.length - 1];
-  if (last && last.kind === "assistant" && last.streaming) {
-    leftover = last.text;
-    out = out.slice(0, -1);
+  let insertAt = -1;
+  for (const it of items) {
+    if (it.kind === "assistant" && it.streaming) {
+      if (insertAt < 0) insertAt = out.length;
+      leftover += it.text;
+      continue;
+    }
+    out.push(it);
   }
   // 流式气泡原来的位置：只有增量、没有正文块时要把字补回这里，别挪到工具卡片后面。
-  const insertAt = out.length;
+  if (insertAt < 0) insertAt = out.length;
 
   let textCount = 0;
   for (const b of blocks) {
