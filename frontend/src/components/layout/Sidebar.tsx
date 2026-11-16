@@ -469,9 +469,6 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         <div className="flex min-w-0 items-center gap-2">
           <BrandMark size={25} className="shrink-0 text-ink" />
           <span className="truncate text-[15px] font-semibold tracking-tight text-ink">Claude Code</span>
-          <span className="shrink-0 rounded-[5px] border border-line-strong px-1 py-[1px] text-[9px] font-semibold tracking-wide text-muted">
-            CONSOLE
-          </span>
         </div>
         <button
           type="button"

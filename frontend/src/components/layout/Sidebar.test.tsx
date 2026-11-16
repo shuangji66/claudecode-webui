@@ -25,7 +25,7 @@ describe("Sidebar 品牌区", () => {
     renderSidebar();
     const brand = screen.getByText("Claude Code");
     expect(brand.closest("button")).toBeNull();
-    expect(screen.getByText("CONSOLE").closest("button")).toBeNull();
+    expect(screen.queryByText("CONSOLE")).toBeNull();
   });
 });
 
