@@ -173,3 +173,36 @@ describe("Composer 权限模式", () => {
     expect(screen.queryByText(/切换到「/)).toBeNull();
   });
 });
+
+describe("Composer 发送结果", () => {
+  const textarea = () => screen.getByLabelText("消息输入框") as HTMLTextAreaElement;
+
+  it("发送失败时保留草稿与附件，不清空输入框", async () => {
+    const onSend = vi.fn().mockResolvedValue(false);
+    setup({ onSend });
+    fireEvent.change(textarea(), { target: { value: "这段提示词不能丢" } });
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+
+    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    expect(textarea().value).toBe("这段提示词不能丢");
+  });
+
+  it("发送成功后才清空输入框", async () => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    setup({ onSend });
+    fireEvent.change(textarea(), { target: { value: "你好" } });
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+
+    await waitFor(() => expect(textarea().value).toBe(""));
+  });
+
+  it("会话未就绪（sendBlocked）时 Enter 不发请求", () => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    setup({ onSend, sendBlocked: true });
+    fireEvent.change(textarea(), { target: { value: "在线吗" } });
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea().value).toBe("在线吗");
+  });
+});

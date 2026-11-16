@@ -22,6 +22,13 @@ import (
 // writeTimeout 是单帧写超时：一个不读数据的客户端不能让写循环永久阻塞。
 const writeTimeout = 5 * time.Second
 
+// readIdleTimeout 是「完全没有上行帧」的容忍时间。
+//
+// WS 建在 unix socket 上，Go 的 TCP keepalive 保护不适用，代码里也没有读超时：
+// 手机丢网、webview 被系统挂起这类半开连接既不报错也不关闭，handler 一直挂着。
+// 前端每 20–25 秒发一次 ping，所以两分钟足够宽松，超时即让 handler 返回。
+const readIdleTimeout = 2 * time.Minute
+
 // sendQueueLen 是每个连接的上行队列长度。
 //
 // 关键约束：hub.Broadcast 跑在 session 的读循环 goroutine 上，所以 SendJSON
@@ -188,6 +195,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for {
+		_ = c.conn.SetReadDeadline(time.Now().Add(readIdleTimeout))
 		op, payload, err := wsframe.ReadMessage(c.r, wsframe.DefaultMaxMessageBytes)
 		if err != nil {
 			return

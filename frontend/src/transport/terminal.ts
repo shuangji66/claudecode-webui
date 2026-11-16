@@ -24,11 +24,15 @@ export interface TerminalHandlers {
   onStatus: (detail: TerminalStatusDetail) => void;
 }
 
+/** 连续这么久没收到任何帧（含 pong）就判连接已死，走 onclose 重连/重启。 */
+const TERMINAL_STALE_MS = 70_000;
+
 export class TerminalConnection {
   private ws: WebSocket | null = null;
   private decoder = new TextDecoder();
   private closedByUs = false;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private lastMessageAt = 0;
   /** 最后一次已上报的状态；服务端先发 error/exit 再关连接时不能被 closed 覆盖。 */
   private lastPhase: TerminalPhase = "connecting";
 
@@ -59,11 +63,13 @@ export class TerminalConnection {
     this.ws = ws;
 
     ws.onopen = () => {
+      this.lastMessageAt = Date.now();
       this.emit({ phase: "open" });
       this.startPing();
       this.resize(this.cols, this.rows);
     };
     ws.onmessage = (event) => {
+      this.lastMessageAt = Date.now();
       if (typeof event.data === "string") {
         this.handleControl(event.data);
         return;
@@ -116,7 +122,14 @@ export class TerminalConnection {
     this.stopPing();
     // 空闲终端没有输出，靠 ping 让中间层/浏览器保持连接活跃。
     this.pingTimer = setInterval(() => {
-      if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: "ping" }));
+      if (this.ws?.readyState !== WebSocket.OPEN) return;
+      // 只发 ping 不判活的话，半开连接（NAT 超时、手机丢网）不会触发 onclose：
+      // 界面一直显示「已连接」，而 PTY 输出与输入两边都静默失效。
+      if (Date.now() - this.lastMessageAt > TERMINAL_STALE_MS) {
+        this.ws.close(4000, "heartbeat timeout");
+        return;
+      }
+      this.ws.send(JSON.stringify({ type: "ping" }));
     }, 25_000);
   }
 

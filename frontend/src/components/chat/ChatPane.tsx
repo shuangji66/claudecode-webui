@@ -318,7 +318,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
               setModeState(m);
               setPermissionMode(m);
             }}
-            onSend={(text, attachments) => void sendPrompt(text, attachments, t("附件：", "File: "))}
+            onSend={(text, attachments) => sendPrompt(text, attachments, t("附件：", "File: "))}
             onInterrupt={interrupt}
             footer={footer}
           />

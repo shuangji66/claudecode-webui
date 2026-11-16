@@ -37,7 +37,8 @@ interface Props {
   onSelectModel: (provider: string, model: string) => void;
   onSelectEffort: (effort: string) => void;
   onPermissionMode: (mode: string) => void;
-  onSend: (text: string, attachments: WireAttachment[]) => void;
+  /** 返回 false 表示没发出去（连接断开等），此时输入框必须保留草稿与附件。 */
+  onSend: (text: string, attachments: WireAttachment[]) => Promise<boolean>;
   onInterrupt: () => void;
   footer?: ReactNode;
 }
@@ -87,10 +88,13 @@ export function Composer({
     return commands.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8);
   }, [text, commands]);
 
-  const submit = () => {
+  const submit = async () => {
     const value = text.trim();
-    if ((!value && files.length === 0) || disabled) return;
-    onSend(value, files.map(toWireAttachment));
+    // sendBlocked = 会话还没就绪 / WS 未打开。按钮的 disabled 里本来就有它，
+    // 但 Enter 直接走 submit，不在这里拦一道就会出现「按了没反应还把草稿清了」。
+    if ((!value && files.length === 0) || disabled || sendBlocked) return;
+    const sent = await onSend(value, files.map(toWireAttachment));
+    if (!sent) return; // 失败：草稿与已读入内存的附件原样保留
     setText("");
     setFiles([]);
     setFileError(null);
@@ -324,7 +328,7 @@ export function Composer({
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              submit();
+              void submit();
             }
           }}
           placeholder={hint}

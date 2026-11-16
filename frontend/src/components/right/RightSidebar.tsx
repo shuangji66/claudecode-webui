@@ -111,7 +111,25 @@ export function RightSidebar({ cwd, onClose }: Props) {
   }, [subagentView, activeSession]);
 
   // 工作区切换/侧栏重开只在这里触发一次；所有面板都读同一份 store。
+  //
+  // 换工作区时必须**结束**终端与子代理标签：旧 shell 的 cwd 已经不成立，
+  // 而 TerminalView 的建连 effect 依赖 cwd，留着标签只会让它静默重启一个新 shell ——
+  // scrollback 全丢，连隐藏的标签也会起一个用户没要求的新进程。
+  const firstCwd = useRef(true);
   useEffect(() => {
+    if (firstCwd.current) {
+      firstCwd.current = false;
+      void setCwd(cwd);
+      return;
+    }
+    termSeq.current = 0;
+    let fallback = "";
+    setTabs((prev) => {
+      const kept = prev.filter((tab) => tab.kind === "files" || tab.kind === "git");
+      fallback = kept[0]?.id ?? "";
+      return kept;
+    });
+    setActive((prev) => (prev && (prev.startsWith("files") || prev.startsWith("git")) ? prev : fallback));
     void setCwd(cwd);
   }, [cwd, setCwd]);
 

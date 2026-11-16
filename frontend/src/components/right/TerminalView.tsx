@@ -103,8 +103,14 @@ function TerminalSession({ cwd, active }: { cwd: string; active: boolean }) {
     });
 
     const connection = new TerminalConnection(cwd, term.cols || 80, term.rows || 24, getToken(), {
-      onOutput: (data) => term.write(data),
+      // 卸载/重连后 WebSocket 仍可能派发已在队列里的帧（含 onclose 里刷出的
+      // decoder 尾巴），而 term 已经 dispose 过了。往已释放的实例写是未定义行为。
+      onOutput: (data) => {
+        if (disposed) return;
+        term.write(data);
+      },
       onStatus: (detail) => {
+        if (disposed) return;
         setPhase(detail.phase);
         setMessage(detail.message ?? "");
         setExitCode(detail.code ?? null);

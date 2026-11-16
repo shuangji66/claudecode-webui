@@ -123,3 +123,25 @@ describe("RightSidebar 停靠与宽度", () => {
     setViewport(1024);
   });
 });
+
+describe("RightSidebar 换工作区", () => {
+  it("换工作区结束终端标签，回到开始页/文件标签，而不是静默重启 shell", async () => {
+    const { rerender } = (() => {
+      const onClose = vi.fn();
+      const r = render(<RightSidebar cwd="/w" onClose={onClose} />);
+      return { rerender: (cwd: string) => r.rerender(<RightSidebar cwd={cwd} onClose={onClose} />) };
+    })();
+
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /终端/ }));
+    await waitFor(() => expect(screen.getAllByText("TERM")).toHaveLength(1));
+
+    rerender("/w2");
+
+    // 终端标签必须消失（旧 shell 的 cwd 不成立，应结束而不是重建）。
+    await waitFor(() => expect(screen.queryByText("TERM")).toBeNull());
+    expect(screen.queryByRole("button", { name: /^bash/ })).toBeNull();
+    // 回到开始页
+    expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
+  });
+});

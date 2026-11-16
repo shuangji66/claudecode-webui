@@ -204,7 +204,7 @@ interface AppState {
   disconnect: (id: string) => void;
   retryConnection: (id: string) => void;
 
-  sendPrompt: (text: string, attachments?: WireAttachment[], attachmentLabel?: string) => Promise<void>;
+  sendPrompt: (text: string, attachments?: WireAttachment[], attachmentLabel?: string) => Promise<boolean>;
   interrupt: () => void;
   setPermissionMode: (mode: string) => void;
   /** 在右侧栏打开某个子代理的对话。 */
@@ -1241,36 +1241,38 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (get().conversations.some((c) => c.id === id)) void get().openConversation(id, true);
   },
 
+  // 返回「这条消息是否真的发出去了」：输入框据此决定要不要清空草稿。
+  // 之前是 void，发送失败（WS 重连中）也照样清空，用户的提示词与附件就没了。
   sendPrompt: async (text, attachments = [], attachmentLabel = "附件：") => {
-    if (!text.trim() && attachments.length === 0) return;
+    if (!text.trim() && attachments.length === 0) return false;
     // 刚点「新对话」时 active 还没切过去：等创建完成，避免把消息发给上一个对话。
     if (createTask) {
       const created = await createTask.catch(() => null);
-      if (!created) return;
+      if (!created) return false;
     }
     let id = get().activeId;
     if (!id) {
       const info = await get().ensureSession();
       id = info?.id ?? null;
     }
-    if (!id) return;
+    if (!id) return false;
     if (!clients.get(id)) {
       // 进程被空闲回收后 active 仍在：发送前先按对话 id 恢复。
       const ok = await get().openConversation(id, true);
-      if (!ok) return;
+      if (!ok) return false;
     }
     if (!clients.get(id)?.ready) {
       // 刚 resume / 新建的会话，HTTP 已经返回但 WS 还在握手；等它真正 open 再发。
       const ok = await waitForOpen(id);
       if (!ok) {
         set({ error: "连接尚未就绪，正在自动重连；稍后再发送即可" });
-        return;
+        return false;
       }
     }
     const client = clients.get(id);
     if (!client?.send({ kind: "prompt", text, attachments: attachments.length > 0 ? attachments : undefined })) {
       set({ error: "发送失败：连接已断开" });
-      return;
+      return false;
     }
     const display = [text.trim(), ...attachments.map((a) => `${attachmentLabel}${a.name}`)].filter(Boolean).join("\n");
     const now = new Date().toISOString();
@@ -1279,6 +1281,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       conversations: s.conversations.map((c) => (c.id === id ? { ...c, last_active: now } : c)),
     }));
     window.setTimeout(() => void get().refreshConversations(), 600);
+    return true;
   },
 
   interrupt: () => {

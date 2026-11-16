@@ -115,6 +115,10 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer close(clientDone)
 		for {
+			// 没有读超时的话，一个半开连接（手机丢网、webview 被挂起）会永久占住
+			// 一个终端槽位：槽位上限 8，攒够之后所有新终端都是 429，只能重启进程。
+			// 前端每 25 秒发一次 ping，两分钟足够宽松。
+			_ = c.conn.SetReadDeadline(time.Now().Add(readIdleTimeout))
 			op, payload, err := wsframe.ReadMessage(c.r, 1<<20)
 			if err != nil {
 				return
