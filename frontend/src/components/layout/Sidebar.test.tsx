@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { Sidebar } from "./Sidebar";
 import { useAppStore } from "../../store/useAppStore";
 
@@ -124,5 +124,53 @@ describe("Sidebar 分组/排序/筛选菜单", () => {
     expect(container.querySelector('button[title="/w/demo"]')).toBeNull();
     expect(screen.getByText("会话甲")).toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem("ccweb-sidebar-view") ?? "{}").group).toBe("flat");
+  });
+});
+
+describe("Sidebar 会话悬浮预览", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useAppStore.setState({
+      workspaces: [{ path: "/w/demo", name: "demo", last_used: "", exists: true }],
+      currentWorkspace: "/w/demo",
+      activeId: null,
+      conversations: [
+        {
+          id: "c-hover",
+          cwd: "/w/demo",
+          title: "会话甲",
+          created_at: "",
+          last_active: "2026-01-02T00:00:00Z",
+          messages: 2,
+          archived: false,
+          live: false,
+        },
+      ],
+    });
+  });
+
+  it("鼠标悬停一会儿弹出最近一问一答", async () => {
+    vi.useFakeTimers();
+    const loadPreview = vi.fn(async () => ({ user: "问一下", assistant: "答一下" }));
+    useAppStore.setState({ loadPreview });
+
+    renderSidebar();
+    const row = screen.getByText("会话甲").closest("button");
+    expect(row).not.toBeNull();
+    fireEvent.pointerEnter(row!, { pointerType: "mouse" });
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+    });
+
+    expect(loadPreview).toHaveBeenCalledWith("c-hover");
+    const tip = screen.getByRole("tooltip");
+    expect(tip).toHaveTextContent("问一下");
+    expect(tip).toHaveTextContent("答一下");
+
+    fireEvent.pointerLeave(row!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    vi.useRealTimers();
   });
 });

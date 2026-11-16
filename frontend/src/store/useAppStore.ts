@@ -17,6 +17,7 @@ import type { Item } from "../lib/model";
 import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
 import type {
   ClaudeCheck,
+  HistoryPreview,
   ClaudeStatus,
   ConversationInfo,
   FsAccess,
@@ -210,6 +211,8 @@ interface AppState {
   showSubagent: (agentId: string, label: string) => void;
   /** 停止一个后台任务（子代理 / 后台命令）。 */
   stopTask: (taskId: string) => Promise<void>;
+  /** 会话的最近几句（侧栏悬浮预览），按 id 缓存。 */
+  loadPreview: (id: string) => Promise<HistoryPreview | null>;
   replyPermission: (
     req: PermissionPayload,
     allow: boolean,
@@ -223,6 +226,8 @@ interface AppState {
 }
 
 const clients = new Map<string, ClaudeClient>();
+/** 会话悬浮预览的缓存：一轮结束后清掉，下次 hover 会重新读盘。 */
+const previewCache = new Map<string, HistoryPreview | null>();
 const resumePromises = new Map<string, Promise<boolean>>();
 /** 正在创建的新对话；此时发送必须等它落定，不能发到上一个 active。 */
 let createTask: Promise<SessionInfo | null> | null = null;
@@ -1288,6 +1293,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
     clients.get(id)?.send({ kind: "permission_mode", mode });
   },
 
+  loadPreview: async (id) => {
+    if (previewCache.has(id)) return previewCache.get(id) ?? null;
+    try {
+      const p = await apiFetch<HistoryPreview>(`/api/history/preview?id=${encodeURIComponent(id)}`);
+      previewCache.set(id, p);
+      return p;
+    } catch {
+      previewCache.set(id, null);
+      return null;
+    }
+  },
+
   showSubagent: (agentId, label) => {
     if (!agentId) return;
     set((s) => ({
@@ -1413,6 +1430,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         }));
         // 一回合结束就把用量写进对话元数据：页面重开 / 换设备打开时底部统计不丢。
         if (usage && isTurnResult(ev.data)) void persistUsage(sid, usage);
+        // 新回合的回复变了，悬浮预览要重新读。
+        if (isTurnResult(ev.data)) previewCache.delete(sid);
         return;
       }
       default:

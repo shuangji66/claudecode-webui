@@ -292,6 +292,27 @@ func (s *Server) conversationInfo(id string) (manager.Info, bool) {
 	return manager.Info{}, false
 }
 
+// handleHistoryPreview 返回会话的最近几句，供侧栏悬浮预览。
+//
+// 只读转录尾部，不进列表接口：列表要快，预览是按需的。
+func (s *Server) handleHistoryPreview(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeErr(w, "missing id", http.StatusBadRequest)
+		return
+	}
+	preview, err := history.LoadPreview(s.d.HistoryDir, id)
+	if err != nil {
+		if errors.Is(err, history.ErrTranscriptNotFound) {
+			writeErr(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		writeErr(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, preview)
+}
+
 // handleHistoryExport 把一次会话的原始日志打包成 zip 下载。
 //
 // 内容是 claude 自己写的文件（主转录 + 子代理转录 + meta），原样打包不解析：

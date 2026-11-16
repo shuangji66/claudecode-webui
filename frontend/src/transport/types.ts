@@ -361,6 +361,12 @@ export interface SubagentMeta {
   finished?: boolean;
 }
 
+/** /api/history/preview 的返回：会话最近一句问与答（侧栏悬浮预览用）。 */
+export interface HistoryPreview {
+  user?: string;
+  assistant?: string;
+}
+
 /** /api/history/subagent 的回放数据：子代理对话不在主转录里，走这条旁路。 */
 export interface SubagentTranscriptPayload extends TranscriptPayload {
   agent: string;

@@ -341,3 +341,61 @@ func TestSessionLogExists(t *testing.T) {
 		t.Fatal("非法 id 应返回 false")
 	}
 }
+
+func TestLoadPreviewReadsTail(t *testing.T) {
+	root := t.TempDir()
+	id := "aaaaaaaa-1111-4222-8333-444444444444"
+	writeJSONL(t, filepath.Join(root, "p", id+".jsonl"),
+		`{"type":"user","message":{"role":"user","content":"第一个问题"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"第一个回答"}]}}`,
+		`{"type":"user","message":{"role":"user","content":"<local-command-stdout>Set model to x</local-command-stdout>"}}`,
+		`{"type":"user","isSidechain":true,"message":{"role":"user","content":"子代理的问题"}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"工具输出"}]}}`,
+		`{"type":"user","message":{"role":"user","content":"最后一个问题"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"想"},{"type":"text","text":"最后一个回答"}]}}`,
+	)
+	p, err := LoadPreview(root, id)
+	if err != nil {
+		t.Fatalf("LoadPreview: %v", err)
+	}
+	if p.User != "最后一个问题" {
+		t.Fatalf("User = %q", p.User)
+	}
+	if p.Assistant != "最后一个回答" {
+		t.Fatalf("Assistant = %q", p.Assistant)
+	}
+}
+
+func TestLoadPreviewOnlyReadsTail(t *testing.T) {
+	root := t.TempDir()
+	id := "bbbbbbbb-1111-4222-8333-444444444444"
+	filler := strings.Repeat("x", 400)
+	var lines []string
+	lines = append(lines, `{"type":"user","message":{"content":"很早以前的问题"}}`)
+	for i := 0; i < 400; i++ {
+		lines = append(lines, `{"type":"assistant","message":{"content":[{"type":"text","text":"`+filler+`"}]}}`)
+	}
+	lines = append(lines, `{"type":"user","message":{"content":"最新的问题"}}`)
+	writeJSONL(t, filepath.Join(root, "p", id+".jsonl"), lines...)
+
+	p, err := LoadPreview(root, id)
+	if err != nil {
+		t.Fatalf("LoadPreview: %v", err)
+	}
+	if p.User != "最新的问题" {
+		t.Fatalf("User = %q（应该来自尾部，不是开头）", p.User)
+	}
+	if p.Assistant == "" || strings.Contains(p.Assistant, "很早以前") {
+		t.Fatalf("Assistant = %q", p.Assistant)
+	}
+}
+
+func TestLoadPreviewMissing(t *testing.T) {
+	root := t.TempDir()
+	if _, err := LoadPreview(root, "cccccccc-1111-4222-8333-444444444444"); err != ErrTranscriptNotFound {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := LoadPreview(root, "../etc/passwd"); err != ErrTranscriptNotFound {
+		t.Fatalf("非法 id 应被拒绝，得到 %v", err)
+	}
+}

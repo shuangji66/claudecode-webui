@@ -44,7 +44,7 @@ src/
   store/useSkillsStore.ts  设置页技能数据（/api/skills 的列表与正文）
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
                        / Collapsible（折叠块）/ FileIcon（按扩展名给颜色的文件图标 + 文件夹图标）
-  components/layout/   Sidebar（工作区/对话列表）/ TopBar / TokenGate / SettingsDrawer
+  components/layout/   Sidebar（工作区/对话列表）/ ConversationPreview（会话悬浮预览）/ TopBar / TokenGate / SettingsDrawer
                        / WorkspaceDialog / SkillsSettings / DeploySettings / HistoryDialog
                        / ClaudeInstallPrompt
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
@@ -160,6 +160,10 @@ src/
 - **Git 多仓库**：`loadRepos()` 拉 `/api/git/repos`，`pickRepo()`（纯函数，`lib/workspace.ts`）
   决定默认选中（保持当前 > 工作区根 > 第一个）；之后所有 git 请求的 cwd 都用
   `repo || cwd`（`gitCwd()`），文件树仍用工作区 `cwd`。
+- **会话悬浮预览**：鼠标在会话行上停 220ms 弹 `ConversationPreview`（标题 + 工作区/时间/条数 +
+  最近一问一答），离开/滚动/点击即收；触屏没有 hover 不显示；卡片 `pointer-events-none`，
+  不挡点击。内容来自 `GET /api/history/preview`（后端只读转录尾部 64KB，不进列表接口），
+  前端按 id 缓存，一轮结束后（`result`）清掉该 id 的缓存。
 - **侧栏状态标记**（`lib/conversations.conversationStatus`，优先级从高到低）：待审批 →
   强调色圆点；进程 `busy`/`starting` → 进度环；完成但没看过 → 绿点；活跃但空闲 → 不画点；
   没有常驻进程 → 灰点。「完成未看」由 `applyEvent` 在 `result` 到达且该对话不是当前打开的

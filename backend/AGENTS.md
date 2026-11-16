@@ -194,6 +194,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 新路由必须 `s.authed(...)`；WS 在 handler 内自行校验 token。
 - 对话路由：`GET /api/conversations`、`PATCH /api/conversations`（重命名/归档/touch/usage）、
   `DELETE /api/conversations?id=`（软删除）、`GET /api/history/transcript?id=`（回放）。
+- 预览路由：`GET /api/history/preview?id=` 返回会话最近一问一答（侧栏悬浮预览用）。
+  `history.LoadPreview` 只读转录尾部 64KB、跳过 sidechain/meta 与本地命令回显，
+  不进列表接口——列表要快，预览是按需的。
 - 导出路由：`GET /api/history/export?id=` 把会话原始日志打成 zip（主转录 + 会话目录下的
   子代理转录 / meta），`archive/zip` 标准库实现。先判存在再写响应头，否则 404 会变成
   「下载到一个坏 zip」；符号链接与超大文件不进包。

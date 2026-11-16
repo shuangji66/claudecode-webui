@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useAppStore } from "../../store/useAppStore";
-import type { ConversationInfo, WorkspaceEntry } from "../../transport/types";
+import type { ConversationInfo, HistoryPreview, WorkspaceEntry } from "../../transport/types";
 import { baseName, conversationTitle, relativeTime, stateLabel } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
+import { ConversationPreview } from "./ConversationPreview";
 import { belongs, conversationStatus, sortByRecent } from "../../lib/conversations";
 import {
   FLAT_KEY,
@@ -116,6 +117,12 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const [viewAnchor, setViewAnchor] = useState<HTMLElement | null>(null);
   /** 拖拽中的会话 id：手动排序用。 */
   const dragId = useRef<string | null>(null);
+  /** 悬浮预览：鼠标停住一会儿才弹，离开/滚动就收。 */
+  const [hover, setHover] = useState<{ conv: ConversationInfo; anchor: HTMLElement } | null>(null);
+  const [hoverPreview, setHoverPreview] = useState<HistoryPreview | null>(null);
+  const [hoverLoading, setHoverLoading] = useState(false);
+  const hoverTimer = useRef<number | null>(null);
+  const loadPreview = useAppStore((s) => s.loadPreview);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentWorkspace ? [currentWorkspace] : []));
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [wsMenu, setWsMenu] = useState<WsMenuState | null>(null);
@@ -204,6 +211,39 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       .filter((g) => g.conversations.length > 0 || g.name.toLowerCase().includes(q));
   }, [workspaces, conversations, view, order, query, items, locale, t]);
 
+  const endHover = () => {
+    if (hoverTimer.current) {
+      window.clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+    setHover(null);
+  };
+
+  const startHover = (event: ReactPointerEvent<HTMLButtonElement>, conv: ConversationInfo) => {
+    // 触屏没有 hover；只在鼠标上弹。
+    if (event.pointerType !== "mouse") return;
+    const anchorEl = event.currentTarget;
+    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+    hoverTimer.current = window.setTimeout(() => setHover({ conv, anchor: anchorEl }), 220);
+  };
+
+  useEffect(() => {
+    if (!hover) {
+      setHoverPreview(null);
+      return;
+    }
+    let alive = true;
+    setHoverLoading(true);
+    void loadPreview(hover.conv.id).then((p) => {
+      if (!alive) return;
+      setHoverPreview(p);
+      setHoverLoading(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [hover, loadPreview]);
+
   /** 手动排序的落盘入口：拖拽和菜单里的上移/下移共用。 */
   const reorder = (key: string, list: ConversationInfo[], fromId: string, toId: string) => {
     setOrder((prev) => ({ ...prev, [key]: moveBefore(prev[key] ?? [], list, fromId, toId) }));
@@ -269,6 +309,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         <button
           type="button"
           onClick={() => openOne(c)}
+          onPointerEnter={(e) => startHover(e, c)}
+          onPointerLeave={endHover}
           className={`side-row min-w-0 flex-1 ${c.archived ? "opacity-60" : ""}`}
           data-active={active}
           title={`${c.cwd}\n${c.live ? stateLabel(liveState, locale) : t("未运行（点击恢复）", "Not running (click to resume)")}`}
@@ -555,7 +597,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         </div>
       )}
 
-      <div className="dsh-scroll mt-1 min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+      <div className="dsh-scroll mt-1 min-h-0 flex-1 overflow-y-auto px-2 pb-3" onScroll={endHover}>
         {groups.length === 0 && (
           <button
             type="button"
@@ -685,6 +727,17 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             : []
         }
       />
+
+      {hover && (
+        <ConversationPreview
+          anchor={hover.anchor}
+          conv={hover.conv}
+          title={titleOf(hover.conv)}
+          workspace={workspaceNameOf(hover.conv.cwd)}
+          preview={hoverPreview}
+          loading={hoverLoading}
+        />
+      )}
 
       <Menu
         open={viewAnchor !== null}
