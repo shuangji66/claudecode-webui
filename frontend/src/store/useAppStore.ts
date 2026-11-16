@@ -229,6 +229,31 @@ const clients = new Map<string, ClaudeClient>();
 /** 会话悬浮预览的缓存：一轮结束后清掉，下次 hover 会重新读盘。 */
 const previewCache = new Map<string, HistoryPreview | null>();
 const resumePromises = new Map<string, Promise<boolean>>();
+// openSeq 记录「用户最近一次想打开/切换对话」的序号。openConversation 里有多段 await，
+// 迟到的旧请求不能在结束时把 activeId 改回它自己 —— 用户看到的是他最后点的那条。
+let openSeq = 0;
+
+/** purgeSession 清掉某个会话在 store 里的全部按 id 存的桶。
+ *  删除/关闭对话后不清，这些数组（含整份 tool 结果）会一直常驻内存。 */
+function purgeSession(state: {
+  items: Record<string, unknown>;
+  subagentItems: Record<string, unknown>;
+  perms: Record<string, unknown>;
+  states: Record<string, string>;
+  inits: Record<string, unknown>;
+  conns: Record<string, unknown>;
+  usage: Record<string, unknown>;
+  doneIds: Record<string, boolean>;
+}, id: string) {
+  delete state.items[id];
+  delete state.subagentItems[id];
+  delete state.perms[id];
+  delete state.states[id];
+  delete state.inits[id];
+  delete state.conns[id];
+  delete state.usage[id];
+  delete state.doneIds[id];
+}
 /** 正在创建的新对话；此时发送必须等它落定，不能发到上一个 active。 */
 let createTask: Promise<SessionInfo | null> | null = null;
 const recovering = new Set<string>();
@@ -958,8 +983,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
   createSession: async (cwd) => {
     // 连点「新对话」时复用同一个创建任务，避免一次点击起两个 claude。
     if (createTask) {
-      await createTask;
-      return;
+      const created = await createTask.catch(() => null);
+      const dir = cwd || get().currentWorkspace;
+      // 等待期间用户可能切了工作区：把旧目录的会话当结果返回，会让界面高亮的
+      // 工作区与实际打开的对话对不上。这种情况按新目录再建一次（此时已无人占用）。
+      if (created && (!dir || created.cwd === dir)) return;
+      return get().createSession(dir);
     }
     const dir = cwd || get().currentWorkspace;
     if (!dir) {
@@ -1012,6 +1041,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   openConversation: async (id, force = false) => {
+    const seq = ++openSeq;
     // 新对话还在创建时先等它落定，避免创建完成后的 setActive 覆盖用户新选的对话。
     if (createTask) await createTask.catch(() => null);
     const conv = get().conversations.find((c) => c.id === id);
@@ -1095,7 +1125,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         });
         await Promise.all([get().refreshSessions(), get().refreshConversations()]);
         await loadTranscript();
-        get().setActive(info.id);
+        // 只有这仍是用户最后一次意图时才改 activeId；WS 照连，历史照填。
+        if (seq === openSeq) get().setActive(info.id);
         get().connect(info.id);
         return true;
       } catch (e) {
@@ -1103,7 +1134,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return false;
       } finally {
         resumePromises.delete(id);
-        set({ starting: false });
+        if (seq === openSeq) set({ starting: false });
       }
     })();
     resumePromises.set(id, promise);
@@ -1156,6 +1187,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
     try {
       await apiFetch(`/api/conversations?id=${encodeURIComponent(id)}`, { method: "DELETE" });
       get().disconnect(id);
+      set((s) => {
+        const buckets = {
+          items: { ...s.items },
+          subagentItems: { ...s.subagentItems },
+          perms: { ...s.perms },
+          states: { ...s.states },
+          inits: { ...s.inits },
+          conns: { ...s.conns },
+          usage: { ...s.usage },
+          doneIds: { ...s.doneIds },
+        };
+        purgeSession(buckets, id);
+        return buckets;
+      });
       await get().refreshConversations();
       if (get().activeId === id) {
         const root = conv ? workspaceFor(conv.cwd, get().workspaces) || conv.cwd : get().currentWorkspace;
@@ -1182,6 +1227,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set({ error: errText(e) });
     }
     get().disconnect(id);
+    // 进程已经结束：审批、状态、用量快照都作废；消息历史保留（下次打开会重新回放）。
+    set((s) => ({
+      perms: { ...s.perms, [id]: [] },
+      states: { ...s.states, [id]: "closed" },
+      conns: { ...s.conns, [id]: { state: "closed" } },
+    }));
     await Promise.all([get().refreshSessions(), get().refreshConversations()]);
   },
 
