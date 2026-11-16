@@ -21,8 +21,8 @@
   `conversations.json` 元数据，启动时恢复上次对话（`--resume`）而不是新建；
 - 设置页分「通用 / 模型 / 技能 / 代理 / 部署」：默认权限（置顶）、主题、语言、字号、技能、代理、
   每个模型的推理强度/图片能力/上下文窗口/最大输出，以及 claude 版本的下载源/安装/切换；
-- 输入框 `+` 支持文件/图片附件（图片/PDF/文本），随 prompt 发送；模型与推理等级是
-  DSH 风格的两级菜单（按提供商分组，不显示图片标记）；
+- 输入框 `+` 是添加菜单（对齐 DSH）：本地文件/图片、从飞牛选择、以及 claude 的 `/` 指令；
+  附件随 prompt 发送。模型与推理等级是 DSH 风格的两级菜单（按提供商分组，不显示图片标记）；
 - 左侧栏品牌图标使用 `frontend/src/assets/claude-code.svg`；前端不允许呼吸灯/无限 pulse 动画。
 
 部署约定：**只部署 `ccweb` 本身**。`claude` 不随包分发、也不回退 PATH、也不接受环境变量覆盖：
@@ -184,6 +184,16 @@ hub ── manager ── session ── process ── claude (NDJSON)
   它是宿主写操作，和浏览接口一样必须挂 `s.authed`。
 - 「重命名工作区」走 `POST /api/workspaces/rename`，**只改显示名**，绝不 `os.Rename` 真目录
   （路径是授权键：会话 cwd、workspaces.json、前端当前工作区都按它匹配）。
+
+### 4.6.1 「从飞牛选择」的文件
+
+- 宿主桥接只给**路径**（`pickUserFile` 返回 `string[]`），没有读文件 API。所以图片/PDF
+  由后端 `POST /api/fs/host-file` 读成附件，其余类型只把路径写进消息，由 claude 用 Read
+  工具自己读。
+- **`/api/fs/host-file` 是唯一不受工作区围栏约束的读文件接口**（选择器挑的文件本来就在
+  工作区外）。边界：只放行图片/PDF（扩展名初筛 + `http.DetectContentType` 复核，改名的
+  HTML/SVG 会被拒）、必须是普通文件、≤ 8MB、必须挂 `s.authed`。不要在这条路上加
+  「顺手读个文本文件」——那等于给前端开了任意宿主文件读取。
 
 ### 4.7 前端侧
 

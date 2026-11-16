@@ -229,6 +229,14 @@ export interface FsListing {
   roots: string[];
 }
 
+/** POST /api/fs/host-file 的响应：宿主文件的字节（base64）。 */
+export interface HostFile {
+  name: string;
+  media_type: string;
+  size: number;
+  data: string;
+}
+
 /**
  * POST /api/fs/access 的响应：应用用户能否直接读写该目录。
  * writable=false 时才需要走飞牛授权（authorizeUserFile）补 ACL。

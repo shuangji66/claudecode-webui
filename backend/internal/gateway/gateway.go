@@ -101,6 +101,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/fs/list", s.authed(s.handleBrowseDirs))
 	s.mux.HandleFunc("POST /api/fs/mkdir", s.authed(s.handleMkdir))
 	s.mux.HandleFunc("POST /api/fs/access", s.authed(s.handleFsAccess))
+	s.mux.HandleFunc("POST /api/fs/host-file", s.authed(s.handleFsHostFile))
 	s.mux.HandleFunc("GET /api/fs/tree", s.authed(s.handleFsTree))
 	s.mux.HandleFunc("GET /api/fs/file", s.authed(s.handleFsFile))
 	s.mux.HandleFunc("GET /api/fs/raw", s.authed(s.handleFsRaw))

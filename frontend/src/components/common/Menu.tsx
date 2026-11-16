@@ -4,7 +4,7 @@
 // 圆角与阴影）只对自绘浮层生效；原生控件由操作系统画，深浅色和字号都跟页面脱节，
 // 在飞牛桌面 iframe 里尤其突兀。
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 /** 所有浮层共用的面板外观（菜单、下拉选择）。 */
@@ -196,6 +196,10 @@ export interface MenuItem {
   id: string;
   label: ReactNode;
   icon?: ReactNode;
+  /** 右侧灰色小字：命令别名、参数提示等（对齐 DSH 的菜单样式）。 */
+  hint?: ReactNode;
+  /** 分组标题：只在同组第一项前渲染一次。 */
+  group?: string;
   danger?: boolean;
   disabled?: boolean;
   onSelect: () => void;
@@ -225,24 +229,32 @@ export function Menu({ open, anchor, items, onClose, width = 176, align = "end" 
   if (!open || !pos) return null;
   return createPortal(
     <div ref={ref} role="menu" {...{ [PORTAL_ATTR]: "" }} style={{ left: pos.left, top: pos.top, width }} className={POPUP_PANEL}>
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          role="menuitem"
-          disabled={item.disabled}
-          onClick={() => {
-            onClose();
-            item.onSelect();
-          }}
-          className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] disabled:opacity-40 ${
-            item.danger ? "text-danger hover:bg-danger/[0.06]" : "text-ink hover:bg-panel-strong"
-          }`}
-        >
-          {item.icon}
-          <span className="truncate">{item.label}</span>
-        </button>
-      ))}
+      {/* 命令列表可能几十条：限高 + 滚动，别让菜单冲出视口。 */}
+      <div className="dsh-scroll max-h-[min(60vh,420px)] overflow-y-auto">
+        {items.map((item, index) => (
+          <Fragment key={item.id}>
+            {item.group && item.group !== items[index - 1]?.group && (
+              <div className="px-2.5 pb-0.5 pt-1.5 text-[10px] text-faint">{item.group}</div>
+            )}
+            <button
+              type="button"
+              role="menuitem"
+              disabled={item.disabled}
+              onClick={() => {
+                onClose();
+                item.onSelect();
+              }}
+              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] disabled:opacity-40 ${
+                item.danger ? "text-danger hover:bg-danger/[0.06]" : "text-ink hover:bg-panel-strong"
+              }`}
+            >
+              {item.icon}
+              <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              {item.hint && <span className="shrink-0 pl-2 font-mono text-[10px] text-faint">{item.hint}</span>}
+            </button>
+          </Fragment>
+        ))}
+      </div>
     </div>,
     document.body,
   );

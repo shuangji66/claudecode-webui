@@ -1,9 +1,13 @@
 package gateway
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -169,6 +173,78 @@ func (s *Server) handleFsRaw(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'")
 	h.Set("Content-Disposition", "inline")
 	http.ServeContent(w, r, path.Base(relPath), info.ModTime(), f)
+}
+
+// maxHostFileBytes 是「从飞牛选择」读取宿主文件的上限，与前端附件的单文件上限一致。
+const maxHostFileBytes = 8 << 20
+
+// hostFileTypes 是允许经 API 读取并转成附件的扩展名 → 期望类型。
+var hostFileTypes = map[string]string{
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif":  "image/gif",
+	".webp": "image/webp",
+	".pdf":  "application/pdf",
+}
+
+// handleFsHostFile 读取飞牛目录选择器挑中的宿主文件，转成对话附件。
+//
+// 这是**唯一一个不受工作区围栏约束**的读文件接口：选择器可以把用户自己的任意目录
+// 交给应用，而这些文件本来就不在工作区里。所以边界收得很紧：只放行图片/PDF
+// （扩展名 + 内容嗅探双重确认）、必须是普通文件、单文件 ≤ 8MB，且必须挂鉴权。
+// 其他类型不读取——前端把路径作为引用写进消息，claude 自己用 Read 工具去读。
+func (s *Server) handleFsHostFile(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeErr(w, "请求体解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	abs := filepath.Clean(strings.TrimSpace(req.Path))
+	if !filepath.IsAbs(abs) {
+		writeErr(w, "需要绝对路径", http.StatusBadRequest)
+		return
+	}
+	if _, ok := hostFileTypes[strings.ToLower(filepath.Ext(abs))]; !ok {
+		writeErr(w, "只支持把图片或 PDF 读成附件；其他文件请用路径引用", http.StatusUnsupportedMediaType)
+		return
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		writeErr(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !st.Mode().IsRegular() {
+		writeErr(w, "不是普通文件", http.StatusBadRequest)
+		return
+	}
+	if st.Size() > maxHostFileBytes {
+		writeErr(w, "文件超过 8MB", http.StatusRequestEntityTooLarge)
+		return
+	}
+	raw, err := os.ReadFile(abs)
+	if err != nil {
+		writeErr(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// 扩展名只用来初筛，真正放行看内容：改名的 HTML/SVG 不能被当成图片读走。
+	head := raw
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	mediaType := strings.TrimSpace(strings.SplitN(http.DetectContentType(head), ";", 2)[0])
+	if !allowedRawTypes[mediaType] || mediaType == "text/plain" {
+		writeErr(w, "文件内容不是图片或 PDF", http.StatusUnsupportedMediaType)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"name":       filepath.Base(abs),
+		"media_type": mediaType,
+		"size":       st.Size(),
+		"data":       base64.StdEncoding.EncodeToString(raw),
+	})
 }
 
 // rawContentType 按扩展名返回可预览类型；未知类型返回空串交给嗅探。

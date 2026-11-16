@@ -805,3 +805,57 @@ func TestGitRepos(t *testing.T) {
 		t.Fatalf("未授权 cwd code = %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestFsHostFile(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	dir := t.TempDir()
+	png := filepath.Join(dir, "shot.png")
+	// 最小 PNG 头足以让 http.DetectContentType 认出 image/png。
+	if err := os.WriteFile(png, append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, 64)...), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	text := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(text, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// 扩展名是 .png、内容其实是 HTML：嗅探必须拦住。
+	fake := filepath.Join(dir, "fake.png")
+	if err := os.WriteFile(fake, []byte("<html><script>alert(1)</script></html>"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	post := func(path string) (int, string) {
+		rec := httptest.NewRecorder()
+		body := `{"path":"` + path + `"}`
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/fs/host-file", strings.NewReader(body)))
+		return rec.Code, rec.Body.String()
+	}
+
+	code, body := post(png)
+	if code != http.StatusOK {
+		t.Fatalf("png code = %d: %s", code, body)
+	}
+	var out struct {
+		Name      string `json:"name"`
+		MediaType string `json:"media_type"`
+		Size      int64  `json:"size"`
+		Data      string `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Name != "shot.png" || out.MediaType != "image/png" || out.Size == 0 || out.Data == "" {
+		t.Fatalf("payload = %+v", out)
+	}
+
+	// 非图片/PDF 一律拒绝：前端改用路径引用。
+	if code, body := post(text); code != http.StatusUnsupportedMediaType {
+		t.Fatalf("txt code = %d: %s", code, body)
+	}
+	if code, body := post(fake); code != http.StatusUnsupportedMediaType {
+		t.Fatalf("伪装 png code = %d: %s", code, body)
+	}
+	if code, body := post("relative.png"); code != http.StatusBadRequest {
+		t.Fatalf("相对路径 code = %d: %s", code, body)
+	}
+}

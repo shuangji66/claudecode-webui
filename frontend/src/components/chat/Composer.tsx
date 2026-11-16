@@ -1,18 +1,23 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { CommandInfo, WireAttachment } from "../../transport/types";
+import { useAppStore } from "../../store/useAppStore";
 import { permissionLabel } from "../../lib/labels";
+import { pickFnosFiles } from "../../lib/fnos";
 import { useLocale, useT } from "../../lib/i18n";
 import type { ModelOption } from "../../lib/providerForm";
 import {
   ATTACHMENT_ACCEPT,
   MAX_TOTAL_BYTES,
+  attachmentFromBase64,
+  classifyAttachment,
   formatBytes,
   readAttachment,
   toWireAttachment,
   type PendingAttachment,
 } from "../../lib/attachments";
 import { Select } from "../common/Select";
-import { IconClose, IconFile, IconPlus, IconSend, IconShield, IconStop } from "../common/Icons";
+import { Menu, type MenuItem } from "../common/Menu";
+import { IconClose, IconFile, IconFolder, IconPlus, IconSend, IconShield, IconStop } from "../common/Icons";
 import { ModelMenu } from "./ModelMenu";
 
 interface Props {
@@ -61,8 +66,10 @@ export function Composer({
   const [text, setText] = useState("");
   const [files, setFiles] = useState<PendingAttachment[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const readHostFile = useAppStore((s) => s.readHostFile);
 
   useEffect(() => {
     const el = ref.current;
@@ -109,6 +116,98 @@ export function Composer({
     setFiles(next);
     if (fileRef.current) fileRef.current.value = "";
   };
+
+  /** 在光标处插入片段（命令、路径引用），并把光标停在片段之后。 */
+  const insertAtCaret = (snippet: string) => {
+    const el = ref.current;
+    const start = el?.selectionStart ?? text.length;
+    const end = el?.selectionEnd ?? text.length;
+    setText(`${text.slice(0, start)}${snippet}${text.slice(end)}`);
+    requestAnimationFrame(() => {
+      const pos = start + snippet.length;
+      el?.focus();
+      el?.setSelectionRange(pos, pos);
+    });
+  };
+
+  /**
+   * 「从飞牛选择」：选择器挑完即授权给本应用，返回 NAS 上的绝对路径。
+   *
+   * 图片/PDF 由后端读成附件（只放行这两类，见 /api/fs/host-file）；其余类型
+   * 作为路径引用写进消息，让 claude 自己用 Read 工具去读——不做任意宿主文件读取。
+   */
+  const pickFromFnos = async () => {
+    setFileError(null);
+    const picked = await pickFnosFiles({
+      title: t("选择文件", "Choose files"),
+      okText: t("选择", "Choose"),
+    });
+    if (picked.state === "skipped") {
+      setFileError(t("当前不在飞牛宿主中，无法打开飞牛文件选择器；可以用「本地文件/图片」。", "Not running inside fnOS, so the fnOS picker is unavailable; use a local file instead."));
+      return;
+    }
+    if (picked.state === "denied") {
+      if (picked.reason === "message") setFileError(t(`飞牛文件选择失败：${picked.message}`, `fnOS file pick failed: ${picked.message}`));
+      return;
+    }
+
+    const refs: string[] = [];
+    const next = [...files];
+    let total = files.reduce((sum, f) => sum + f.size, 0);
+    for (const path of picked.paths) {
+      const name = path.split("/").pop() || path;
+      const kind = classifyAttachment(name, "");
+      if (kind !== "image" && kind !== "pdf") {
+        refs.push(path);
+        continue;
+      }
+      try {
+        const host = await readHostFile(path);
+        const attachment = attachmentFromBase64(host, locale);
+        if (total + attachment.size > MAX_TOTAL_BYTES) {
+          setFileError(t("附件总大小不能超过 10MB", "Attachments cannot exceed 10MB in total"));
+          break;
+        }
+        next.push(attachment);
+        total += attachment.size;
+      } catch (e) {
+        setFileError(e instanceof Error ? e.message : String(e));
+      }
+    }
+    setFiles(next);
+    if (refs.length > 0) insertAtCaret(`${refs.join("\n")}\n`);
+  };
+
+  const addItems: MenuItem[] = [
+    {
+      id: "local",
+      group: t("添加", "Add"),
+      label: t("本地文件/图片", "Local file or image"),
+      hint: "file",
+      icon: <IconFile size={13} />,
+      onSelect: () => fileRef.current?.click(),
+    },
+    {
+      id: "fnos",
+      label: t("从飞牛选择", "Choose in fnOS"),
+      hint: "fnos",
+      icon: <IconFolder size={13} />,
+      onSelect: () => void pickFromFnos(),
+    },
+  ];
+
+  const commandItems: MenuItem[] = commands.map((c) => ({
+    id: `cmd:${c.name}`,
+    group: t("指令", "Commands"),
+    label: (
+      <span className="flex min-w-0 items-baseline gap-1.5">
+        <span className="font-mono text-ink">/{c.name}</span>
+        {c.description && <span className="truncate text-[10.5px] text-faint">{c.description}</span>}
+      </span>
+    ),
+    hint: c.argumentHint,
+    onSelect: () => insertAtCaret(`/${c.name} `),
+  }));
 
   const hint = starting
     ? t("正在启动 Claude…", "Starting Claude…")
@@ -205,14 +304,27 @@ export function Composer({
         <div className="mt-1.5 flex items-center gap-1 sm:gap-1.5">
           <button
             type="button"
-            onClick={() => fileRef.current?.click()}
+            onClick={(e) => {
+              const anchor = e.currentTarget;
+              setMenuAnchor((prev) => (prev ? null : anchor));
+            }}
             disabled={disabled}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted hover:bg-panel-strong hover:text-ink disabled:opacity-40"
-            aria-label={t("添加文件或图片", "Add file or image")}
-            title={t("添加文件或图片", "Add file or image")}
+            aria-label={t("添加", "Add")}
+            aria-haspopup="menu"
+            aria-expanded={menuAnchor !== null}
+            title={t("添加文件、图片或指令", "Add files, images or commands")}
           >
             <IconPlus size={17} />
           </button>
+          <Menu
+            open={menuAnchor !== null}
+            anchor={menuAnchor}
+            items={[...addItems, ...commandItems]}
+            onClose={() => setMenuAnchor(null)}
+            width={264}
+            align="start"
+          />
 
           <span className="shrink-0" title={t("权限模式", "Permission mode")}>
             <Select

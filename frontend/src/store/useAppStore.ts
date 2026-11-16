@@ -20,6 +20,7 @@ import type {
   ConversationInfo,
   FsAccess,
   FsListing,
+  HostFile,
   GatewayModel,
   InitPayload,
   ModelsResult,
@@ -170,6 +171,8 @@ interface AppState {
   probeDir: (path: string) => Promise<FsAccess>;
   /** 在目录选择器里新建一层文件夹，返回新目录绝对路径；失败直接抛错给弹窗展示。 */
   mkdirDir: (parent: string, name: string) => Promise<string>;
+  /** 读取飞牛里挑中的图片/PDF（后端只放行这两类），用于转成对话附件。 */
+  readHostFile: (path: string) => Promise<HostFile>;
   /** 打开目录下最近一条对话；createIfEmpty=false 时没有对话就保持空态，不新建。 */
   ensureSession: (cwd?: string, createIfEmpty?: boolean) => Promise<SessionInfo | null>;
   createSession: (cwd?: string) => Promise<void>;
@@ -823,6 +826,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   probeDir: async (path) => {
     return apiFetch<FsAccess>("/api/fs/access", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    });
+  },
+
+  readHostFile: async (path) => {
+    return apiFetch<HostFile>("/api/fs/host-file", {
       method: "POST",
       body: JSON.stringify({ path }),
     });

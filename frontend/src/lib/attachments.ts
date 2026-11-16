@@ -115,6 +115,32 @@ export async function readAttachment(file: File, locale: Locale = "zh"): Promise
   };
 }
 
+/**
+ * 用后端读回来的字节构造附件（飞牛目录里挑中的图片/PDF）。
+ *
+ * 校验规则与本地文件一致：类型不认识或超过单文件上限就抛错，别把 8MB 的 PDF
+ * 塞进 WS 帧。
+ */
+export function attachmentFromBase64(
+  input: { name: string; media_type: string; size: number; data: string },
+  locale: Locale = "zh",
+): PendingAttachment {
+  const kind = classifyAttachment(input.name, input.media_type);
+  if (!kind) throw new Error(tr(locale, `不支持的文件类型：${input.name}`, `Unsupported file type: ${input.name}`));
+  const limit = attachmentLimit(kind);
+  if (input.size > limit) {
+    throw new Error(tr(locale, `${input.name} 超过 ${formatBytes(limit)}`, `${input.name} exceeds ${formatBytes(limit)}`));
+  }
+  return {
+    id: newID(),
+    name: input.name,
+    mediaType: input.media_type,
+    data: input.data,
+    size: input.size,
+    kind,
+  };
+}
+
 export function toWireAttachment(a: PendingAttachment): WireAttachment {
   return { name: a.name, media_type: a.mediaType, data: a.data };
 }

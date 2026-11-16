@@ -141,14 +141,65 @@ export type FnosPickOutcome =
  * `{ code: 0, data: [] }` 表示「用户什么都没选」，不能当成成功。
  */
 export function classifyPickResult(res: AuthorizeResponseLike | null | undefined): FnosPickOutcome {
+  const paths = pickedPaths(res);
+  if (paths.length > 0) return { state: "ok", path: paths[0] };
+  return classifyDenial(res);
+}
+
+/** 回包里的全部路径（选择器支持多选，取消时是空数组）。 */
+function pickedPaths(res: AuthorizeResponseLike | null | undefined): string[] {
   const data = Array.isArray(res?.data) ? res.data : [];
-  const path = data.find((item): item is string => typeof item === "string" && item.trim() !== "");
-  if (path) return { state: "ok", path };
+  return data.filter((item): item is string => typeof item === "string" && item.trim() !== "");
+}
+
+/** 没有路径时的失败语义：空回包或「操作失败」= 用户取消，其余带原文报错。 */
+function classifyDenial(
+  res: AuthorizeResponseLike | null | undefined,
+): { state: "denied"; reason: "cancel" } | { state: "denied"; reason: "message"; message: string } {
   const msg = String(res?.msg ?? "").trim();
   if (!msg) return { state: "denied", reason: "cancel" };
   const lower = msg.toLowerCase();
   if (CANCEL_TEXTS.some((text) => lower === text || lower.includes(text))) return { state: "denied", reason: "cancel" };
   return { state: "denied", reason: "message", message: msg };
+}
+
+/** 多选文件的结果：ok 时带全部路径。 */
+export type FnosFilesOutcome =
+  | { state: "ok"; paths: string[] }
+  | { state: "denied"; reason: "cancel" }
+  | { state: "denied"; reason: "message"; message: string }
+  | { state: "skipped"; reason: FnosAuthSkipReason };
+
+/** 把选择器回包折成「全部路径」——多选时不能只取第一个。 */
+export function classifyPickPaths(res: AuthorizeResponseLike | null | undefined): FnosFilesOutcome {
+  const paths = pickedPaths(res);
+  if (paths.length > 0) return { state: "ok", paths };
+  return classifyDenial(res);
+}
+
+/**
+ * 打开飞牛的**文件**选择器（不是目录），挑完即授权给本应用。
+ *
+ * 返回的是 NAS 上的绝对路径：图片/PDF 由后端读成附件，其余类型作为路径引用写进
+ * 消息，让 claude 自己用 Read 工具读——不做任意宿主文件读取。
+ */
+export async function pickFnosFiles(params: FnosPickParams = {}): Promise<FnosFilesOutcome> {
+  if (!inHostFrame()) return { state: "skipped", reason: "standalone" };
+  const sdk = await trimReady();
+  if (!sdk) return { state: "skipped", reason: "bridge" };
+  try {
+    const res = await sdk.pickUserFile({
+      directory: false,
+      multiple: true,
+      title: params.title,
+      okText: params.okText,
+      sidebarGroup: ["myFiles", "external", "favorites", "team"],
+    });
+    return classifyPickPaths(res);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { state: "denied", reason: "message", message };
+  }
 }
 
 /** 跳过授权的原因：非 iframe（独立浏览器）/ 宿主桥接不可用。 */
