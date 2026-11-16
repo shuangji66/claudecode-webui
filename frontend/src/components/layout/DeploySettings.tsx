@@ -131,20 +131,6 @@ export function DeploySettings() {
           onChange={(v) => void setClaudeSource(v)}
           options={SOURCES.map((s) => ({ value: s.value, label: t(s.zh, s.en) }))}
         />
-        <p className="mt-2 text-[10.5px] leading-relaxed text-faint">
-          {t(
-            "本机平台包：",
-            "Platform package: ",
-          )}
-          <code className="font-mono">{claude?.platform || "—"}</code>
-          {claude?.dir ? (
-            <>
-              {" · "}
-              {t("目录：", "Dir: ")}
-              <code className="break-all font-mono">{claude.dir}</code>
-            </>
-          ) : null}
-        </p>
       </Section>
 
       <Section title={t("已安装版本", "Installed versions")} desc={t("切换版本只影响之后新建的会话。", "Switching only affects conversations started afterwards.")}>
