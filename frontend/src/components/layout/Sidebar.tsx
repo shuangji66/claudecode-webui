@@ -303,7 +303,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   return (
     <aside className="safe-top flex h-full w-full shrink-0 flex-col border-r border-line bg-panel md:w-[280px] md:pt-0">
-      <div className="flex h-[58px] shrink-0 items-center gap-2 px-3">
+      {/* 三栏（侧栏 / 对话 / 右侧栏）的表头统一 56px，分隔线才对得齐。 */}
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3">
         <button type="button" onClick={startNewChat} className="flex min-w-0 items-center gap-2 text-left" aria-label={t("新对话", "New conversation")}>
           <BrandMark size={25} className="shrink-0 text-ink" />
           <span className="truncate text-[15px] font-semibold tracking-tight text-ink">Claude Code</span>

@@ -163,9 +163,6 @@ export function FilesPanel({ cwd, active }: Props) {
             <p className="px-2 py-2 text-[10.5px] text-warn">{t("目录项过多，仅显示前一部分。", "Directory truncated.")}</p>
           )}
         </div>
-        <div className="shrink-0 border-t border-line px-2 py-1 text-[10px] text-faint">
-          {t("只读预览 · 点文件查看内容", "Read-only preview · click a file")}
-        </div>
       </div>
 
       {selected && (

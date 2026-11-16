@@ -240,7 +240,7 @@ export function RightSidebar({ cwd, onClose }: Props) {
           title={t("拖动调整宽度，双击复位", "Drag to resize, double-click to reset")}
         />
 
-        <div className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-1.5">
+        <div className="flex h-14 shrink-0 items-center gap-1 border-b border-line px-1.5">
           <div className="dsh-scroll flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
             {tabs.length === 0 && <span className="shrink-0 px-1.5 text-[12.5px] font-medium text-ink">{t("开始", "Start")}</span>}
             {tabs.map((tab) => {

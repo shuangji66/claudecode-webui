@@ -216,7 +216,6 @@ function TerminalSession({ cwd, active }: { cwd: string; active: boolean }) {
             <IconRetry size={11} />
           </button>
         </div>
-        <p className="mt-0.5 truncate">{t("关闭该标签会结束这个 shell；切换标签/面板不会。", "Closing this tab ends this shell; switching tabs or panels does not.")}</p>
       </div>
     </div>
   );

@@ -43,7 +43,7 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, onTogg
   };
   return (
     <header className="safe-top shrink-0 border-b border-line bg-canvas md:pt-0">
-      <div className="flex h-[56px] items-center gap-2 px-3 md:px-4">
+      <div className="flex h-14 items-center gap-2 px-3 md:px-4">
         <button
           type="button"
           onClick={onToggleSidebar}
