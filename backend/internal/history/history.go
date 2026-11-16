@@ -9,6 +9,7 @@ package history
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -20,8 +21,13 @@ import (
 	"time"
 )
 
-// maxScanLines 是单个转录文件参与解析的最大行数，避免超大文件拖慢列表接口。
-const maxScanLines = 5000
+// maxScanLines 是列表摘要单次扫描的行数上限（与回放上限同量级），
+// maxTitleScanLines 是「取标题」只看头部多少行——标题来自首条用户消息，
+// 而时间戳与消息数必须覆盖整份转录。
+const (
+	maxScanLines      = 20000
+	maxTitleScanLines = 5000
+)
 
 // Session 是一条历史会话的摘要。
 type Session struct {
@@ -34,10 +40,12 @@ type Session struct {
 }
 
 type transcriptLine struct {
-	Type      string `json:"type"`
-	Cwd       string `json:"cwd"`
-	SessionID string `json:"sessionId"`
-	Timestamp string `json:"timestamp"`
+	Type        string `json:"type"`
+	Cwd         string `json:"cwd"`
+	SessionID   string `json:"sessionId"`
+	Timestamp   string `json:"timestamp"`
+	IsSidechain bool   `json:"isSidechain"`
+	IsMeta      bool   `json:"isMeta"`
 	Message   struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
@@ -88,16 +96,21 @@ func summarize(path, project string) Session {
 	defer f.Close()
 
 	titleDone := false
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 4<<20)
-	for i := 0; i < maxScanLines && sc.Scan(); i++ {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
+	lines := 0
+	// 时间戳与消息数要看整份转录：只读头部 5000 行会让长对话的「最近活跃」
+	// 停在第 5000 行那一刻，侧栏排序与自动预热都会选错。
+	_ = scanLines(f, 4<<20, func(line []byte) bool {
+		lines++
+		if lines > maxScanLines {
+			return false
 		}
 		var l transcriptLine
 		if err := json.Unmarshal(line, &l); err != nil {
-			continue
+			return true
+		}
+		// 子代理消息与系统提醒不算主消息，也不能当标题——回放那边同样过滤。
+		if l.IsSidechain || l.IsMeta {
+			return true
 		}
 		if l.Cwd != "" && s.Cwd == "" {
 			s.Cwd = l.Cwd
@@ -116,21 +129,65 @@ func summarize(path, project string) Session {
 			// 包装）也被写成 user 行。它们既不该计数，更不能当会话标题——否则列表里
 			// 会出现一条叫 "Set model to `x`" 的对话。
 			if l.Type == "user" && isLocalCommandEcho(extractText(l.Message.Content)) {
-				continue
+				return true
 			}
 			s.Messages++
-			if l.Type == "user" && !titleDone {
+			if l.Type == "user" && !titleDone && lines <= maxTitleScanLines {
 				if txt := extractText(l.Message.Content); txt != "" {
 					s.Title = truncate(txt, 80)
 					titleDone = true
 				}
 			}
 		}
-	}
+		return true
+	})
 	if s.Title == "" {
 		s.Title = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	}
 	return s
+}
+
+// scanLines 逐行读取并回调 fn；fn 返回 false 时停止。
+//
+// 单行超过 limit 时只丢弃这一行、继续读后面的行。原先用 bufio.Scanner：
+// 一条带 base64 图片的 tool_result 或一次大文件 Read 就能让某行超过 8MB，
+// Scanner 直接返回 ErrTooLong，整次回放变成 500 —— 明明只有一行读不了。
+func scanLines(r io.Reader, limit int, fn func(line []byte) bool) error {
+	br := bufio.NewReaderSize(r, 64*1024)
+	var buf []byte
+	dropping := false
+	for {
+		chunk, err := br.ReadSlice('\n')
+		if len(chunk) > 0 {
+			switch {
+			case dropping:
+				// 超长行的剩余部分，直接丢。
+			case len(buf)+len(chunk) > limit:
+				buf = nil
+				dropping = true
+			default:
+				buf = append(buf, chunk...)
+			}
+		}
+		switch {
+		case err == nil:
+			line := bytes.TrimRight(buf, "\r\n")
+			if !dropping && len(line) > 0 && !fn(line) {
+				return nil
+			}
+			buf = nil
+			dropping = false
+		case errors.Is(err, bufio.ErrBufferFull):
+			// 这一行还没读完，继续。
+		case errors.Is(err, io.EOF):
+			if !dropping && len(buf) > 0 {
+				_ = fn(bytes.TrimRight(buf, "\r\n"))
+			}
+			return nil
+		default:
+			return err
+		}
+	}
 }
 
 // extractText 从 content（字符串或内容块数组）里取出纯文本。
@@ -227,14 +284,8 @@ func LoadTranscript(projectsDir, id string) (Transcript, error) {
 // 而子代理自己的转录文件里每一行都带 isSidechain，正是要保留的内容。
 func scanTranscript(r io.Reader, id string, keepSidechain bool) (Transcript, error) {
 	out := Transcript{ID: id, Lines: make([]json.RawMessage, 0, 128)}
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	total := 0
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
-		}
+	err := scanLines(r, 8<<20, func(line []byte) bool {
 		var meta struct {
 			Type        string `json:"type"`
 			IsSidechain bool   `json:"isSidechain"`
@@ -242,20 +293,20 @@ func scanTranscript(r io.Reader, id string, keepSidechain bool) (Transcript, err
 			Cwd         string `json:"cwd"`
 		}
 		if err := json.Unmarshal(line, &meta); err != nil {
-			continue
+			return true
 		}
 		if out.Cwd == "" && meta.Cwd != "" {
 			out.Cwd = meta.Cwd
 		}
 		if meta.IsMeta || (meta.IsSidechain && !keepSidechain) {
-			continue
+			return true
 		}
 		switch meta.Type {
 		case "user", "assistant", "system", "result":
 		default:
-			continue
+			return true
 		}
-		// Scanner 复用底层数组，必须复制后再保留。
+		// line 的底层数组会被复用，必须复制后再保留。
 		copied := append(json.RawMessage(nil), line...)
 		out.Lines = append(out.Lines, copied)
 		total += len(copied)
@@ -264,8 +315,9 @@ func scanTranscript(r io.Reader, id string, keepSidechain bool) (Transcript, err
 			out.Lines = out.Lines[1:]
 			out.Truncated = true
 		}
-	}
-	if err := sc.Err(); err != nil {
+		return true
+	})
+	if err != nil {
 		return Transcript{}, err
 	}
 	return out, nil

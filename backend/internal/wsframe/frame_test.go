@@ -121,3 +121,23 @@ func TestEncodeNoMaskBit(t *testing.T) {
 		t.Fatalf("首字节 = %x, want 81", raw[0])
 	}
 }
+
+// 回归：分片聚合的剩余预算为 0 时不能退回默认上限。
+//
+// ReadFrame 把 maxPayload<=0 当成「未指定」并重置为 DefaultMaxMessageBytes，
+// 于是首片刚好用满预算后，续片可以先分配 16MB 再被拒（终端 1MB 上限形同虚设）。
+func TestReadMessageFragmentBudgetExhausted(t *testing.T) {
+	first := Encode(OpText, bytes.Repeat([]byte("a"), 8))
+	first[0] &^= 0x80 // 清 FIN
+	second := Encode(OpContinuation, []byte("tail"))
+	raw := append(append([]byte{}, first...), second...)
+
+	cr := bytes.NewReader(raw)
+	if _, _, err := ReadMessage(cr, 8); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("err = %v, want ErrTooLarge", err)
+	}
+	// 预算已经耗尽就不该再读下一片：旧实现会把剩余字节也消费掉（并先分配 16MB）。
+	if cr.Len() == 0 {
+		t.Fatal("预算耗尽后仍然读取了后续分片")
+	}
+}

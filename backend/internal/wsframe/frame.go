@@ -128,7 +128,14 @@ func ReadMessage(r io.Reader, maxBytes int) (op byte, payload []byte, err error)
 	op = f.Op
 	buf := append([]byte(nil), f.Payload...)
 	for !f.Fin {
-		f, err = ReadFrame(r, maxBytes-len(buf))
+		// 剩余预算必须显式判：ReadFrame 把 <=0 当成「未指定」并重置为
+		// DefaultMaxMessageBytes，预算耗尽时反而允许下一片先分配 16MB
+		// （终端 1MB 上限会被放大成 16MB 分配）。
+		remaining := maxBytes - len(buf)
+		if remaining <= 0 {
+			return 0, nil, ErrTooLarge
+		}
+		f, err = ReadFrame(r, remaining)
 		if err != nil {
 			return 0, nil, err
 		}

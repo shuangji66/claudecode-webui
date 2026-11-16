@@ -399,3 +399,117 @@ func TestLoadPreviewMissing(t *testing.T) {
 		t.Fatalf("非法 id 应被拒绝，得到 %v", err)
 	}
 }
+
+// 回归：单行超长不能让整次回放失败。
+//
+// 一次带 base64 图片的 tool_result 或读大文件的返回就能让某行超过 8MB；
+// 旧实现用 bufio.Scanner，ErrTooLong 直接让 LoadTranscript 返回错误，
+// 前端拿到 500，整段历史一行都渲染不出来。
+func TestLoadTranscriptSkipsOversizedLine(t *testing.T) {
+	root := t.TempDir()
+	big := `{"type":"user","message":{"role":"user","content":"` + strings.Repeat("A", 9<<20) + `"}}`
+	writeJSONL(t, filepath.Join(root, "-tmp-work", "sess-big.jsonl"),
+		`{"type":"user","cwd":"/tmp/work","message":{"role":"user","content":"第一条"}}`,
+		big,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"最后一条"}]}}`,
+	)
+
+	got, err := LoadTranscript(root, "sess-big")
+	if err != nil {
+		t.Fatalf("超长行不应让整次回放失败: %v", err)
+	}
+	if len(got.Lines) != 2 {
+		t.Fatalf("可回放行数 = %d, want 2（超长行应跳过，其余保留）", len(got.Lines))
+	}
+	if got.Cwd != "/tmp/work" {
+		t.Fatalf("Cwd = %q", got.Cwd)
+	}
+}
+
+// 回归：列表摘要不能只看头部 5000 行，也不能把子代理/系统提醒当主消息。
+func TestListUsesWholeTranscriptForActivity(t *testing.T) {
+	root := t.TempDir()
+	lines := []string{
+		`{"type":"user","cwd":"/tmp/work","sessionId":"sess-long","timestamp":"2026-11-16T01:00:00Z","message":{"role":"user","content":"第一条"}}`,
+		// 子代理与系统提醒：不计消息数，更不能当标题。
+		`{"type":"user","isSidechain":true,"timestamp":"2026-11-16T01:01:00Z","message":{"role":"user","content":"子代理的悄悄话"}}`,
+		`{"type":"user","isMeta":true,"timestamp":"2026-11-16T01:02:00Z","message":{"role":"user","content":"系统提醒"}}`,
+	}
+	for i := 0; i < maxTitleScanLines+200; i++ {
+		lines = append(lines, `{"type":"assistant","timestamp":"2026-11-16T02:00:00Z","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}`)
+	}
+	// 第 5200+ 行的时间戳远晚于头部：只有扫完整个文件才能看到。
+	lines = append(lines, `{"type":"user","timestamp":"2026-11-17T09:30:00Z","message":{"role":"user","content":"很久以后的一句话"}}`)
+	writeJSONL(t, filepath.Join(root, "-tmp-work", "sess-long.jsonl"), lines...)
+
+	got, err := List(root)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("条数 = %d", len(got))
+	}
+	s := got[0]
+	if s.Title != "第一条" {
+		t.Fatalf("Title = %q, want 第一条（sidechain/meta 行不能当标题）", s.Title)
+	}
+	want := "2026-11-17T09:30:00Z"
+	if s.UpdatedAt.Format("2006-01-02T15:04:05Z") != want {
+		t.Fatalf("UpdatedAt = %v, want %s（不能被前 5000 行截断）", s.UpdatedAt, want)
+	}
+	// 3 条真实主消息 + 5200 条 assistant + 1 条尾部 user，sidechain/meta 不计。
+	if s.Messages != 2+maxTitleScanLines+200 {
+		t.Fatalf("Messages = %d, want %d", s.Messages, 2+maxTitleScanLines+200)
+	}
+}
+
+// 回归：旁路文件过大只该少一个条目，不能终止整次打包。
+//
+// 旧实现把「超过 64MB」当错误上抛，WalkDir 立刻中止，WriteSessionZip 返回错误 ——
+// 而响应头已经发出去了，用户拿到的是 HTTP 200 + 一个没有中央目录的坏 zip。
+func TestExportSkipsOversizedSidecar(t *testing.T) {
+	root := t.TempDir()
+	const id = "sess-export"
+	writeJSONL(t, filepath.Join(root, "-tmp-work", id+".jsonl"),
+		`{"type":"user","message":{"role":"user","content":"hi"}}`,
+	)
+	sidecarDir := filepath.Join(root, "-tmp-work", id, "subagents")
+	if err := os.MkdirAll(sidecarDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sidecarDir, "agent-1.jsonl"), []byte(`{"type":"user"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// 稀疏文件：不真写 65MB，只把长度撑过上限。
+	huge := filepath.Join(sidecarDir, "agent-2.jsonl")
+	f, err := os.Create(huge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(int64(maxExportFileBytes) + 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+
+	var buf bytes.Buffer
+	if err := WriteSessionZip(&buf, root, id); err != nil {
+		t.Fatalf("超大旁路文件不应让导出失败: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("zip 不可读（中央目录缺失？）: %v", err)
+	}
+	names := map[string]bool{}
+	for _, f := range zr.File {
+		names[f.Name] = true
+	}
+	if !names[id+".jsonl"] {
+		t.Fatal("主转录缺失")
+	}
+	if !names[id+"/subagents/agent-1.jsonl"] {
+		t.Fatal("小旁路文件缺失")
+	}
+	if names[id+"/subagents/agent-2.jsonl"] {
+		t.Fatal("超大旁路文件不应进包")
+	}
+}

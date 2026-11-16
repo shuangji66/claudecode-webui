@@ -2,7 +2,7 @@ package history
 
 import (
 	"archive/zip"
-	"fmt"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -42,19 +42,26 @@ func WriteSessionZip(w io.Writer, projectsDir, id string) error {
 
 	zw := zip.NewWriter(w)
 	total := 0
-	add := func(name, file string) error {
-		n, err := addFileToZip(zw, name, file)
-		total += n
+	// add 把「跳过某个文件」与「真的失败」分开：超大文件只该少一个条目，
+	// 不该在响应头已发出之后终止打包（客户端会拿到 200 + 一个没有中央目录的坏 zip）。
+	add := func(name, file string, limit int64) error {
+		n, skipped, err := addFileToZip(zw, name, file, limit)
 		if err != nil {
 			return err
 		}
+		if skipped {
+			return nil
+		}
+		total += n
 		if total > maxExportTotal {
-			return fmt.Errorf("history: 导出内容超过 %d MB", maxExportTotal>>20)
+			// 总量超限：停在这里，zip 仍然是完整可打开的（已写入的条目保留）。
+			return filepath.SkipAll
 		}
 		return nil
 	}
 
-	if err := add(id+".jsonl", path); err != nil {
+	// 主转录是用户要的东西本身，不受单文件上限约束（流式写入，不占内存）。
+	if err := add(id+".jsonl", path, 0); err != nil {
 		return err
 	}
 
@@ -84,39 +91,40 @@ func WriteSessionZip(w io.Writer, projectsDir, id string) error {
 			if !d.Type().IsRegular() {
 				return nil
 			}
-			return add(filepath.ToSlash(filepath.Join(id, rel)), p)
+			return add(filepath.ToSlash(filepath.Join(id, rel)), p, int64(maxExportFileBytes))
 		})
-		if err != nil {
+		if err != nil && !errors.Is(err, filepath.SkipAll) {
 			return err
 		}
 	}
 	return zw.Close()
 }
 
-// addFileToZip 把单个文件写进 zip，返回写入的字节数（用于总量控制）。
-func addFileToZip(zw *zip.Writer, name, path string) (int, error) {
+// addFileToZip 把单个文件写进 zip，返回写入字节数与「是否因超限被跳过」。
+// limit 为 0 表示不检查单文件大小。
+func addFileToZip(zw *zip.Writer, name, path string, limit int64) (int, bool, error) {
 	src, err := os.Open(path)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	defer src.Close()
 	st, err := src.Stat()
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	if st.Size() > int64(maxExportFileBytes) {
-		return 0, fmt.Errorf("history: %s 超过 %d MB，未导出", name, maxExportFileBytes>>20)
+	if limit > 0 && st.Size() > limit {
+		return 0, true, nil
 	}
 	hdr, err := zip.FileInfoHeader(st)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	hdr.Name = name
 	hdr.Method = zip.Deflate
 	dst, err := zw.CreateHeader(hdr)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	n, err := io.Copy(dst, src)
-	return int(n), err
+	return int(n), false, err
 }
