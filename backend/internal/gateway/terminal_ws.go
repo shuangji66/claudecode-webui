@@ -75,7 +75,7 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	c := &wsClient{conn: conn, r: reader}
+	c := newWSClient(conn, reader, "")
 	defer c.close()
 
 	sess, err := terminal.Start(shell, cwd, uint16(cols), uint16(rows))

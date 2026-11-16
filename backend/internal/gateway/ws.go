@@ -19,8 +19,15 @@ import (
 	"ccweb/backend/internal/wsframe"
 )
 
-// writeTimeout 是单帧写超时：一个不读数据的客户端不能让广播永久阻塞。
+// writeTimeout 是单帧写超时：一个不读数据的客户端不能让写循环永久阻塞。
 const writeTimeout = 5 * time.Second
+
+// sendQueueLen 是每个连接的上行队列长度。
+//
+// 关键约束：hub.Broadcast 跑在 session 的读循环 goroutine 上，所以 SendJSON
+// 绝不能碰网络。事件只入队，真正的写由 writeLoop 负责；队列满说明客户端不读数据，
+// 直接判连接不可用（hub 会退订并关闭它），代价只落在这个客户端身上。
+const sendQueueLen = 256
 
 // wsClient 是一条浏览器 WebSocket 连接，同时实现 hub.Client。
 type wsClient struct {
@@ -28,9 +35,46 @@ type wsClient struct {
 	r     *bufio.Reader
 	topic string
 
+	out  chan []byte
+	done chan struct{}
+
 	wmu       sync.Mutex
 	closed    atomic.Bool
 	closeOnce sync.Once
+}
+
+// newWSClient 建一条连接并启动写循环。
+func newWSClient(conn net.Conn, r *bufio.Reader, topic string) *wsClient {
+	c := &wsClient{
+		conn:  conn,
+		r:     r,
+		topic: topic,
+		out:   make(chan []byte, sendQueueLen),
+		done:  make(chan struct{}),
+	}
+	go c.writeLoop()
+	return c
+}
+
+// writeLoop 串行写帧。写失败（含 5s 超时）就直接关 socket 退出：
+// 读循环那边会立刻拿到错误并走 close()，两边都不会把广播拖住。
+func (c *wsClient) writeLoop() {
+	for {
+		select {
+		case <-c.done:
+			return
+		case frame := <-c.out:
+			c.wmu.Lock()
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+			_, err := c.conn.Write(frame)
+			c.wmu.Unlock()
+			if err != nil {
+				c.closed.Store(true)
+				_ = c.conn.Close()
+				return
+			}
+		}
+	}
 }
 
 // SendJSON 发送一条事件；实现 hub.Client。
@@ -42,18 +86,22 @@ func (c *wsClient) SendJSON(v any) error {
 	return c.writeFrame(wsframe.OpText, b)
 }
 
+// writeFrame 把一帧放进发送队列（不阻塞调用方）。
 func (c *wsClient) writeFrame(op byte, payload []byte) error {
-	c.wmu.Lock()
-	defer c.wmu.Unlock()
 	if c.closed.Load() {
 		return errors.New("ws: 连接已关闭")
 	}
-	_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if _, err := c.conn.Write(wsframe.Encode(op, payload)); err != nil {
+	frame := wsframe.Encode(op, payload)
+	select {
+	case c.out <- frame:
+		return nil
+	default:
+		// 队列满 = 客户端长期不读数据。直接关 socket：写循环会退出、读循环立刻拿到
+		// 错误，handler 随之返回并释放 hub 订阅，不会留下半死不活的连接。
 		c.closed.Store(true)
-		return err
+		_ = c.conn.Close()
+		return errors.New("ws: 发送队列已满，客户端未消费数据")
 	}
-	return nil
 }
 
 func (c *wsClient) close() {
@@ -63,6 +111,7 @@ func (c *wsClient) close() {
 	// 所以这里的 once 只管「socket 只关一次」，不拿 closed 当早退条件。
 	already := c.closed.Swap(true)
 	c.closeOnce.Do(func() {
+		close(c.done)
 		if !already {
 			c.wmu.Lock()
 			_ = c.conn.SetWriteDeadline(time.Now().Add(time.Second))
@@ -115,7 +164,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c := &wsClient{conn: conn, r: reader, topic: id}
+	c := newWSClient(conn, reader, id)
 	s.d.Hub.Subscribe(id, c)
 	defer func() {
 		s.d.Hub.Unsubscribe(id, c)
