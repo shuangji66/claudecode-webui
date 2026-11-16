@@ -26,3 +26,28 @@ export function sortByRecent(conversations: ConversationInfo[]): ConversationInf
 export function latestConversation(cwd: string, conversations: ConversationInfo[]): ConversationInfo | null {
   return sortByRecent(conversations.filter((c) => !c.archived && belongs(c.cwd, cwd)))[0] ?? null;
 }
+
+/**
+ * 侧栏一行该画什么状态标记（对齐 DSH 的 sessionStatuses 优先级）：
+ * 待审批 > 进行中 > 完成未看 > 活跃（不画点）> 未运行（灰点）。
+ *
+ * 「完成未看」只在结果到达时会话不是当前打开的那条时置位，打开即清除；
+ * 否则一轮结束后会永远挂着绿点，反倒成了噪音。
+ */
+export type ConversationStatus = "approval" | "ongoing" | "done" | "active" | "off";
+
+export function conversationStatus(input: {
+  /** 该会话待处理的审批条数。 */
+  pending: number;
+  /** 是否有常驻进程。 */
+  live: boolean;
+  /** 进程状态：busy / starting / ready …（live 为 false 时无意义）。 */
+  state?: string;
+  /** 完成但用户还没看过。 */
+  done: boolean;
+}): ConversationStatus {
+  if (input.pending > 0) return "approval";
+  if (input.live && (input.state === "busy" || input.state === "starting")) return "ongoing";
+  if (input.done) return "done";
+  return input.live ? "active" : "off";
+}

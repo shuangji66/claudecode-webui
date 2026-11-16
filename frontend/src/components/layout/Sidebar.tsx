@@ -3,9 +3,10 @@ import { useAppStore } from "../../store/useAppStore";
 import type { ConversationInfo, WorkspaceEntry } from "../../transport/types";
 import { baseName, conversationTitle, relativeTime, stateLabel } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
-import { belongs } from "../../lib/conversations";
+import { belongs, conversationStatus } from "../../lib/conversations";
 import { askConfirm, askPrompt } from "../common/SystemDialogs";
 import { Menu, type MenuItem } from "../common/Menu";
+import { StateDot } from "../common/StateDot";
 import {
   BrandMark,
   IconArchive,
@@ -73,6 +74,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const activeId = useAppStore((s) => s.activeId);
   const items = useAppStore((s) => s.items);
   const states = useAppStore((s) => s.states);
+  const perms = useAppStore((s) => s.perms);
+  const doneIds = useAppStore((s) => s.doneIds);
   const starting = useAppStore((s) => s.starting);
   const switchWorkspace = useAppStore((s) => s.switchWorkspace);
   const openConversation = useAppStore((s) => s.openConversation);
@@ -453,8 +456,13 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                   {g.conversations.map((c) => {
                     const active = c.id === activeId;
                     const liveState = c.live ? (states[c.id] ?? c.state ?? "ready") : "";
-                    const dot =
-                      liveState === "busy" ? "bg-warn" : liveState === "ready" ? "bg-ok" : liveState === "starting" ? "bg-warn" : "bg-faint";
+                    // 待审批 > 进行中 > 完成未看 > 活跃（不画点）> 未运行（灰点），见 lib/conversations。
+                    const status = conversationStatus({
+                      pending: perms[c.id]?.length ?? 0,
+                      live: c.live,
+                      state: liveState,
+                      done: Boolean(doneIds[c.id]),
+                    });
                     return (
                       <div key={c.id} className="group/session flex items-center gap-0.5">
                         <button
@@ -464,7 +472,9 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                           data-active={active}
                           title={`${c.cwd}\n${c.live ? stateLabel(liveState, locale) : t("未运行（点击恢复）", "Not running (click to resume)")}`}
                         >
-                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+                          <span className="flex h-[14px] w-[14px] shrink-0 items-center justify-center">
+                            {status !== "active" && <StateDot state={status} />}
+                          </span>
                           <span className={`truncate text-[12px] ${active ? "text-ink" : "text-ink-2"}`}>{titleOf(c)}</span>
                           {c.archived && (
                             <span className="shrink-0 rounded-full bg-black/[0.06] px-1 text-[9px] text-muted">{t("归档", "Archived")}</span>

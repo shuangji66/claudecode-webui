@@ -10,7 +10,7 @@
 
 import { create } from "zustand";
 import { apiFetch } from "../lib/runtime";
-import { appendError, appendUser, applyCLI } from "../lib/normalize";
+import { appendError, appendUser, applyCLI, isTurnResult } from "../lib/normalize";
 import { openFnosFileManager } from "../lib/fnos";
 import type { Item } from "../lib/model";
 import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
@@ -112,6 +112,11 @@ interface AppState {
   inits: Record<string, InitPayload>;
   states: Record<string, string>;
   conns: Record<string, ConnInfo>;
+  /**
+   * 一轮跑完、但用户还没打开看过的对话。侧栏用它显示绿点；
+   * 打开对话（setActive）即清除，否则绿点会一直挂着。
+   */
+  doneIds: Record<string, boolean>;
 
   // 「获取可用模型」的临时结果（按提供商分别保存会太啰嗦，这里只留最近一次）
   modelsFor: string;
@@ -318,6 +323,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   inits: {},
   states: {},
   conns: {},
+  doneIds: {},
   modelsFor: "",
   gatewayModels: [],
   modelsError: null,
@@ -1110,7 +1116,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setActive: (id) => {
-    set({ activeId: id });
+    set((s) => {
+      if (!id || !s.doneIds[id]) return { activeId: id };
+      const next = { ...s.doneIds };
+      delete next[id];
+      return { activeId: id, doneIds: next };
+    });
     writeActiveId(id);
   },
 
@@ -1288,7 +1299,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return;
       }
       case "cli": {
-        set((s) => ({ items: { ...s.items, [sid]: applyCLI(s.items[sid] ?? [], ev.data) } }));
+        // 一轮结束时给「没在看的对话」打上完成标记：正在看的对话结果就在眼前，
+        // 再挂一个绿点只会让人以为自己漏了什么。
+        const finished = get().activeId !== sid && isTurnResult(ev.data);
+        set((s) => ({
+          items: { ...s.items, [sid]: applyCLI(s.items[sid] ?? [], ev.data) },
+          ...(finished ? { doneIds: { ...s.doneIds, [sid]: true } } : {}),
+        }));
         return;
       }
       default:

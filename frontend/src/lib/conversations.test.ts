@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { belongs, latestConversation, sortByRecent, workspaceFor } from "./conversations";
+import { belongs, conversationStatus, latestConversation, sortByRecent, workspaceFor } from "./conversations";
 import type { ConversationInfo, WorkspaceEntry } from "../transport/types";
 
 function conv(id: string, cwd: string, last: string, archived = false): ConversationInfo {
@@ -36,5 +36,23 @@ describe("conversations", () => {
     const list = [conv("a", "/work", "2026-01-01T00:00:00Z"), conv("b", "/work", "2026-02-01T00:00:00Z", true), conv("c", "/work/sub", "2026-03-01T00:00:00Z")];
     expect(latestConversation("/work", list)?.id).toBe("c");
     expect(sortByRecent(list).map((c) => c.id)).toEqual(["c", "b", "a"]);
+  });
+});
+
+describe("conversationStatus", () => {
+  const base = { pending: 0, live: true, state: "ready", done: false };
+
+  it("优先级：待审批 > 进行中 > 完成未看 > 活跃 > 未运行", () => {
+    // 需要审批时即使进程正忙也先报审批
+    expect(conversationStatus({ ...base, pending: 1, state: "busy", done: true })).toBe("approval");
+    expect(conversationStatus({ ...base, state: "busy" })).toBe("ongoing");
+    expect(conversationStatus({ ...base, state: "starting" })).toBe("ongoing");
+    expect(conversationStatus({ ...base, done: true })).toBe("done");
+    expect(conversationStatus(base)).toBe("active");
+    expect(conversationStatus({ ...base, live: false, state: undefined })).toBe("off");
+  });
+
+  it("进程已经不在时，残留的完成标记仍然显示绿点", () => {
+    expect(conversationStatus({ pending: 0, live: false, done: true })).toBe("done");
   });
 });

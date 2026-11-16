@@ -30,7 +30,7 @@ src/
   store/useSkillsStore.ts  设置页技能数据（/api/skills 的列表与正文）
   components/layout/Sidebar.tsx 工作区/对话列表、重命名/归档/删除菜单
   components/right/    RightSidebar / FilesPanel / GitPanel / TerminalPanel
-  components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons
+  components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
   components/          layout / chat / tools / permission / settings
 ```
 
@@ -56,6 +56,9 @@ src/
 9. 强调色是陶土色 `#D97757`，统一用 `bg-brand/text-brand/border-brand`。
 10. 移动端输入区必须保留 `env(safe-area-inset-bottom)`；设置页底部操作栏同样要留安全区。
 11. 不要加呼吸灯/无限 pulse 动画；状态点用静态圆点，流式光标也不闪烁。
+    **唯一例外**是对话「进行中」的进度环（`common/StateDot` 的 `ongoing`：1.5s 匀速旋转 +
+    弧长呼吸，对齐 DSH 的 StateDot），它表达的是「正在干活」而不是装饰；必须在
+    `prefers-reduced-motion: reduce` 下停成静态弧。新增任何循环动画前先想清楚这一点。
 12. 输入框 `+` 是附件入口（文件/图片），不要再改回插入 `/`；" / " 命令仍由用户键入触发补全。
 13. **右侧栏三个面板必须常驻**，只切 `hidden`；终端只在首次激活后创建 PTY，切页签不能卸载
     `TerminalPanel`，否则 shell 会被杀。关闭侧栏才允许结束终端。
@@ -102,6 +105,10 @@ src/
   有对话时才回到贴底布局。上方 `WorkspacePicker` 选中工作区走既有的 `startConversationIn`
   （切当前工作区 + 在该目录新建对话）：只切不建会让首条消息落到 `ensureSession` 的
   「恢复最近对话」上，用户明明选了工作区却进了旧对话。
+- **侧栏状态标记**（`lib/conversations.conversationStatus`，优先级从高到低）：待审批 →
+  强调色圆点；进程 `busy`/`starting` → 进度环；完成但没看过 → 绿点；活跃但空闲 → 不画点；
+  没有常驻进程 → 灰点。「完成未看」由 `applyEvent` 在 `result` 到达且该对话不是当前打开的
+  那条时置位（`doneIds`），`setActive` 打开即清除——不清就会永远挂着绿点。
 - 新增事件类型：先改 `transport/types.ts` → 再在 `applyEvent` 里分支 → 最后补测试。
 
 ## 4. 消息模型（Item）

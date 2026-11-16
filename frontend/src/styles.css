@@ -273,6 +273,92 @@ pre {
 }
 
 /* 消息进入时轻微上浮，避免流式内容闪跳。 */
+/* 对话状态标记（对齐 DSH 的 StateDot）：进行中是一圈匀速旋转的进度环，
+   需要审批 / 任务完成 / 未运行分别是强调色、绿色、灰色圆点。
+   圆点用 currentColor 画在 ::after 里，尺寸由行内 width/height 决定。 */
+.state-dot {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  color: var(--c-faint);
+}
+
+.state-dot::after {
+  content: "";
+  position: absolute;
+  inset: 20%;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.state-dot-approval {
+  color: var(--c-brand);
+}
+
+.state-dot-done {
+  color: var(--c-ok);
+}
+
+.state-dot-spinner {
+  flex: none;
+  color: var(--c-muted);
+}
+
+.state-dot-spin {
+  transform-origin: center;
+  animation: state-dot-spin 1.5s linear infinite;
+}
+
+.state-dot-track,
+.state-dot-arc {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.state-dot-track {
+  opacity: 0.25;
+}
+
+.state-dot-arc {
+  stroke-dasharray: 12 150;
+  animation: state-dot-dash 1.5s ease-in-out infinite;
+}
+
+@keyframes state-dot-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes state-dot-dash {
+  0% {
+    stroke-dasharray: 12 150;
+    stroke-dashoffset: 0;
+  }
+  50% {
+    stroke-dasharray: 24 150;
+    stroke-dashoffset: -6;
+  }
+  to {
+    stroke-dasharray: 12 150;
+    stroke-dashoffset: 0;
+  }
+}
+
+/* 尊重系统的「减少动态效果」：环停在一个固定弧长上，不再是转圈。 */
+@media (prefers-reduced-motion: reduce) {
+  .state-dot-spin,
+  .state-dot-arc {
+    animation: none;
+  }
+  .state-dot-arc {
+    stroke-dasharray: 18 150;
+    stroke-dashoffset: -3;
+  }
+}
+
 @keyframes rise-in {
   from {
     opacity: 0;

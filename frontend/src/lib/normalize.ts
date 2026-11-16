@@ -62,6 +62,11 @@ function asRecord(v: unknown): Raw | undefined {
   return v && typeof v === "object" ? (v as Raw) : undefined;
 }
 
+/** 这条 CLI 消息是不是「一轮结束」（成功、被中断、报错都会发 result）。 */
+export function isTurnResult(msg: unknown): boolean {
+  return asRecord(msg)?.type === "result";
+}
+
 /** 处理一条 CLI 原始消息，返回新的列表（不修改入参）。
  *  at 用于回放历史转录时保留原始时间，不传则用当前时间。 */
 export function applyCLI(items: Item[], msg: unknown, at = Date.now()): Item[] {
