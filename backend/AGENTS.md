@@ -165,6 +165,11 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 
 - 只监听 unix socket；启动时清理残留 socket 文件并 `chmod 0660`。
 - `withBaseURL` 剥离前缀，**前缀外的请求 404**（不要放行裸路径）。
+- **裸前缀（`/app/<Name>`，无尾斜杠）直接当 `/` 处理，不要 301 到 `base+"/"`**。
+  飞牛网关（`trim_http_cgi`）把会话凭据放在 query 上（`?token=` / ticket），301 会丢掉它，
+  下一次请求就没有凭据，网关直接回 13 字节 `invalid token`（HTTP 200、text/plain，
+  应用完全收不到请求）；301 还会被 webview 长期缓存，之后连新凭据都带不上。
+  相对资源靠 index.html 注入的 `<base href>` 解析，不需要尾斜杠。
 - 新路由必须 `s.authed(...)`；WS 在 handler 内自行校验 token。
   `/api/settings` 三个端点（GET/PUT/POST test）都属于敏感路由，务必保持鉴权。
 - 工作区路由：`GET/POST/DELETE /api/workspaces`、`POST /api/workspaces/current`、

@@ -159,8 +159,16 @@ func withBaseURL(base string, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		if p == base {
-			// 让相对资源能正确解析，补一个尾斜杠。
-			http.Redirect(w, r, base+"/", http.StatusMovedPermanently)
+			// 裸前缀直接当根处理，**不要**重定向到 base+"/"。
+			// 飞牛网关（trim_http_cgi）会把会话凭据放在 query 上（?token=…），
+			// 301 会把它丢掉：随后那次请求没有任何凭据，网关直接回 13 字节的
+			// "invalid token"（HTTP 200、text/plain），而应用根本收不到请求。
+			// 而且 301 会被浏览器/webview 长期缓存，凭据再也不会被带上。
+			// 相对资源本来就靠 index.html 里注入的 <base href="{base}/"> 解析，
+			// 所以裸前缀不需要尾斜杠也能正确加载。
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = "/"
+			h.ServeHTTP(w, r2)
 			return
 		}
 		if !strings.HasPrefix(p, base+"/") {

@@ -260,15 +260,30 @@ func TestBaseURLStripsPrefix(t *testing.T) {
 	}
 }
 
-func TestBaseURLRedirectsBarePrefix(t *testing.T) {
-	h := withBaseURL("/app/ccweb", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+// 裸前缀必须原地当成 "/" 处理，不能 301 到 base+"/"。
+//
+// 飞牛网关把会话凭据放在 query 上（?token=…），301 会丢掉 query：随后那次
+// 请求没有任何凭据，网关直接回 "invalid token"，应用根本收不到请求；
+// 而且 301 会被 webview 长期缓存，之后连新凭据也带不上。
+func TestBaseURLServesBarePrefixWithoutRedirect(t *testing.T) {
+	var gotPath, gotQuery string
+	h := withBaseURL("/app/ccweb", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+	}))
+
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/app/ccweb", nil))
-	if rec.Code != http.StatusMovedPermanently {
-		t.Fatalf("code = %d, want 301", rec.Code)
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/app/ccweb?token=abc&x=1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200（不得重定向）", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "/app/ccweb/" {
-		t.Fatalf("Location = %q", loc)
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Fatalf("不该有 Location: %q", loc)
+	}
+	if gotPath != "/" {
+		t.Fatalf("裸前缀应映射到 /，实际 %q", gotPath)
+	}
+	if gotQuery != "token=abc&x=1" {
+		t.Fatalf("query 必须原样保留，实际 %q", gotQuery)
 	}
 }
 
@@ -336,6 +351,30 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// 飞牛网关打开微应用的入口就是 ui/config 里的 url（`/app/<Name>`，没有尾斜杠）。
+// 这条路径必须直接返回 index.html，不能 301：301 会丢掉 query 上的会话凭据，
+// 网关随后回 13 字节 "invalid token"，用户看到的是纯文本错误页而不是应用。
+func TestBarePrefixServesIndexWithoutRedirect(t *testing.T) {
+	useSPAFS(t, "<html><head></head><body>app</body></html>")
+	srv, _ := newTestServer(t, "")
+	srv.d.Cfg.BaseURL = "/app/ccweb"
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/app/ccweb?token=abc", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200（不得重定向）", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Fatalf("不该有 Location: %q", loc)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `<base href="/app/ccweb/">`) {
+		t.Fatalf("index.html 缺少注入的 base：%s", body)
+	}
 }
 
 func TestUnknownRoute(t *testing.T) {
