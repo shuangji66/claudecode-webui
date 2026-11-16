@@ -54,6 +54,9 @@ src/
 4. **未知消息类型静默忽略**，不要 throw —— 协议会演进。
 5. **令牌只存 localStorage**，并通过 `?token=` 传给 WS（浏览器限制，无法设头）。
 6. **不要用 `dangerouslySetInnerHTML`**。Markdown 渲染走 React 节点（`common/Markdown.tsx`）。
+   `index.html` 的启动兜底（白屏自我解释）同样只能用 `textContent`：它显示的是未捕获异常
+   信息 / 资源地址，里面可能带着工作区文件名或服务端报文，拼成 HTML 就等于给了工作区内容
+   一个在本应用同源里执行脚本的机会（能读走 localStorage 里的 token）。
 7. 用户可见文案走 `useT()`：`t("中文", "English")`；默认中文，测试未挂 Provider 时也是中文。
    新增文案不要只写中文。
 8. 主题由 `<html data-theme="light|dark">` 决定，Tailwind 的 `dark:` 已绑定该属性；
