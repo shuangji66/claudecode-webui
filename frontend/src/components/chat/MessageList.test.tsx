@@ -65,3 +65,29 @@ describe("MessageList 长对话", () => {
     expect(screen.getByRole("button", { name: /加载更早的 80 条/ })).toBeInTheDocument();
   });
 });
+
+describe("MessageList 轮次刻度", () => {
+  function conversation(turns: number): Item[] {
+    const out: Item[] = [];
+    for (let i = 0; i < turns; i += 1) {
+      out.push({ id: `u${i}`, seq: i * 2, ts: 0, kind: "user", text: `问题 ${i}` });
+      out.push({ id: `a${i}`, seq: i * 2 + 1, ts: 0, kind: "assistant", text: `回答 ${i}`, streaming: false });
+    }
+    return out;
+  }
+
+  it("每条用户消息一个刻度，当前轮高亮", () => {
+    render(<MessageList items={conversation(3)} />);
+    expect(screen.getByRole("button", { name: /跳到第 1 轮：问题 0/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /跳到第 3 轮：问题 2/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /跳到第 1 轮/ })).toHaveAttribute("aria-current", "true");
+  });
+
+  it("点被窗口截掉的刻度会先展开再跳", () => {
+    render(<MessageList items={conversation(100)} />);
+    // 默认只渲染最近 80 条，第一条问题早被截掉
+    expect(screen.queryByText("问题 0")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /跳到第 1 轮/ }));
+    expect(screen.getByText("问题 0")).toBeInTheDocument();
+  });
+});

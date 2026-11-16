@@ -262,6 +262,14 @@ pre {
     background: color-mix(in srgb, var(--c-ink) 7%, transparent);
   }
 
+  /* 有轮次刻度时把原生滚动条藏起来，避免和刻度叠在一起。 */
+  .dsh-scroll-none {
+    scrollbar-width: none;
+  }
+  .dsh-scroll-none::-webkit-scrollbar {
+    display: none;
+  }
+
   .chat-text {
     font-size: var(--chat-font-size);
     line-height: var(--chat-line-height);

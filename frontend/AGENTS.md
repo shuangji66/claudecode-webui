@@ -33,6 +33,7 @@ src/
   lib/sessionExport.ts 会话导出 Markdown（右上角「更多」菜单）
   lib/sidebarView.ts   左侧栏视图偏好：分组/排序/归档筛选 + 手动顺序（纯函数 + localStorage）
   lib/subagents.ts     从消息流收集子代理（页头计数 / 审批归属，纯函数）
+  lib/turns.ts         「轮」的切分与视口所在轮（对话区刻度跳转，纯函数）
   lib/usage.ts         用量换算：上下文/缓存命中/tok/s（只从 CLI 的 usage 派生）
   lib/workspace.ts     文件路径/porcelain 分组/unified diff 解析（纯函数）
   lib/conversations.ts 对话归属/最近对话排序（纯函数）
@@ -221,6 +222,11 @@ src/
   流式追加只重渲染最后一条；行上带 `content-visibility: auto` + `contain-intrinsic-size`，
   离屏行不参与布局绘制。**不做自己算高度的虚拟列表**：消息高度差异太大，容易抖，
   也会破坏浏览器查找与锚点。
+- **对话区右侧有轮次刻度**（`MessageList` + `lib/turns.ts`）：每条用户消息一个刻度，
+  点一下跳到那一轮（被 80 条窗口截掉时会先展开再滚），当前轮用强调色加宽；悬停变宽、
+  `title` 显示该轮首行。刻度出现时（≥2 轮）隐藏原生滚动条并给内容留 `pr-9`，
+  避免和右对齐的用户气泡叠在一起；刻度整体 `pointer-events-none`，只有刻度本身可点，
+  底部让出 64px 给「回到底部」按钮。
 - **对话区右下角必须有「回到底部」按钮**（`MessageList`）：不贴底时出现，圆形、带下箭头；
   不贴底期间来了新消息时按钮上点一个强调色小圆点，`aria-label` 换成「有新内容，回到底部」。
   点击后恢复贴底跟随；`prefers-reduced-motion` 下直接跳，不做平滑滚动。

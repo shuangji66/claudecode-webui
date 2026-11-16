@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Item } from "../../lib/model";
 import { AssistantBubble } from "./AssistantBubble";
 import { ResultBar } from "./ResultBar";
@@ -7,6 +7,7 @@ import { UserBubble } from "./UserBubble";
 import { ToolCardHost } from "../tools/ToolCardHost";
 import { IconAlert, IconChevronDown, IconSpark } from "../common/Icons";
 import { useT } from "../../lib/i18n";
+import { activeTurnIndex, turnsOf, type Turn } from "../../lib/turns";
 
 /**
  * 长对话只渲染最近这一批，往上翻时再按批展开。
@@ -93,6 +94,44 @@ export function MessageList({
   const prevCount = useRef(items.length);
   /** 展开更早消息前记录的「距底部距离」，用于展开后保持视口不动。 */
   const anchorFromBottom = useRef<number | null>(null);
+  /** 轮次刻度：每条用户消息一个刻度，点一下跳到那一轮。 */
+  const turns = useMemo(() => turnsOf(items), [items]);
+  const [activeTurn, setActiveTurn] = useState(0);
+  const rafPending = useRef<number | null>(null);
+  /** 跳转目标被窗口截掉时，先展开再滚。 */
+  const pendingJump = useRef<string | null>(null);
+
+  const scrollToItem = (id: string) => {
+    const sc = scroller.current;
+    const el = sc?.querySelector<HTMLElement>(`[data-item-id="${id}"]`);
+    if (!sc || !el) return;
+    const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 8;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+    if (!reduce && typeof sc.scrollTo === "function") sc.scrollTo({ top, behavior: "smooth" });
+    else sc.scrollTop = top;
+  };
+
+  const jumpToTurn = (turn: Turn) => {
+    const need = items.length - turn.index;
+    if (need > limit) {
+      pendingJump.current = turn.id;
+      setLimit(need);
+      return;
+    }
+    scrollToItem(turn.id);
+  };
+
+  /** 视口顶部落在哪一轮（节流到每帧一次）。 */
+  const syncActiveTurn = () => {
+    const sc = scroller.current;
+    if (!sc || turns.length === 0) return;
+    const base = sc.getBoundingClientRect().top;
+    const tops = turns.map((turn) => {
+      const el = sc.querySelector<HTMLElement>(`[data-item-id="${turn.id}"]`);
+      return el ? el.getBoundingClientRect().top - base + sc.scrollTop : Number.POSITIVE_INFINITY;
+    });
+    setActiveTurn(activeTurnIndex(tops, sc.scrollTop));
+  };
 
   const hidden = Math.max(0, items.length - limit);
   const shown = hidden > 0 ? items.slice(-limit) : items;
@@ -125,9 +164,15 @@ export function MessageList({
   // 展开更早的消息后把视口钉在原来那条消息上，别让它「跳一下」。
   useLayoutEffect(() => {
     const el = scroller.current;
-    if (!el || anchorFromBottom.current === null) return;
-    el.scrollTop = el.scrollHeight - anchorFromBottom.current;
-    anchorFromBottom.current = null;
+    if (el && anchorFromBottom.current !== null) {
+      el.scrollTop = el.scrollHeight - anchorFromBottom.current;
+      anchorFromBottom.current = null;
+    }
+    const jump = pendingJump.current;
+    if (jump) {
+      pendingJump.current = null;
+      scrollToItem(jump);
+    }
   }, [limit]);
 
   const onScroll = () => {
@@ -137,6 +182,12 @@ export function MessageList({
     stick.current = near;
     setAtBottom(near);
     if (near) setUnseen(false);
+    if (rafPending.current === null) {
+      rafPending.current = window.requestAnimationFrame(() => {
+        rafPending.current = null;
+        syncActiveTurn();
+      });
+    }
   };
 
   const toBottom = () => {
@@ -178,10 +229,10 @@ export function MessageList({
       <div
         ref={scroller}
         data-testid="message-scroller"
-        className="dsh-scroll h-full overflow-y-auto"
+        className={`dsh-scroll h-full overflow-y-auto ${turns.length >= 2 ? "dsh-scroll-none" : ""}`}
         onScroll={onScroll}
       >
-        <div className="mx-auto w-full max-w-[820px] px-4 py-6 md:px-6 md:py-8">
+        <div className={`mx-auto w-full max-w-[820px] px-4 py-6 md:px-6 md:py-8 ${turns.length >= 2 ? "pr-9 md:pr-10" : ""}`}>
           <div className="space-y-5">
             {hidden > 0 && (
               <div className="flex justify-center">
@@ -195,12 +246,34 @@ export function MessageList({
               </div>
             )}
             {shown.map((item) => (
-              <MessageRow key={item.id} item={item} />
+              <div key={item.id} data-item-id={item.id}>
+                <MessageRow item={item} />
+              </div>
             ))}
           </div>
           <div className="h-6" />
         </div>
       </div>
+
+      {turns.length >= 2 && (
+        <div className="pointer-events-none absolute bottom-16 right-1 top-6 flex w-5 items-center justify-center">
+          <div className="dsh-scroll-none pointer-events-auto flex max-h-full flex-col items-end gap-[3px] overflow-y-auto py-1 pr-0.5">
+            {turns.map((turn, index) => (
+              <button
+                key={turn.id}
+                type="button"
+                onClick={() => jumpToTurn(turn)}
+                aria-label={t(`跳到第 ${index + 1} 轮：${turn.label}`, `Jump to turn ${index + 1}: ${turn.label}`)}
+                aria-current={index === activeTurn ? "true" : undefined}
+                title={turn.label}
+                className={`h-[3px] shrink-0 rounded-full transition-all ${
+                  index === activeTurn ? "w-[18px] bg-brand" : "w-2.5 bg-faint hover:w-4 hover:bg-muted"
+                }`}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {!atBottom && (
         <button
