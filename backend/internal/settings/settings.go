@@ -437,6 +437,14 @@ func (v Settings) Env() []string {
 	if modelOK && spec.MaxOutputTokens > 0 {
 		out = append(out, "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(spec.MaxOutputTokens))
 	}
+	// 交互式会话要快速失败：CLI 默认对 429/529 重试 10 次（约 2.5 分钟），
+	// 额度/频率限制不会在几秒内恢复，等待只会让用户以为卡死。
+	// 保留 2 次重试应对瞬时抖动，同时给单次等待封顶 5 秒。
+	out = append(out,
+		"CLAUDE_CODE_MAX_RETRIES=2",
+		"CLAUDE_CODE_OVERLOADED_RETRY_MAX_WAIT_MS=5000",
+		"CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES=0",
+	)
 	if v.DisableUnknownModelWindow {
 		out = append(out, "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1")
 	}

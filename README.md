@@ -174,6 +174,10 @@ id 会复用进程，重复调用不会多起 claude。没有历史对话时后�
   最大输出注入 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`。
   选中的推理强度会作为 `--effort` 传给新建的 claude 进程；对已有会话修改强度会在输入框下方
   提示「将在新会话生效」。
+- **429 / 额度耗尽快速失败**：后端给 claude 注入 `CLAUDE_CODE_MAX_RETRIES=2`、
+  `CLAUDE_CODE_OVERLOADED_RETRY_MAX_WAIT_MS=5000` 与
+  `CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES=0`，避免 CLI 默认重试 10 次、约 2.5 分钟后
+  才把限流错误抛到界面上。瞬时抖动仍有 2 次重试。
 - **部署**：从 npm 平台包按版本下载 claude（x64 / arm64 / musl 自动匹配），可选
   npmmirror、腾讯云、华为云或官方 registry；下载后按官方 `dist.integrity`（sha512）校验，
   镜像被换包会直接失败；安装中可以取消，临时目录会被清理。

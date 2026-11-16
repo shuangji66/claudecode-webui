@@ -117,6 +117,10 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - **对话地址与列表地址不是同一个**：CLI 自己拼 `/v1/messages`，而 OpenAI/Gemini 协议的
   base 习惯带 `/v1`。`Provider.ChatBaseURL()` 对非 Anthropic 协议剥掉尾部 `/v1`，
   `Env()` 必须用它，否则会拼成 `/v1/v1/messages`（404）。
+- **交互式会话要快速失败**：`Env()` 固定注入 `CLAUDE_CODE_MAX_RETRIES=2`、
+  `CLAUDE_CODE_OVERLOADED_RETRY_MAX_WAIT_MS=5000`、
+  `CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES=0`。CLI 默认对 429/529 重试 10 次，
+  额度/频率限制会让用户等约 2.5 分钟才看到错误；这几个值把等待压到几秒。
 - `Env()` 只注入选中提供商的值：`ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY`（或无 key 时
   `ANTHROPIC_AUTH_TOKEN`）/ `ANTHROPIC_MODEL`，并把三个别名变量也指向同一模型，
   使 CLI「固定使用默认模型」。

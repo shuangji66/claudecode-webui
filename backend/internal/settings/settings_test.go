@@ -357,6 +357,20 @@ func TestEnvUsesModelCapacity(t *testing.T) {
 	}
 }
 
+// 429/额度耗尽不应让用户等几分钟：默认重试 10 次，这里压到 2 次并封顶单次等待。
+func TestEnvFailsFastOnRateLimit(t *testing.T) {
+	env := strings.Join(Settings{}.Env(), ",")
+	for _, want := range []string{
+		"CLAUDE_CODE_MAX_RETRIES=2",
+		"CLAUDE_CODE_OVERLOADED_RETRY_MAX_WAIT_MS=5000",
+		"CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES=0",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("缺少 %s: %v", want, env)
+		}
+	}
+}
+
 func TestModelMetaAndEffort(t *testing.T) {
 	s, _ := openTemp(t)
 	if _, err := s.Apply(Patch{

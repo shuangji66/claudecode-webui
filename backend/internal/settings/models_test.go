@@ -366,9 +366,9 @@ func TestDefaultModelAndEnv(t *testing.T) {
 }
 
 func TestEnvEmptyWhenNothingSelected(t *testing.T) {
-	env := Settings{}.Env()
-	if len(env) != 0 {
-		t.Fatalf("未选模型时不应注入任何变量: %v", env)
+	env := strings.Join(Settings{}.Env(), ",")
+	if strings.Contains(env, "ANTHROPIC_") {
+		t.Fatalf("未选模型时不应注入 ANTHROPIC_*: %v", env)
 	}
 }
 
