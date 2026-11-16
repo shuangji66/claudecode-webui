@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { UsageStats } from "./UsageStats";
 
 // 真实帧算出来的快照（见 lib/usage.test.ts）。
@@ -25,12 +25,41 @@ describe("UsageStats", () => {
     expect(offset).toBeCloseTo(dash * 0.95, 3);
   });
 
-  it("悬浮提示给出上下文绝对值、缓存命中与本回合输出", () => {
-    const { container } = render(<UsageStats snap={SNAP} turns={1} tools={0} events={9} />);
-    const title = container.querySelector("span[title]")?.getAttribute("title") ?? "";
-    expect(title).toContain("上下文 9.1K / 195.3K（5%）");
-    expect(title).toContain("缓存命中 97%");
-    expect(title).toContain("本回合输出 7 tok · API 0.02s");
+  it("点上下文圈弹出详情：绝对值、缓存命中、本回合输出与速度", () => {
+    render(<UsageStats snap={SNAP} turns={1} tools={0} events={9} />);
+    // 关着的时候不渲染，也不再往 title 里塞长文（触屏拿不到悬停）。
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    const trigger = screen.getByRole("button", { name: "上下文占用 5%" });
+    fireEvent.click(trigger);
+
+    const panel = screen.getByRole("dialog", { name: "用量详情" });
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(panel).toHaveTextContent("上下文占用");
+    expect(panel).toHaveTextContent("9.1K / 195.3K");
+    expect(panel).toHaveTextContent("缓存命中97%");
+    expect(panel).toHaveTextContent("本回合输出7 tok");
+    expect(panel).toHaveTextContent("API 耗时0.02s");
+    expect(panel).toHaveTextContent("生成速度318 tok/s");
+    expect(panel).toHaveTextContent("累计1 轮 · 9 条事件");
+  });
+
+  it("再点一次、按 Esc、点外部都会关闭详情", () => {
+    render(<UsageStats snap={SNAP} turns={1} tools={0} events={9} />);
+    const trigger = screen.getByRole("button", { name: "上下文占用 5%" });
+
+    fireEvent.click(trigger);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    fireEvent.click(trigger);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.click(trigger);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.click(trigger);
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("没有 usage 时退回事件计数，不编造 token 数", () => {
