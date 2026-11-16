@@ -56,8 +56,9 @@ export function RightSidebar({ cwd, onClose }: Props) {
   const t = useT();
   const setCwd = useSidebarStore((s) => s.setCwd);
   const [width, setWidth] = useState(readWidth);
-  const [tabs, setTabs] = useState<Tab[]>([{ id: "files", kind: "files", label: t("文件", "Files") }]);
-  const [active, setActive] = useState("files");
+  // 初始停在开始页：不自动开「文件」标签，由用户点卡片或 + 决定。
+  const [tabs, setTabs] = useState<Tab[]>([]);
+  const [active, setActive] = useState("");
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const termSeq = useRef(0);
   const drag = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -142,6 +143,30 @@ export function RightSidebar({ cwd, onClose }: Props) {
     });
   };
 
+  const startCards: { kind: TabKind; title: string; desc: string; icon: typeof IconFolder; tone: string }[] = [
+    {
+      kind: "files",
+      title: t("工作区文件", "Workspace files"),
+      desc: t("浏览工作区文件", "Browse files"),
+      icon: IconFolder,
+      tone: "text-warn",
+    },
+    {
+      kind: "git",
+      title: t("Git", "Git"),
+      desc: t("变更、历史与分支", "Changes and branches"),
+      icon: IconGitBranch,
+      tone: "text-ok",
+    },
+    {
+      kind: "terminal",
+      title: t("新建终端", "New terminal"),
+      desc: t("在工作区运行命令", "Run commands"),
+      icon: IconTerminal,
+      tone: "text-brand",
+    },
+  ];
+
   const terminals = tabs.filter((tab) => tab.kind === "terminal").length;
   const openItems: MenuItem[] = [
     { id: "files", group: t("打开", "Open"), label: t("文件", "Files"), icon: <IconFolder size={13} />, onSelect: () => openTab("files") },
@@ -188,6 +213,7 @@ export function RightSidebar({ cwd, onClose }: Props) {
 
         <div className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-1.5">
           <div className="dsh-scroll flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+            {tabs.length === 0 && <span className="shrink-0 px-1.5 text-[12.5px] font-medium text-ink">{t("开始", "Start")}</span>}
             {tabs.map((tab) => {
               const Icon = KIND_ICON[tab.kind];
               const on = tab.id === active;
@@ -258,14 +284,29 @@ export function RightSidebar({ cwd, onClose }: Props) {
             </p>
           </div>
         ) : tabs.length === 0 ? (
-          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-panel-strong text-muted">
-              <IconPlus size={20} />
-            </span>
-            <p className="text-[13px] font-medium text-ink">{t("没有打开的标签", "No tabs open")}</p>
-            <p className="text-[11.5px] leading-relaxed text-muted">
-              {t("点顶部的 + 打开文件、Git 或终端。", "Use + at the top to open files, Git or a terminal.")}
-            </p>
+          // 开始页：三张功能卡片，点哪张就开哪个标签（参照 DSH 的两列网格）。
+          <div className="dsh-scroll flex min-h-0 flex-1 flex-col justify-center overflow-y-auto px-3 py-6">
+            <div className="grid grid-cols-2 gap-2">
+              {startCards.map((card) => {
+                const Icon = card.icon;
+                return (
+                  <button
+                    key={card.kind}
+                    type="button"
+                    onClick={() => openTab(card.kind)}
+                    className="flex h-full min-w-0 items-start gap-2.5 rounded-2xl border border-line bg-canvas px-3 py-3 text-left transition hover:border-line-strong hover:bg-panel/60"
+                  >
+                    <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-panel-strong">
+                      <Icon size={15} className={card.tone} />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-[12.5px] font-medium text-ink">{card.title}</span>
+                      <span className="mt-0.5 block text-[10.5px] leading-relaxed text-muted">{card.desc}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         ) : (
           <div className="relative min-h-0 flex-1">
