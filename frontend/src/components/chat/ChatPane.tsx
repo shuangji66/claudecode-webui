@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
+import { TurnTimer } from "./TurnTimer";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { UsageStats } from "./UsageStats";
 import { TopBar } from "../layout/TopBar";
@@ -74,6 +75,16 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
   const conn = activeId ? (conns[activeId] ?? { state: "idle" as const }) : { state: "idle" as const };
   const state = activeId ? (states[activeId] ?? session?.state ?? "idle") : "idle";
   const busy = state === "busy";
+  // 本回合的起点取「最后一条用户消息的时间」：local 插入与转录回放都带时间戳，
+  // 不再另存一份「回合开始时间」，免得重连、切对话后两份状态对不上。
+  const turnStartedAt = useMemo(() => {
+    if (!busy) return 0;
+    for (let i = itemList.length - 1; i >= 0; i -= 1) {
+      const it = itemList[i];
+      if (it.kind === "user") return it.ts;
+    }
+    return 0;
+  }, [busy, itemList]);
   const title = session || conversation
     ? conversationTitle(conversation?.title, itemList, locale)
     : t("新对话", "New chat");
@@ -295,6 +306,8 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
               />
             </div>
           )}
+
+          {!newChat && <TurnTimer startedAt={turnStartedAt} className="mb-1.5 px-1" />}
 
           <Composer
             disabled={disabled}

@@ -74,3 +74,44 @@ describe("ChatPane 新对话布局", () => {
     expect(screen.queryByRole("button", { name: "工作区" })).not.toBeInTheDocument();
   });
 });
+
+describe("ChatPane 回合计时", () => {
+  function setupTurn(state: "busy" | "ready") {
+    useAppStore.setState({
+      activeId: "c1",
+      conversations: [conv({ messages: 1 })],
+      sessions: [{ id: "c1", cwd: "/data/ws", state }],
+      items: {
+        c1: [{ id: "u1", seq: 0, ts: Date.now() - 5_000, kind: "user", text: "跑一下测试", streaming: false }],
+      },
+      perms: {},
+      inits: {},
+      states: { c1: state },
+      conns: {},
+      usage: {},
+      starting: false,
+      currentWorkspace: "/data/ws",
+      workspaces: [{ path: "/data/ws", name: "ws", created_at: "2026-01-01T00:00:00Z" }],
+    } as never);
+    render(
+      <ChatPane
+        onToggleSidebar={() => {}}
+        onToggleCollapse={() => {}}
+        onAddWorkspace={() => {}}
+        rightOpen={false}
+        onToggleRight={() => {}}
+      />,
+    );
+  }
+
+  it("工作中显示「少女祈祷中」与已进行时间", () => {
+    setupTurn("busy");
+    expect(screen.getByText("少女祈祷中")).toBeInTheDocument();
+    expect(screen.getByText("5s")).toBeInTheDocument();
+  });
+
+  it("空闲时不显示计时行", () => {
+    setupTurn("ready");
+    expect(screen.queryByText("少女祈祷中")).not.toBeInTheDocument();
+  });
+});
