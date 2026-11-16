@@ -29,6 +29,7 @@ src/
   lib/workspace.ts     文件路径/porcelain 分组/unified diff 解析（纯函数）
   lib/conversations.ts 对话归属/最近对话排序（纯函数）
   lib/subagents.ts     从消息流收集子代理（页头计数 / 审批归属，纯函数）
+  lib/sidebarView.ts   左侧栏视图偏好：分组/排序/归档筛选 + 手动顺序（纯函数 + localStorage）
   lib/fnos.ts          飞牛宿主桥接：目录授权（authorizeUserFile）+ 回包归一化（纯函数部分可测）
   assets/claude-code.svg 左侧栏品牌图标
   store/useAppStore.ts zustand 全局状态（只做状态搬运）
@@ -113,6 +114,11 @@ src/
     会让命令不经审批直接执行，误点一次就已经跑完了。`lib/permissionModes.ts` 是唯一判定入口，
     下拉选项带 `danger`（触发器与菜单项都变红），切换前用 `askConfirm` 弹一句人话说明。
     新增设置权限模式的入口也必须走同一套。
+23. **左侧栏的「分组 / 排序 / 筛选」走 `lib/sidebarView.ts`**：分组（按工作区 / 按工作区树 /
+    单列表）、排序（手动 / 最近更新）、筛选（隐藏已归档 / 全部 / 仅已归档）三种偏好存在
+    localStorage（`ccweb-sidebar-view`），手动顺序存在 `ccweb-session-order`
+    （按工作区路径分键，单列表用 `__flat__`）。手动排序的入口有两个：桌面拖拽 +
+    会话「更多」菜单里的上移/下移（触屏没有拖拽）。视图偏好是**每台设备**的，不进后端。
 
 ## 3. 状态管理（zustand）
 

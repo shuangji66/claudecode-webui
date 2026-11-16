@@ -40,6 +40,26 @@ export function IconPlus(props: Props) {
   );
 }
 
+/** 三条滑杆：视图/筛选菜单的触发器（对齐 DSH 的 sliders 图标）。 */
+export function IconSliders(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M4 8h6M14 8h6M4 16h10M18 16h2" />
+      <circle cx="12" cy="8" r="2" />
+      <circle cx="16" cy="16" r="2" />
+    </Svg>
+  );
+}
+
+/** 上移：菜单里的「上移」用。 */
+export function IconChevronUp(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="m6 14.5 6-6 6 6" />
+    </Svg>
+  );
+}
+
 export function IconSearch(props: Props) {
   return (
     <Svg {...props}>

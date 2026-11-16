@@ -1,9 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import type { ConversationInfo, WorkspaceEntry } from "../../transport/types";
 import { baseName, conversationTitle, relativeTime, stateLabel } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
-import { belongs, conversationStatus } from "../../lib/conversations";
+import { belongs, conversationStatus, sortByRecent } from "../../lib/conversations";
+import {
+  FLAT_KEY,
+  OTHER_KEY,
+  applyOrder,
+  flattenWorkspaceTree,
+  loadOrder,
+  loadView,
+  matchArchive,
+  moveBefore,
+  moveStep,
+  saveOrder,
+  saveView,
+  type SidebarView,
+} from "../../lib/sidebarView";
 import { askConfirm, askPrompt } from "../common/SystemDialogs";
 import { Menu, type MenuItem } from "../common/Menu";
 import { StateDot } from "../common/StateDot";
@@ -11,11 +25,14 @@ import {
   BrandMark,
   IconArchive,
   IconChevronDown,
+  IconChevronUp,
   IconChevronRight,
+  IconClock,
   IconClose,
   IconDownload,
   IconFolder,
   IconFolderPlus,
+  IconGitBranch,
   IconHistory,
   IconMore,
   IconPanel,
@@ -23,6 +40,7 @@ import {
   IconPlus,
   IconSearch,
   IconSettings,
+  IconSliders,
   IconStop,
   IconTerminal,
   IconTrash,
@@ -46,6 +64,8 @@ interface WorkspaceGroup {
   exists: boolean;
   workspace: WorkspaceEntry | null;
   conversations: ConversationInfo[];
+  /** 按工作区树分组时的缩进层级。 */
+  depth: number;
 }
 
 interface MenuState {
@@ -90,10 +110,23 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
+  // 分组 / 排序 / 归档筛选（对齐 DSH 的工作区菜单），随设备持久化。
+  const [view, setView] = useState<SidebarView>(loadView);
+  const [order, setOrder] = useState<Record<string, string[]>>(loadOrder);
+  const [viewAnchor, setViewAnchor] = useState<HTMLElement | null>(null);
+  /** 拖拽中的会话 id：手动排序用。 */
+  const dragId = useRef<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentWorkspace ? [currentWorkspace] : []));
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [wsMenu, setWsMenu] = useState<WsMenuState | null>(null);
+
+  useEffect(() => {
+    saveView(view);
+  }, [view]);
+
+  useEffect(() => {
+    saveOrder(order);
+  }, [order]);
 
   useEffect(() => {
     if (!currentWorkspace) return;
@@ -102,17 +135,50 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   const archivedCount = conversations.filter((c) => c.archived).length;
 
+  /** 会话所属工作区的显示名（单列表模式下在行首标出来）。 */
+  const workspaceNameOf = (cwd: string): string => {
+    const ws = workspaces
+      .filter((w) => belongs(cwd, w.path))
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    return ws ? ws.name || baseName(ws.path) : baseName(cwd);
+  };
+
   const groups = useMemo<WorkspaceGroup[]>(() => {
-    const result: WorkspaceGroup[] = workspaces.map((w) => ({
+    const visible = conversations.filter((c) => matchArchive(c, view.archive));
+    // 手动排序只在 manual 模式生效；其它模式一律按最近更新。
+    const sortList = (list: ConversationInfo[], key: string) =>
+      view.sort === "manual" ? applyOrder(list, order[key] ?? []) : sortByRecent(list);
+
+    const q = query.trim().toLowerCase();
+    const matches = (c: ConversationInfo, groupName: string) =>
+      !q ||
+      conversationTitle(c.title, items[c.id], locale).toLowerCase().includes(q) ||
+      c.cwd.toLowerCase().includes(q) ||
+      groupName.toLowerCase().includes(q);
+
+    // 单列表：不分组，全部会话按当前排序排成一列（行上标出所属工作区）。
+    if (view.group === "flat") {
+      // 单列表里也按「会话标题 / 路径 / 所属工作区名」搜。
+      const all = sortList(visible, FLAT_KEY).filter((c) => matches(c, workspaceNameOf(c.cwd)));
+      return [
+        { path: FLAT_KEY, name: "", exists: true, workspace: null, conversations: all, depth: 0 },
+      ];
+    }
+
+    const entries =
+      view.group === "tree"
+        ? flattenWorkspaceTree(workspaces)
+        : workspaces.map((w) => ({ workspace: w, depth: 0 }));
+    const result: WorkspaceGroup[] = entries.map(({ workspace: w, depth }) => ({
       path: w.path,
       name: w.name || baseName(w.path),
       exists: w.exists,
       workspace: w,
       conversations: [],
+      depth,
     }));
     const others: ConversationInfo[] = [];
-    for (const c of conversations) {
-      if (!showArchived && c.archived) continue;
+    for (const c of visible) {
       const group = result
         .filter((g) => belongs(c.cwd, g.path))
         .sort((a, b) => b.path.length - a.path.length)[0];
@@ -120,25 +186,118 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       else others.push(c);
     }
     if (others.length > 0) {
-      result.push({ path: "__other__", name: t("其他对话", "Other conversations"), exists: true, workspace: null, conversations: others });
+      result.push({
+        path: OTHER_KEY,
+        name: t("其他对话", "Other conversations"),
+        exists: true,
+        workspace: null,
+        conversations: others,
+        depth: 0,
+      });
     }
     for (const g of result) {
-      g.conversations.sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""));
+      g.conversations = sortList(g.conversations, g.path);
     }
-    const q = query.trim().toLowerCase();
     if (!q) return result;
     return result
-      .map((g) => ({
-        ...g,
-        conversations: g.conversations.filter(
-          (c) =>
-            conversationTitle(c.title, items[c.id], locale).toLowerCase().includes(q) ||
-            c.cwd.toLowerCase().includes(q) ||
-            g.name.toLowerCase().includes(q),
-        ),
-      }))
+      .map((g) => ({ ...g, conversations: g.conversations.filter((c) => matches(c, g.name)) }))
       .filter((g) => g.conversations.length > 0 || g.name.toLowerCase().includes(q));
-  }, [workspaces, conversations, showArchived, query, items, locale, t]);
+  }, [workspaces, conversations, view, order, query, items, locale, t]);
+
+  /** 手动排序的落盘入口：拖拽和菜单里的上移/下移共用。 */
+  const reorder = (key: string, list: ConversationInfo[], fromId: string, toId: string) => {
+    setOrder((prev) => ({ ...prev, [key]: moveBefore(prev[key] ?? [], list, fromId, toId) }));
+  };
+  const stepOrder = (key: string, list: ConversationInfo[], id: string, delta: number) => {
+    setOrder((prev) => ({ ...prev, [key]: moveStep(prev[key] ?? [], list, id, delta) }));
+  };
+  const groupOf = (c: ConversationInfo) => groups.find((g) => g.conversations.some((x) => x.id === c.id));
+
+  /** 一行会话：状态点 + 标题 +（单列表模式）工作区名 + 时间 + 管理菜单。 */
+  const renderConversation = (
+    c: ConversationInfo,
+    groupKey: string,
+    list: ConversationInfo[],
+    showWorkspace: boolean,
+  ) => {
+    const active = c.id === activeId;
+    const liveState = c.live ? (states[c.id] ?? c.state ?? "ready") : "";
+    // 待审批 > 进行中 > 完成未看 > 活跃（不画点）> 未运行（灰点），见 lib/conversations。
+    const status = conversationStatus({
+      pending: perms[c.id]?.length ?? 0,
+      live: c.live,
+      state: liveState,
+      done: Boolean(doneIds[c.id]),
+    });
+    const manual = view.sort === "manual";
+    return (
+      <div
+        key={c.id}
+        className="group/session flex items-center gap-0.5"
+        draggable={manual}
+        onDragStart={
+          manual
+            ? (e) => {
+                dragId.current = c.id;
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", c.id);
+              }
+            : undefined
+        }
+        onDragOver={
+          manual
+            ? (e) => {
+                if (dragId.current && dragId.current !== c.id) {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                }
+              }
+            : undefined
+        }
+        onDrop={
+          manual
+            ? (e) => {
+                e.preventDefault();
+                const from = dragId.current ?? e.dataTransfer.getData("text/plain");
+                dragId.current = null;
+                if (from && from !== c.id) reorder(groupKey, list, from, c.id);
+              }
+            : undefined
+        }
+        onDragEnd={manual ? () => (dragId.current = null) : undefined}
+      >
+        <button
+          type="button"
+          onClick={() => openOne(c)}
+          className={`side-row min-w-0 flex-1 ${c.archived ? "opacity-60" : ""}`}
+          data-active={active}
+          title={`${c.cwd}\n${c.live ? stateLabel(liveState, locale) : t("未运行（点击恢复）", "Not running (click to resume)")}`}
+        >
+          <span className="flex h-[14px] w-[14px] shrink-0 items-center justify-center">
+            {status !== "active" && <StateDot state={status} />}
+          </span>
+          {showWorkspace && (
+            <span className="shrink-0 max-w-[38%] truncate text-[10px] text-faint">{workspaceNameOf(c.cwd)}</span>
+          )}
+          <span className={`truncate text-[12px] ${active ? "text-ink" : "text-ink-2"}`}>{titleOf(c)}</span>
+          {c.archived && (
+            <span className="shrink-0 rounded-full bg-black/[0.06] px-1 text-[9px] text-muted">{t("归档", "Archived")}</span>
+          )}
+          <span className="ml-auto shrink-0 text-[10px] text-faint">{relativeTime(c.last_active, Date.now(), locale)}</span>
+        </button>
+        <button
+          type="button"
+          onClick={(e) => openMenu(e, c)}
+          className="rounded-md p-1 text-muted opacity-100 transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover/session:opacity-100 md:focus:opacity-100"
+          aria-label={`${t("管理对话", "Manage conversation")} ${titleOf(c)}`}
+          aria-haspopup="menu"
+          title={t("管理对话", "Manage conversation")}
+        >
+          <IconMore size={14} />
+        </button>
+      </div>
+    );
+  };
 
   const activeConn = activeId ? (states[activeId] ?? "idle") : "idle";
   const connLabel =
@@ -361,13 +520,18 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
           </button>
           <button
             type="button"
-            onClick={() => setShowArchived((v) => !v)}
-            className={`rounded-md p-1.5 hover:bg-black/5 ${showArchived ? "text-brand" : "text-muted hover:text-ink"}`}
-            aria-label={showArchived ? t("隐藏已归档", "Hide archived") : t("显示已归档", "Show archived")}
-            aria-pressed={showArchived}
-            title={showArchived ? t("隐藏已归档", "Hide archived") : t(`显示已归档${archivedCount ? `（${archivedCount}）` : ""}`, `Show archived${archivedCount ? ` (${archivedCount})` : ""}`)}
+            onClick={(e) => setViewAnchor((prev) => (prev ? null : e.currentTarget))}
+            className={`rounded-md p-1.5 hover:bg-black/5 ${
+              view.group !== "workspace" || view.sort !== "recent" || view.archive !== "hide"
+                ? "text-brand"
+                : "text-muted hover:text-ink"
+            }`}
+            aria-label={t("分组、排序与筛选", "Grouping, sorting and filtering")}
+            aria-haspopup="menu"
+            aria-expanded={viewAnchor !== null}
+            title={t("分组、排序与筛选", "Grouping, sorting and filtering")}
           >
-            <IconArchive size={15} />
+            <IconSliders size={15} />
           </button>
           <button
             type="button"
@@ -407,10 +571,25 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         )}
 
         {groups.map((g) => {
+          // 单列表：没有工作区分组标题，行首标出所属工作区。
+          if (g.path === FLAT_KEY) {
+            return (
+              <div key={FLAT_KEY} className="mb-1">
+                {g.conversations.length === 0 && (
+                  <p className="px-2 py-1.5 text-[11px] text-faint">{t("暂无对话", "No conversations")}</p>
+                )}
+                {g.conversations.map((c) => renderConversation(c, FLAT_KEY, g.conversations, true))}
+              </div>
+            );
+          }
           const open = expanded.has(g.path) || Boolean(query.trim());
           const isCurrent = g.path === currentWorkspace;
           return (
-            <div key={g.path} className="mb-1">
+            <div
+              key={g.path}
+              className="mb-1"
+              style={g.depth > 0 ? { marginLeft: g.depth * 12 } : undefined}
+            >
               <div className="group flex items-center gap-0.5">
                 <button
                   type="button"
@@ -419,11 +598,11 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                   aria-expanded={open}
                   className={`side-row min-w-0 flex-1 ${isCurrent ? "text-ink" : "text-ink-2"} ${!g.exists ? "opacity-50" : ""}`}
                   data-active={isCurrent}
-                  title={g.path === "__other__" ? t("不在授权目录内的对话", "Conversations outside authorized directories") : g.path}
+                  title={g.path === OTHER_KEY ? t("不在授权目录内的对话", "Conversations outside authorized directories") : g.path}
                 >
-                  {g.path === "__other__" ? <IconTerminal size={15} className="shrink-0 text-muted" /> : <IconFolder size={15} className="shrink-0 text-muted" />}
+                  {g.path === OTHER_KEY ? <IconTerminal size={15} className="shrink-0 text-muted" /> : <IconFolder size={15} className="shrink-0 text-muted" />}
                   <span className="truncate text-[12.5px] font-medium">{g.name}</span>
-                  {!g.exists && g.path !== "__other__" && <span className="shrink-0 text-[10px] text-warn">{t("不可用", "Missing")}</span>}
+                  {!g.exists && g.path !== OTHER_KEY && <span className="shrink-0 text-[10px] text-warn">{t("不可用", "Missing")}</span>}
                   <span className="ml-auto flex shrink-0 items-center gap-1">
                     {g.conversations.length > 0 && (
                       <span className="rounded-full bg-black/[0.06] px-1.5 text-[10px] text-muted">{g.conversations.length}</span>
@@ -431,7 +610,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                     {open ? <IconChevronDown size={14} className="text-muted" /> : <IconChevronRight size={14} className="text-muted" />}
                   </span>
                 </button>
-                {g.path !== "__other__" && (
+                {g.path !== OTHER_KEY && (
                   <>
                     <button
                       type="button"
@@ -463,47 +642,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                       {isCurrent && starting ? t("正在启动 Claude…", "Starting Claude…") : t("暂无对话", "No conversations")}
                     </p>
                   )}
-                  {g.conversations.map((c) => {
-                    const active = c.id === activeId;
-                    const liveState = c.live ? (states[c.id] ?? c.state ?? "ready") : "";
-                    // 待审批 > 进行中 > 完成未看 > 活跃（不画点）> 未运行（灰点），见 lib/conversations。
-                    const status = conversationStatus({
-                      pending: perms[c.id]?.length ?? 0,
-                      live: c.live,
-                      state: liveState,
-                      done: Boolean(doneIds[c.id]),
-                    });
-                    return (
-                      <div key={c.id} className="group/session flex items-center gap-0.5">
-                        <button
-                          type="button"
-                          onClick={() => openOne(c)}
-                          className={`side-row min-w-0 flex-1 ${c.archived ? "opacity-60" : ""}`}
-                          data-active={active}
-                          title={`${c.cwd}\n${c.live ? stateLabel(liveState, locale) : t("未运行（点击恢复）", "Not running (click to resume)")}`}
-                        >
-                          <span className="flex h-[14px] w-[14px] shrink-0 items-center justify-center">
-                            {status !== "active" && <StateDot state={status} />}
-                          </span>
-                          <span className={`truncate text-[12px] ${active ? "text-ink" : "text-ink-2"}`}>{titleOf(c)}</span>
-                          {c.archived && (
-                            <span className="shrink-0 rounded-full bg-black/[0.06] px-1 text-[9px] text-muted">{t("归档", "Archived")}</span>
-                          )}
-                          <span className="ml-auto shrink-0 text-[10px] text-faint">{relativeTime(c.last_active, Date.now(), locale)}</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => openMenu(e, c)}
-                          className="rounded-md p-1 text-muted opacity-100 transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover/session:opacity-100 md:focus:opacity-100"
-                          aria-label={`${t("管理对话", "Manage conversation")} ${titleOf(c)}`}
-                          aria-haspopup="menu"
-                          title={t("管理对话", "Manage conversation")}
-                        >
-                          <IconMore size={14} />
-                        </button>
-                      </div>
-                    );
-                  })}
+                  {g.conversations.map((c) => renderConversation(c, g.path, g.conversations, false))}
                 </div>
               )}
             </div>
@@ -550,6 +689,80 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       />
 
       <Menu
+        open={viewAnchor !== null}
+        anchor={viewAnchor}
+        onClose={() => setViewAnchor(null)}
+        width={236}
+        align="end"
+        items={
+          [
+            {
+              id: "g-workspace",
+              group: t("分组方式", "Group by"),
+              label: t("按工作区", "By workspace"),
+              icon: <IconFolder size={13} className="text-muted" />,
+              checked: view.group === "workspace",
+              onSelect: () => setView((v) => ({ ...v, group: "workspace" })),
+            },
+            {
+              id: "g-tree",
+              label: t("按工作区树", "By workspace tree"),
+              icon: <IconGitBranch size={13} className="text-muted" />,
+              checked: view.group === "tree",
+              onSelect: () => setView((v) => ({ ...v, group: "tree" })),
+            },
+            {
+              id: "g-flat",
+              label: t("单列表", "Single list"),
+              icon: <IconPanel size={13} className="text-muted" />,
+              checked: view.group === "flat",
+              onSelect: () => setView((v) => ({ ...v, group: "flat" })),
+            },
+            {
+              id: "s-manual",
+              group: t("排序方式", "Sort by"),
+              label: t("手动排序", "Manual order"),
+              icon: <IconMore size={13} className="text-muted" />,
+              checked: view.sort === "manual",
+              onSelect: () => setView((v) => ({ ...v, sort: "manual" })),
+            },
+            {
+              id: "s-recent",
+              label: t("最近更新", "Last updated"),
+              icon: <IconClock size={13} className="text-muted" />,
+              checked: view.sort === "recent",
+              onSelect: () => setView((v) => ({ ...v, sort: "recent" })),
+            },
+            {
+              id: "f-hide",
+              group: t("筛选会话", "Filter sessions"),
+              label: t("隐藏已归档", "Hide archived"),
+              icon: <IconArchive size={13} className="text-muted" />,
+              checked: view.archive === "hide",
+              onSelect: () => setView((v) => ({ ...v, archive: "hide" })),
+            },
+            {
+              id: "f-all",
+              label: t("全部对话（显示已归档）", "All (show archived)"),
+              icon: <IconHistory size={13} className="text-muted" />,
+              checked: view.archive === "all",
+              onSelect: () => setView((v) => ({ ...v, archive: "all" })),
+            },
+            {
+              id: "f-only",
+              label: t(
+                `仅显示已归档${archivedCount ? `（${archivedCount}）` : ""}`,
+                `Archived only${archivedCount ? ` (${archivedCount})` : ""}`,
+              ),
+              icon: <IconArchive size={13} className="text-muted" />,
+              checked: view.archive === "only",
+              onSelect: () => setView((v) => ({ ...v, archive: "only" })),
+            },
+          ] satisfies MenuItem[]
+        }
+      />
+
+      <Menu
         open={Boolean(menu && menuConv)}
         anchor={menu?.anchor ?? null}
         onClose={() => setMenu(null)}
@@ -559,6 +772,28 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             ? ([
                 { id: "rename", label: t("重命名", "Rename"), icon: <IconPencil size={13} className="text-muted" />, onSelect: () => void askRename(menuConv) },
                 { id: "archive", label: menuConv.archived ? t("取消归档", "Unarchive") : t("归档", "Archive"), icon: <IconArchive size={13} className="text-muted" />, onSelect: () => askArchive(menuConv) },
+                ...(view.sort === "manual" && groupOf(menuConv)
+                  ? [
+                      {
+                        id: "move-up",
+                        label: t("上移", "Move up"),
+                        icon: <IconChevronUp size={13} className="text-muted" />,
+                        onSelect: () => {
+                          const g = groupOf(menuConv);
+                          if (g) stepOrder(g.path, g.conversations, menuConv.id, -1);
+                        },
+                      },
+                      {
+                        id: "move-down",
+                        label: t("下移", "Move down"),
+                        icon: <IconChevronDown size={13} className="text-muted" />,
+                        onSelect: () => {
+                          const g = groupOf(menuConv);
+                          if (g) stepOrder(g.path, g.conversations, menuConv.id, 1);
+                        },
+                      },
+                    ]
+                  : []),
                 ...(menuConv.live
                   ? [{ id: "stop", label: t("结束进程", "Stop process"), icon: <IconStop size={13} className="text-muted" />, onSelect: () => void askStop(menuConv) }]
                   : []),

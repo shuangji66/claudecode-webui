@@ -6,6 +6,7 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { IconCheck } from "./Icons";
 
 /** 所有浮层共用的面板外观（菜单、下拉选择）。 */
 export const POPUP_PANEL = "fixed z-[80] rounded-xl border border-line bg-canvas p-1 shadow-soft";
@@ -219,6 +220,11 @@ export interface MenuItem {
   hint?: ReactNode;
   /** 分组标题：只在同组第一项前渲染一次。 */
   group?: string;
+  /**
+   * 单选项的选中态（分组方式、排序方式这类）。
+   * 设置后这一项变成 role="menuitemradio"，右侧自动画对勾。
+   */
+  checked?: boolean;
   danger?: boolean;
   disabled?: boolean;
   onSelect: () => void;
@@ -263,7 +269,8 @@ export function Menu({ open, anchor, items, onClose, width = 176, align = "end" 
             )}
             <button
               type="button"
-              role="menuitem"
+              role={item.checked === undefined ? "menuitem" : "menuitemradio"}
+              aria-checked={item.checked}
               disabled={item.disabled}
               onClick={() => {
                 onClose();
@@ -281,6 +288,7 @@ export function Menu({ open, anchor, items, onClose, width = 176, align = "end" 
                   {item.hint}
                 </span>
               )}
+              {item.checked && <IconCheck size={13} className="shrink-0 text-brand" />}
             </button>
           </Fragment>
         ))}
