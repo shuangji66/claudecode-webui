@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import { relativeTime } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
-import { IconClose, IconFolder, IconHistory, IconSearch } from "../common/Icons";
+import { Button } from "../common/Button";
+import { Dialog } from "../common/Dialog";
+import { IconFolder, IconHistory, IconSearch } from "../common/Icons";
 
 interface Props {
   open: boolean;
@@ -60,22 +62,27 @@ export function HistoryDialog({ open, onClose }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 md:items-center md:p-6" onClick={onClose}>
-      <div
-        role="dialog"
-        aria-label={t("历史记录", "History")}
-        className="flex h-[88dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-canvas shadow-2xl md:h-auto md:max-h-[80vh] md:max-w-xl md:rounded-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="safe-top flex items-center gap-2 border-b border-line px-4 py-3.5 md:pt-3.5">
-          <IconHistory size={17} className="text-muted" />
-          <h2 className="text-[15px] font-semibold text-ink">{t("历史记录", "History")}</h2>
-          <button type="button" onClick={onClose} className="ml-auto rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink" aria-label={t("关闭", "Close")}>
-            <IconClose size={18} />
-          </button>
+    <Dialog
+      open={open}
+      onClose={onClose}
+      label={t("历史记录", "History")}
+      title={t("历史记录", "History")}
+      icon={<IconHistory size={17} />}
+      sheet
+      bodyScroll={false}
+      bodyClassName="flex min-h-0 flex-1 flex-col"
+      footer={
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[10px] text-faint">
+            {busyCwd ? t(`正在切换到 ${busyCwd}…`, `Switching to ${busyCwd}…`) : t(`共 ${conversations.length} 条对话`, `${conversations.length} conversations`)}
+          </p>
+          <Button variant="secondary" onClick={onClose}>
+            {t("关闭", "Close")}
+          </Button>
         </div>
-
-        <div className="border-b border-line px-4 py-2.5">
+      }
+    >
+      <div className="border-b border-line px-4 py-2.5">
           <div className="flex items-center gap-2 rounded-[10px] border border-line-strong px-2.5 py-1.5 focus-within:border-brand/60">
             <IconSearch size={14} className="text-muted" />
             <input
@@ -117,10 +124,6 @@ export function HistoryDialog({ open, onClose }: Props) {
           ))}
         </div>
 
-        <div className="safe-bottom border-t border-line px-4 pt-2.5">
-          <p className="text-[10px] text-faint">{busyCwd ? t(`正在切换到 ${busyCwd}…`, `Switching to ${busyCwd}…`) : t(`共 ${conversations.length} 条对话`, `${conversations.length} conversations`)}</p>
-        </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }

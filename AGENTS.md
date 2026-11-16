@@ -181,6 +181,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 强调色固定为陶土色 `#D97757`，用 `bg-brand/text-brand` 等语义类，不要写死 slate/blue。
 - 移动端输入框下方必须保留 `env(safe-area-inset-bottom)`，否则 iPhone Home Indicator 会盖住输入区。
 - 界面文案走 `useT()`（中文 / English 两参数），默认中文；新增文案不要再硬编码单语。
+- **UI 原语入库，不要重复造**：模态 `common/Dialog`、确认/输入 `common/SystemDialogs`
+  （`askConfirm`/`askPrompt`）、下拉 `common/Select`、菜单 `common/Menu`、按钮 `common/Button`。
+  原生 `window.confirm/prompt/alert` 与 `<select>` 一律不用：它们的配色/圆角/字号由系统决定，
+  在飞牛桌面 iframe 里和主题对不上。
 
 ## 5. 命令速查
 

@@ -4,6 +4,8 @@ import type { ConversationInfo, WorkspaceEntry } from "../../transport/types";
 import { baseName, conversationTitle, relativeTime, stateLabel } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
 import { belongs } from "../../lib/conversations";
+import { askConfirm, askPrompt } from "../common/SystemDialogs";
+import { Menu, type MenuItem } from "../common/Menu";
 import {
   BrandMark,
   IconArchive,
@@ -45,15 +47,13 @@ interface WorkspaceGroup {
 
 interface MenuState {
   id: string;
-  x: number;
-  y: number;
+  anchor: HTMLElement;
 }
 
 interface WsMenuState {
   path: string;
   name: string;
-  x: number;
-  y: number;
+  anchor: HTMLElement;
 }
 
 export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onAddWorkspace, onOpenHistory }: Props) {
@@ -89,38 +89,6 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     if (!currentWorkspace) return;
     setExpanded((prev) => (prev.has(currentWorkspace) ? prev : new Set(prev).add(currentWorkspace)));
   }, [currentWorkspace]);
-
-  useEffect(() => {
-    if (!menu) return;
-    const onDown = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest("[data-conv-menu]")) setMenu(null);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenu(null);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [menu]);
-
-  useEffect(() => {
-    if (!wsMenu) return;
-    const onDown = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest("[data-ws-menu]")) setWsMenu(null);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setWsMenu(null);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [wsMenu]);
 
   const archivedCount = conversations.filter((c) => c.archived).length;
 
@@ -201,32 +169,32 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   const openWsMenu = (e: React.MouseEvent<HTMLButtonElement>, g: WorkspaceGroup) => {
     e.stopPropagation();
-    const rect = e.currentTarget.getBoundingClientRect();
-    setWsMenu({
-      path: g.path,
-      name: g.name,
-      x: Math.max(8, Math.min(rect.right - 176, window.innerWidth - 184)),
-      y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 190)),
-    });
+    setWsMenu({ path: g.path, name: g.name, anchor: e.currentTarget });
   };
 
-  const askRenameWorkspace = (m: WsMenuState) => {
-    setWsMenu(null);
-    const next = window.prompt(t("重命名工作区", "Rename workspace"), m.name);
+  const askRenameWorkspace = async (m: WsMenuState) => {
+    const next = await askPrompt({
+      title: t("重命名工作区", "Rename workspace"),
+      message: t("只改显示名，不会改动真实目录。", "Only the display name changes; the real directory is untouched."),
+      initial: m.name,
+    });
     if (next === null) return;
     void renameWorkspace(m.path, next.trim());
   };
 
   const revealWorkspace = (m: WsMenuState) => {
-    setWsMenu(null);
     void openWorkspaceInFiles(m.path);
   };
 
-  const askRemove = async (path: string, fromMenu = false) => {
-    if (fromMenu) setWsMenu(null);
+  const askRemove = async (path: string) => {
     if (path === "__other__") return;
-    if (!window.confirm(t(`移除授权目录「${path}」？\n移除后不能再在该目录新建对话。`, `Remove authorized directory "${path}"?\nYou cannot start new conversations there afterwards.`))) return;
-    await removeWorkspace(path);
+    const ok = await askConfirm({
+      title: t("删除工作区", "Delete workspace"),
+      message: t(`「${baseName(path)}」将不再作为工作区；已存在的对话和历史记录都会保留。`, `"${baseName(path)}" will no longer be a workspace; existing conversations and history are kept.`),
+      danger: true,
+      confirmText: t("删除", "Delete"),
+    });
+    if (ok) await removeWorkspace(path);
   };
 
   const openOne = (c: ConversationInfo) => {
@@ -237,38 +205,39 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   const titleOf = (c: ConversationInfo) => conversationTitle(c.title, items[c.id], locale);
 
-  const askRename = (c: ConversationInfo) => {
-    setMenu(null);
-    const next = window.prompt(t("重命名对话", "Rename conversation"), titleOf(c));
+  const askRename = async (c: ConversationInfo) => {
+    const next = await askPrompt({ title: t("重命名对话", "Rename conversation"), initial: titleOf(c) });
     if (next === null) return;
     void renameConversation(c.id, next.trim());
   };
 
   const askArchive = (c: ConversationInfo) => {
-    setMenu(null);
     void archiveConversation(c.id, !c.archived);
   };
 
-  const askDelete = (c: ConversationInfo) => {
-    setMenu(null);
-    if (!window.confirm(t(`删除对话「${titleOf(c)}」？\n会从列表移除并结束运行中的进程，转录文件仍保留。`, `Delete conversation "${titleOf(c)}"?\nIt is removed from the list and any running process is stopped; the transcript file is kept.`))) return;
-    void deleteConversation(c.id);
+  const askDelete = async (c: ConversationInfo) => {
+    const ok = await askConfirm({
+      title: t("删除对话", "Delete conversation"),
+      message: t(`「${titleOf(c)}」会从列表移除并结束运行中的进程，转录文件仍保留。`, `"${titleOf(c)}" is removed from the list and any running process is stopped; the transcript file is kept.`),
+      danger: true,
+      confirmText: t("删除", "Delete"),
+    });
+    if (ok) void deleteConversation(c.id);
   };
 
-  const askStop = (c: ConversationInfo) => {
-    setMenu(null);
-    if (!window.confirm(t(`结束对话「${titleOf(c)}」的 claude 进程？\n对话仍保留，下次点击会恢复。`, `Stop the claude process for "${titleOf(c)}"?\nThe conversation stays and can be resumed later.`))) return;
-    void closeSession(c.id);
+  const askStop = async (c: ConversationInfo) => {
+    const ok = await askConfirm({
+      title: t("结束进程", "Stop process"),
+      message: t(`结束「${titleOf(c)}」的 claude 进程？对话仍保留，下次点击会恢复。`, `Stop the claude process for "${titleOf(c)}"? The conversation stays and can be resumed later.`),
+      danger: true,
+      confirmText: t("结束进程", "Stop"),
+    });
+    if (ok) void closeSession(c.id);
   };
 
   const openMenu = (e: React.MouseEvent<HTMLButtonElement>, c: ConversationInfo) => {
     e.stopPropagation();
-    const rect = e.currentTarget.getBoundingClientRect();
-    setMenu({
-      id: c.id,
-      x: Math.max(8, Math.min(rect.right - 168, window.innerWidth - 176)),
-      y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 210)),
-    });
+    setMenu({ id: c.id, anchor: e.currentTarget });
   };
 
   if (collapsed) {
@@ -526,55 +495,39 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         </button>
       </div>
 
-      {wsMenu && (
-        <div
-          data-ws-menu
-          role="menu"
-          className="fixed z-[70] w-[176px] rounded-xl border border-line bg-canvas p-1 shadow-soft"
-          style={{ left: wsMenu.x, top: wsMenu.y }}
-        >
-          <button type="button" role="menuitem" onClick={() => askRenameWorkspace(wsMenu)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-ink hover:bg-panel-strong">
-            <IconPencil size={13} className="text-muted" />
-            {t("重命名", "Rename")}
-          </button>
-          <button type="button" role="menuitem" onClick={() => revealWorkspace(wsMenu)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-ink hover:bg-panel-strong">
-            <IconFolder size={13} className="text-muted" />
-            {t("在文件夹显示", "Show in files")}
-          </button>
-          <button type="button" role="menuitem" onClick={() => void askRemove(wsMenu.path, true)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-danger hover:bg-danger/[0.06]">
-            <IconTrash size={13} />
-            {t("删除工作区", "Delete workspace")}
-          </button>
-        </div>
-      )}
+      <Menu
+        open={Boolean(wsMenu)}
+        anchor={wsMenu?.anchor ?? null}
+        onClose={() => setWsMenu(null)}
+        items={
+          wsMenu
+            ? ([
+                { id: "rename", label: t("重命名", "Rename"), icon: <IconPencil size={13} className="text-muted" />, onSelect: () => void askRenameWorkspace(wsMenu) },
+                { id: "reveal", label: t("在文件夹显示", "Show in files"), icon: <IconFolder size={13} className="text-muted" />, onSelect: () => revealWorkspace(wsMenu) },
+                { id: "remove", label: t("删除工作区", "Delete workspace"), icon: <IconTrash size={13} />, danger: true, onSelect: () => void askRemove(wsMenu.path) },
+              ] satisfies MenuItem[])
+            : []
+        }
+      />
 
-      {menu && menuConv && (
-        <div
-          data-conv-menu
-          role="menu"
-          className="fixed z-[70] w-[168px] rounded-xl border border-line bg-canvas p-1 shadow-soft"
-          style={{ left: menu.x, top: menu.y }}
-        >
-          <button type="button" role="menuitem" onClick={() => askRename(menuConv)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-ink hover:bg-panel-strong">
-            <IconPencil size={13} className="text-muted" />
-            {t("重命名", "Rename")}
-          </button>
-          <button type="button" role="menuitem" onClick={() => askArchive(menuConv)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-ink hover:bg-panel-strong">
-            <IconArchive size={13} className="text-muted" />
-            {menuConv.archived ? t("取消归档", "Unarchive") : t("归档", "Archive")}
-          </button>
-          {menuConv.live && (
-            <button type="button" role="menuitem" onClick={() => askStop(menuConv)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-ink hover:bg-panel-strong">
-              <IconStop size={13} className="text-muted" />
-              {t("结束进程", "Stop process")}
-            </button>
-          )}
-          <button type="button" role="menuitem" onClick={() => askDelete(menuConv)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-danger hover:bg-danger/[0.06]">
-            <IconTrash size={13} />
-            {t("删除", "Delete")}
-          </button>
-        </div>
-      )}
+      <Menu
+        open={Boolean(menu && menuConv)}
+        anchor={menu?.anchor ?? null}
+        onClose={() => setMenu(null)}
+        width={168}
+        items={
+          menuConv
+            ? ([
+                { id: "rename", label: t("重命名", "Rename"), icon: <IconPencil size={13} className="text-muted" />, onSelect: () => void askRename(menuConv) },
+                { id: "archive", label: menuConv.archived ? t("取消归档", "Unarchive") : t("归档", "Archive"), icon: <IconArchive size={13} className="text-muted" />, onSelect: () => askArchive(menuConv) },
+                ...(menuConv.live
+                  ? [{ id: "stop", label: t("结束进程", "Stop process"), icon: <IconStop size={13} className="text-muted" />, onSelect: () => void askStop(menuConv) }]
+                  : []),
+                { id: "delete", label: t("删除", "Delete"), icon: <IconTrash size={13} />, danger: true, onSelect: () => void askDelete(menuConv) },
+              ] satisfies MenuItem[])
+            : []
+        }
+      />
     </aside>
   );
 }

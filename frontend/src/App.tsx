@@ -9,6 +9,7 @@ import { SettingsDrawer } from "./components/layout/SettingsDrawer";
 import { TokenGate } from "./components/layout/TokenGate";
 import { WorkspaceDialog } from "./components/layout/WorkspaceDialog";
 import { HistoryDialog } from "./components/layout/HistoryDialog";
+import { SystemDialogs } from "./components/common/SystemDialogs";
 import { BrandMark, IconClose, IconRetry } from "./components/common/Icons";
 import { RightSidebar, type RightTab } from "./components/right/RightSidebar";
 
@@ -210,6 +211,8 @@ function AppShell() {
       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <WorkspaceDialog open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />
       <HistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} />
+      {/* 全局确认 / 输入框（替代 window.confirm / prompt），由这里挂一次 */}
+      <SystemDialogs />
 
       {error && (
         <div className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] z-[60] md:left-1/2 md:right-auto md:w-auto md:-translate-x-1/2">

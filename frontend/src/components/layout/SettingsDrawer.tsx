@@ -12,10 +12,12 @@ import {
   type ProviderForm,
 } from "../../lib/providerForm";
 import type { ModelSpec } from "../../transport/types";
+import { Select } from "../common/Select";
+import { Dialog } from "../common/Dialog";
+import { askConfirm } from "../common/SystemDialogs";
 import {
   IconCheck,
   IconChevronDown,
-  IconClose,
   IconGauge,
   IconGlobe,
   IconImage,
@@ -41,38 +43,18 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
   const t = useT();
   const [tab, setTab] = useState<Tab>("general");
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 md:p-6" onClick={onClose}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={t("设置", "Settings")}
-        className="flex h-[100dvh] w-full flex-col overflow-hidden bg-canvas shadow-2xl md:h-[82vh] md:max-w-[900px] md:rounded-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="safe-top flex h-14 shrink-0 items-center border-b border-line px-5 md:pt-0">
-          <h2 className="text-[16px] font-semibold text-ink">{t("设置", "Settings")}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="ml-auto rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
-            aria-label={t("关闭设置", "Close settings")}
-          >
-            <IconClose size={18} />
-          </button>
-        </header>
-
+    <Dialog
+      open={open}
+      onClose={onClose}
+      label={t("设置", "Settings")}
+      title={t("设置", "Settings")}
+      size="xl"
+      bare
+      panelClassName="h-[100dvh] md:h-[82vh] md:max-w-[900px]"
+    >
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
           <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-2 py-2 md:w-48 md:flex-col md:border-b-0 md:border-r md:px-2.5 md:py-3">
             <NavItem active={tab === "general"} icon={<IconSettings size={16} />} onClick={() => setTab("general")}>
@@ -110,8 +92,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             </div>
           </div>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -238,17 +219,14 @@ function GeneralSettings() {
       </Section>
 
       <Section title={t("默认权限", "Default permission")} desc={t("新建会话时使用的权限模式。当前会话可用输入框上方的选择器切换。", "Permission mode for new sessions. The current session can be changed from the composer.")}>
-        <select
+        <Select
+          className="max-w-xs"
+          ariaLabel={t("默认权限", "Default permission")}
           value={settings?.permission_mode ?? ""}
-          onChange={(e) => void save({ permission_mode: e.target.value })}
-          className="w-full max-w-xs rounded-lg border border-line-strong bg-canvas px-2.5 py-1.5 text-[12.5px] outline-none focus:border-brand/60"
-        >
-          {PERMISSION_MODES.map((m) => (
-            <option key={m || "default"} value={m}>
-              {permissionLabel(m, locale as "zh" | "en")}
-            </option>
-          ))}
-        </select>
+          onChange={(next) => void save({ permission_mode: next })}
+          options={PERMISSION_MODES.map((m) => ({ value: m, label: permissionLabel(m, locale as "zh" | "en") }))}
+          menuWidth={200}
+        />
       </Section>
 
       {info?.auth_required && (
@@ -376,13 +354,21 @@ function ModelsSettings() {
             }
             onChange={(patch) => update(p.uid, patch)}
             onRemove={() => {
-              if (!window.confirm(t(`删除提供商「${p.name || p.id}」？`, `Delete provider "${p.name || p.id}"?`))) return;
-              const next = forms.filter((x) => x.uid !== p.uid);
-              setForms(next);
-              if (next.length === 1) setExpanded(new Set([next[0].uid]));
-              else if (next.length === 0) setExpanded(new Set());
-              setDirty(true);
-              setSavedAt(null);
+              void (async () => {
+                const ok = await askConfirm({
+                  title: t("删除提供商", "Delete provider"),
+                  message: t(`「${p.name || p.id}」及其模型配置会被移除。`, `"${p.name || p.id}" and its model settings will be removed.`),
+                  danger: true,
+                  confirmText: t("删除", "Delete"),
+                });
+                if (!ok) return;
+                const next = forms.filter((x) => x.uid !== p.uid);
+                setForms(next);
+                if (next.length === 1) setExpanded(new Set([next[0].uid]));
+                else if (next.length === 0) setExpanded(new Set());
+                setDirty(true);
+                setSavedAt(null);
+              })();
             }}
           />
         ))}
@@ -444,8 +430,13 @@ function ProxySettings() {
   }, [settings?.proxy_url]);
 
   const save = async () => {
-    if (sessions.length > 0 && !window.confirm(t(`保存后需要重启 ${sessions.length} 个 claude 会话；对话记录会保留并自动恢复。继续？`, `Saving will restart ${sessions.length} claude session(s); conversations are kept and will be resumed. Continue?`))) {
-      return;
+    if (sessions.length > 0) {
+      const ok = await askConfirm({
+        title: t("保存代理设置", "Save proxy settings"),
+        message: t(`保存后需要重启 ${sessions.length} 个 claude 会话；对话记录会保留并自动恢复。继续？`, `Saving restarts ${sessions.length} claude session(s); conversations are kept and resumed. Continue?`),
+        confirmText: t("继续", "Continue"),
+      });
+      if (!ok) return;
     }
     setLocalError(null);
     const result = await applyProxy(url.trim());
@@ -625,15 +616,13 @@ function ProviderCard({
       {expanded && <div className="space-y-2.5 px-3 py-3">
         <label className="block">
           <span className="block text-[10.5px] text-faint">{t("协议", "Protocol")}</span>
-          <select
+          <Select
+            className="mt-0.5 px-2 py-1.5"
+            ariaLabel={t("协议", "Protocol")}
             value={provider.protocol}
-            onChange={(e) => onChange({ protocol: e.target.value })}
-            className="mt-0.5 w-full rounded-lg border border-line-strong bg-canvas px-2 py-1.5 text-[12px] outline-none focus:border-brand/60"
-          >
-            {PROTOCOLS.map((p) => (
-              <option key={p.value} value={p.value}>{p.label}</option>
-            ))}
-          </select>
+            onChange={(next) => onChange({ protocol: next })}
+            options={PROTOCOLS.map((p) => ({ value: p.value, label: p.label }))}
+          />
         </label>
 
         <label className="block">
@@ -894,15 +883,14 @@ function ModelRow({
             {ordered.length > 0 && (
               <label className="mt-1.5 flex items-center gap-1.5 text-[10px] text-faint">
                 {t("默认强度", "Default effort")}
-                <select
+                <Select
+                  className="w-auto px-1.5 py-0.5 text-[10.5px]"
+                  ariaLabel={t("默认强度", "Default effort")}
                   value={spec.default_reasoning_effort ?? ordered[0]}
-                  onChange={(e) => onChange({ default_reasoning_effort: e.target.value })}
-                  className="rounded-md border border-line-strong bg-canvas px-1.5 py-0.5 text-[10.5px] text-ink outline-none"
-                >
-                  {ordered.map((e) => (
-                    <option key={e} value={e}>{e}</option>
-                  ))}
-                </select>
+                  onChange={(next) => onChange({ default_reasoning_effort: next })}
+                  options={ordered.map((e) => ({ value: e, label: e }))}
+                  menuWidth={110}
+                />
               </label>
             )}
           </div>

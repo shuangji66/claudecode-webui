@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { SessionInfo } from "../../transport/types";
 import { permissionLabel } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
+import { Menu } from "../common/Menu";
 import { IconCheck, IconCopy, IconMore, IconPanel, IconSettings, IconSidebarRight } from "../common/Icons";
 
 export type ChatTab = "chat" | "overview";
@@ -25,36 +26,14 @@ interface Props {
 export function TopBar({ session, title, busy, tab, mode, onTab, onToggleSidebar, onToggleCollapse, onOpenSettings, onCopySession, rightOpen, onToggleRight }: Props) {
   const t = useT();
   const locale = useLocale();
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "ok" | "fail">("idle");
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenuOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [menuOpen]);
 
   const copySession = async () => {
     if (!session) return;
     const ok = await onCopySession();
     setCopyState(ok ? "ok" : "fail");
-    if (ok) {
-      window.setTimeout(() => {
-        setCopyState("idle");
-        setMenuOpen(false);
-      }, 900);
-    }
+    if (ok) window.setTimeout(() => setCopyState("idle"), 900);
   };
   return (
     <header className="safe-top shrink-0 border-b border-line bg-canvas md:pt-0">
@@ -99,59 +78,47 @@ export function TopBar({ session, title, busy, tab, mode, onTab, onToggleSidebar
           <IconSidebarRight size={17} />
         </button>
 
-        <div className="relative" ref={menuRef}>
-          <button
-            type="button"
-            onClick={() => {
-              setMenuOpen((v) => !v);
-              setCopyState("idle");
-            }}
-            className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
-            aria-label={t("更多", "More")}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            title={t("更多", "More")}
-          >
-            <IconMore size={17} />
-          </button>
-          {menuOpen && (
-            <div
-              role="menu"
-              className="absolute right-0 top-full z-50 mt-1 w-56 rounded-xl border border-line bg-canvas p-1 shadow-soft"
-            >
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!session}
-                onClick={() => void copySession()}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-ink hover:bg-panel-strong disabled:opacity-40"
-              >
-                {copyState === "ok" ? <IconCheck size={14} className="text-ok" /> : <IconCopy size={14} className="text-muted" />}
-                <span>
-                  {!session
-                    ? t("没有可复制的会话", "No session to copy")
-                    : copyState === "ok"
-                      ? t("已复制为 Markdown", "Copied as Markdown")
-                      : copyState === "fail"
-                        ? t("复制失败", "Copy failed")
-                        : t("复制会话为 Markdown", "Copy session as Markdown")}
-                </span>
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMenuOpen(false);
-                  onOpenSettings();
-                }}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-ink hover:bg-panel-strong"
-              >
-                <IconSettings size={14} className="text-muted" />
-                {t("设置", "Settings")}
-              </button>
-            </div>
-          )}
-        </div>
+        <button
+          type="button"
+          onClick={(e) => {
+            setMenuAnchor(e.currentTarget);
+            setCopyState("idle");
+          }}
+          className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+          aria-label={t("更多", "More")}
+          aria-haspopup="menu"
+          aria-expanded={Boolean(menuAnchor)}
+          title={t("更多", "More")}
+        >
+          <IconMore size={17} />
+        </button>
+        <Menu
+          open={Boolean(menuAnchor)}
+          anchor={menuAnchor}
+          onClose={() => setMenuAnchor(null)}
+          width={224}
+          items={[
+            {
+              id: "copy",
+              disabled: !session,
+              icon: copyState === "ok" ? <IconCheck size={14} className="text-ok" /> : <IconCopy size={14} className="text-muted" />,
+              label: !session
+                ? t("没有可复制的会话", "No session to copy")
+                : copyState === "ok"
+                  ? t("已复制为 Markdown", "Copied as Markdown")
+                  : copyState === "fail"
+                    ? t("复制失败", "Copy failed")
+                    : t("复制会话为 Markdown", "Copy session as Markdown"),
+              onSelect: () => void copySession(),
+            },
+            {
+              id: "settings",
+              icon: <IconSettings size={14} className="text-muted" />,
+              label: t("设置", "Settings"),
+              onSelect: onOpenSettings,
+            },
+          ]}
+        />
       </div>
 
       <div className="flex h-[38px] items-end gap-1 px-3 md:px-4">

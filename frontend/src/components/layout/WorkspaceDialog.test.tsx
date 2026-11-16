@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { WorkspaceDialog } from "./WorkspaceDialog";
+import { SystemDialogs } from "../common/SystemDialogs";
 import { useAppStore } from "../../store/useAppStore";
 
 const authorizeFnosDir = vi.fn();
@@ -43,7 +44,13 @@ beforeEach(() => {
 /** 打开弹窗并等首次目录加载落定（load() 里的 setState 要在 act 内完成）。 */
 const openDialog = async () => {
   const onClose = vi.fn();
-  render(<WorkspaceDialog open onClose={onClose} />);
+  // 「新建文件夹」走统一的输入框，需要挂上全局对话框宿主。
+  render(
+    <>
+      <WorkspaceDialog open onClose={onClose} />
+      <SystemDialogs />
+    </>,
+  );
   await screen.findByRole("button", { name: /^添加$/ });
   return onClose;
 };
@@ -122,14 +129,20 @@ describe("WorkspaceDialog", () => {
     expect(addWorkspace).not.toHaveBeenCalled();
   });
 
-  it("「新建文件夹」在当前目录下建好后进入新目录", async () => {
+  it("「新建文件夹」用统一输入框填入名称，建好后进入新目录", async () => {
     mkdirDir.mockResolvedValue("/vol1/1000/demo/新目录");
     browseDirs.mockResolvedValueOnce(LISTING).mockResolvedValue({ ...LISTING, path: "/vol1/1000/demo/新目录" });
-    vi.spyOn(window, "prompt").mockReturnValue("新目录");
     await openDialog();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /新建文件夹/ }));
+    });
+
+    // 自绘输入框（不是 window.prompt）
+    const input = await screen.findByRole("textbox", { name: "新建文件夹" });
+    fireEvent.change(input, { target: { value: "新目录" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "创建" }));
     });
 
     await waitFor(() => expect(mkdirDir).toHaveBeenCalledWith("/vol1/1000/demo", "新目录"));

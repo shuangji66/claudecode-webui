@@ -11,7 +11,8 @@ import {
   toWireAttachment,
   type PendingAttachment,
 } from "../../lib/attachments";
-import { IconChevronDown, IconClose, IconFile, IconGauge, IconImage, IconPlus, IconSend, IconShield, IconSpark, IconStop } from "../common/Icons";
+import { Select } from "../common/Select";
+import { IconClose, IconFile, IconGauge, IconImage, IconPlus, IconSend, IconShield, IconSpark, IconStop } from "../common/Icons";
 
 interface Props {
   disabled: boolean;
@@ -215,78 +216,67 @@ export function Composer({
             <IconPlus size={17} />
           </button>
 
-          <label className="relative flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] text-muted hover:bg-panel-strong" title={t("权限模式", "Permission mode")}>
-            <IconShield size={13} className="shrink-0" />
-            <span className="hidden max-w-[7rem] truncate sm:inline">{permissionLabel(permissionMode, locale)}</span>
-            <IconChevronDown size={11} className="shrink-0 opacity-60" />
-            <select
+          <span className="shrink-0" title={t("权限模式", "Permission mode")}>
+            <Select
+              variant="ghost"
+              ariaLabel={t("权限模式", "Permission mode")}
               value={permissionMode}
-              onChange={(e) => onPermissionMode(e.target.value)}
+              onChange={onPermissionMode}
               disabled={disabled}
-              className="absolute inset-0 cursor-pointer appearance-none opacity-0"
-              aria-label={t("权限模式", "Permission mode")}
-            >
-              {PERMISSION_MODES.map((m) => (
-                <option key={m || "default"} value={m}>
-                  {permissionLabel(m, locale)}
-                </option>
-              ))}
-            </select>
-          </label>
+              leading={<IconShield size={13} className="shrink-0" />}
+              options={PERMISSION_MODES.map((m) => ({ value: m, label: permissionLabel(m, locale) }))}
+              menuWidth={176}
+            />
+          </span>
 
-          <label className="relative flex min-w-0 flex-1 items-center gap-1 rounded-full px-2 py-1 text-[11px] text-muted hover:bg-panel-strong" title={t("模型", "Model")}>
-            <IconSpark size={13} className="shrink-0" />
-            <span className="min-w-0 truncate">{selectedModel ? (selectedModel.spec.name || selectedModel.model) : t("未添加模型", "No models")}</span>
-            {selectedModel?.spec.supports_image && (
-              <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-brand-soft px-1 text-[9px] text-brand" title={t("支持图片输入", "Supports image input")}>
-                <IconImage size={10} />
-                <span className="hidden sm:inline">{t("图片", "Image")}</span>
-              </span>
-            )}
-            <IconChevronDown size={11} className="shrink-0 opacity-60" />
-            <select
+          <span className="min-w-0 flex-1" title={t("模型", "Model")}>
+            <Select
+              variant="ghost"
+              className="w-full justify-start"
+              ariaLabel={t("模型", "Model")}
               value={selectedKey}
-              onChange={(e) => {
-                const opt = modelOptions.find((o) => `${o.provider}/${o.model}` === e.target.value);
+              disabled={disabled || modelOptions.length === 0}
+              placeholder={t("未添加模型", "No models")}
+              options={modelOptions.map((o) => ({
+                value: `${o.provider}/${o.model}`,
+                label: `${o.label}${o.spec.supports_image ? t(" · 图片", " · Image") : ""}`,
+              }))}
+              onChange={(next) => {
+                const opt = modelOptions.find((o) => `${o.provider}/${o.model}` === next);
                 if (opt) onSelectModel(opt.provider, opt.model);
               }}
-              disabled={disabled || modelOptions.length === 0}
-              className="absolute inset-0 cursor-pointer appearance-none opacity-0"
-              aria-label={t("模型", "Model")}
-            >
-              {modelOptions.length === 0 && <option value="">{t("未添加模型", "No models")}</option>}
-              {modelOptions.length > 0 && !selectedKey && <option value="">{t("未选择模型", "No model selected")}</option>}
-              {modelOptions.map((o) => (
-                <option key={`${o.provider}/${o.model}`} value={`${o.provider}/${o.model}`}>
-                  {o.label}
-                  {o.spec.supports_image ? t(" · 图片", " · Image") : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+              leading={<IconSpark size={13} className="shrink-0" />}
+              trigger={
+                <>
+                  <span className="min-w-0 flex-1 truncate text-left">
+                    {selectedModel ? selectedModel.spec.name || selectedModel.model : t("未添加模型", "No models")}
+                  </span>
+                  {selectedModel?.spec.supports_image && (
+                    <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-brand-soft px-1 text-[9px] text-brand" title={t("支持图片输入", "Supports image input")}>
+                      <IconImage size={10} />
+                      <span className="hidden sm:inline">{t("图片", "Image")}</span>
+                    </span>
+                  )}
+                </>
+              }
+              menuWidth={260}
+            />
+          </span>
 
           {efforts.length > 0 && (
-            <label
-              className="relative flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] text-muted hover:bg-panel-strong"
-              title={t("推理强度（在新建会话时生效）", "Reasoning effort (applies to new sessions)")}
-            >
-              <IconGauge size={13} className="shrink-0" />
-              <span className="max-w-[5rem] truncate">{selectedEffort || t("默认", "Default")}</span>
-              <IconChevronDown size={11} className="shrink-0 opacity-60" />
-              <select
+            <span className="shrink-0" title={t("推理强度（在新建会话时生效）", "Reasoning effort (applies to new sessions)")}>
+              <Select
+                variant="ghost"
+                ariaLabel={t("推理强度", "Reasoning effort")}
                 value={selectedEffort}
-                onChange={(e) => onSelectEffort(e.target.value)}
+                onChange={onSelectEffort}
                 disabled={disabled}
-                className="absolute inset-0 cursor-pointer appearance-none opacity-0"
-                aria-label={t("推理强度", "Reasoning effort")}
-              >
-                {efforts.map((effort) => (
-                  <option key={effort} value={effort}>
-                    {effort}
-                  </option>
-                ))}
-              </select>
-            </label>
+                placeholder={t("默认", "Default")}
+                leading={<IconGauge size={13} className="shrink-0" />}
+                options={efforts.map((effort) => ({ value: effort, label: effort }))}
+                menuWidth={128}
+              />
+            </span>
           )}
 
           <div className="ml-auto flex shrink-0 items-center gap-1.5">

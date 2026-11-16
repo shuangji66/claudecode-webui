@@ -12,6 +12,8 @@ import {
   type GitTone,
 } from "../../lib/workspace";
 import { useSidebarStore } from "../../store/useSidebarStore";
+import { Select } from "../common/Select";
+import { askConfirm } from "../common/SystemDialogs";
 import type { GitLogEntry } from "../../transport/types";
 import {
   IconChevronLeft,
@@ -183,22 +185,35 @@ export function GitPanel({ cwd, active }: Props) {
     }
   };
 
-  const askDiscard = (row: ChangeRow) => {
+  const askDiscard = async (row: ChangeRow) => {
     if (row.entry.xy === "??") return;
-    if (!window.confirm(t(`丢弃「${row.entry.path}」的工作区改动？\n此操作不可撤销。`, `Discard changes in "${row.entry.path}"?\nThis cannot be undone.`))) return;
-    void run(() => discard(row.entry.path));
+    const ok = await askConfirm({
+      title: t("丢弃工作区改动", "Discard changes"),
+      message: t(`「${row.entry.path}」的未暂存改动会被丢弃，此操作不可撤销。`, `Unstaged changes in "${row.entry.path}" will be discarded. This cannot be undone.`),
+      danger: true,
+      confirmText: t("丢弃", "Discard"),
+    });
+    if (ok) void run(() => discard(row.entry.path));
   };
 
-  const askCheckout = (branch: string) => {
+  const askCheckout = async (branch: string) => {
     if (!branch || branch === git?.branch) return;
-    if (!window.confirm(t(`切换到分支「${branch}」？`, `Switch to branch "${branch}"?`))) return;
-    void run(() => checkout(branch));
+    const ok = await askConfirm({
+      title: t("切换分支", "Switch branch"),
+      message: t(`切换到「${branch}」？工作区未提交的改动会跟着带过去。`, `Switch to "${branch}"? Uncommitted changes come along.`),
+      confirmText: t("切换", "Switch"),
+    });
+    if (ok) void run(() => checkout(branch));
   };
 
-  const askSync = () => {
+  const askSync = async () => {
     if (!git?.upstream || git.detached) return;
-    if (!window.confirm(t(`先 pull --ff-only 再 push 到「${git.upstream}」？`, `Pull --ff-only, then push to "${git.upstream}"?`))) return;
-    void run(() => sync());
+    const ok = await askConfirm({
+      title: t("同步远端", "Sync remote"),
+      message: t(`先 pull --ff-only，再 push 到「${git.upstream}」。`, `Pull --ff-only, then push to "${git.upstream}".`),
+      confirmText: t("同步", "Sync"),
+    });
+    if (ok) void run(() => sync());
   };
 
   const submit = async () => {
@@ -456,26 +471,16 @@ export function GitPanel({ cwd, active }: Props) {
         <div className="shrink-0 border-t border-line px-2 py-1.5">
           <div className="flex items-center gap-1.5">
             <IconGitBranch size={13} className="shrink-0 text-muted" />
-            <select
+            <Select
+              variant="ghost"
+              className="min-w-0 flex-1 justify-start text-[11.5px] text-ink"
+              ariaLabel={t("切换分支", "Switch branch")}
               value={git?.branch ?? ""}
-              onChange={(e) => {
-                const next = e.target.value;
-                // 受控 select 在用户取消确认时不会自动回弹，先手动还原。
-                e.target.value = git?.branch ?? "";
-                askCheckout(next);
-              }}
               disabled={busy || !branches || branches.names.length === 0}
-              className="min-w-0 flex-1 truncate rounded border-0 bg-transparent py-0.5 text-[11.5px] text-ink outline-none disabled:opacity-70"
-              aria-label={t("切换分支", "Switch branch")}
-              title={t("切换分支", "Switch branch")}
-            >
-              {git?.detached && <option value="">{t("分离 HEAD", "detached HEAD")}</option>}
-              {(branches?.names ?? (git?.branch ? [git.branch] : [])).map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
+              placeholder={git?.detached ? t("分离 HEAD", "detached HEAD") : t("选择分支", "Select branch")}
+              onChange={(next) => void askCheckout(next)}
+              options={(branches?.names ?? (git?.branch ? [git.branch] : [])).map((name) => ({ value: name, label: name }))}
+            />
             <button
               type="button"
               onClick={askSync}

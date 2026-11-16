@@ -28,7 +28,8 @@ src/
   store/useSidebarStore.ts 右侧栏数据（文件树/Git/预览，所有 fetch 收敛在这里）
   components/layout/Sidebar.tsx 工作区/对话列表、重命名/归档/删除菜单
   components/right/    RightSidebar / FilesPanel / GitPanel / TerminalPanel
-  components/          layout / chat / tools / permission / settings / common
+  components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons
+  components/          layout / chat / tools / permission / settings
 ```
 
 **分层规则**：组件不直接调 `fetch` 或 `WebSocket`；一律经 store / transport；
@@ -126,6 +127,17 @@ src/
   模型配置在底部「保存模型设置」统一提交，代理保存后重启所有 claude 会话。
 - 模型页提供商只有一个时默认展开，多个时默认折叠；新建提供商必须手填 ID，显示名留空跟随 ID。
 - 右上角「更多」是下拉菜单（复制会话为 Markdown / 设置），不要直接打开设置。
+- **不许用浏览器原生控件承载 UI**：
+  - 模态统一 `components/common/Dialog.tsx`（遮罩、标题区、滚动体、底部栏、Esc/遮罩关闭、
+    背景滚动锁、移动端底部安全区都在里面）。不要再手写 `fixed inset-0 … rounded-t-2xl`。
+  - 下拉统一 `components/common/Select.tsx`（自绘 listbox + 键盘 ↑↓/Enter/Esc），
+    **禁止 `<select>`**——原生展开面板由系统绘制，深浅色/字号/圆角都不受主题控制。
+  - 弹出菜单统一 `components/common/Menu.tsx`（Portal + 视口夹取 + 下方放不下时向上翻 +
+    点外部/Esc 关闭），不要在组件里各写一套 document 监听。
+  - 确认 / 输入走 `askConfirm` / `askPrompt`（`SystemDialogs` 在 `App` 挂一次），
+    **禁止 `window.confirm` / `window.prompt` / `window.alert`**。
+  - 按钮统一 `components/common/Button.tsx`（primary/secondary/ghost/danger + sm/md），
+    新代码不要再复制 `bg-brand px-4 py-2 …` 这类串。
 - `document.title` 默认 `Claude Code`，有活动会话时跟随会话名；结果条不显示费用。
 
 ## 7. 测试
@@ -159,3 +171,4 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
 | 部署到子路径后资源 404 | 用了绝对路径，没走 `runtimeBase()` |
 | 审批按钮点了没反应 | WS 未连接（`conn !== "open"`），或 `request_id` 传丢 |
 | 类型检查报 CSS 导入 | 缺 `src/vite-env.d.ts` |
+| 弹窗/下拉在深色主题下跟页面脱节 | 用了 `window.confirm` / `<select>` 等原生控件 |
