@@ -8,7 +8,9 @@ import {
   PROTOCOLS,
   blankProvider,
   buildProviderPatches,
+  formatCapacity,
   formsFromSettings,
+  parseCapacity,
   type ProviderForm,
 } from "../../lib/providerForm";
 import type { ModelSpec } from "../../transport/types";
@@ -163,10 +165,23 @@ function GeneralSettings() {
     <div className="mx-auto max-w-2xl space-y-7">
       <div className="flex items-center gap-2">
         <h3 className="text-[15px] font-semibold text-ink">{t("通用设置", "General")}</h3>
-        <span className="ml-auto text-[10.5px] text-faint">
-          {saving ? t("保存中…", "Saving…") : savedAt ? t("已保存", "Saved") : t("修改即时生效", "Changes apply immediately")}
-        </span>
+        {(saving || savedAt) && (
+          <span className="ml-auto text-[10.5px] text-faint">
+            {saving ? t("保存中…", "Saving…") : t("已保存", "Saved")}
+          </span>
+        )}
       </div>
+
+      <Section title={t("默认权限", "Default permission")} desc={t("新建会话时使用的权限模式。当前会话可用输入框上方的选择器切换。", "Permission mode for new sessions. The current session can be changed from the composer.")}>
+        <Select
+          className="max-w-xs"
+          ariaLabel={t("默认权限", "Default permission")}
+          value={settings?.permission_mode ?? ""}
+          onChange={(next) => void save({ permission_mode: next })}
+          options={PERMISSION_MODES.map((m) => ({ value: m, label: permissionLabel(m, locale as "zh" | "en") }))}
+          menuWidth={200}
+        />
+      </Section>
 
       <Section title={t("外观", "Appearance")} desc={t("选择浅色、深色，或跟随系统。", "Choose light, dark, or follow the system.")}>
         <div className="grid grid-cols-3 gap-2">
@@ -245,17 +260,6 @@ function GeneralSettings() {
         <p className="chat-text mt-3 rounded-lg border border-line bg-panel/60 px-3 py-2 text-ink">
           {t("这是一段会话内容预览。Claude 会在当前工作区读取文件并执行命令。", "This is a preview of conversation text. Claude reads files and runs commands in the current workspace.")}
         </p>
-      </Section>
-
-      <Section title={t("默认权限", "Default permission")} desc={t("新建会话时使用的权限模式。当前会话可用输入框上方的选择器切换。", "Permission mode for new sessions. The current session can be changed from the composer.")}>
-        <Select
-          className="max-w-xs"
-          ariaLabel={t("默认权限", "Default permission")}
-          value={settings?.permission_mode ?? ""}
-          onChange={(next) => void save({ permission_mode: next })}
-          options={PERMISSION_MODES.map((m) => ({ value: m, label: permissionLabel(m, locale as "zh" | "en") }))}
-          menuWidth={200}
-        />
       </Section>
 
       {info?.auth_required && (
@@ -495,48 +499,14 @@ function ProxySettings() {
           className="w-full rounded-lg border border-line-strong bg-canvas px-2.5 py-2 font-mono text-[12px] outline-none placeholder:text-faint focus:border-brand/60"
           aria-label={t("代理地址", "Proxy URL")}
         />
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {[
-            ["HTTP", "http://127.0.0.1:7890"],
-            ["HTTPS", "https://127.0.0.1:7890"],
-            ["SOCKS5", "socks5://127.0.0.1:1080"],
-          ].map(([label, value]) => (
-            <button
-              key={label}
-              type="button"
-              onClick={() => {
-                setUrl(value);
-                setSavedAt(null);
-                setLocalError(null);
-              }}
-              className="rounded-full border border-line-strong px-2 py-0.5 text-[10.5px] text-muted hover:bg-panel-strong hover:text-ink"
-            >
-              {label}
-            </button>
-          ))}
-          {url && (
-            <button
-              type="button"
-              onClick={() => {
-                setUrl("");
-                setSavedAt(null);
-                setLocalError(null);
-              }}
-              className="rounded-full border border-line-strong px-2 py-0.5 text-[10.5px] text-muted hover:bg-panel-strong hover:text-ink"
-            >
-              {t("直连", "Direct")}
-            </button>
-          )}
-        </div>
-        <p className="mt-2 text-[10.5px] leading-relaxed text-faint">
-          {t("代理变量会同时写入 HTTPS_PROXY / HTTP_PROXY / ALL_PROXY；localhost 与 127.0.0.1 自动直连。", "The proxy is written to HTTPS_PROXY / HTTP_PROXY / ALL_PROXY; localhost and 127.0.0.1 bypass it automatically.")}
-        </p>
       </Section>
 
       <div className="flex items-center gap-3">
-        <span className="text-[10.5px] text-faint">
-          {saving ? t("保存并重启中…", "Saving and restarting…") : savedAt ? t("已保存并重启 Claude", "Saved and restarted Claude") : sessions.length > 0 ? t(`当前有 ${sessions.length} 个会话`, `${sessions.length} session(s) running`) : t("当前没有运行中的会话", "No running sessions")}
-        </span>
+        {(saving || savedAt) && (
+          <span className="text-[10.5px] text-faint">
+            {saving ? t("保存并重启中…", "Saving and restarting…") : t("已保存并重启 Claude", "Saved and restarted Claude")}
+          </span>
+        )}
         <button
           type="button"
           onClick={() => void save()}
@@ -591,12 +561,19 @@ function ProviderCard({
     onChange({ modelMeta: { ...provider.modelMeta, [id]: { ...current, ...patch } } });
   };
 
-  const addModels = (ids: string[], names?: Record<string, string>) => {
+  const addModels = (ids: string[], seeds?: Record<string, Partial<ModelSpec>>) => {
     const merged = [...new Set([...provider.models, ...ids])];
     const meta = { ...provider.modelMeta };
     for (const id of ids) {
-      if (!meta[id]) meta[id] = { name: names?.[id], reasoning_efforts: [], supports_image: false };
-      else if (names?.[id] && !meta[id].name) meta[id] = { ...meta[id], name: names[id] };
+      const seed = seeds?.[id];
+      const current = meta[id] ?? { reasoning_efforts: [], supports_image: false };
+      // 网关给了容量就预填，但用户已手填的值优先。
+      meta[id] = {
+        ...current,
+        name: current.name || seed?.name,
+        context_window: current.context_window ?? seed?.context_window,
+        max_output_tokens: current.max_output_tokens ?? seed?.max_output_tokens,
+      };
     }
     onChange({ models: merged, modelMeta: meta });
   };
@@ -743,9 +720,16 @@ function ProviderCard({
                 <button
                   type="button"
                   onClick={() => {
-                    const names: Record<string, string> = {};
-                    for (const m of gatewayModels) if (m.display_name) names[m.id] = m.display_name;
-                    addModels([...picked], names);
+                    const seeds: Record<string, Partial<ModelSpec>> = {};
+                    for (const m of gatewayModels) {
+                      if (!picked.has(m.id)) continue;
+                      seeds[m.id] = {
+                        name: m.display_name,
+                        context_window: m.context_length,
+                        max_output_tokens: m.max_output_tokens,
+                      };
+                    }
+                    addModels([...picked], seeds);
                     setPicking(false);
                   }}
                   className="shrink-0 rounded-md bg-brand px-2 py-1 text-[10.5px] font-medium text-white hover:bg-brand-hover"
@@ -771,6 +755,7 @@ function ProviderCard({
                       }}
                     />
                     <span className="min-w-0 flex-1 truncate font-mono text-ink">{m.id}</span>
+                    {m.context_length ? <span className="shrink-0 text-[10px] text-faint">{formatCapacity(m.context_length)}</span> : null}
                     {m.display_name && <span className="max-w-[40%] truncate text-[10px] text-muted">{m.display_name}</span>}
                   </label>
                 ))}
@@ -838,7 +823,20 @@ function ModelRow({
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const [contextText, setContextText] = useState(() => formatCapacity(spec.context_window));
+  const [outputText, setOutputText] = useState(() => formatCapacity(spec.max_output_tokens));
+  const [capacityBad, setCapacityBad] = useState({ context: false, output: false });
   const efforts = spec.reasoning_efforts ?? [];
+
+  const editCapacity = (field: "context" | "output", text: string) => {
+    if (field === "context") setContextText(text);
+    else setOutputText(text);
+    const parsed = parseCapacity(text);
+    setCapacityBad((prev) => ({ ...prev, [field]: parsed === null }));
+    // 非法输入不写入配置：宁可保留上一次的有效值，也不要存成 0。
+    if (parsed === null) return;
+    onChange(field === "context" ? { context_window: parsed } : { max_output_tokens: parsed });
+  };
   const ordered = EFFORT_LEVELS.filter((e) => efforts.includes(e));
   const toggleEffort = (level: string) => {
     const next = efforts.includes(level) ? efforts.filter((e) => e !== level) : [...efforts, level];
@@ -853,6 +851,7 @@ function ModelRow({
       <div className="flex items-center gap-2 px-2 py-1.5">
         <button type="button" onClick={() => setOpen((v) => !v)} className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={open}>
           <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ink">{id}</span>
+          {spec.context_window ? <span className="shrink-0 rounded bg-panel-strong px-1.5 py-0.5 text-[9px] text-muted">{formatCapacity(spec.context_window)}</span> : null}
           {spec.supports_image && <span className="shrink-0 rounded bg-brand-soft px-1.5 py-0.5 text-[9px] text-brand">{t("图片", "Image")}</span>}
           {ordered.length > 0 && <span className="shrink-0 rounded bg-panel-strong px-1.5 py-0.5 text-[9px] text-muted">{t(`推理 ${ordered.length} 档`, `${ordered.length} efforts`)}</span>}
         </button>
@@ -875,6 +874,46 @@ function ModelRow({
               className="mt-0.5 w-full rounded-md border border-line-strong bg-canvas px-2 py-1 text-[11.5px] outline-none focus:border-brand/60"
             />
           </label>
+
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block">
+              <span className="block text-[10px] text-faint">{t("上下文窗口", "Context window")}</span>
+              <input
+                value={contextText}
+                onChange={(e) => editCapacity("context", e.target.value)}
+                onBlur={() => {
+                  if (!capacityBad.context) return;
+                  setContextText(formatCapacity(spec.context_window));
+                  setCapacityBad((prev) => ({ ...prev, context: false }));
+                }}
+                placeholder="1M"
+                inputMode="numeric"
+                aria-invalid={capacityBad.context}
+                aria-label={t("上下文窗口", "Context window")}
+                className={`mt-0.5 w-full rounded-md border bg-canvas px-2 py-1 font-mono text-[11.5px] outline-none focus:border-brand/60 ${capacityBad.context ? "border-danger" : "border-line-strong"}`}
+              />
+            </label>
+            <label className="block">
+              <span className="block text-[10px] text-faint">{t("最大输出 token 数", "Max output tokens")}</span>
+              <input
+                value={outputText}
+                onChange={(e) => editCapacity("output", e.target.value)}
+                onBlur={() => {
+                  if (!capacityBad.output) return;
+                  setOutputText(formatCapacity(spec.max_output_tokens));
+                  setCapacityBad((prev) => ({ ...prev, output: false }));
+                }}
+                placeholder="128K"
+                inputMode="numeric"
+                aria-invalid={capacityBad.output}
+                aria-label={t("最大输出 token 数", "Max output tokens")}
+                className={`mt-0.5 w-full rounded-md border bg-canvas px-2 py-1 font-mono text-[11.5px] outline-none focus:border-brand/60 ${capacityBad.output ? "border-danger" : "border-line-strong"}`}
+              />
+            </label>
+          </div>
+          <p className="text-[9.5px] leading-relaxed text-faint">
+            {t("支持 128K / 1M 写法；留空表示不声明，由 CLI 使用默认窗口。", "Accepts 128K / 1M; leave blank to let the CLI use its default window.")}
+          </p>
 
           <label className="flex items-center gap-2 text-[11px] text-ink-2">
             <input

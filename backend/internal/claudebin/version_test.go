@@ -40,6 +40,26 @@ func TestValidVersionRejectsPathTraversal(t *testing.T) {
 	}
 }
 
+func TestPlatformFor(t *testing.T) {
+	cases := []struct {
+		goos, goarch string
+		musl         bool
+		want         string
+	}{
+		{"linux", "amd64", false, "linux-x64"},
+		{"linux", "amd64", true, "linux-x64-musl"},
+		{"linux", "arm64", false, "linux-arm64"},
+		{"linux", "arm64", true, "linux-arm64-musl"},
+		{"darwin", "arm64", false, ""},
+		{"linux", "386", false, ""},
+	}
+	for _, c := range cases {
+		if got := platformFor(c.goos, c.goarch, c.musl); got != c.want {
+			t.Fatalf("platformFor(%s,%s,musl=%v)=%q, want %q", c.goos, c.goarch, c.musl, got, c.want)
+		}
+	}
+}
+
 func TestPlatform(t *testing.T) {
 	got := Platform()
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {

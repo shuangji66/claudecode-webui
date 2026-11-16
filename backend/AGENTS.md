@@ -99,7 +99,10 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   清除必须 `clear_key`。ID 为空或重复要报错。
 - 删除提供商后若 `Selection` 悬空，必须清空 Selection。
 - `Provider.Models` 仍是模型 ID 列表；能力元数据放在 `Provider.ModelMeta`（按 ID 索引）：
-  `name` / `reasoning_efforts` / `default_reasoning_effort` / `supports_image`。
+  `name` / `reasoning_efforts` / `default_reasoning_effort` / `supports_image` /
+  `context_window` / `max_output_tokens`。`Env()` 把前者注入
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`、后者注入 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`；
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 是独立的全局设置，两者可同时存在。
   新增字段时保持老配置（只有 `models: ["id"]`）可读。
 - 推理强度没有控制请求，只在 `process.Args` 里用 `--effort` 固定；已有会话改强度
   只能提示「新会话生效」，不要假装热切换。

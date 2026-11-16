@@ -124,6 +124,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/claude/status", s.authed(s.handleClaudeStatus))
 	s.mux.HandleFunc("POST /api/claude/check", s.authed(s.handleClaudeCheck))
 	s.mux.HandleFunc("POST /api/claude/install", s.authed(s.handleClaudeInstall))
+	s.mux.HandleFunc("POST /api/claude/cancel", s.authed(s.handleClaudeCancel))
 	s.mux.HandleFunc("POST /api/claude/active", s.authed(s.handleClaudeActive))
 	s.mux.HandleFunc("POST /api/claude/source", s.authed(s.handleClaudeSource))
 	s.mux.HandleFunc("GET /ws", s.handleWS)

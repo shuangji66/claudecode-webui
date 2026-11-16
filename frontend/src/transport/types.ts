@@ -118,6 +118,10 @@ export interface ModelSpec {
   reasoning_efforts?: string[];
   default_reasoning_effort?: string;
   supports_image?: boolean;
+  /** 上下文窗口（token 数）；未声明时由后端回落到全局压缩窗口。 */
+  context_window?: number;
+  /** 最大输出 token 数；未声明时不注入。 */
+  max_output_tokens?: number;
 }
 
 /** 一个第三方模型提供商的脱敏视图。 */
@@ -172,6 +176,10 @@ export interface GatewayModel {
   id: string;
   display_name?: string;
   owned_by?: string;
+  /** 部分网关返回上下文窗口，添加模型时用于预填。 */
+  context_length?: number;
+  /** 部分网关返回最大输出 token 数，添加模型时用于预填。 */
+  max_output_tokens?: number;
 }
 
 /** /api/settings/models 的响应。 */
@@ -321,7 +329,7 @@ export interface ClaudeVersion {
 }
 
 /** 安装任务的阶段；字符串由后端定义，不要改成数字。 */
-export type ClaudeJobPhase = "downloading" | "extracting" | "verifying" | "done" | "error";
+export type ClaudeJobPhase = "downloading" | "extracting" | "verifying" | "done" | "error" | "cancelled";
 
 export interface ClaudeJob {
   version: string;
@@ -334,6 +342,9 @@ export interface ClaudeJob {
   finished_at?: string;
 }
 
+/** claude 平台包的下载源标识（与后端 claudebin.Sources 一致）。 */
+export type ClaudeSource = "npmmirror" | "tencent" | "huawei" | "official";
+
 /** 「设置 → 部署」的状态快照。 */
 export interface ClaudeStatus {
   /** 本机对应的 npm 平台包后缀，例如 linux-x64、linux-arm64-musl。 */
@@ -343,7 +354,7 @@ export interface ClaudeStatus {
   installed: ClaudeVersion[];
   /** 当前生效版本；空表示没有可用版本。 */
   active: string;
-  source: "npmmirror" | "official";
+  source: ClaudeSource;
   latest: string;
   update_available: boolean;
   job: ClaudeJob | null;

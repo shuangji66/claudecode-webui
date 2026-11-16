@@ -324,6 +324,39 @@ func TestAutoCompactEnv(t *testing.T) {
 	}
 }
 
+// 模型声明的容量要同时告诉 CLI：上下文窗口走 MAX_CONTEXT_TOKENS，
+// 输出上限走 MAX_OUTPUT_TOKENS；全局压缩窗口是独立设置。
+func TestEnvUsesModelCapacity(t *testing.T) {
+	v := Settings{
+		Providers: []Provider{{
+			ID: "gw", Models: []string{"m1"},
+			ModelMeta: map[string]ModelSpec{"m1": {ContextWindow: 1000000, MaxOutputTokens: 128000}},
+		}},
+		Selected: Selection{Provider: "gw", Model: "m1"},
+	}
+	env := strings.Join(v.Env(), ",")
+	if !strings.Contains(env, "CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000") {
+		t.Fatalf("缺少模型上下文窗口: %v", env)
+	}
+	if !strings.Contains(env, "CLAUDE_CODE_MAX_OUTPUT_TOKENS=128000") {
+		t.Fatalf("缺少模型最大输出: %v", env)
+	}
+
+	v.AutoCompactWindow = "200k"
+	env = strings.Join(v.Env(), ",")
+	if !strings.Contains(env, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=200k") {
+		t.Fatalf("全局压缩窗口应独立注入: %v", env)
+	}
+	if !strings.Contains(env, "CLAUDE_CODE_MAX_CONTEXT_TOKENS=1000000") {
+		t.Fatalf("上下文窗口不应被压缩窗口顶掉: %v", env)
+	}
+
+	// 没有选中模型时不应凭空注入容量。
+	if got := strings.Join((Settings{}).Env(), ","); strings.Contains(got, "MAX_OUTPUT_TOKENS") || strings.Contains(got, "MAX_CONTEXT_TOKENS") || strings.Contains(got, "AUTO_COMPACT") {
+		t.Fatalf("空配置不应注入容量: %v", got)
+	}
+}
+
 func TestModelMetaAndEffort(t *testing.T) {
 	s, _ := openTemp(t)
 	if _, err := s.Apply(Patch{
@@ -331,7 +364,7 @@ func TestModelMetaAndEffort(t *testing.T) {
 			ID:     "gw",
 			Models: []string{"m1", "m2"},
 			ModelMeta: map[string]ModelSpec{
-				"m1": {Name: "模型一", ReasoningEfforts: []string{"low", "high"}, DefaultReasoningEffort: "high", SupportsImage: true},
+				"m1": {Name: "模型一", ReasoningEfforts: []string{"low", "high"}, DefaultReasoningEffort: "high", SupportsImage: true, ContextWindow: 1000000, MaxOutputTokens: 128000},
 				"m2": {ReasoningEfforts: []string{"bogus"}},
 			},
 		}},
@@ -344,6 +377,9 @@ func TestModelMetaAndEffort(t *testing.T) {
 	spec := p.ModelMeta["m1"]
 	if spec.Name != "模型一" || !spec.SupportsImage || spec.DefaultReasoningEffort != "high" {
 		t.Fatalf("m1 meta = %+v", spec)
+	}
+	if spec.ContextWindow != 1000000 || spec.MaxOutputTokens != 128000 {
+		t.Fatalf("容量字段应保留: %+v", spec)
 	}
 	if len(p.ModelMeta["m2"].ReasoningEfforts) != 0 {
 		t.Fatalf("非法强度应被过滤: %+v", p.ModelMeta["m2"])

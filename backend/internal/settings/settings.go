@@ -17,6 +17,7 @@ import (
 	neturl "net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -62,6 +63,11 @@ type ModelSpec struct {
 	DefaultReasoningEffort string `json:"default_reasoning_effort,omitempty"`
 	// SupportsImage 表示模型接受图片输入（仅影响界面提示与能力标记）。
 	SupportsImage bool `json:"supports_image,omitempty"`
+	// ContextWindow 是模型的上下文窗口（token 数），0 表示未声明。
+	// 非 0 时注入 CLAUDE_CODE_MAX_CONTEXT_TOKENS，避免 CLI 对未知模型按 200K 处理。
+	ContextWindow int `json:"context_window,omitempty"`
+	// MaxOutputTokens 是模型的最大输出 token 数，0 表示未声明。
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
 }
 
 func (m ModelSpec) Clone() ModelSpec {
@@ -418,8 +424,18 @@ func (v Settings) Env() []string {
 		out = append(out, "ANTHROPIC_DEFAULT_SONNET_MODEL="+model)
 		out = append(out, "ANTHROPIC_DEFAULT_HAIKU_MODEL="+model)
 	}
+	// 模型声明的上下文窗口要告诉 CLI：对不认识的模型，CLI 会按内置的保守
+	// 窗口（200K）处理，并提示 set CLAUDE_CODE_MAX_CONTEXT_TOKENS to its real
+	// window。压缩窗口是另一个独立的全局设置，两者可以同时存在。
+	_, _, spec, modelOK := v.ActiveModel()
+	if modelOK && spec.ContextWindow > 0 {
+		out = append(out, "CLAUDE_CODE_MAX_CONTEXT_TOKENS="+strconv.Itoa(spec.ContextWindow))
+	}
 	if v.AutoCompactWindow != "" {
 		out = append(out, "CLAUDE_CODE_AUTO_COMPACT_WINDOW="+v.AutoCompactWindow)
+	}
+	if modelOK && spec.MaxOutputTokens > 0 {
+		out = append(out, "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(spec.MaxOutputTokens))
 	}
 	if v.DisableUnknownModelWindow {
 		out = append(out, "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1")
@@ -642,6 +658,13 @@ func normalizeModelMeta(models []string, in map[string]ModelSpec) map[string]Mod
 			continue
 		}
 		spec.Name = strings.TrimSpace(spec.Name)
+		// 容量字段只接受正数；负数/脏值按未声明处理，避免把非法环境变量交给 CLI。
+		if spec.ContextWindow < 0 {
+			spec.ContextWindow = 0
+		}
+		if spec.MaxOutputTokens < 0 {
+			spec.MaxOutputTokens = 0
+		}
 		efforts := make([]string, 0, len(spec.ReasoningEfforts))
 		seen := make(map[string]bool)
 		for _, e := range spec.ReasoningEfforts {

@@ -88,6 +88,10 @@ src/
 - **对话列表**存 `conversations`（后端合并转录+元数据+live），`openConversation(id)` 负责
   `--resume`、切换工作区、回放 transcript、连接 WS；组件不要自己调 `/api/session`。
 - 新建对话用 `createSession`；空对话等首条 prompt 才由后端落元数据，前端不要提前 touch。
+- **工作区行本身就是展开/收起开关**，不要再放单独的箭头按钮；点击只切当前工作区，
+  `ensureSession(dir, false)` 在没有对话时保持空态，不自动起 claude。
+- **已经在一个空的新对话里时，再点「新对话」是 no-op**：否则会新建进程再把旧空壳关掉，
+  界面会闪一下。
 - 新增事件类型：先改 `transport/types.ts` → 再在 `applyEvent` 里分支 → 最后补测试。
 
 ## 4. 消息模型（Item）
@@ -127,6 +131,10 @@ src/
   模型配置在底部「保存模型设置」统一提交，代理保存后重启所有 claude 会话。
   「部署」页管 claude 版本（下载源 / 安装进度 / 切换生效版本），切换只影响之后新建的会话。
 - 模型页提供商只有一个时默认展开，多个时默认折叠；新建提供商必须手填 ID，显示名留空跟随 ID。
+  每个模型可填上下文窗口 / 最大输出（`128K` / `1M` 写法），从网关拉取时用
+  `context_length` / `max_output_tokens` 预填。
+- 聊天页的模型与推理等级是 `components/chat/ModelMenu.tsx` 的两级菜单（参照 DSH）：
+  一级「模型 / 推理等级」，模型页按提供商分组；菜单里不展示图片能力标记。
 - 右上角「更多」是下拉菜单（复制会话为 Markdown / 设置），不要直接打开设置。
 - **不许用浏览器原生控件承载 UI**：
   - 模态统一 `components/common/Dialog.tsx`（遮罩、标题区、滚动体、底部栏、Esc/遮罩关闭、

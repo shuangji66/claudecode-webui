@@ -19,6 +19,7 @@ type fakeDeploy struct {
 	installErr error
 	activeErr  error
 	installed  []string
+	cancelled  int
 	activated  []string
 	sources    []string
 }
@@ -34,6 +35,11 @@ func (f *fakeDeploy) StartInstall(version, source string) error {
 		return f.installErr
 	}
 	f.installed = append(f.installed, version+"@"+source)
+	return nil
+}
+
+func (f *fakeDeploy) CancelInstall() error {
+	f.cancelled++
 	return nil
 }
 
@@ -76,6 +82,7 @@ func TestClaudeRoutesRequireToken(t *testing.T) {
 		{http.MethodGet, "/api/claude/status"},
 		{http.MethodPost, "/api/claude/check"},
 		{http.MethodPost, "/api/claude/install"},
+		{http.MethodPost, "/api/claude/cancel"},
 		{http.MethodPost, "/api/claude/active"},
 		{http.MethodPost, "/api/claude/source"},
 	} {
@@ -142,6 +149,20 @@ func TestClaudeInstallConflictAndBadRequest(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, authedRequest(http.MethodPost, "/api/claude/install", `{}`))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("空版本号应 400，实际 %d", rec.Code)
+	}
+}
+
+func TestClaudeCancel(t *testing.T) {
+	f := &fakeDeploy{}
+	srv := withDeploy(t, f)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, authedRequest(http.MethodPost, "/api/claude/cancel", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("取消失败: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if f.cancelled != 1 {
+		t.Fatalf("取消未透传: %d", f.cancelled)
 	}
 }
 

@@ -86,12 +86,87 @@ export function useAnchoredPosition(
   return pos;
 }
 
-/** 点浮层外部或按 Esc 时关闭；触发元素自身不算外部（否则点击会被「关了又开」）。 */
+/** 高度会变化的浮层（两级菜单）：贴住触发元素的一侧，不因内容变高而整体上移。 */
+export interface AnchoredPanelPosition {
+  left: number;
+  /** 向下展开时的上边距；向上展开时为空。 */
+  top?: number;
+  /** 向上展开时的下边距；向下展开时为空。 */
+  bottom?: number;
+  /** 允许的最大高度（px），由可用空间与首选高度取小。 */
+  maxHeight: number;
+  placement: "above" | "below";
+}
+
+/**
+ * 计算会随内容变高的浮层位置。
+ *
+ * 与 useAnchoredPosition 的区别：向上展开时返回 bottom，让浮层底边贴住触发元素。
+ * 否则内容从一级菜单切到二级菜单、高度变化时，top 会按新的估算高度整体上移，
+ * 看起来像“飘到上面去了”。
+ *
+ * placement 按 preferredHeight 一次决定，打开期间不再因为内容变矮而翻边。
+ */
+export function useAnchoredPanel(
+  anchor: HTMLElement | null,
+  open: boolean,
+  width: number,
+  preferredHeight: number,
+  align: "start" | "end" = "end",
+  offset = 4,
+): AnchoredPanelPosition | null {
+  const [pos, setPos] = useState<AnchoredPanelPosition | null>(null);
+
+  const update = useCallback(() => {
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const rawLeft = align === "end" ? rect.right - width : rect.left;
+    const maxLeft = Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN);
+    const left = Math.min(Math.max(VIEWPORT_MARGIN, rawLeft), maxLeft);
+    const spaceBelow = window.innerHeight - rect.bottom - offset - VIEWPORT_MARGIN;
+    const spaceAbove = rect.top - offset - VIEWPORT_MARGIN;
+    const below = spaceBelow >= preferredHeight || spaceAbove < spaceBelow;
+    const maxHeight = Math.max(80, Math.min(preferredHeight, below ? spaceBelow : spaceAbove));
+    setPos(
+      below
+        ? { left, top: rect.bottom + offset, maxHeight, placement: "below" }
+        : { left, bottom: window.innerHeight - rect.top + offset, maxHeight, placement: "above" },
+    );
+  }, [anchor, width, preferredHeight, align, offset]);
+
+  useLayoutEffect(() => {
+    if (!open || !anchor) {
+      setPos(null);
+      return;
+    }
+    update();
+  }, [open, anchor, update]);
+
+  useEffect(() => {
+    if (!open || !anchor) return;
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open, anchor, update]);
+
+  return pos;
+}
+
+/**
+ * 点浮层外部或按 Esc 时关闭；触发元素自身不算外部（否则点击会被「关了又开」）。
+ *
+ * onEscape 返回 true 表示这次 Esc 已被内部处理（例如从二级菜单退回一级），
+ * 不再关闭整个浮层。默认行为是直接关闭。
+ */
 export function useDismiss(
   open: boolean,
   layer: React.RefObject<HTMLElement | null>,
   anchor: HTMLElement | null,
   onClose: () => void,
+  onEscape?: () => boolean,
 ): void {
   useEffect(() => {
     if (!open) return;
@@ -103,10 +178,10 @@ export function useDismiss(
       onClose();
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      if (onEscape?.()) return;
+      onClose();
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
@@ -114,7 +189,7 @@ export function useDismiss(
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [open, layer, anchor, onClose]);
+  }, [open, layer, anchor, onClose, onEscape]);
 }
 
 export interface MenuItem {

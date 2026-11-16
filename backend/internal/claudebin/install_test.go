@@ -236,3 +236,124 @@ func TestCheckReturnsLatestFirst(t *testing.T) {
 		t.Fatalf("Status 应带上缓存的最新版本，实际 %+v", st)
 	}
 }
+
+// 华为云等镜像返回相对 tarball 地址（`/@anthropic-ai/...tgz`），
+// 必须按当前源补成绝对 URL，否则下载直接失败。
+func TestInstallResolvesRelativeTarball(t *testing.T) {
+	const version = "2.1.325"
+	tgz := fakeTgz(t, version)
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/@anthropic-ai/claude-code-linux-arm64/"+version, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"name":    "@anthropic-ai/claude-code-linux-arm64",
+			"version": version,
+			"dist": map[string]any{
+				"tarball":   "/pkg.tgz",
+				"integrity": integrityOf(tgz),
+				"size":      len(tgz),
+			},
+		})
+	})
+	mux.HandleFunc("/pkg.tgz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(tgz)))
+		_, _ = w.Write(tgz)
+	})
+	srv = httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	m, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	m.platform = "linux-arm64"
+	m.registries[SourceHuawei] = srv.URL
+
+	if err := m.StartInstall(version, SourceHuawei); err != nil {
+		t.Fatalf("StartInstall: %v", err)
+	}
+	if job := waitJob(t, m); job.Phase != PhaseDone {
+		t.Fatalf("arm64 安装失败: phase=%s err=%s", job.Phase, job.Error)
+	}
+	if got := m.Active(); got != version {
+		t.Fatalf("安装后生效版本 = %q，期望 %q", got, version)
+	}
+}
+
+func TestResolveTarball(t *testing.T) {
+	cases := []struct {
+		registry, raw, want string
+	}{
+		{"https://repo.huaweicloud.com/repository/npm", "/@anthropic-ai/x/-/x-1.tgz", "https://repo.huaweicloud.com/repository/npm/@anthropic-ai/x/-/x-1.tgz"},
+		{"https://registry.npmjs.org", "/@anthropic-ai/x/-/x-1.tgz", "https://registry.npmjs.org/@anthropic-ai/x/-/x-1.tgz"},
+		{"https://example.test/npm/", "pkg/x.tgz", "https://example.test/npm/pkg/x.tgz"},
+		{"https://mirrors.cloud.tencent.com/npm", "https://mirrors.cloud.tencent.com/npm/x.tgz", "https://mirrors.cloud.tencent.com/npm/x.tgz"},
+	}
+	for _, c := range cases {
+		got, err := resolveTarball(c.registry, c.raw)
+		if err != nil {
+			t.Fatalf("resolveTarball(%q,%q): %v", c.registry, c.raw, err)
+		}
+		if got != c.want {
+			t.Fatalf("resolveTarball(%q,%q)=%q, want %q", c.registry, c.raw, got, c.want)
+		}
+	}
+	if _, err := resolveTarball("https://example.test/npm", "file:///etc/passwd"); err == nil {
+		t.Fatal("非 http/https 地址应被拒绝")
+	}
+}
+
+// 安装过程中可以取消：context 取消后任务进入终态，且不留下版本目录。
+func TestCancelInstall(t *testing.T) {
+	const version = "2.1.325"
+	tgz := fakeTgz(t, version)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/@anthropic-ai/claude-code-linux-x64/"+version, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"name":    "@anthropic-ai/claude-code-linux-x64",
+			"version": version,
+			"dist": map[string]any{
+				"tarball":   srv.URL + "/pkg.tgz",
+				"integrity": integrityOf(tgz),
+				"size":      len(tgz),
+			},
+		})
+	})
+	mux.HandleFunc("/pkg.tgz", func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		_, _ = w.Write(tgz)
+	})
+	srv = httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	m, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	m.platform = "linux-x64"
+	m.registries[SourceNpmmirror] = srv.URL
+
+	if err := m.StartInstall(version, ""); err != nil {
+		t.Fatalf("StartInstall: %v", err)
+	}
+	<-started
+	if err := m.CancelInstall(); err != nil {
+		t.Fatalf("CancelInstall: %v", err)
+	}
+	job := waitJob(t, m)
+	close(release)
+	if job.Phase != PhaseCancelled {
+		t.Fatalf("取消后 phase=%s，期望 %s（err=%s）", job.Phase, PhaseCancelled, job.Error)
+	}
+	if got := m.Installed(); len(got) != 0 {
+		t.Fatalf("取消后不应留下版本目录: %+v", got)
+	}
+	// 没有任务时取消是幂等的。
+	if err := m.CancelInstall(); err != nil {
+		t.Fatalf("无任务时 CancelInstall 应幂等: %v", err)
+	}
+}

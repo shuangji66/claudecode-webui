@@ -138,6 +138,8 @@ interface AppState {
   checkClaudeUpdate: () => Promise<ClaudeCheck | null>;
   /** 触发后台安装并轮询进度；成功返回 true。 */
   installClaude: (version: string, source?: string) => Promise<boolean>;
+  /** 取消正在进行的安装；没有任务时后端幂等返回当前状态。 */
+  cancelClaudeInstall: () => Promise<boolean>;
   setClaudeActive: (version: string) => Promise<boolean>;
   setClaudeSource: (source: string) => Promise<boolean>;
 
@@ -155,7 +157,8 @@ interface AppState {
   browseDirs: (path: string, hidden: boolean) => Promise<FsListing>;
   /** 在目录选择器里新建一层文件夹，返回新目录绝对路径；失败直接抛错给弹窗展示。 */
   mkdirDir: (parent: string, name: string) => Promise<string>;
-  ensureSession: (cwd?: string) => Promise<SessionInfo | null>;
+  /** 打开目录下最近一条对话；createIfEmpty=false 时没有对话就保持空态，不新建。 */
+  ensureSession: (cwd?: string, createIfEmpty?: boolean) => Promise<SessionInfo | null>;
   createSession: (cwd?: string) => Promise<void>;
   openConversation: (id: string, force?: boolean) => Promise<boolean>;
   renameConversation: (id: string, title: string) => Promise<boolean>;
@@ -569,7 +572,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
           const st = await apiFetch<ClaudeStatus>("/api/claude/status");
           set({ claude: st });
           const phase = st.job?.phase;
-          if (phase === "done" || phase === "error") {
+          if (phase === "done" || phase === "error" || phase === "cancelled") {
             await get().loadClaudeStatus();
             if (phase === "error") set({ claudeError: st.job?.error ?? "安装失败" });
             resolve(phase === "done");
@@ -582,6 +585,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
       };
       claudePollTimer = window.setTimeout(() => void tick(), 400);
     });
+  },
+
+  cancelClaudeInstall: async () => {
+    set({ claudeError: null });
+    try {
+      const st = await apiFetch<ClaudeStatus>("/api/claude/cancel", { method: "POST" });
+      set({ claude: st });
+      return true;
+    } catch (e) {
+      set({ claudeError: errText(e) });
+      return false;
+    }
   },
 
   setClaudeActive: async (version) => {
@@ -677,7 +692,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         currentWorkspace: r.current ?? "",
         workspaceRoot: r.root ?? get().workspaceRoot,
       });
-      if (open) await get().ensureSession(r.current);
+      if (open) await get().ensureSession(r.current, false);
       else await get().refreshConversations();
       return true;
     } catch (e) {
@@ -703,7 +718,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // 只有移除的正好是当前工作区时才自动拉起下一个；移除别的目录
       // 不应打断用户当前会话。
       if (r.current && r.current !== previous) {
-        await get().ensureSession(r.current);
+        await get().ensureSession(r.current, false);
       } else if (!r.current && previous) {
         const active = get().activeId;
         if (active) get().disconnect(active);
@@ -789,10 +804,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   switchWorkspace: async (path) => {
-    if (!path || path === get().currentWorkspace) {
-      await get().ensureSession(path || get().currentWorkspace);
-      return;
-    }
+    // 点击当前工作区只负责折叠/展开，不再顺手打开或新建对话。
+    if (!path || path === get().currentWorkspace) return;
     set({ workspaceBusy: true, error: null });
     try {
       const r = await apiFetch<WorkspacesPayload>("/api/workspaces/current", {
@@ -804,7 +817,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         currentWorkspace: r.current ?? path,
         workspaceRoot: r.root ?? get().workspaceRoot,
       });
-      await get().ensureSession(r.current || path);
+      await get().ensureSession(r.current || path, false);
     } catch (e) {
       set({ error: errText(e) });
     } finally {
@@ -819,7 +832,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     return apiFetch<FsListing>(`/api/fs/list?${q.toString()}`);
   },
 
-  ensureSession: async (cwd) => {
+  ensureSession: async (cwd, createIfEmpty = true) => {
     const dir = cwd || get().currentWorkspace;
     if (!dir) {
       set({ error: "请先添加并选择一个授权目录" });
@@ -837,6 +850,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const id = get().activeId;
       if (!id) return null;
       return get().sessions.find((s) => s.id === id) ?? { id, cwd: latest.cwd, state: "starting" };
+    }
+    if (!createIfEmpty) {
+      // 切到一个还没有对话的工作区：保持空态，由用户点「+」或直接输入消息再创建。
+      get().setActive(null);
+      writeActiveId(null);
+      return null;
     }
     await get().createSession(dir);
     const id = get().activeId;
@@ -857,6 +876,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
     const previousId = get().activeId;
     const previous = previousId ? get().conversations.find((c) => c.id === previousId) : null;
+    // 已经在一个空的新对话里：再点「新对话」不应新建进程，否则会先起一个
+    // 新会话、再把旧的空壳关掉，界面会闪一下。
+    if (previousId) {
+      const live = get().sessions.find((s) => s.id === previousId);
+      const cwd = previous?.cwd || live?.cwd || "";
+      const empty = (get().items[previousId] ?? []).length === 0 && (!previous || (previous.messages === 0 && !previous.title));
+      if (empty && cwd === dir && (previous || live)) return;
+    }
     set({ starting: true, error: null });
     const task = (async (): Promise<SessionInfo | null> => {
       try {

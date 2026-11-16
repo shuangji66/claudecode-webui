@@ -12,7 +12,8 @@ import {
   type PendingAttachment,
 } from "../../lib/attachments";
 import { Select } from "../common/Select";
-import { IconClose, IconFile, IconGauge, IconImage, IconPlus, IconSend, IconShield, IconSpark, IconStop } from "../common/Icons";
+import { IconClose, IconFile, IconPlus, IconSend, IconShield, IconStop } from "../common/Icons";
+import { ModelMenu } from "./ModelMenu";
 
 interface Props {
   disabled: boolean;
@@ -75,9 +76,6 @@ export function Composer({
     const q = text.slice(1).toLowerCase();
     return commands.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8);
   }, [text, commands]);
-
-  const selectedModel = modelOptions.find((o) => `${o.provider}/${o.model}` === selectedKey);
-  const efforts = selectedModel?.spec.reasoning_efforts ?? [];
 
   const submit = () => {
     const value = text.trim();
@@ -229,55 +227,16 @@ export function Composer({
             />
           </span>
 
-          <span className="min-w-0 flex-1" title={t("模型", "Model")}>
-            <Select
-              variant="ghost"
-              className="w-full justify-start"
-              ariaLabel={t("模型", "Model")}
-              value={selectedKey}
-              disabled={disabled || modelOptions.length === 0}
-              placeholder={t("未添加模型", "No models")}
-              options={modelOptions.map((o) => ({
-                value: `${o.provider}/${o.model}`,
-                label: `${o.label}${o.spec.supports_image ? t(" · 图片", " · Image") : ""}`,
-              }))}
-              onChange={(next) => {
-                const opt = modelOptions.find((o) => `${o.provider}/${o.model}` === next);
-                if (opt) onSelectModel(opt.provider, opt.model);
-              }}
-              leading={<IconSpark size={13} className="shrink-0" />}
-              trigger={
-                <>
-                  <span className="min-w-0 flex-1 truncate text-left">
-                    {selectedModel ? selectedModel.spec.name || selectedModel.model : t("未添加模型", "No models")}
-                  </span>
-                  {selectedModel?.spec.supports_image && (
-                    <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-brand-soft px-1 text-[9px] text-brand" title={t("支持图片输入", "Supports image input")}>
-                      <IconImage size={10} />
-                      <span className="hidden sm:inline">{t("图片", "Image")}</span>
-                    </span>
-                  )}
-                </>
-              }
-              menuWidth={260}
+          <span className="min-w-0 flex-1" title={t("模型与推理等级", "Model and reasoning level")}>
+            <ModelMenu
+              options={modelOptions}
+              selectedKey={selectedKey}
+              selectedEffort={selectedEffort}
+              disabled={disabled}
+              onSelectModel={onSelectModel}
+              onSelectEffort={onSelectEffort}
             />
           </span>
-
-          {efforts.length > 0 && (
-            <span className="shrink-0" title={t("推理强度（在新建会话时生效）", "Reasoning effort (applies to new sessions)")}>
-              <Select
-                variant="ghost"
-                ariaLabel={t("推理强度", "Reasoning effort")}
-                value={selectedEffort}
-                onChange={onSelectEffort}
-                disabled={disabled}
-                placeholder={t("默认", "Default")}
-                leading={<IconGauge size={13} className="shrink-0" />}
-                options={efforts.map((effort) => ({ value: effort, label: effort }))}
-                menuWidth={128}
-              />
-            </span>
-          )}
 
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
             {busy ? (

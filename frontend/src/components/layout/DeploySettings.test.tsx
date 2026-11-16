@@ -8,6 +8,7 @@ import type { ClaudeStatus } from "../../transport/types";
 const loadClaudeStatus = vi.fn();
 const checkClaudeUpdate = vi.fn();
 const installClaude = vi.fn();
+const cancelClaudeInstall = vi.fn();
 const setClaudeActive = vi.fn();
 const setClaudeSource = vi.fn();
 
@@ -29,6 +30,7 @@ beforeEach(() => {
   loadClaudeStatus.mockReset().mockResolvedValue(undefined);
   checkClaudeUpdate.mockReset();
   installClaude.mockReset().mockResolvedValue(true);
+  cancelClaudeInstall.mockReset().mockResolvedValue(true);
   setClaudeActive.mockReset().mockResolvedValue(true);
   setClaudeSource.mockReset().mockResolvedValue(true);
   useAppStore.setState({
@@ -37,6 +39,7 @@ beforeEach(() => {
     loadClaudeStatus,
     checkClaudeUpdate,
     installClaude,
+    cancelClaudeInstall,
     setClaudeActive,
     setClaudeSource,
   });
@@ -72,6 +75,33 @@ describe("DeploySettings", () => {
     useAppStore.setState({ claude: { ...STATUS, installed: [], active: "", latest: "" } });
     render(<DeploySettings />);
     expect(screen.getByText(/尚未安装任何版本/)).toBeTruthy();
+  });
+
+  it("下载源包含腾讯云与华为云镜像", () => {
+    render(<DeploySettings />);
+    fireEvent.click(screen.getByRole("button", { name: "下载源" }));
+    expect(screen.getByRole("option", { name: /腾讯云镜像/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /华为云镜像/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /官方 npm registry/ })).toBeTruthy();
+  });
+
+  it("安装中可取消", async () => {
+    useAppStore.setState({
+      claude: {
+        ...STATUS,
+        job: {
+          version: "2.1.330",
+          source: "npmmirror",
+          phase: "downloading",
+          downloaded: 12,
+          total: 100,
+          started_at: "2026-11-16T10:00:00Z",
+        },
+      },
+    });
+    render(<DeploySettings />);
+    fireEvent.click(screen.getByRole("button", { name: /取消安装/ }));
+    await waitFor(() => expect(cancelClaudeInstall).toHaveBeenCalled());
   });
 
   it("展示安装进度与失败原因", () => {

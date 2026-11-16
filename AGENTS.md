@@ -18,9 +18,10 @@
   Linux PTY 上的 bash 终端（`xterm.js` 只做渲染）；
 - **授权目录 = 工作区**，持久化在 `workspaces.json`；对话列表来自 claude 转录 +
   `conversations.json` 元数据，启动时恢复上次对话（`--resume`）而不是新建；
-- 设置页分「通用 / 模型 / 代理 / 部署」：主题、语言、字号、默认权限、代理、每个模型的推理强度/图片能力，
-  以及 claude 版本的下载源/安装/切换；
-- 输入框 `+` 支持文件/图片附件（图片/PDF/文本），随 prompt 发送；
+- 设置页分「通用 / 模型 / 代理 / 部署」：默认权限（置顶）、主题、语言、字号、代理、
+  每个模型的推理强度/图片能力/上下文窗口/最大输出，以及 claude 版本的下载源/安装/切换；
+- 输入框 `+` 支持文件/图片附件（图片/PDF/文本），随 prompt 发送；模型与推理等级是
+  DSH 风格的两级菜单（按提供商分组，不显示图片标记）；
 - 左侧栏品牌图标使用 `frontend/src/assets/claude-code.svg`；前端不允许呼吸灯/无限 pulse 动画。
 
 部署约定：**只部署 `ccweb` 本身**。`claude` 不再随包分发、也不回退 PATH：由「设置 → 部署」
@@ -195,8 +196,11 @@ hub ── manager ── session ── process ── claude (NDJSON)
 ### 4.8 claude 版本管理（`internal/claudebin`）
 
 - **数据源是 npm 平台包**，不是 `downloads.claude.ai/claude.zst`：平台包
-  `@anthropic-ai/claude-code-<platform>` 与官方二进制逐字节相同，且 npmmirror 在国内实测
-  ~11 MB/s（官方 CDN 只有 IPv6 通）。Go 标准库能解 gzip+tar，不用引 zstd。
+  `@anthropic-ai/claude-code-<platform>` 与官方二进制逐字节相同，且国内镜像实测
+  ~11 MB/s（官方 CDN 只有 IPv6 通）。可选 npmmirror / 腾讯云 / 华为云 / 官方；
+  x64 与 arm64（含 musl）都按 `platformFor` 映射到对应包。Go 标准库能解 gzip+tar，不用引 zstd。
+- **镜像可能返回相对 tarball 地址**（华为云是 `/@scope/pkg/-/pkg.tgz`）：按当前源的
+  路径前缀补成绝对 URL，否则请求会报 unsupported protocol scheme 或丢掉 `/repository/npm`。
 - **必须按 `dist.integrity` 校验 sha512 再落盘**：镜像被换包时要直接失败，不能装上来路不明的二进制。
 - **装完先跑一次 `--version`**：musl/glibc 选错包、文件被截断都在这里暴露，而不是等到会话起不来。
 - **解包与下载同一遍流式完成**：先存 tgz 再解开会在 NAS 上多占 170 MB。

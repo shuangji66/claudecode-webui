@@ -8,6 +8,8 @@ import {
   normalizeSettings,
   modelOptionsFromSettings,
   effortFor,
+  formatCapacity,
+  parseCapacity,
 } from "./providerForm";
 import type { PublicSettings } from "../transport/types";
 
@@ -177,5 +179,44 @@ describe("模型能力元数据", () => {
     };
     const s = normalizeSettings(raw)!;
     expect(s.providers[0].model_meta).toEqual({ m1: { name: undefined, reasoning_efforts: [], default_reasoning_effort: undefined, supports_image: false }, m2: { name: undefined, reasoning_efforts: [], default_reasoning_effort: undefined, supports_image: false } });
+  });
+});
+
+describe("容量字段", () => {
+  it("1M / 256K / 纯数字都能解析，空白表示未声明", () => {
+    expect(parseCapacity("1M")).toBe(1_000_000);
+    expect(parseCapacity("256K")).toBe(256_000);
+    expect(parseCapacity("131072")).toBe(131_072);
+    expect(parseCapacity("2.3M")).toBe(2_300_000);
+    expect(parseCapacity("  ")).toBeUndefined();
+    expect(parseCapacity("128k")).toBe(128_000);
+  });
+
+  it("非法写法返回 null，由界面标红而不是写 0", () => {
+    expect(parseCapacity("128KB")).toBeNull();
+    expect(parseCapacity("-1")).toBeNull();
+    expect(parseCapacity("abc")).toBeNull();
+  });
+
+  it("格式化成最短 K/M 形式", () => {
+    expect(formatCapacity(1_000_000)).toBe("1M");
+    expect(formatCapacity(128_000)).toBe("128K");
+    expect(formatCapacity(131_072)).toBe("131072");
+    expect(formatCapacity(undefined)).toBe("");
+  });
+
+  it("保存时只提交正数容量，网关回填的值能往返", () => {
+    const f = formsFromSettings(sample)[0];
+    const patch = buildProviderPatches([
+      {
+        ...f,
+        models: ["cn:deepseek"],
+        modelMeta: {
+          "cn:deepseek": { context_window: 1_000_000, max_output_tokens: 128_000, reasoning_efforts: [] },
+        },
+      },
+    ])[0];
+    expect(patch.model_meta["cn:deepseek"].context_window).toBe(1_000_000);
+    expect(patch.model_meta["cn:deepseek"].max_output_tokens).toBe(128_000);
   });
 });

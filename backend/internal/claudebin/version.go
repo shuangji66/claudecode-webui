@@ -59,11 +59,19 @@ func parseVersion(v string) ([3]int, string) {
 // claude 只在 Linux 服务器上跑，其它平台返回空串（安装时明确报错，而不是
 // 猜一个包名让它 404）。
 func Platform() string {
-	if runtime.GOOS != "linux" {
+	return platformFor(runtime.GOOS, runtime.GOARCH, isMusl())
+}
+
+// platformFor 把 GOOS/GOARCH 映射成 npm 平台包后缀。
+//
+// 拆成纯函数是为了能直接测 arm64：只在 arm64 NAS 上跑测试才能发现包名写错，
+// 成本太高，而 arm64 包（linux-arm64 / linux-arm64-musl）确实存在。
+func platformFor(goos, goarch string, musl bool) string {
+	if goos != "linux" {
 		return ""
 	}
 	var arch string
-	switch runtime.GOARCH {
+	switch goarch {
 	case "amd64":
 		arch = "x64"
 	case "arm64":
@@ -71,7 +79,7 @@ func Platform() string {
 	default:
 		return ""
 	}
-	if isMusl() {
+	if musl {
 		arch += "-musl"
 	}
 	return "linux-" + arch

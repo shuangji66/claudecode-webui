@@ -11,10 +11,13 @@
 //
 // 数据来源（设置页可切，默认国内镜像）：
 //   - npmmirror：https://registry.npmmirror.com（国内实测 ~11 MB/s）
+//   - tencent  ：https://mirrors.cloud.tencent.com/npm
+//   - huawei   ：https://repo.huaweicloud.com/repository/npm
 //   - official ：https://registry.npmjs.org
 //
-// 两个源发布的是同一个平台包，dist.integrity（sha512）逐字节一致；下载完成后按
-// integrity 校验再解包，镜像被换包会直接失败，不会把来路不明的二进制装上去。
+// 所有源发布的是同一个平台包（x64 / arm64 都有对应包），dist.integrity（sha512）
+// 逐字节一致；下载完成后按 integrity 校验再解包，镜像被换包会直接失败。
+// 部分镜像返回相对 tarball 地址，install 会按源地址解析成绝对 URL。
 package claudebin
 
 import (
@@ -34,15 +37,19 @@ import (
 // 支持的 npm 源标识。字符串直接落盘，改名会让老配置失效。
 const (
 	SourceNpmmirror = "npmmirror"
+	SourceTencent   = "tencent"
+	SourceHuawei    = "huawei"
 	SourceOfficial  = "official"
 )
 
 // Sources 是允许选择的源，顺序即设置页展示顺序。
-var Sources = []string{SourceNpmmirror, SourceOfficial}
+var Sources = []string{SourceNpmmirror, SourceTencent, SourceHuawei, SourceOfficial}
 
 // defaultRegistries 只在 Open 时拷贝到实例上，测试可以逐实例替换。
 var defaultRegistries = map[string]string{
 	SourceNpmmirror: "https://registry.npmmirror.com",
+	SourceTencent:   "https://mirrors.cloud.tencent.com/npm",
+	SourceHuawei:    "https://repo.huaweicloud.com/repository/npm",
 	SourceOfficial:  "https://registry.npmjs.org",
 }
 
@@ -53,6 +60,7 @@ const (
 	PhaseVerifying   = "verifying"
 	PhaseDone        = "done"
 	PhaseError       = "error"
+	PhaseCancelled   = "cancelled"
 )
 
 var (
@@ -294,6 +302,22 @@ func (m *Manager) SetActive(version string) error {
 	return m.persist()
 }
 
+// CancelInstall 取消正在进行的安装任务；没有任务或任务已结束时是幂等的。
+//
+// 取消通过 context 传给下载/解包：stage 目录由 install 的 defer 清理，
+// 不会在版本目录里留下半截二进制。
+func (m *Manager) CancelInstall() error {
+	m.mu.Lock()
+	job := cloneJob(m.job)
+	cancel := m.cancel
+	m.mu.Unlock()
+	if job == nil || isFinal(job.Phase) || cancel == nil {
+		return nil
+	}
+	cancel()
+	return nil
+}
+
 // SetSource 记住下载源偏好（只影响后续安装）。
 func (m *Manager) SetSource(source string) error {
 	if !validSource(source) {
@@ -383,8 +407,13 @@ func (m *Manager) run(ctx context.Context, version, source string) {
 	m.job.FinishedAt = time.Now()
 	m.cancel = nil
 	if err != nil {
-		m.job.Phase = PhaseError
-		m.job.Error = err.Error()
+		if errors.Is(err, context.Canceled) {
+			m.job.Phase = PhaseCancelled
+			m.job.Error = "已取消"
+		} else {
+			m.job.Phase = PhaseError
+			m.job.Error = err.Error()
+		}
 	} else {
 		m.job.Phase = PhaseDone
 		m.job.Downloaded = m.job.Total
@@ -439,7 +468,7 @@ func cloneJob(j *Job) *Job {
 }
 
 func isFinal(phase string) bool {
-	return phase == PhaseDone || phase == PhaseError
+	return phase == PhaseDone || phase == PhaseError || phase == PhaseCancelled
 }
 
 func hasVersion(list []Version, version string) bool {

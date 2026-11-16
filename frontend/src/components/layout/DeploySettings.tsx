@@ -10,10 +10,15 @@ import { useT } from "../../lib/i18n";
 import { formatBytes } from "../../lib/attachments";
 import { Select } from "../common/Select";
 import { Button } from "../common/Button";
-import { IconAlert, IconCheck, IconDownload, IconRefresh, IconTrash } from "../common/Icons";
-import type { ClaudeJobPhase } from "../../transport/types";
+import { IconAlert, IconCheck, IconClose, IconDownload, IconRefresh } from "../common/Icons";
+import type { ClaudeJobPhase, ClaudeSource } from "../../transport/types";
 
-const SOURCES = ["npmmirror", "official"] as const;
+const SOURCES: { value: ClaudeSource; zh: string; en: string }[] = [
+  { value: "npmmirror", zh: "npmmirror 国内镜像（推荐）", en: "npmmirror (China mirror, recommended)" },
+  { value: "tencent", zh: "腾讯云镜像", en: "Tencent Cloud mirror" },
+  { value: "huawei", zh: "华为云镜像", en: "Huawei Cloud mirror" },
+  { value: "official", zh: "官方 npm registry", en: "Official npm registry" },
+];
 
 /** 阶段 → 文案。phase 是后端定义的字符串，映射不到时原样显示。 */
 function phaseLabel(phase: ClaudeJobPhase, t: (zh: string, en: string) => string): string {
@@ -28,6 +33,8 @@ function phaseLabel(phase: ClaudeJobPhase, t: (zh: string, en: string) => string
       return t("安装完成", "Installed");
     case "error":
       return t("安装失败", "Failed");
+    case "cancelled":
+      return t("已取消", "Cancelled");
     default:
       return phase;
   }
@@ -40,6 +47,7 @@ export function DeploySettings() {
   const loadClaudeStatus = useAppStore((s) => s.loadClaudeStatus);
   const checkClaudeUpdate = useAppStore((s) => s.checkClaudeUpdate);
   const installClaude = useAppStore((s) => s.installClaude);
+  const cancelClaudeInstall = useAppStore((s) => s.cancelClaudeInstall);
   const setClaudeActive = useAppStore((s) => s.setClaudeActive);
   const setClaudeSource = useAppStore((s) => s.setClaudeSource);
 
@@ -54,8 +62,9 @@ export function DeploySettings() {
 
   // 安装完成后刷新可用列表，避免"刚装完还是旧的最新版"。
   useEffect(() => {
-    if (claude?.job?.phase === "done") setInstalling(false);
-    if (claude?.job?.phase === "error") setInstalling(false);
+    if (claude?.job?.phase === "done" || claude?.job?.phase === "error" || claude?.job?.phase === "cancelled") {
+      setInstalling(false);
+    }
   }, [claude?.job?.phase]);
 
   const installed = claude?.installed ?? [];
@@ -91,15 +100,7 @@ export function DeploySettings() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 pb-2">
-      <div>
-        <h3 className="text-[15px] font-semibold text-ink">{t("部署", "Deployment")}</h3>
-        <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
-          {t(
-            "claude 二进制不再随应用分发，而是按版本下载到数据目录。安装或切换版本后，新开的对话使用新版本；已在运行的会话不受影响。",
-            "The claude binary is no longer bundled. Versions are downloaded into the data directory. After installing or switching, new conversations use the new version; running sessions are unaffected.",
-          )}
-        </p>
-      </div>
+      <h3 className="text-[15px] font-semibold text-ink">{t("部署", "Deployment")}</h3>
 
       {claude?.external_bin ? (
         <div className="flex items-start gap-2 rounded-xl border border-line bg-panel/60 px-3 py-2.5 text-[11.5px] leading-relaxed text-ink-2">
@@ -119,18 +120,12 @@ export function DeploySettings() {
         </div>
       )}
 
-      <Section title={t("下载源", "Download source")} desc={t("两个源发布的是同一个平台包，下载后按官方 integrity（sha512）校验，镜像被换包会直接失败。", "Both sources publish the same platform package; downloads are verified against the official sha512 integrity, so a tampered mirror fails outright.")}>
+      <Section title={t("下载源", "Download source")}>
         <Select
           value={claude?.source ?? "npmmirror"}
           ariaLabel={t("下载源", "Download source")}
           onChange={(v) => void setClaudeSource(v)}
-          options={SOURCES.map((s) => ({
-            value: s,
-            label:
-              s === "npmmirror"
-                ? t("npmmirror 国内镜像（推荐）", "npmmirror (China mirror, recommended)")
-                : t("官方 npm registry", "Official npm registry"),
-          }))}
+          options={SOURCES.map((s) => ({ value: s.value, label: t(s.zh, s.en) }))}
         />
         <p className="mt-2 text-[10.5px] leading-relaxed text-faint">
           {t(
@@ -183,10 +178,7 @@ export function DeploySettings() {
         )}
       </Section>
 
-      <Section
-        title={t("安装与更新", "Install & update")}
-        desc={t("下载约 160 MB（gzip 平台包），解压后约 350 MB；安装完成后会跑一次 --version 确认可执行。", "About 160 MB gzip (≈350 MB unpacked); a --version run verifies the binary afterwards.")}
-      >
+      <Section title={t("安装与更新", "Install & update")}>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="secondary" size="sm" icon={<IconRefresh size={13} />} disabled={checking || busy} onClick={() => void check()}>
             {checking ? t("检查中…", "Checking…") : t("检查更新", "Check for updates")}
@@ -212,6 +204,11 @@ export function DeploySettings() {
           >
             {busy ? t("安装中…", "Installing…") : pickedInstalled ? t("已安装", "Installed") : t("安装", "Install")}
           </Button>
+          {busy && (
+            <Button variant="secondary" size="sm" icon={<IconClose size={13} />} onClick={() => void cancelClaudeInstall()}>
+              {t("取消安装", "Cancel")}
+            </Button>
+          )}
           {latest && active && latest !== active && !busy && (
             <Button variant="secondary" size="sm" onClick={() => void install(latest)}>
               {t(`更新到 ${latest}`, `Update to ${latest}`)}
@@ -230,7 +227,7 @@ export function DeploySettings() {
                 </span>
               )}
             </div>
-            {job.phase !== "error" && (
+            {job.phase !== "error" && job.phase !== "cancelled" && (
               <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/[0.07] dark:bg-white/10">
                 <div className="h-full rounded-full bg-brand transition-[width] duration-300" style={{ width: `${job.phase === "done" ? 100 : pct}%` }} />
               </div>
@@ -238,19 +235,14 @@ export function DeploySettings() {
             {job.phase === "error" && job.error && (
               <p className="mt-1.5 break-words text-[10.5px] leading-relaxed text-danger">{job.error}</p>
             )}
+            {job.phase === "cancelled" && (
+              <p className="mt-1.5 text-[10.5px] leading-relaxed text-muted">{t("安装已取消，临时文件已清理。", "Installation cancelled; temporary files were cleaned up.")}</p>
+            )}
           </div>
         )}
       </Section>
 
       {claudeError && <p className="rounded-lg bg-rose-50 px-3 py-2 text-[11px] text-danger dark:bg-rose-950/30">{claudeError}</p>}
-
-      <p className="flex items-start gap-1.5 text-[10.5px] leading-relaxed text-faint">
-        <IconTrash size={12} className="mt-0.5 shrink-0" />
-        {t(
-          "旧版本不会自动清理：磁盘紧张时在数据目录下删除对应版本文件夹即可，正在使用中的版本不能删。",
-          "Old versions are not pruned automatically. On low disk, delete the version folder in the data directory; the active one must stay.",
-        )}
-      </p>
     </div>
   );
 }

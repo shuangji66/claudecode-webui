@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -60,6 +61,13 @@ func (m *Manager) install(ctx context.Context, version, source string) error {
 	if man.Dist.Tarball == "" {
 		return errors.New("claudebin: registry 没有返回 tarball 地址")
 	}
+	// 华为云等镜像返回的是相对路径（`/@anthropic-ai/...tgz`），直接请求会
+	// 报 unsupported protocol scheme；按当前源的地址解析成绝对 URL。
+	tarball, err := resolveTarball(m.registries[source], man.Dist.Tarball)
+	if err != nil {
+		return err
+	}
+	man.Dist.Tarball = tarball
 
 	stage, err := os.MkdirTemp(m.root, ".stage-")
 	if err != nil {
@@ -93,6 +101,41 @@ func (m *Manager) install(ctx context.Context, version, source string) error {
 		return fmt.Errorf("claudebin: 落盘版本目录: %w", err)
 	}
 	return nil
+}
+
+// resolveTarball 把 registry 返回的 tarball 地址补成绝对 URL。
+//
+// 只接受 http/https：源是内置白名单，但元数据来自网络，不能让它把下载
+// 引导到 file:// 之类的地方。
+func resolveTarball(registry, raw string) (string, error) {
+	u, err := neturl.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", fmt.Errorf("claudebin: 解析 tarball 地址: %w", err)
+	}
+	if !u.IsAbs() {
+		base := strings.TrimRight(registry, "/")
+		// 以 `/` 开头的相对地址按「源根」拼接，而不是 RFC 的 origin 根：
+		// 华为云把 `/@anthropic-ai/...` 挂在 `/repository/npm` 下，丢掉前缀会
+		// 吃到一次 301；保留前缀才是真实文件地址。
+		if strings.HasPrefix(u.Path, "/") {
+			u, err = neturl.Parse(base + u.Path)
+			if err != nil {
+				return "", fmt.Errorf("claudebin: 解析 tarball 地址: %w", err)
+			}
+		} else {
+			b, err := neturl.Parse(base + "/")
+			if err != nil {
+				return "", fmt.Errorf("claudebin: 解析下载源地址: %w", err)
+			}
+			u = b.ResolveReference(u)
+		}
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		return u.String(), nil
+	default:
+		return "", fmt.Errorf("claudebin: tarball 地址必须是 http/https，实际 %q", u.Scheme)
+	}
 }
 
 // fetchManifest 取单个版本的平台包元数据（只有几 KB，比整份 packument 便宜）。

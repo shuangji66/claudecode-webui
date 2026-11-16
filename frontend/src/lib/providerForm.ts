@@ -52,6 +52,11 @@ export interface ProviderPatch {
   model_meta: Record<string, ModelSpec>;
 }
 
+/** 只保留正的整数容量；0/负数/脏值按未声明处理。 */
+function capacity(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
+}
+
 function specOf(raw: ModelSpec | undefined): ModelSpec {
   const spec = raw ?? {};
   return {
@@ -59,7 +64,41 @@ function specOf(raw: ModelSpec | undefined): ModelSpec {
     reasoning_efforts: [...(spec.reasoning_efforts ?? [])],
     default_reasoning_effort: spec.default_reasoning_effort || undefined,
     supports_image: Boolean(spec.supports_image),
+    context_window: capacity(spec.context_window),
+    max_output_tokens: capacity(spec.max_output_tokens),
   };
+}
+
+/** 容量输入接受的写法：十进制数字，可带 K/M 后缀（1M = 1000K）。 */
+const CAPACITY_PATTERN = /^(\d+(?:\.\d+)?)([km])?$/i;
+const CAPACITY_SCALE = { k: 1_000, m: 1_000_000 } as const;
+
+/**
+ * 解析容量输入。
+ *
+ * @returns 空白 → undefined（表示未声明）；无法解析 → null（由界面标红，
+ *          不写入配置，避免把 0 当成「无限」传给 CLI）。
+ */
+export function parseCapacity(text: string): number | undefined | null {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  const match = CAPACITY_PATTERN.exec(trimmed);
+  if (!match) return null;
+  const suffix = match[2]?.toLowerCase();
+  const scale = suffix === "k" || suffix === "m" ? CAPACITY_SCALE[suffix] : 1;
+  const scaled = Number(match[1]) * scale;
+  const rounded = Math.round(scaled);
+  // 2.3M 这类写法在二进制浮点里会差几个 ULP，整数意图要回到整数。
+  return Math.abs(scaled - rounded) < 1e-6 ? rounded : scaled;
+}
+
+/** 把 token 数写成最短的 K/M 形式；不是整千的保持原样。 */
+export function formatCapacity(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return "";
+  if (!Number.isInteger(value)) return String(value);
+  if (value % CAPACITY_SCALE.m === 0) return `${value / CAPACITY_SCALE.m}M`;
+  if (value % CAPACITY_SCALE.k === 0) return `${value / CAPACITY_SCALE.k}K`;
+  return String(value);
 }
 
 function fromPublic(p: PublicProvider): ProviderForm {

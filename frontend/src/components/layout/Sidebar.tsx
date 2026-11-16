@@ -160,19 +160,16 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   };
 
   const onWorkspaceClick = (g: WorkspaceGroup) => {
-    if (g.path === "__other__") return;
-    setExpanded((prev) => new Set(prev).add(g.path));
-    void switchWorkspace(g.path);
-    onClose?.();
-  };
-
-  const toggleGroup = (path: string) => {
+    if (!g.exists) return;
+    // 工作区行本身就是展开/收起开关；切到别的工作区时顺带打开它最近的对话。
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
+      if (next.has(g.path)) next.delete(g.path);
+      else next.add(g.path);
       return next;
     });
+    if (g.path !== "__other__" && g.path !== currentWorkspace) void switchWorkspace(g.path);
+    onClose?.();
   };
 
   const openWsMenu = (e: React.MouseEvent<HTMLButtonElement>, g: WorkspaceGroup) => {
@@ -405,7 +402,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                 <button
                   type="button"
                   onClick={() => onWorkspaceClick(g)}
-                  disabled={g.path === "__other__" || !g.exists}
+                  disabled={!g.exists}
+                  aria-expanded={open}
                   className={`side-row min-w-0 flex-1 ${isCurrent ? "text-ink" : "text-ink-2"} ${!g.exists ? "opacity-50" : ""}`}
                   data-active={isCurrent}
                   title={g.path === "__other__" ? t("不在授权目录内的对话", "Conversations outside authorized directories") : g.path}
@@ -413,21 +411,15 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                   {g.path === "__other__" ? <IconTerminal size={15} className="shrink-0 text-muted" /> : <IconFolder size={15} className="shrink-0 text-muted" />}
                   <span className="truncate text-[12.5px] font-medium">{g.name}</span>
                   {!g.exists && g.path !== "__other__" && <span className="shrink-0 text-[10px] text-warn">{t("不可用", "Missing")}</span>}
-                  {g.conversations.length > 0 && (
-                    <span className="ml-auto shrink-0 rounded-full bg-black/[0.06] px-1.5 text-[10px] text-muted">{g.conversations.length}</span>
-                  )}
+                  <span className="ml-auto flex shrink-0 items-center gap-1">
+                    {g.conversations.length > 0 && (
+                      <span className="rounded-full bg-black/[0.06] px-1.5 text-[10px] text-muted">{g.conversations.length}</span>
+                    )}
+                    {open ? <IconChevronDown size={14} className="text-muted" /> : <IconChevronRight size={14} className="text-muted" />}
+                  </span>
                 </button>
                 {g.path !== "__other__" && (
                   <>
-                    <button
-                      type="button"
-                      onClick={() => toggleGroup(g.path)}
-                      className="rounded-md p-1 text-muted hover:bg-black/5 hover:text-ink"
-                      aria-label={open ? t("收起对话", "Collapse conversations") : t("展开对话", "Expand conversations")}
-                      title={open ? t("收起", "Collapse") : t("展开", "Expand")}
-                    >
-                      {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
-                    </button>
                     <button
                       type="button"
                       onClick={(e) => openWsMenu(e, g)}

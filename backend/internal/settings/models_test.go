@@ -93,6 +93,46 @@ func TestFetchModelsLargeResponseNotTruncated(t *testing.T) {
 	if res.Models[0].ID != "cn:deepseek-v4.1-flash-0" {
 		t.Fatalf("首个模型 = %q", res.Models[0].ID)
 	}
+	// 网关同时给出上下文窗口与最大输出，两个都要回填，前端才能预填模型容量。
+	if res.Models[0].ContextLength != 1000000 {
+		t.Fatalf("context_length = %d，期望 1000000", res.Models[0].ContextLength)
+	}
+	if res.Models[0].MaxOutputTokens != 128000 {
+		t.Fatalf("max_output_tokens = %d，期望 128000", res.Models[0].MaxOutputTokens)
+	}
+}
+
+func TestCapacityParsing(t *testing.T) {
+	el := map[string]any{
+		"context_window": map[string]any{"default": float64(300000)},
+		"limit":          map[string]any{"output": float64(64000)},
+	}
+	if got := contextLengthOf(el); got != 300000 {
+		t.Fatalf("contextLengthOf = %d，期望 300000", got)
+	}
+	if got := maxOutputTokensOf(el); got != 64000 {
+		t.Fatalf("maxOutputTokensOf = %d，期望 64000", got)
+	}
+
+	cases := []struct {
+		name string
+		el   map[string]any
+		want int
+	}{
+		{"max_output_tokens", map[string]any{"max_output_tokens": float64(128000)}, 128000},
+		{"max_completion_tokens", map[string]any{"max_completion_tokens": float64(8192)}, 8192},
+		{"max_tokens", map[string]any{"max_tokens": float64(4096)}, 4096},
+		{"top_provider", map[string]any{"top_provider": map[string]any{"max_completion_tokens": float64(2048)}}, 2048},
+		{"没有容量字段", map[string]any{"id": "m"}, 0},
+		{"非法值", map[string]any{"max_tokens": "128k"}, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := maxOutputTokensOf(c.el); got != c.want {
+				t.Fatalf("maxOutputTokensOf = %d，期望 %d", got, c.want)
+			}
+		})
+	}
 }
 
 func TestParseModelsRejectsHTML(t *testing.T) {

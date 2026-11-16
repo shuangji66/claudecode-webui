@@ -16,6 +16,8 @@ type Model struct {
 	OwnedBy string `json:"owned_by,omitempty"`
 	// ContextLength 是条目的上下文窗口（部分网关提供），用于回填压缩窗口。
 	ContextLength int `json:"context_length,omitempty"`
+	// MaxOutputTokens 是条目的最大输出 token 数（部分网关提供）。
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
 }
 
 // AuthInfo 描述一次请求携带的鉴权方式（只报类型，不含值）。
@@ -255,7 +257,7 @@ func findModels(v any, depth int) []Model {
 func decodeItems(items []any) []Model {
 	out := make([]Model, 0, len(items))
 	seen := make(map[string]bool, len(items))
-	add := func(id, display, owned string, ctxLen int) {
+	add := func(id, display, owned string, ctxLen, maxOut int) {
 		id = strings.TrimSpace(id)
 		// Gemini 的条目名形如 models/gemini-1.5-pro，对外只留模型名。
 		if i := strings.LastIndex(id, "/"); i >= 0 {
@@ -265,13 +267,13 @@ func decodeItems(items []any) []Model {
 			return
 		}
 		seen[id] = true
-		out = append(out, Model{ID: id, Display: display, OwnedBy: owned, ContextLength: ctxLen})
+		out = append(out, Model{ID: id, Display: display, OwnedBy: owned, ContextLength: ctxLen, MaxOutputTokens: maxOut})
 	}
 
 	for _, item := range items {
 		switch el := item.(type) {
 		case string:
-			add(el, "", "", 0)
+			add(el, "", "", 0, 0)
 		case map[string]any:
 			id := firstString(el, "id", "name", "model", "model_id", "modelId", "slug")
 			if id == "" {
@@ -289,7 +291,7 @@ func decodeItems(items []any) []Model {
 			}
 			add(id, display,
 				firstString(el, "owned_by", "ownedBy", "provider", "owner"),
-				contextLengthOf(el))
+				contextLengthOf(el), maxOutputTokensOf(el))
 		}
 	}
 	return out
@@ -309,6 +311,30 @@ func contextLengthOf(el map[string]any) int {
 	}
 	if lim, ok := el["limit"].(map[string]any); ok {
 		if n, ok := lim["context"].(float64); ok && n > 0 {
+			return int(n)
+		}
+	}
+	return 0
+}
+
+// maxOutputTokensOf 从常见的几个字段里取最大输出 token 数。
+//
+// 各家字段名不统一：OpenAI 风格用 max_tokens / max_completion_tokens，
+// 部分中转用 max_output_tokens，OpenRouter 把上限放在 limit.output 或
+// top_provider.max_completion_tokens。取第一个正整数。
+func maxOutputTokensOf(el map[string]any) int {
+	for _, k := range []string{"max_output_tokens", "max_completion_tokens", "max_tokens", "maxTokens"} {
+		if n, ok := el[k].(float64); ok && n > 0 {
+			return int(n)
+		}
+	}
+	if lim, ok := el["limit"].(map[string]any); ok {
+		if n, ok := lim["output"].(float64); ok && n > 0 {
+			return int(n)
+		}
+	}
+	if tp, ok := el["top_provider"].(map[string]any); ok {
+		if n, ok := tp["max_completion_tokens"].(float64); ok && n > 0 {
 			return int(n)
 		}
 	}

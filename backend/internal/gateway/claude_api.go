@@ -19,6 +19,7 @@ type ClaudeDeployer interface {
 	Status() claudebin.Status
 	Check(ctx context.Context) (claudebin.CheckResult, error)
 	StartInstall(version, source string) error
+	CancelInstall() error
 	SetActive(version string) error
 	SetSource(source string) error
 }
@@ -109,6 +110,18 @@ func (s *Server) handleClaudeInstall(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErr(w, err.Error(), http.StatusBadRequest)
 	}
+}
+
+// handleClaudeCancel 取消正在进行的安装；没有任务时也返回当前状态（幂等）。
+func (s *Server) handleClaudeCancel(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDeploy(w) {
+		return
+	}
+	if err := s.d.Claude.CancelInstall(); err != nil {
+		writeErr(w, "取消安装失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, s.d.Claude.Status())
 }
 
 type activateClaudeReq struct {
