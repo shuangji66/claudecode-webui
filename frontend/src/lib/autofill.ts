@@ -12,8 +12,33 @@ const AUTOFILL_ATTRS: ReadonlyArray<[string, string]> = [
   ["data-lpignore", "true"],
   ["data-1p-ignore", "true"],
   ["data-bwignore", "true"],
+  ["data-dashlane-ignore", "true"],
+  ["data-protonpass-ignore", "true"],
+  ["data-keeper-ignore", "true"],
   ["data-form-type", "other"],
+  ["autocapitalize", "off"],
+  ["spellcheck", "false"],
 ];
+
+/**
+ * 静态版本：直接写进 JSX（`<input {...NO_AUTOFILL} />`）。
+ *
+ * 为什么不能只靠 MutationObserver：密码管理器在元素插入时就会扫描一次，
+ * 而 observer 的回调是微任务——1Password 这类会抢在前面弹出填充浮层。
+ * 凭证类输入框（API 地址 / 密钥 / 令牌）必须一开始就带上这些属性。
+ */
+export const NO_AUTOFILL = {
+  autoComplete: "off",
+  "data-lpignore": "true",
+  "data-1p-ignore": "true",
+  "data-bwignore": "true",
+  "data-dashlane-ignore": "true",
+  "data-protonpass-ignore": "true",
+  "data-keeper-ignore": "true",
+  "data-form-type": "other",
+  autoCapitalize: "off",
+  spellCheck: false,
+} as const;
 
 function guardElement(el: HTMLInputElement | HTMLTextAreaElement): void {
   const password = el instanceof HTMLInputElement && el.type === "password";

@@ -1,3 +1,4 @@
+import { NO_AUTOFILL } from "../../lib/autofill";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import { getToken, setToken } from "../../lib/runtime";
@@ -378,7 +379,7 @@ function GeneralSettings() {
       {info?.auth_required && (
         <Section title={t("访问令牌", "Access token")} desc={t("后端启用了 CCWEB_AUTH_TOKEN。令牌只保存在本浏览器。", "The backend requires CCWEB_AUTH_TOKEN. The token is stored only in this browser.")}>
           <div className="flex gap-2">
-            <input
+            <input {...NO_AUTOFILL} {...NO_AUTOFILL}
               type="password"
               value={token}
               onChange={(e) => setTokenDraft(e.target.value)}
@@ -601,7 +602,7 @@ function ProxySettings() {
       </div>
 
       <Section title={t("代理地址", "Proxy URL")} desc={t("支持 http://、https://、socks5://、socks5h://；可包含用户名密码。", "Supports http://, https://, socks5://, socks5h://; credentials are allowed.")}>
-        <input
+        <input {...NO_AUTOFILL} {...NO_AUTOFILL}
           value={url}
           onChange={(e) => {
             setUrl(e.target.value);
@@ -740,7 +741,7 @@ function ProviderCard({
     <div className="overflow-hidden rounded-xl border border-line bg-canvas">
       <div className="flex items-center gap-2 border-b border-line bg-panel/50 px-3 py-2.5">
         {provider.isNew ? (
-          <input
+          <input {...NO_AUTOFILL} {...NO_AUTOFILL}
             value={provider.id}
             onChange={(e) => onChange({ id: e.target.value })}
             placeholder={t("提供商 ID", "Provider ID")}
@@ -752,7 +753,7 @@ function ProviderCard({
             {provider.id}
           </span>
         )}
-        <input
+        <input {...NO_AUTOFILL} {...NO_AUTOFILL}
           value={provider.name}
           onChange={(e) => onChange({ name: e.target.value })}
           placeholder={provider.id || t("显示名（留空跟随 ID）", "Display name (blank follows ID)")}
@@ -807,7 +808,7 @@ function ProviderCard({
 
         <label className="block">
           <span className="block text-[10.5px] text-faint">{t("API 地址", "API base URL")}</span>
-          <input
+          <input {...NO_AUTOFILL} {...NO_AUTOFILL}
             value={provider.baseUrl}
             onChange={(e) => onChange({ baseUrl: e.target.value })}
             placeholder={preset?.needsBaseUrl ? t("填写完整 Base URL（账号 / 区域 / 网关路径）", "Full base URL (account / region / gateway path)") : "https://gateway.example/v1"}
@@ -818,7 +819,7 @@ function ProviderCard({
         <label className="block">
           <span className="block text-[10.5px] text-faint">{t("API 密钥", "API key")}</span>
           <div className="mt-0.5 flex gap-2">
-            <input
+            <input {...NO_AUTOFILL} {...NO_AUTOFILL}
               type="password"
               value={provider.apiKey}
               onChange={(e) => onChange({ apiKey: e.target.value })}
@@ -848,7 +849,7 @@ function ProviderCard({
         {advanced && (
           <label className="block">
             <span className="block text-[10.5px] text-faint">{t("Bearer 令牌（没有 API 密钥时使用）", "Bearer token (when no API key)")}</span>
-            <input
+            <input {...NO_AUTOFILL} {...NO_AUTOFILL}
               type="password"
               value={provider.authToken}
               onChange={(e) => onChange({ authToken: e.target.value })}
@@ -890,7 +891,7 @@ function ProviderCard({
           {picking && (
             <div className="mt-2 rounded-lg border border-line bg-canvas p-2">
               <div className="flex items-center gap-2">
-                <input
+                <input {...NO_AUTOFILL} {...NO_AUTOFILL}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder={t("搜索模型…", "Search models…")}
@@ -920,7 +921,7 @@ function ProviderCard({
                 {filtered.length === 0 && <p className="px-2 py-3 text-center text-[11px] text-muted">{t("没有匹配的模型。", "No matching models.")}</p>}
                 {filtered.map((m) => (
                   <label key={m.id} className="flex items-center gap-2 rounded-md px-2 py-1 text-[11.5px] hover:bg-panel-strong">
-                    <input
+                    <input {...NO_AUTOFILL} {...NO_AUTOFILL}
                       type="checkbox"
                       className="accent-[var(--c-brand)]"
                       checked={picked.has(m.id)}
@@ -967,7 +968,7 @@ function ProviderCard({
           </div>
 
           <div className="mt-2 flex gap-2">
-            <input
+            <input {...NO_AUTOFILL} {...NO_AUTOFILL}
               value={manual}
               onChange={(e) => setManual(e.target.value)}
               onKeyDown={(e) => {
@@ -1046,7 +1047,7 @@ function ModelRow({
         <div className="space-y-2.5 border-t border-line px-2.5 py-2.5">
           <label className="block">
             <span className="block text-[10px] text-faint">{t("显示名称", "Display name")}</span>
-            <input
+            <input {...NO_AUTOFILL} {...NO_AUTOFILL}
               value={spec.name ?? ""}
               onChange={(e) => onChange({ name: e.target.value })}
               placeholder={id}
@@ -1057,7 +1058,7 @@ function ModelRow({
           <div className="grid grid-cols-2 gap-2">
             <label className="block">
               <span className="block text-[10px] text-faint">{t("上下文窗口", "Context window")}</span>
-              <input
+              <input {...NO_AUTOFILL} {...NO_AUTOFILL}
                 value={contextText}
                 onChange={(e) => editCapacity("context", e.target.value)}
                 onBlur={() => {
@@ -1074,7 +1075,7 @@ function ModelRow({
             </label>
             <label className="block">
               <span className="block text-[10px] text-faint">{t("最大输出 token 数", "Max output tokens")}</span>
-              <input
+              <input {...NO_AUTOFILL} {...NO_AUTOFILL}
                 value={outputText}
                 onChange={(e) => editCapacity("output", e.target.value)}
                 onBlur={() => {
@@ -1095,7 +1096,7 @@ function ModelRow({
           </p>
 
           <label className="flex items-center gap-2 text-[11px] text-ink-2">
-            <input
+            <input {...NO_AUTOFILL} {...NO_AUTOFILL}
               type="checkbox"
               checked={Boolean(spec.supports_image)}
               onChange={(e) => onChange({ supports_image: e.target.checked })}

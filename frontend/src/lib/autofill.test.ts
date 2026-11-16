@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { guardAutofill, installAutofillGuard } from "./autofill";
+import { NO_AUTOFILL, guardAutofill, installAutofillGuard } from "./autofill";
 
 describe("autofill guard", () => {
   it("给输入框加禁用自动填充属性，密码框用 new-password", () => {
@@ -10,7 +10,9 @@ describe("autofill guard", () => {
     expect(root.querySelector("#pwd")!.getAttribute("autocomplete")).toBe("new-password");
     expect(root.querySelector("#ta")!.getAttribute("autocomplete")).toBe("off");
     expect(root.querySelector("#url")!.getAttribute("data-lpignore")).toBe("true");
+    expect(root.querySelector("#url")!.getAttribute("data-dashlane-ignore")).toBe("true");
     expect(root.querySelector("#pwd")!.getAttribute("data-form-type")).toBe("other");
+    expect(root.querySelector("#pwd")!.getAttribute("data-1p-ignore")).toBe("true");
   });
 
   it("动态插入的输入框也会被处理", async () => {
@@ -21,5 +23,19 @@ describe("autofill guard", () => {
     expect(input.getAttribute("autocomplete")).toBe("off");
     input.remove();
     stop();
+  });
+});
+
+describe("NO_AUTOFILL 静态属性", () => {
+  it("覆盖主流密码管理器的忽略标记", () => {
+    expect(NO_AUTOFILL).toMatchObject({
+      autoComplete: "off",
+      "data-1p-ignore": "true",
+      "data-lpignore": "true",
+      "data-bwignore": "true",
+      "data-dashlane-ignore": "true",
+      "data-protonpass-ignore": "true",
+      "data-form-type": "other",
+    });
   });
 });

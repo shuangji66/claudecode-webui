@@ -1,3 +1,4 @@
+import { NO_AUTOFILL } from "../../lib/autofill";
 import { useState } from "react";
 import { setToken } from "../../lib/runtime";
 import { BrandMark } from "../common/Icons";
@@ -21,7 +22,7 @@ export function TokenGate({ onSaved }: { onSaved: () => void }) {
       >
         <h1 className="text-[15px] font-semibold text-ink">{t("需要访问令牌", "Access token required")}</h1>
         <p className="mt-1 text-[12px] leading-relaxed text-muted">{t("后端启用了 CCWEB_AUTH_TOKEN，请输入后继续。", "The backend requires CCWEB_AUTH_TOKEN. Enter it to continue.")}</p>
-        <input
+        <input {...NO_AUTOFILL} {...NO_AUTOFILL}
           type="password"
           value={value}
           onChange={(e) => setValue(e.target.value)}

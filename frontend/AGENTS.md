@@ -261,7 +261,10 @@ src/
 - 右上角「更多」是下拉菜单（复制会话为 Markdown / 下载 Session 日志），不要直接打开设置。
 - **全局禁用浏览器自动填充**：`lib/autofill.ts` 在 `App` 挂载时给所有
   `input/textarea` 补 `autocomplete=off`（密码框用 `new-password`）与主流密码管理器的
-  ignore 标记；新增输入框不用再逐个手写。
+  ignore 标记；新增普通输入框不用再逐个手写。
+  **凭证类输入框（API 地址 / 密钥 / Bearer 令牌 / 访问令牌）必须静态写 `{...NO_AUTOFILL}`**：
+  密码管理器在元素插入时就扫描，MutationObserver 的回调是微任务，晚一步 1Password
+  就会弹「填充密码」浮层（截图里出现在 API 地址框上）。
 - **不许用浏览器原生控件承载 UI**：
   - 模态统一 `components/common/Dialog.tsx`（遮罩、标题区、滚动体、底部栏、Esc/遮罩关闭、
     背景滚动锁、移动端底部安全区都在里面）。不要再手写 `fixed inset-0 … rounded-t-2xl`。
