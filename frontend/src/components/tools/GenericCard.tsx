@@ -2,6 +2,7 @@ import { Collapsible } from "../common/Collapsible";
 import { IconWrench } from "../common/Icons";
 import type { ToolItem } from "../../lib/model";
 import { useT } from "../../lib/i18n";
+import { ToolImages } from "./ToolImages";
 
 /** 兜底卡片：任何未注册的工具都能显示，保证版本升级后不出现空白卡片。 */
 export function GenericCard({ item }: { item: ToolItem }) {
@@ -34,18 +35,7 @@ export function GenericCard({ item }: { item: ToolItem }) {
             </pre>
           </Collapsible>
         )}
-        {item.images && item.images.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {item.images.map((img, i) => (
-              <img
-                key={`${i}-${img.mediaType}`}
-                src={`data:${img.mediaType};base64,${img.data}`}
-                alt={t("工具结果图片", "Tool result image")}
-                className="max-h-80 w-auto rounded-lg border border-line"
-              />
-            ))}
-          </div>
-        )}
+        <ToolImages item={item} />
       </div>
     </div>
   );

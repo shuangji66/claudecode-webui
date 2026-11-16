@@ -412,6 +412,16 @@ function fileNameOfBlock(block: unknown): string | undefined {
   return m?.[1] || undefined;
 }
 
+/** 回显与本地气泡是否同一条消息：比提示词前缀，不比附件名（CLI 不带文件名）。 */
+function samePromptEcho(lastText: string, prompt: string): boolean {
+  if (!prompt) return lastText === "附件" || lastText.startsWith("附件：");
+  return (
+    lastText === prompt ||
+    lastText.startsWith(`${prompt}\n附件：`) ||
+    lastText.startsWith(`${prompt}\nFile: `)
+  );
+}
+
 function applyUser(items: Item[], m: Raw, at: number): Item[] {
   const message = asRecord(m.message);
   const content = message?.content;
@@ -419,7 +429,9 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
   const results = blocks.filter((b) => asRecord(b)?.type === "tool_result");
 
   if (results.length > 0) {
-    const structured = m.tool_use_result ?? m.toolUseResult;
+    // tool_use_result 是**整条消息**上的单值；一条 user 行里出现多个 tool_result 时
+    // 它只属于其中一个，套到其它卡片上会让 Edit 画出别的文件的 diff。
+    const structured = results.length === 1 ? (m.tool_use_result ?? m.toolUseResult) : undefined;
     let out = items;
     for (const r of results) {
       const block = asRecord(r)!;
@@ -472,14 +484,22 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
   }).length;
   const attachmentEcho = binaryCount > 0 || textBlocks.length > 1 || fileBlocks.length > 0;
   if (attachmentEcho) {
-    const last = items[items.length - 1];
-    if (last && last.kind === "user") return items;
-    const prompt = textOfContent(promptBlocks);
+    // 空数组不能走 textOfContent：它会把「无可读文本」降级成 JSON 预览（"[]"），
+    // 拼出来的气泡就变成 "[]\n附件：a.txt"。
+    const prompt = promptBlocks.length > 0 ? textOfContent(promptBlocks) : "";
     const names = fileBlocks
       .map(fileNameOfBlock)
       .filter((n): n is string => typeof n === "string" && n !== "");
     if (binaryCount > 0) names.push(`${binaryCount} 个图片/PDF`);
     const display = [prompt, ...names.map((n) => `附件：${n}`)].filter(Boolean).join("\n");
+    const last = items[items.length - 1];
+    // 只有「本地刚插入的那条就是这条回显」时才丢弃。原先只看最后一条是不是 user：
+    // 上一轮被中断（没有 assistant 行）时，下一条带附件的消息会被整条吞掉。
+    // 比对只能比提示词前缀：CLI 的 image/document block 不带文件名，本地气泡写的是
+    // 「附件：a.png」，回显只能拼出「附件：1 个图片/PDF」。
+    if (last && last.kind === "user" && samePromptEcho(last.text, prompt)) {
+      return items;
+    }
     return [
       ...items,
       { id: nextId(), seq: seqOf(items), ts: at, kind: "user", text: display || "附件" },

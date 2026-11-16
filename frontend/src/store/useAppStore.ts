@@ -21,7 +21,7 @@ import type {
   ClaudeStatus,
   ConversationInfo,
   FsAccess,
-  FsListing,
+  FsPickListing,
   HostFile,
   GatewayModel,
   InitPayload,
@@ -181,7 +181,7 @@ interface AppState {
   startConversationIn: (path: string) => Promise<void>;
   /** 在飞牛文件管理器里显示目录；失败走全局错误条。 */
   openWorkspaceInFiles: (path: string) => Promise<void>;
-  browseDirs: (path: string, hidden: boolean) => Promise<FsListing>;
+  browseDirs: (path: string, hidden: boolean) => Promise<FsPickListing>;
   /**
    * 探测应用用户能否直接读写该目录。能读写就不必再申请飞牛授权，
    * 只有 writable=false（ACL 还没授予）时才走 authorizeUserFile。
@@ -946,7 +946,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const q = new URLSearchParams();
     if (path) q.set("path", path);
     if (hidden) q.set("hidden", "1");
-    return apiFetch<FsListing>(`/api/fs/list?${q.toString()}`);
+    return apiFetch<FsPickListing>(`/api/fs/list?${q.toString()}`);
   },
 
   ensureSession: async (cwd, createIfEmpty = true) => {

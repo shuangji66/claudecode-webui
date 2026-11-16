@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
-import type { FsListing } from "../../transport/types";
+import type { FsPickListing } from "../../transport/types";
 import { baseName } from "../../lib/labels";
 import { authorizeFnosDir, pickFnosDir } from "../../lib/fnos";
 import { useT } from "../../lib/i18n";
@@ -34,7 +34,7 @@ export function WorkspaceDialog({ open, onClose }: Props) {
   const probeDir = useAppStore((s) => s.probeDir);
 
   const [path, setPath] = useState("");
-  const [listing, setListing] = useState<FsListing | null>(null);
+  const [listing, setListing] = useState<FsPickListing | null>(null);
   const [hidden, setHidden] = useState(false);
   const [loading, setLoading] = useState(false);
   const [authorizing, setAuthorizing] = useState(false);

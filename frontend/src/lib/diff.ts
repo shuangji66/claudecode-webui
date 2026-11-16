@@ -67,6 +67,15 @@ function collectFromInput(input: unknown): DiffResult | null {
   return { lines, added: news.length, removed: olds.length };
 }
 
+/** Write 的输入是 file_path/content：整段内容都算新增。 */
+export function writeDiff(input: unknown): DiffResult | null {
+  if (!input || typeof input !== "object") return null;
+  const content = (input as Record<string, unknown>).content;
+  if (typeof content !== "string") return null;
+  const lines = content.replace(/\n$/, "").split("\n");
+  return { lines: lines.map((text) => ({ type: "add" as const, text })), added: lines.length, removed: 0 };
+}
+
 /** 构造 diff；无法构造时返回 null。 */
 export function buildDiff(input: unknown, structured: unknown): DiffResult | null {
   if (structured && typeof structured === "object") {

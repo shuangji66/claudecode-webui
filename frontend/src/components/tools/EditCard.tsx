@@ -4,6 +4,7 @@ import { IconWrench } from "../common/Icons";
 import { buildDiff, editSummary } from "../../lib/diff";
 import type { ToolItem } from "../../lib/model";
 import { useT } from "../../lib/i18n";
+import { ToolImages } from "./ToolImages";
 
 const tone: Record<string, string> = {
   add: "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300",
@@ -44,6 +45,11 @@ export function EditCard({ item }: { item: ToolItem }) {
           <Collapsible title={t("变更内容", "Changes")} summary={t("无结构化补丁", "No structured patch")}>
             <pre className="overflow-x-auto text-[11.5px]">{item.result ?? t("（等待结果）", "(waiting for result)")}</pre>
           </Collapsible>
+        </div>
+      )}
+      {item.images && item.images.length > 0 && (
+        <div className="border-t border-line px-3 py-2">
+          <ToolImages item={item} />
         </div>
       )}
     </div>

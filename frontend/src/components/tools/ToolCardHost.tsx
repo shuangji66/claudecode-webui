@@ -4,6 +4,7 @@ import { AgentCard } from "./AgentCard";
 import { BashCard } from "./BashCard";
 import { EditCard } from "./EditCard";
 import { GenericCard } from "./GenericCard";
+import { WriteCard } from "./WriteCard";
 
 /**
  * 工具渲染注册表。
@@ -18,7 +19,9 @@ const registry: Record<string, ComponentType<{ item: ToolItem }>> = {
   Task: AgentCard,
   Bash: BashCard,
   Edit: EditCard,
-  Write: EditCard,
+  // Write 的输入是 file_path/content，没有 old_string/new_string：走 EditCard 会
+  // diff 构造失败、只显示一行 "File created successfully"，写入内容看不到。
+  Write: WriteCard,
 };
 
 export function ToolCardHost({ item }: { item: ToolItem }) {

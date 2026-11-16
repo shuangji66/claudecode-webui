@@ -144,6 +144,11 @@ export function MessageList({
     prevCount.current = items.length;
   }, [resetKey]);
 
+  // 距底部距离：窗口是「尾部 limit 条」，消息一增长窗口就整体上移一条，
+  // 最上面那条会离开 DOM。用户正在往上翻（不贴底）时要靠这个值还原视口，
+  // 否则他正在读的那条会直接消失。onScroll 里持续记录，代价是一次减法。
+  const distFromBottom = useRef<number | null>(null);
+
   // 新内容到达：贴底就跟随；否则只点亮「有新内容」。
   useEffect(() => {
     const el = scroller.current;
@@ -175,9 +180,19 @@ export function MessageList({
     }
   }, [limit]);
 
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const dist = distFromBottom.current;
+    if (!stick.current && hidden > 0 && dist !== null) {
+      el.scrollTop = el.scrollHeight - dist;
+    }
+  }, [items.length, hidden]);
+
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
+    distFromBottom.current = el.scrollHeight - el.scrollTop;
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
     stick.current = near;
     setAtBottom(near);

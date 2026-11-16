@@ -41,6 +41,24 @@ interface Props {
 // Esc 只关最上面那个，不能一次全关掉。
 const dialogStack: symbol[] = [];
 
+// 背景滚动用计数而不是「记下打开前的值再还原」：多层叠加时，下层先关会把
+// overflow 还原成 ""，上层还开着背景却能滚。
+let lockCount = 0;
+let savedOverflow = "";
+
+function lockScroll() {
+  if (lockCount === 0) {
+    savedOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  lockCount += 1;
+}
+
+function unlockScroll() {
+  lockCount = Math.max(0, lockCount - 1);
+  if (lockCount === 0) document.body.style.overflow = savedOverflow;
+}
+
 const WIDTH: Record<DialogSize, string> = {
   sm: "md:max-w-sm",
   md: "md:max-w-xl",
@@ -70,6 +88,13 @@ export function Dialog({
   const t = useT();
   const panelRef = useRef<HTMLDivElement>(null);
 
+  // onClose 进 ref：调用点几乎都传内联箭头，把它放进依赖会让 effect 每次渲染都
+  // 重跑（先从栈里摘掉自己再压到栈顶），叠加弹窗时 Esc 会关错窗口。
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!open) return;
     const token = Symbol("dialog");
@@ -78,19 +103,18 @@ export function Dialog({
       if (e.key !== "Escape") return;
       if (dialogStack[dialogStack.length - 1] !== token) return;
       e.stopPropagation();
-      onClose();
+      onCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
     // 打开期间锁住背景滚动，避免移动端遮罩后面还在滚。
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    lockScroll();
     return () => {
       document.removeEventListener("keydown", onKey);
       const index = dialogStack.indexOf(token);
       if (index >= 0) dialogStack.splice(index, 1);
-      document.body.style.overflow = previous;
+      unlockScroll();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

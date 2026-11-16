@@ -5,6 +5,7 @@ import type { SubagentInfo, ToolItem } from "../../lib/model";
 import { formatTokens } from "../../lib/usage";
 import { useT } from "../../lib/i18n";
 import { useAppStore } from "../../store/useAppStore";
+import { ToolImages } from "./ToolImages";
 
 const tone: Record<SubagentInfo["status"], string> = {
   running: "bg-brand-soft text-brand",
@@ -105,6 +106,7 @@ export function AgentCard({ item }: { item: ToolItem }) {
             </pre>
           </Collapsible>
         )}
+        {item.images && item.images.length > 0 && <ToolImages item={item} />}
       </div>
     </div>
   );

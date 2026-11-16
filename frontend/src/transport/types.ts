@@ -217,17 +217,22 @@ export interface WorkspacesPayload {
   root: string;
 }
 
-/** 目录选择器里的一行。 */
-export interface FsEntry {
+/** 目录选择器（GET /api/fs/list）里的一行。 */
+export interface FsPickEntry {
   name: string;
   path: string;
 }
 
-/** GET /api/fs/list 的响应。 */
-export interface FsListing {
+/**
+ * GET /api/fs/list 的响应。
+ *
+ * 注意与文件树（/api/fs/tree）的 FsListing 区分：这个接口只回名字和绝对路径，
+ * 没有 type/size/truncated。两边曾经同名，TS 的声明合并把两种线上形状混成一个。
+ */
+export interface FsPickListing {
   path: string;
   parent: string;
-  entries: FsEntry[];
+  entries: FsPickEntry[];
   roots: string[];
 }
 

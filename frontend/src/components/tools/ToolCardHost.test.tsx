@@ -54,3 +54,36 @@ describe("ToolCardHost", () => {
     expect(screen.getByText("运行中…")).toBeInTheDocument();
   });
 });
+
+describe("Write 与工具结果图片", () => {
+  it("Write 显示写入内容，而不是「File created successfully」", () => {
+    render(
+      <ToolCardHost
+        item={tool({
+          name: "Write",
+          input: { file_path: "/w/新建.md", content: "第一行\n第二行\n" },
+          result: "File created successfully at /w/新建.md",
+        })}
+      />,
+    );
+    expect(screen.getByText("Write")).toBeInTheDocument();
+    expect(screen.getByText(/新建\.md/)).toBeInTheDocument();
+    expect(screen.getByText("第一行")).toBeInTheDocument();
+    expect(screen.getByText("第二行")).toBeInTheDocument();
+  });
+
+  it("已注册的卡片也会画 tool_result 图片", () => {
+    render(
+      <ToolCardHost
+        item={tool({
+          name: "Bash",
+          input: { command: "screenshot" },
+          result: "[图片 image/png，约 1 KB]",
+          images: [{ mediaType: "image/png", data: "iVBORw0KGgo=" }],
+        })}
+      />,
+    );
+    const img = screen.getByAltText("工具结果图片") as HTMLImageElement;
+    expect(img.src).toContain("data:image/png;base64,");
+  });
+});

@@ -1,6 +1,7 @@
 import { Collapsible } from "../common/Collapsible";
 import { IconTerminal } from "../common/Icons";
 import type { ToolItem } from "../../lib/model";
+import { ToolImages } from "./ToolImages";
 import { useT } from "../../lib/i18n";
 
 interface Props {
@@ -48,6 +49,11 @@ export function BashCard({ item }: Props) {
               {item.result}
             </pre>
           </Collapsible>
+        </div>
+      )}
+      {item.images && item.images.length > 0 && (
+        <div className="px-3 pb-2.5">
+          <ToolImages item={item} />
         </div>
       )}
     </div>

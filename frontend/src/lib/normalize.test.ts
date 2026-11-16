@@ -636,3 +636,74 @@ describe("tool_progress", () => {
     expect(items).toEqual([]);
   });
 });
+
+describe("回显去重不吞相邻消息", () => {
+  it("上一条是没有回复的用户消息时，带附件的下一条仍要保留", () => {
+    // 上一轮被中断（没有 assistant 行），最后一条仍是 user。
+    let items: Item[] = appendUser([], "上一句");
+    items = appendUser(items, "看看这张图\n附件：a.png");
+    items = applyCLI(items, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "看看这张图" },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "AAA" } },
+        ],
+      },
+    });
+    // 回显与第 2 条重复 → 丢弃；第 1 条不能被牵连，也不能多出第 3 条。
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ text: "上一句" });
+    expect(items[1]).toMatchObject({ text: "看看这张图\n附件：a.png" });
+  });
+
+  it("提示词不同的附件消息不会被当成上一条的回显", () => {
+    let items: Item[] = appendUser([], "旧的一句\n附件：old.png");
+    items = applyCLI(items, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "全新的一句" },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "AAA" } },
+        ],
+      },
+    });
+    expect(items).toHaveLength(2);
+    const second = items[1];
+    expect(second.kind === "user" ? second.text : "").toContain("全新的一句");
+  });
+});
+
+describe("多 tool_result 共用一条消息", () => {
+  it("消息级 tool_use_result 只挂到唯一的那个结果上", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "tu1", name: "Edit", input: { file_path: "/a.go", old_string: "a", new_string: "b" } },
+          { type: "tool_use", id: "tu2", name: "Edit", input: { file_path: "/b.go", old_string: "c", new_string: "d" } },
+        ],
+      },
+    });
+    items = applyCLI(items, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "tu1", content: "ok" },
+          { type: "tool_result", tool_use_id: "tu2", content: "ok" },
+        ],
+      },
+      tool_use_result: { structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ["-a", "+b"] }] },
+    });
+    const tools = items.filter((i): i is Extract<Item, { kind: "tool" }> => i.kind === "tool");
+    expect(tools).toHaveLength(2);
+    // 两个结果同属一条消息时，结构化补丁不该被复制到两张卡片上。
+    expect(tools[0].structured).toBeUndefined();
+    expect(tools[1].structured).toBeUndefined();
+  });
+});
