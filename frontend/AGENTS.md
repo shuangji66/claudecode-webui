@@ -127,6 +127,8 @@ src/
   「步骤数」「实时 tok/s」「官方上下文百分比」——步数用工具调用次数、tok/s 用输出 ÷ API 耗时、
   上下文用 (input+cache_read+cache_creation) ÷ contextWindow，都是同一套数据的换算，
   不要在界面上编造。转录回放时 store 没有实时快照，回落到最后一条 result 上挂的 usage。
+  上下文占用显示成一个小圆环（`UsageStats` 里的 `UsageRing`，≥70% 转琥珀、≥85% 转红），
+  旁边跟百分比；绝对值和缓存命中率放 `title` 里。
 - 新增事件类型：先改 `transport/types.ts` → 再在 `applyEvent` 里分支 → 最后补测试。
 
 ## 4. 消息模型（Item）

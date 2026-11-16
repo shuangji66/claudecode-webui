@@ -15,6 +15,36 @@ interface Props {
   events: number;
 }
 
+/**
+ * 上下文占用的小圈（参照 DSH 底栏那个环形）。
+ *
+ * 用 stroke-dashoffset 画弧：周长做 dasharray，占用比例做 offset，从 12 点方向顺时针。
+ * 颜色按水位分级——超过 70% 转琥珀、85% 转红，让「快满了」在余光里就能看见。
+ */
+function UsageRing({ percent }: { percent: number }) {
+  const r = 9;
+  const circumference = 2 * Math.PI * r;
+  const offset = circumference * (1 - Math.min(100, Math.max(0, percent)) / 100);
+  const tone = percent >= 85 ? "text-danger" : percent >= 70 ? "text-warn" : "text-ink-2";
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" className="shrink-0">
+      <circle cx="12" cy="12" r={r} fill="none" strokeWidth="3" className="stroke-line-strong" />
+      <circle
+        cx="12"
+        cy="12"
+        r={r}
+        fill="none"
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+        transform="rotate(-90 12 12)"
+        className={`stroke-current ${tone}`}
+      />
+    </svg>
+  );
+}
+
 export function UsageStats({ snap, turns, tools, events }: Props) {
   const t = useT();
   const tps = snap ? tokensPerSecond(snap.outputTokens ?? 0, snap.apiMs) : undefined;
@@ -24,7 +54,6 @@ export function UsageStats({ snap, turns, tools, events }: Props) {
   if (turns > 0) parts.push(t(`${turns} 轮`, `${turns} turns`));
   if (tools > 0) parts.push(t(`${tools} 工具`, `${tools} tools`));
   if (tps !== undefined) parts.push(`${Math.round(tps)} tok/s`);
-  if (pct !== undefined) parts.push(t(`上下文 ${pct}%`, `context ${pct}%`));
 
   const contextLine =
     snap && snap.contextTokens > 0
@@ -48,12 +77,16 @@ export function UsageStats({ snap, turns, tools, events }: Props) {
   }
 
   return (
-    <span className="shrink-0 tabular-nums" title={title}>
+    <span className="flex shrink-0 items-center gap-2 tabular-nums" title={title}>
       <span className="hidden sm:inline">{parts.join(" · ")}</span>
-      {/* 窄屏只留轮数与上下文百分比，别把输入框那一行挤爆。 */}
-      <span className="sm:hidden">
-        {[turns > 0 ? t(`${turns} 轮`, `${turns} turns`) : "", pct !== undefined ? `${pct}%` : ""].filter(Boolean).join(" · ")}
-      </span>
+      {/* 窄屏只留轮数与上下文圈，别把输入框那一行挤爆。 */}
+      {turns > 0 && <span className="sm:hidden">{t(`${turns} 轮`, `${turns} turns`)}</span>}
+      {pct !== undefined && (
+        <span className="flex items-center gap-1" aria-label={t(`上下文占用 ${pct}%`, `Context usage ${pct}%`)}>
+          <UsageRing percent={pct} />
+          <span>{pct}%</span>
+        </span>
+      )}
     </span>
   );
 }

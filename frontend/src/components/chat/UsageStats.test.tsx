@@ -12,9 +12,17 @@ const SNAP = {
 };
 
 describe("UsageStats", () => {
-  it("有 usage 时显示轮数 / 工具 / tok/s / 上下文百分比", () => {
-    render(<UsageStats snap={SNAP} turns={3} tools={12} events={40} />);
-    expect(screen.getByText(/3 轮 · 12 工具 · 318 tok\/s · 上下文 5%/)).toBeInTheDocument();
+  it("有 usage 时显示轮数 / 工具 / tok/s，上下文单独用圈 + 百分比", () => {
+    const { container } = render(<UsageStats snap={SNAP} turns={3} tools={12} events={40} />);
+    expect(screen.getByText("3 轮 · 12 工具 · 318 tok/s")).toBeInTheDocument();
+    expect(screen.getByLabelText("上下文占用 5%")).toBeInTheDocument();
+    // 圈是两段圆：底环 + 按比例画弧（5% → dashoffset 接近满周长）
+    const arcs = container.querySelectorAll("svg circle");
+    expect(arcs).toHaveLength(2);
+    const dash = Number(arcs[1].getAttribute("stroke-dasharray"));
+    const offset = Number(arcs[1].getAttribute("stroke-dashoffset"));
+    expect(dash).toBeGreaterThan(0);
+    expect(offset).toBeCloseTo(dash * 0.95, 3);
   });
 
   it("悬浮提示给出上下文绝对值、缓存命中与本回合输出", () => {
