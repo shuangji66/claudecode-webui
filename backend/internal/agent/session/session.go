@@ -59,6 +59,12 @@ const (
 	KindClosed       = "closed"
 )
 
+// writeReq 是一条待写入 stdin 的行；ack 非空时调用方等待写入结果。
+type writeReq struct {
+	line []byte
+	ack  chan error
+}
+
 // pendingCall 是一次等待回包的控制请求。
 //
 // ch 只由读循环写、由 request 读，**永远不被 close**；done 只由 Close 关闭。
@@ -88,6 +94,10 @@ type Session struct {
 	emit func(Event)
 
 	wmu     sync.Mutex // 串行化对 stdin 的写
+	// send 是写队列：读循环里要回控制响应（例如未实现的子类型回 unsupported），
+	// 但写 stdin 可能被对端不读而阻塞 —— 在读循环里同步写会把「读 stdout」也一起卡死。
+	// 所有写都投给 writer goroutine，读循环只做非阻塞入队。
+	send chan writeReq
 	pmu     sync.Mutex
 	pending map[string]*pendingCall
 
@@ -116,12 +126,14 @@ func New(id, cwd string, tr Transport, emit func(Event)) *Session {
 		CreatedAt: time.Now(),
 		tr:        tr,
 		emit:      emit,
+		send:      make(chan writeReq, 64),
 		pending:   make(map[string]*pendingCall),
 		perms:     make(map[string]json.RawMessage),
 		done:      make(chan struct{}),
 	}
 	s.state.Store(StateStarting)
 	s.idle.Store(time.Now().UnixNano())
+	go s.writeLoop()
 	return s
 }
 
@@ -343,9 +355,54 @@ func (s *Session) Done() <-chan struct{} { return s.done }
 
 // writeLine 写一行 NDJSON。写操作必须串行，否则两条消息会交错。
 func (s *Session) writeLine(b []byte) error {
+	req := writeReq{line: append(b, '\n'), ack: make(chan error, 1)}
+	select {
+	case s.send <- req:
+	case <-s.done:
+		return errors.New("session: 会话已关闭")
+	}
+	select {
+	case err := <-req.ack:
+		return err
+	case <-s.done:
+		return errors.New("session: 会话已关闭")
+	}
+}
+
+// writeAsync 只入队、不等待写入结果。用于读循环里的回包（失败的会话反正会被关掉）。
+// 队列满说明对端长时间不读 stdin，此时会话已经不可用：直接关闭，别把读循环挂住。
+func (s *Session) writeAsync(b []byte) {
+	select {
+	case s.send <- writeReq{line: append(b, '\n')}:
+	case <-s.done:
+	default:
+		_ = s.Close()
+	}
+}
+
+// writeLoop 串行写 stdin。写失败即关会话：stdin 断了等于会话结束。
+func (s *Session) writeLoop() {
+	for {
+		select {
+		case <-s.done:
+			return
+		case req := <-s.send:
+			err := s.writeNow(req.line)
+			if req.ack != nil {
+				req.ack <- err
+			}
+			if err != nil {
+				_ = s.Close()
+				return
+			}
+		}
+	}
+}
+
+func (s *Session) writeNow(b []byte) error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
-	if _, err := s.tr.Write(append(b, '\n')); err != nil {
+	if _, err := s.tr.Write(b); err != nil {
 		return fmt.Errorf("session: 写入失败: %w", err)
 	}
 	s.idle.Store(time.Now().UnixNano())
@@ -460,7 +517,8 @@ func (s *Session) handleLine(line []byte) {
 			return
 		}
 		// 未实现的子类型必须显式回错，否则 CLI 会一直等。
-		_ = s.writeLine(protocol.Unsupported(env.RequestID))
+		// 这里在读循环 goroutine 上，只能入队：同步写会让「读 stdout」跟着卡住。
+		s.writeAsync(protocol.Unsupported(env.RequestID))
 
 	case protocol.TypeResult:
 		s.setState(StateReady)

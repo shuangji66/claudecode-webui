@@ -652,3 +652,73 @@ func TestPendingPermissionsSurviveUntilReplied(t *testing.T) {
 		t.Fatalf("回复后仍残留审批: %v", left)
 	}
 }
+
+// slowSink 的 Write 会一直阻塞，模拟「CLI 暂时不读 stdin」（大 prompt 正在处理、
+// 或者对端卡住）。读循环不能因此停摆，否则 stdout 没人排空，双向死锁。
+type slowSink struct {
+	release chan struct{}
+	once    sync.Once
+	wrote   chan struct{}
+}
+
+func newSlowSink() *slowSink {
+	return &slowSink{release: make(chan struct{}), wrote: make(chan struct{}, 8)}
+}
+
+func (s *slowSink) Read([]byte) (int, error) { select {} }
+func (s *slowSink) Close() error            { s.once.Do(func() { close(s.release) }); return nil }
+func (s *slowSink) Write(b []byte) (int, error) {
+	s.wrote <- struct{}{}
+	<-s.release
+	return len(b), nil
+}
+
+// 回归：读循环里回 unsupported 不能同步写 stdin。
+//
+// 旧实现直接在 handleLine 里 writeLine：stdin 管道被对端堵住时，读循环卡在写锁上，
+// 同时不再读 stdout，CLI 写满管道也阻塞 —— 会话双向死锁，且状态一直显示 ready/busy。
+func TestHandleLineDoesNotBlockOnStdin(t *testing.T) {
+	sink := newSlowSink()
+	sess := New("s1", "/tmp/work", sink, func(Event) {})
+	t.Cleanup(func() { _ = sess.Close() })
+
+	// 未实现的子类型：必须回 unsupported（走写队列），但调用不能等写完。
+	line := []byte(`{"type":"control_request","request_id":"r1","request":{"subtype":"no_such_subtype"}}`)
+	done := make(chan struct{})
+	go func() {
+		sess.handleLine(line)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleLine 被 stdin 写操作阻塞了")
+	}
+
+	// 回包确实进了写队列（writer goroutine 已经卡在 Write 上）。
+	select {
+	case <-sink.wrote:
+	case <-time.After(2 * time.Second):
+		t.Fatal("unsupported 回包没有进入写队列")
+	}
+}
+
+// 写队列满（对端长期不读）时会话必须被关掉，而不是把调用方永远挂住。
+func TestWriteQueueFullClosesSession(t *testing.T) {
+	sink := newSlowSink()
+	sess := New("s1", "/tmp/work", sink, func(Event) {})
+	defer sink.Close()
+
+	line := []byte(`{"type":"control_request","request_id":"r%d","request":{"subtype":"x"}}`)
+	for i := 0; i < 200; i++ {
+		select {
+		case <-sess.Done():
+			return // 已按预期关闭
+		default:
+		}
+		sess.writeAsync([]byte(`{"type":"control_request"}`))
+		_ = line
+	}
+	t.Fatal("写队列灌满后会话没有关闭")
+}
