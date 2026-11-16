@@ -23,12 +23,16 @@ import { isDangerousPermissionMode, permissionModeWarning } from "../../lib/perm
 import { Dialog } from "../common/Dialog";
 import { askConfirm } from "../common/SystemDialogs";
 import {
+  BrandMark,
   IconCheck,
   IconChevronDown,
   IconDownload,
+  IconExternal,
   IconGauge,
+  IconGitHub,
   IconGlobe,
   IconImage,
+  IconInfo,
   IconMonitor,
   IconMoon,
   IconPlus,
@@ -42,7 +46,7 @@ import {
   IconWrench,
 } from "../common/Icons";
 
-type Tab = "general" | "models" | "skills" | "proxy" | "deploy";
+type Tab = "general" | "models" | "skills" | "proxy" | "deploy" | "about";
 
 const PERMISSION_MODES = ["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
 const THEMES = ["light", "dark", "system"] as const;
@@ -100,6 +104,9 @@ export function SettingsDrawer({
             <NavItem active={tab === "deploy"} icon={<IconDownload size={16} />} onClick={() => setTab("deploy")}>
               {t("部署", "Deployment")}
             </NavItem>
+            <NavItem active={tab === "about"} icon={<IconInfo size={16} />} onClick={() => setTab("about")}>
+              {t("关于", "About")}
+            </NavItem>
           </nav>
 
           <div className="min-h-0 flex-1">
@@ -136,9 +143,76 @@ export function SettingsDrawer({
             >
               <DeploySettings />
             </div>
+            <div
+              className={
+                tab === "about"
+                  ? "dsh-scroll h-full overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4 md:px-8 md:pb-8 md:pt-6"
+                  : "hidden"
+              }
+            >
+              <AboutSettings />
+            </div>
           </div>
         </div>
     </Dialog>
+  );
+}
+
+/** 「关于」页：一句话特性、致谢与源码地址。 */
+export function AboutSettings() {
+  const t = useT();
+  const info = useAppStore((s) => s.info);
+  const version = info?.version ? `v${info.version}` : "";
+  return (
+    <div className="mx-auto max-w-2xl space-y-7">
+      <div className="flex items-center gap-3">
+        <BrandMark size={40} className="text-ink" />
+        <div className="min-w-0">
+          <h3 className="text-[15px] font-semibold text-ink">Claude Code WebUI</h3>
+          {version && <p className="text-[11.5px] text-muted">{version}</p>}
+        </div>
+      </div>
+
+      <p className="text-[12.5px] leading-relaxed text-ink-2">
+        {t(
+          "把本地 claude CLI 包成可视化 Web 控制台：消息、思考、工具卡片、diff 与审批全部结构化渲染，右侧栏带文件、Git 和真正的终端。整个应用是一个 Go 二进制，只监听 unix socket，由飞牛网关反代。",
+          "A visual console for the local claude CLI: messages, thinking, tool cards, diffs and approvals rendered structurally, with files, Git and a real terminal in the side panel. One Go binary, listening only on a unix socket behind the fnOS gateway.",
+        )}
+      </p>
+
+      <Section
+        title={t("致谢", "Credits")}
+        desc={t("这个项目的交互与协议细节大量参考了下面几项工作。", "The interaction and protocol details here borrow heavily from the work below.")}
+      >
+        <ul className="space-y-2 text-[12px] leading-relaxed text-ink-2">
+          <li>
+            <span className="font-medium text-ink">DeepSeek</span>
+            {t(" — 模型与技术支持", " — models and technical support")}
+          </li>
+          <li>
+            <span className="font-medium text-ink">DeepSeekRuntime（DSH）</span>
+            {t(" — 界面交互、消息模型与子代理设计的参考", " — reference for the UI, message model and subagent design")}
+          </li>
+          <li>
+            <span className="font-medium text-ink">dsh-better-sidebar</span>
+            {t(" — 右侧栏 Git 面板的交互与命令安全思路", " — the Git panel's interaction and command-safety rules")}
+          </li>
+        </ul>
+      </Section>
+
+      <Section title={t("源码", "Source")}>
+        <a
+          href="https://github.com/shuangji66/claudecode-webui"
+          target="_blank"
+          rel="noreferrer noopener"
+          className="inline-flex items-center gap-2 rounded-lg border border-line-strong px-3 py-2 text-[12px] text-ink transition hover:bg-panel-strong"
+        >
+          <IconGitHub size={16} />
+          <span>shuangji66/claudecode-webui</span>
+          <IconExternal size={13} className="text-muted" />
+        </a>
+      </Section>
+    </div>
   );
 }
 

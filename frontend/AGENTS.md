@@ -240,7 +240,11 @@ src/
   **宽度必须由「用户偏好 + 当前视口」派生**（`preferredWidth` 存偏好、`useViewportWidth()`
   跟踪 resize、渲染时 `clampWidth(preferredWidth, viewport)`）：只在拖动时 clamp 的话，
   窗口缩小后右侧栏不会自己变窄，会一直把对话挤成一条缝，直到用户拖一下才被纠正。
-- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 技能 / 代理 / 部署」；通用设置即时保存，
+- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 技能 / 代理 / 部署 / 关于」；
+  「关于」页只放：一句话特性、版本号（`/api/info` 的 version）、致谢
+  （DeepSeek / DeepSeekRuntime / dsh-better-sidebar）与 GitHub 仓库外链
+  （`https://github.com/shuangji66/claudecode-webui`，`target=_blank` + `rel=noreferrer`）。
+  不要把设置项塞进这一页。通用设置即时保存，
   模型配置在底部「保存模型设置」统一提交，代理保存后重启所有 claude 会话。
   「部署」页管 claude 版本（下载源 / 安装进度 / 切换生效版本），切换只影响之后新建的会话。
   「技能」页读写 SKILL.md（`store/useSkillsStore.ts` 收敛请求）：个人技能对所有会话生效，
