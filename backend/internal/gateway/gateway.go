@@ -55,6 +55,8 @@ type Deps struct {
 	Settings      *settings.Store
 	Workspaces    *workspace.Store
 	Conversations *conversation.Store
+	// Claude 是 claude 版本管理（下载/切换）；为 nil 时部署相关路由返回 503。
+	Claude        ClaudeDeployer
 	ClaudeVersion string
 	TerminalShell string
 	StartedAt     time.Time
@@ -119,6 +121,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/settings/models", s.authed(s.handleFetchModels))
 	s.mux.HandleFunc("POST /api/settings/verify", s.authed(s.handleVerifyModel))
 	s.mux.HandleFunc("POST /api/settings/proxy", s.authed(s.handleApplyProxy))
+	s.mux.HandleFunc("GET /api/claude/status", s.authed(s.handleClaudeStatus))
+	s.mux.HandleFunc("POST /api/claude/check", s.authed(s.handleClaudeCheck))
+	s.mux.HandleFunc("POST /api/claude/install", s.authed(s.handleClaudeInstall))
+	s.mux.HandleFunc("POST /api/claude/active", s.authed(s.handleClaudeActive))
+	s.mux.HandleFunc("POST /api/claude/source", s.authed(s.handleClaudeSource))
 	s.mux.HandleFunc("GET /ws", s.handleWS)
 	s.mux.HandleFunc("GET /ws/terminal", s.handleTerminalWS)
 	s.mux.HandleFunc("/", s.handleSPA)

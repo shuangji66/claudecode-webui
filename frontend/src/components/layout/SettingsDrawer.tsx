@@ -12,12 +12,14 @@ import {
   type ProviderForm,
 } from "../../lib/providerForm";
 import type { ModelSpec } from "../../transport/types";
+import { DeploySettings } from "./DeploySettings";
 import { Select } from "../common/Select";
 import { Dialog } from "../common/Dialog";
 import { askConfirm } from "../common/SystemDialogs";
 import {
   IconCheck,
   IconChevronDown,
+  IconDownload,
   IconGauge,
   IconGlobe,
   IconImage,
@@ -33,15 +35,30 @@ import {
   IconType,
 } from "../common/Icons";
 
-type Tab = "general" | "models" | "proxy";
+type Tab = "general" | "models" | "proxy" | "deploy";
 
 const PERMISSION_MODES = ["", "default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
 const THEMES = ["light", "dark", "system"] as const;
 const LOCALES = ["zh", "en"] as const;
 
-export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function SettingsDrawer({
+  open,
+  onClose,
+  initialTab,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /** 从侧栏「有更新」等入口直接落到某一页。 */
+  initialTab?: Tab;
+}) {
   const t = useT();
-  const [tab, setTab] = useState<Tab>("general");
+  const [tab, setTab] = useState<Tab>(initialTab ?? "general");
+
+  // 每次打开都按入口指定的页签重置：否则上次停在「模型」，
+  // 点「有更新」进来还是模型页。
+  useEffect(() => {
+    if (open) setTab(initialTab ?? "general");
+  }, [open, initialTab]);
 
   if (!open) return null;
 
@@ -66,6 +83,9 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             <NavItem active={tab === "proxy"} icon={<IconShield size={16} />} onClick={() => setTab("proxy")}>
               {t("代理", "Proxy")}
             </NavItem>
+            <NavItem active={tab === "deploy"} icon={<IconDownload size={16} />} onClick={() => setTab("deploy")}>
+              {t("部署", "Deployment")}
+            </NavItem>
           </nav>
 
           <div className="min-h-0 flex-1">
@@ -89,6 +109,15 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
               }
             >
               <ProxySettings />
+            </div>
+            <div
+              className={
+                tab === "deploy"
+                  ? "dsh-scroll h-full overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4 md:px-8 md:pb-8 md:pt-6"
+                  : "hidden"
+              }
+            >
+              <DeploySettings />
             </div>
           </div>
         </div>

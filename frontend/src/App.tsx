@@ -6,6 +6,7 @@ import { I18nProvider, useT } from "./lib/i18n";
 import { Sidebar } from "./components/layout/Sidebar";
 import { ChatPane } from "./components/chat/ChatPane";
 import { SettingsDrawer } from "./components/layout/SettingsDrawer";
+import { ClaudeInstallPrompt } from "./components/layout/ClaudeInstallPrompt";
 import { TokenGate } from "./components/layout/TokenGate";
 import { WorkspaceDialog } from "./components/layout/WorkspaceDialog";
 import { HistoryDialog } from "./components/layout/HistoryDialog";
@@ -73,6 +74,8 @@ function AppShell() {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"general" | "models" | "proxy" | "deploy" | undefined>(undefined);
+  const [installPromptDismissed, setInstallPromptDismissed] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [tokenEpoch, setTokenEpoch] = useState(0);
@@ -140,6 +143,12 @@ function AppShell() {
 
   const openSettings = () => {
     setSidebarOpen(false);
+    setSettingsTab(undefined);
+    setSettingsOpen(true);
+  };
+  const openDeploy = () => {
+    setSidebarOpen(false);
+    setSettingsTab("deploy");
     setSettingsOpen(true);
   };
   const openWorkspace = () => {
@@ -164,6 +173,7 @@ function AppShell() {
           collapsed={collapsed}
           onToggleCollapse={toggleCollapse}
           onOpenSettings={openSettings}
+          onOpenDeploy={openDeploy}
           onAddWorkspace={openWorkspace}
           onOpenHistory={openHistory}
         />
@@ -175,6 +185,7 @@ function AppShell() {
             <Sidebar
               onClose={() => setSidebarOpen(false)}
               onOpenSettings={openSettings}
+              onOpenDeploy={openDeploy}
               onAddWorkspace={openWorkspace}
               onOpenHistory={openHistory}
             />
@@ -208,7 +219,16 @@ function AppShell() {
         />
       )}
 
-      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsTab} />
+      {/* 一个版本都没装：后端能起来，但开不了会话，首屏直接把人送到部署页 */}
+      <ClaudeInstallPrompt
+        open={Boolean(info && info.claude_installed === false) && !installPromptDismissed}
+        onClose={() => setInstallPromptDismissed(true)}
+        onGoDeploy={() => {
+          setInstallPromptDismissed(true);
+          openDeploy();
+        }}
+      />
       <WorkspaceDialog open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />
       <HistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} />
       {/* 全局确认 / 输入框（替代 window.confirm / prompt），由这里挂一次 */}

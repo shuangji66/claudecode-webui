@@ -5,8 +5,8 @@
 #   make test            # 后端 go test + 前端 vitest
 #   make clean           # 清理产物（并把 embed 里的占位 index.html 还原）
 #
-# 部署约定：二进制与 claude 放在同一目录（claude 需在 PATH 中），
-# 服务只监听 unix socket，由网关按 baseurl 前缀反代。
+# 部署约定：只部署 ccweb 本身；claude 由「设置 → 部署」按版本下载到数据目录，
+# 不再随包分发、也不回退 PATH。服务只监听 unix socket，由网关按 baseurl 前缀反代。
 
 ROOT     := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 BACKEND  := $(ROOT)/backend

@@ -15,6 +15,8 @@ import { openFnosFileManager } from "../lib/fnos";
 import type { Item } from "../lib/model";
 import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
 import type {
+  ClaudeCheck,
+  ClaudeStatus,
   ConversationInfo,
   FsListing,
   GatewayModel,
@@ -42,6 +44,10 @@ export interface InfoResponse {
   socket: string;
   claude_bin: string;
   claude_version: string;
+  /** 是否有可用的托管 claude 版本（没有就弹安装引导）。 */
+  claude_installed?: boolean;
+  /** 当前生效的托管版本号。 */
+  claude_active?: string;
   projects_root: string;
   data_dir: string;
   claude_home: string;
@@ -84,6 +90,11 @@ interface AppState {
   settings: PublicSettings | null;
   settingsSaving: boolean;
 
+  /** 「设置 → 部署」的状态；null 表示还没拉过。 */
+  claude: ClaudeStatus | null;
+  /** 部署页的局部错误（检查更新失败、安装失败），不占用全局错误条。 */
+  claudeError: string | null;
+
   workspaces: WorkspaceEntry[];
   workspaceRoot: string;
   currentWorkspace: string;
@@ -121,6 +132,14 @@ interface AppState {
   verifyModelFor: (form: ProviderForm, model: string) => Promise<void>;
   probeProvider: (form: ProviderForm) => Promise<void>;
   applyProxy: (url: string) => Promise<{ ok: boolean; warning?: string }>;
+
+  loadClaudeStatus: () => Promise<void>;
+  /** 查询 registry 最新版本；失败只写 claudeError。 */
+  checkClaudeUpdate: () => Promise<ClaudeCheck | null>;
+  /** 触发后台安装并轮询进度；成功返回 true。 */
+  installClaude: (version: string, source?: string) => Promise<boolean>;
+  setClaudeActive: (version: string) => Promise<boolean>;
+  setClaudeSource: (source: string) => Promise<boolean>;
 
   refreshSessions: () => Promise<void>;
   refreshConversations: () => Promise<void>;
@@ -170,6 +189,8 @@ let createTask: Promise<SessionInfo | null> | null = null;
 const recovering = new Set<string>();
 const ACTIVE_KEY = "ccweb-active-session";
 let bootstrapPromise: Promise<void> | null = null;
+/** 安装进度轮询句柄；同一时刻只允许一条轮询链。 */
+let claudePollTimer: number | null = null;
 
 function token(): string {
   try {
@@ -270,6 +291,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   info: null,
   settings: null,
   settingsSaving: false,
+  claude: null,
+  claudeError: null,
   workspaces: [],
   workspaceRoot: "",
   currentWorkspace: "",
@@ -324,6 +347,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
           conversations: conversationList,
           loading: false,
         });
+
+        // 部署状态独立拉取：失败不影响主流程（离线时只是拿不到「有更新」提示）。
+        void get().loadClaudeStatus();
+
+        // 没有可用的 claude 时不要自动建会话：后端必然失败，只会弹一条红条，
+        // 而首屏的安装引导已经把话说清楚了。
+        if (info.claude_installed === false) return;
 
         // 优先恢复上次打开且未归档的对话；否则当前工作区最近的一条；
         // 都没有（或已被归档/删除）才开一条新对话。
@@ -478,6 +508,107 @@ export const useAppStore = create<AppState>()((set, get) => ({
     } catch (e) {
       set({ settingsSaving: false, error: errText(e) });
       return { ok: false, warning: errText(e) };
+    }
+  },
+
+  loadClaudeStatus: async () => {
+    try {
+      const st = await apiFetch<ClaudeStatus>("/api/claude/status");
+      set({ claude: st, claudeError: null });
+      // /api/info 里的安装状态是启动时算的：装完/切版本后要同步，
+      // 否则「未安装」弹窗和侧栏更新标记会一直停在旧值。
+      const cur = get().info;
+      if (cur && (cur.claude_installed !== (st.installed.length > 0) || cur.claude_active !== st.active)) {
+        set({
+          info: {
+            ...cur,
+            claude_installed: st.installed.length > 0,
+            claude_active: st.active,
+            claude_version: st.active || cur.claude_version,
+          },
+        });
+      }
+    } catch (e) {
+      set({ claudeError: errText(e) });
+    }
+  },
+
+  checkClaudeUpdate: async () => {
+    set({ claudeError: null });
+    try {
+      const res = await apiFetch<ClaudeCheck>("/api/claude/check", { method: "POST" });
+      await get().loadClaudeStatus();
+      return res;
+    } catch (e) {
+      set({ claudeError: errText(e) });
+      return null;
+    }
+  },
+
+  installClaude: async (version, source) => {
+    set({ claudeError: null });
+    try {
+      const st = await apiFetch<ClaudeStatus>("/api/claude/install", {
+        method: "POST",
+        body: JSON.stringify({ version, source: source ?? "" }),
+      });
+      set({ claude: st });
+    } catch (e) {
+      set({ claudeError: errText(e) });
+      return false;
+    }
+    // 后台安装：轮询到终态为止。失败也停在 claude.job.error 上，由部署页展示。
+    return new Promise<boolean>((resolve) => {
+      if (claudePollTimer !== null) window.clearTimeout(claudePollTimer);
+      const tick = async () => {
+        claudePollTimer = null;
+        try {
+          const st = await apiFetch<ClaudeStatus>("/api/claude/status");
+          set({ claude: st });
+          const phase = st.job?.phase;
+          if (phase === "done" || phase === "error") {
+            await get().loadClaudeStatus();
+            if (phase === "error") set({ claudeError: st.job?.error ?? "安装失败" });
+            resolve(phase === "done");
+            return;
+          }
+        } catch {
+          // 轮询期间的网络抖动不当作失败，继续下一轮
+        }
+        claudePollTimer = window.setTimeout(() => void tick(), 800);
+      };
+      claudePollTimer = window.setTimeout(() => void tick(), 400);
+    });
+  },
+
+  setClaudeActive: async (version) => {
+    set({ claudeError: null });
+    try {
+      const st = await apiFetch<ClaudeStatus>("/api/claude/active", {
+        method: "POST",
+        body: JSON.stringify({ version }),
+      });
+      set({ claude: st });
+      await get().loadClaudeStatus();
+      return true;
+    } catch (e) {
+      set({ claudeError: errText(e) });
+      return false;
+    }
+  },
+
+  setClaudeSource: async (source) => {
+    set({ claudeError: null });
+    try {
+      const st = await apiFetch<ClaudeStatus>("/api/claude/source", {
+        method: "POST",
+        body: JSON.stringify({ source }),
+      });
+      set({ claude: st });
+      return true;
+    } catch (e) {
+      set({ claudeError: errText(e) });
+      return false;
     }
   },
 

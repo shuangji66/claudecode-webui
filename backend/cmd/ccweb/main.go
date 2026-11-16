@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"ccweb/backend/internal/agent/manager"
+	"ccweb/backend/internal/agent/process"
 	"ccweb/backend/internal/agent/session"
 	"ccweb/backend/internal/authz"
+	"ccweb/backend/internal/claudebin"
 	"ccweb/backend/internal/config"
 	"ccweb/backend/internal/conversation"
 	"ccweb/backend/internal/gateway"
@@ -34,7 +36,6 @@ func main() {
 	logger := log.New(os.Stdout, "[ccweb] ", log.LstdFlags)
 
 	cfg := config.Load(version)
-	exePath, _ := os.Executable()
 
 	h := hub.New()
 
@@ -59,13 +60,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	mgr, err := manager.New(cfg, exePath, store, func(sid string, ev session.Event) {
-		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data})
-	})
+	// claude 二进制改为按版本下载到数据目录，由设置页选择生效版本。
+	// CCWEB_CLAUDE_BIN 仍然优先：它是显式的运维覆盖，不属于"PATH 回退"。
+	claudeMgr, err := claudebin.Open(cfg.ClaudeVersions)
 	if err != nil {
 		logger.Printf("启动失败: %v", err)
 		os.Exit(1)
 	}
+	resolveClaude := func() (string, error) {
+		if cfg.ClaudeBin != "" {
+			return process.Discover(cfg.ClaudeBin)
+		}
+		return claudeMgr.BinPath()
+	}
+
+	mgr := manager.New(cfg, resolveClaude, store, func(sid string, ev session.Event) {
+		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data})
+	})
 	defer mgr.CloseAll()
 
 	historyDir := filepath.Join(cfg.ClaudeHome, ".claude", "projects")
@@ -78,6 +89,7 @@ func main() {
 		Settings:      store,
 		Workspaces:    wsStore,
 		Conversations: convStore,
+		Claude:        claudeMgr,
 		ProjectsRoot:  cfg.ProjectsRoot,
 		ClaudeVersion: probeClaudeVersion(mgr.Binary()),
 		TerminalShell: cfg.TerminalShell,
@@ -159,6 +171,9 @@ func latestTranscript(projectsDir, cwd string, skip func(string) bool) (history.
 
 // probeClaudeVersion 取一次 `claude --version` 用于 /api/info 展示；失败不阻塞启动。
 func probeClaudeVersion(bin string) string {
+	if bin == "" {
+		return ""
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, bin, "--version").Output()

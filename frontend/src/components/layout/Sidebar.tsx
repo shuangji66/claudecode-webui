@@ -13,6 +13,7 @@ import {
   IconChevronRight,
   IconClock,
   IconClose,
+  IconDownload,
   IconFolder,
   IconFolderPlus,
   IconHistory,
@@ -33,6 +34,8 @@ interface Props {
   collapsed?: boolean;
   onToggleCollapse?: () => void;
   onOpenSettings: () => void;
+  /** 直接落到「设置 → 部署」，用于左下角的更新提示。 */
+  onOpenDeploy?: () => void;
   onAddWorkspace: () => void;
   onOpenHistory: () => void;
 }
@@ -56,8 +59,13 @@ interface WsMenuState {
   anchor: HTMLElement;
 }
 
-export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onAddWorkspace, onOpenHistory }: Props) {
+export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onOpenDeploy, onAddWorkspace, onOpenHistory }: Props) {
   const t = useT();
+  const claude = useAppStore((s) => s.claude);
+  // 只有「已装过」才提示更新：一个版本都没装时走首屏的安装弹窗，
+  // 否则左下角会同时出现两个入口，指向同一件事。
+  const updateAvailable = Boolean(claude?.update_available && claude.active);
+  const claudeLatest = claude?.latest ?? "";
   const locale = useLocale();
   const workspaces = useAppStore((s) => s.workspaces);
   const currentWorkspace = useAppStore((s) => s.currentWorkspace);
@@ -266,6 +274,17 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
           <IconHistory size={18} />
         </button>
         <div className="flex-1" />
+        {updateAvailable && onOpenDeploy && (
+          <button
+            type="button"
+            onClick={onOpenDeploy}
+            className="mb-2 flex h-9 w-9 items-center justify-center rounded-lg text-brand hover:bg-black/5"
+            aria-label={t("有新版本可安装", "Update available")}
+            title={t(`有更新 ${claudeLatest}`, `Update ${claudeLatest}`)}
+          >
+            <IconDownload size={18} />
+          </button>
+        )}
         <span className={`mb-3 h-2 w-2 rounded-full ${connTone}`} title={connLabel} />
         <button
           type="button"
@@ -481,6 +500,18 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       </div>
 
       <div className="shrink-0 border-t border-line px-2 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] pt-2 md:pb-2">
+        {updateAvailable && onOpenDeploy && (
+          <button
+            type="button"
+            onClick={onOpenDeploy}
+            className="side-row text-brand hover:bg-brand/10"
+            title={t(`有更新 ${claudeLatest}，点击去部署页安装`, `Update ${claudeLatest} available — open deployment`)}
+          >
+            <IconDownload size={15} />
+            <span className="text-[12px]">{t(`有更新 ${claudeLatest}`, `Update ${claudeLatest}`)}</span>
+            <span className="ml-auto text-[10px] text-brand/80">{t("去安装", "Install")}</span>
+          </button>
+        )}
         <button type="button" onClick={onOpenHistory} className="side-row text-muted hover:text-ink">
           <IconClock size={15} />
           <span className="text-[12px]">{t("历史记录", "History")}</span>

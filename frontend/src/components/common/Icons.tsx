@@ -426,3 +426,22 @@ export function IconPencil(props: Props) {
     </Svg>
   );
 }
+
+export function IconDownload(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M12 4v10" />
+      <path d="m8 10 4 4 4-4" />
+      <path d="M5 18h14" />
+    </Svg>
+  );
+}
+
+export function IconRefresh(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M20 12a8 8 0 1 1-2.6-5.9" />
+      <path d="M20 4v4h-4" />
+    </Svg>
+  );
+}

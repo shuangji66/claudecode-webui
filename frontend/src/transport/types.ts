@@ -311,3 +311,47 @@ export interface TranscriptPayload {
   lines: unknown[];
   truncated?: boolean;
 }
+
+/** 一个已安装的 claude 版本（/api/claude/status）。 */
+export interface ClaudeVersion {
+  version: string;
+  path: string;
+  size: number;
+  installed_at: string;
+}
+
+/** 安装任务的阶段；字符串由后端定义，不要改成数字。 */
+export type ClaudeJobPhase = "downloading" | "extracting" | "verifying" | "done" | "error";
+
+export interface ClaudeJob {
+  version: string;
+  source: string;
+  phase: ClaudeJobPhase;
+  downloaded: number;
+  total: number;
+  error?: string;
+  started_at: string;
+  finished_at?: string;
+}
+
+/** 「设置 → 部署」的状态快照。 */
+export interface ClaudeStatus {
+  /** 本机对应的 npm 平台包后缀，例如 linux-x64、linux-arm64-musl。 */
+  platform: string;
+  /** 版本目录，方便在 NAS 上排查。 */
+  dir: string;
+  installed: ClaudeVersion[];
+  /** 当前生效版本；空表示没有可用版本。 */
+  active: string;
+  source: "npmmirror" | "official";
+  latest: string;
+  update_available: boolean;
+  job: ClaudeJob | null;
+}
+
+/** /api/claude/check 的返回。 */
+export interface ClaudeCheck {
+  source: string;
+  latest: string;
+  versions: string[];
+}

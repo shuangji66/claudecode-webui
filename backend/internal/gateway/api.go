@@ -17,7 +17,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleInfo 返回前端启动所需的环境信息。
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]any{
+	// 前端第一屏要判断「有没有装 claude」，这里顺手带一份精简状态，
+	// 免得再发一次 /api/claude/status 才能决定弹不弹安装提示。
+	//
+	// 未装配部署管理时**不带这两个字段**：前端据此区分"确实没装"与"这套部署不
+	// 走托管安装"，否则会误弹一个装不了东西的安装提示。
+	body := map[string]any{
 		"version":            s.d.Cfg.Version,
 		"base_url":           s.d.Cfg.BaseURL,
 		"socket":             s.d.Cfg.AdminSock,
@@ -40,7 +45,13 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"frontend":      webui.HasIndex(),
 		"max_sessions":  s.d.Cfg.MaxSessions,
 		"started_at":    s.d.StartedAt,
-	})
+	}
+	if s.d.Claude != nil {
+		st := s.d.Claude.Status()
+		body["claude_installed"] = len(st.Installed) > 0
+		body["claude_active"] = st.Active
+	}
+	writeJSON(w, body)
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {

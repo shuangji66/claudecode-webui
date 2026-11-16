@@ -18,11 +18,14 @@
   Linux PTY 上的 bash 终端（`xterm.js` 只做渲染）；
 - **授权目录 = 工作区**，持久化在 `workspaces.json`；对话列表来自 claude 转录 +
   `conversations.json` 元数据，启动时恢复上次对话（`--resume`）而不是新建；
-- 设置页分「通用 / 模型 / 代理」：主题、语言、字号、默认权限、代理，以及每个模型的推理强度/图片能力；
+- 设置页分「通用 / 模型 / 代理 / 部署」：主题、语言、字号、默认权限、代理、每个模型的推理强度/图片能力，
+  以及 claude 版本的下载源/安装/切换；
 - 输入框 `+` 支持文件/图片附件（图片/PDF/文本），随 prompt 发送；
 - 左侧栏品牌图标使用 `frontend/src/assets/claude-code.svg`；前端不允许呼吸灯/无限 pulse 动画。
 
-部署约定：`ccweb` 与 `claude` 放同一目录，`claude` 在 PATH 中，后端直接 exec `claude`。
+部署约定：**只部署 `ccweb` 本身**。`claude` 不再随包分发、也不回退 PATH：由「设置 → 部署」
+从 npm 平台包按版本下载到 `CCWEB_DATA_DIR/claude/versions/<版本>/claude`，面板里切换生效版本。
+`CCWEB_CLAUDE_BIN` 是显式的运维覆盖，优先级最高（用于已经自己管 claude 的机器）。
 
 ## 2. 架构
 
@@ -58,6 +61,7 @@ hub ── manager ── session ── process ── claude (NDJSON)
 | `agent/manager` | `agent/session`、`agent/process`、config、settings | 处理 HTTP / WS |
 | `agent/session` | `agent/protocol` | 知道文件系统布局、知道前端协议 |
 | `agent/process` | 标准库 | 启动会话、解析 NDJSON |
+| `claudebin` | 标准库 | 启动 claude、决定会话参数 |
 | `agent/protocol` | 标准库 | I/O、状态机 |
 
 `gateway` 对 manager 只依赖 `SessionManager` 接口（见 `gateway.go`），
@@ -86,7 +90,9 @@ hub ── manager ── session ── process ── claude (NDJSON)
     图片/PDF 白名单，并带 `CSP: sandbox`——不要让工作区的 HTML/SVG 以同源页面执行脚本。
 14. **Git 只调 CLI、不经 shell**。路径参数前加 `--literal-pathspecs`，rev/hash/分支前加
     `--end-of-options`；提交沿用用户全局身份，禁止设置 `user.name/email`。
-15. **对话 id 必须稳定**。新建会话用 UUID 作为 `--session-id`，恢复用同一个 UUID `--resume`；
+15. **claude 二进制只能来自托管版本或显式 `CCWEB_CLAUDE_BIN`**。不要再加 PATH / 程序同目录
+    回退：NAS 上经常同时存在几份 claude，"跑的是哪个版本"必须能在界面上看到。
+16. **对话 id 必须稳定**。新建会话用 UUID 作为 `--session-id`，恢复用同一个 UUID `--resume`；
     `Info.ID`、转录文件名、`conversations.json`、前端 active id 必须是同一个值。
     不要用「按 cwd ensure 一个新的」来恢复旧对话——那会造出新对话、丢掉上下文。
 
@@ -185,6 +191,21 @@ hub ── manager ── session ── process ── claude (NDJSON)
   （`askConfirm`/`askPrompt`）、下拉 `common/Select`、菜单 `common/Menu`、按钮 `common/Button`。
   原生 `window.confirm/prompt/alert` 与 `<select>` 一律不用：它们的配色/圆角/字号由系统决定，
   在飞牛桌面 iframe 里和主题对不上。
+
+### 4.8 claude 版本管理（`internal/claudebin`）
+
+- **数据源是 npm 平台包**，不是 `downloads.claude.ai/claude.zst`：平台包
+  `@anthropic-ai/claude-code-<platform>` 与官方二进制逐字节相同，且 npmmirror 在国内实测
+  ~11 MB/s（官方 CDN 只有 IPv6 通）。Go 标准库能解 gzip+tar，不用引 zstd。
+- **必须按 `dist.integrity` 校验 sha512 再落盘**：镜像被换包时要直接失败，不能装上来路不明的二进制。
+- **装完先跑一次 `--version`**：musl/glibc 选错包、文件被截断都在这里暴露，而不是等到会话起不来。
+- **解包与下载同一遍流式完成**：先存 tgz 再解开会在 NAS 上多占 170 MB。
+- **已生效版本不被静默顶掉**：装旧版本用于回滚对比是常见操作，只有原本没有生效版本时才自动启用。
+- **切换只影响之后新建的会话**：`manager.resolve` 每次建会话重新解析路径，已在跑的进程不重启。
+- **未安装时服务必须能起来**：否则用户没有入口去装。`manager.New` 不再因找不到 claude 失败，
+  建会话时才返回「请去设置 → 部署安装」。
+- **`/api/info` 只在装配了部署管理时才带 `claude_installed`**：前端据此区分"确实没装"与
+  "这套部署不走托管安装"，否则会弹一个装不了东西的提示。
 
 ## 5. 命令速查
 

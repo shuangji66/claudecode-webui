@@ -40,10 +40,12 @@ type Info struct {
 
 // Manager 持有全部常驻会话。
 type Manager struct {
-	cfg   config.Config
-	bin   string
-	store *settings.Store
-	emit  func(sessionID string, ev session.Event)
+	cfg config.Config
+	// resolve 每次新建会话时重新解析 claude 路径：设置页切换版本后，
+	// 新会话立刻用新版本，已在跑的进程保持原样（二进制已载入内存）。
+	resolve func() (string, error)
+	store   *settings.Store
+	emit    func(sessionID string, ev session.Event)
 
 	// createMu 串行化「检查是否已有同目录会话 + 启动新进程」。
 	// 没有它时，后端自动拉起与前端同时到达的 ensure 会各起一个 claude。
@@ -57,16 +59,15 @@ type Manager struct {
 	closing chan struct{}
 }
 
-// New 构造 Manager。exePath 用于在程序同目录里发现 claude；
-// store 提供第三方端点/密钥/默认模型等运行期配置。
-func New(cfg config.Config, exePath string, store *settings.Store, emit func(string, session.Event)) (*Manager, error) {
-	bin, err := process.Discover(cfg.ClaudeBin, exePath)
-	if err != nil {
-		return nil, err
-	}
+// New 构造 Manager。resolve 提供当前要启动的 claude 路径（通常是
+// claudebin 的当前版本）；store 提供第三方端点/密钥/默认模型等运行期配置。
+//
+// 这里不再做「找不到 claude 就启动失败」：二进制改成运行期从界面安装，
+// 未安装时服务必须照常起来，否则用户没有入口去装。
+func New(cfg config.Config, resolve func() (string, error), store *settings.Store, emit func(string, session.Event)) *Manager {
 	m := &Manager{
 		cfg:      cfg,
-		bin:      bin,
+		resolve:  resolve,
 		store:    store,
 		emit:     emit,
 		sessions: make(map[string]*session.Session),
@@ -75,11 +76,20 @@ func New(cfg config.Config, exePath string, store *settings.Store, emit func(str
 		closing:  make(chan struct{}),
 	}
 	go m.reapLoop()
-	return m, nil
+	return m
 }
 
-// Binary 返回已发现的 claude 路径。
-func (m *Manager) Binary() string { return m.bin }
+// Binary 返回当前生效的 claude 路径；未安装时返回空串（/api/info 只做展示）。
+func (m *Manager) Binary() string {
+	if m.resolve == nil {
+		return ""
+	}
+	p, err := m.resolve()
+	if err != nil {
+		return ""
+	}
+	return p
+}
 
 // Create 新建一个会话并完成握手。
 //
@@ -269,7 +279,11 @@ func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string)
 	env := process.CleanEnv(os.Environ(), m.cfg.ClaudeHome, abs)
 	env = append(env, cfgSet.Env()...)
 
-	proc, err := process.Spawn(m.bin, args, abs, env)
+	bin, err := m.resolve()
+	if err != nil {
+		return Info{}, fmt.Errorf("manager: %w；请在「设置 → 部署」里安装 claude", err)
+	}
+	proc, err := process.Spawn(bin, args, abs, env)
 	if err != nil {
 		return Info{}, err
 	}

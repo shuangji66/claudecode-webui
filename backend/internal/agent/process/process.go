@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 )
 
@@ -30,24 +28,17 @@ type Options struct {
 	IncludePartialMessages bool
 }
 
-// Discover 依次在显式路径、PATH、可执行文件同目录中查找 claude。
+// Discover 校验显式给出的 claude 路径。
 //
-// 部署约定：ccweb 二进制与 claude 二进制放在同一目录，且 claude 已在 PATH 中。
-// 因此三个来源都要试，任一命中即可。
-func Discover(explicit, exePath string) (string, error) {
-	if explicit != "" {
-		return check(explicit)
+// 这里**不再**回退 PATH 或程序同目录：claude 由 internal/claudebin 按版本下载到
+// 数据目录并显式选择，回退 PATH 会让"到底跑的是哪个版本"不可控（NAS 上经常同时
+// 存在 npm 全局装的、镜像装的、手工放的几份）。explicit 为空说明调用方没有走这条
+// 兜底路径——调用方应当先解析托管版本，再来这里。
+func Discover(explicit string) (string, error) {
+	if explicit == "" {
+		return "", errors.New("process: 没有指定 claude 路径")
 	}
-	if p, err := exec.LookPath("claude"); err == nil {
-		return p, nil
-	}
-	if exePath != "" {
-		cand := filepath.Join(filepath.Dir(exePath), "claude")
-		if p, err := check(cand); err == nil {
-			return p, nil
-		}
-	}
-	return "", errors.New("process: 找不到 claude 可执行文件（已尝试 CCWEB_CLAUDE_BIN、PATH、程序同目录）")
+	return check(explicit)
 }
 
 func check(p string) (string, error) {

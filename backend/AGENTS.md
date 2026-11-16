@@ -23,6 +23,7 @@ internal/gitctl      Git 面板后端：status/diff/stage/commit/log/branch/sync
 internal/terminal    Linux PTY 会话（/dev/ptmx + ioctl，零依赖）
 internal/authz       token 鉴权
 internal/settings    持久化配置（第三方端点/密钥/模型）+ 端点探测
+internal/claudebin   claude 版本管理：npm 平台包下载、sha512 校验、按版本目录隔离与切换
 internal/webui       go:embed 前端产物
 ```
 
@@ -167,6 +168,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   原始字节只放行图片/PDF 并带 `CSP: sandbox`，HTML/SVG 不得同源 inline。
 - `POST /api/settings/proxy` 是敏感路由；先 Apply 设置，再重启全部会话，并返回
   `{settings, sessions, warning}` 供前端直接切换。
+- 部署路由：`GET /api/claude/status`、`POST /api/claude/check|install|active|source`。
+  安装是后台任务，接口立即返回，进度靠轮询 status；全部挂 `s.authed`。
+  `Deps.Claude` 为 nil 时返回 503，且 `/api/info` 不带 `claude_installed`。
 - `POST /api/session` 与 `/api/session/ensure` 必须先 `project.Validate`，再
   `s.ensureCwdAuthorized`；移除工作区时若仍有会话在用要返回 409。
 - SPA：`index.html` 注入 `<base href>`，缓存头用 **`no-store`**；`assets/**` 用 `immutable` 强缓存。

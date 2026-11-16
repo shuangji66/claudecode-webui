@@ -18,11 +18,10 @@
 # 1. 编译（前端 → 内嵌 → 单二进制）
 make dev            # 产物：bin/ccweb
 
-# 2. 把 ccweb 和 claude 放到同一目录（claude 需在 PATH 中）
+# 2. 部署二进制（不再需要自己准备 claude）
 cp bin/ccweb /opt/cc/
-# /opt/cc/claude 已存在且在 PATH 中，后端会直接 exec "claude"
 
-# 3. 启动
+# 3. 启动（首次打开页面会提示安装 claude）
 CCWEB_BASEURL=/app/ccweb \
 CCWEB_ADMIN_SOCK=/run/ccweb/ccweb.sock \
 /opt/cc/ccweb
@@ -50,13 +49,14 @@ location /app/ccweb/ {
 |---|---|---|
 | `CCWEB_ADMIN_SOCK` | `$TMPDIR/ccweb/ccweb.sock` | 唯一监听入口（unix socket） |
 | `CCWEB_BASEURL` | 空（根路径） | 网关路径前缀，自动归一成 `/x/y` |
-| `CCWEB_CLAUDE_BIN` | 空 | 显式指定 claude；为空则依次查 PATH、程序同目录 |
+| `CCWEB_CLAUDE_BIN` | 空 | 显式指定 claude 路径（覆盖托管安装）；为空则用「设置 → 部署」里下载的版本 |
 | `CCWEB_AUTH_TOKEN` | 空 | 非空即启用 Bearer 鉴权（WS 走 `?token=`） |
 | `CCWEB_DATA_DIR` | `$TMPDIR/ccweb` | **数据目录**：socket、设置、授权目录、claude 家目录都在这下面 |
 | `CCWEB_SETTINGS_FILE` | `$DATA_DIR/settings.json` | 持久化配置（含第三方端点、密钥与界面偏好），权限 0600 |
 | `CCWEB_WORKSPACES_FILE` | `$DATA_DIR/workspaces.json` | 授权目录与当前工作区，权限 0600 |
 | `CCWEB_CONVERSATIONS_FILE` | `$DATA_DIR/conversations.json` | 对话元数据（归档/删除/重命名/最近活跃），权限 0600 |
 | `CCWEB_CLAUDE_HOME` | `$DATA_DIR/claude` | 派给 claude 子进程的 HOME（登录态与转录落在这里） |
+| `CCWEB_CLAUDE_VERSIONS` | `$DATA_DIR/claude/versions` | 托管 claude 的版本目录（每个版本一个子目录，可手动删除旧版本） |
 | `CCWEB_PROJECTS_ROOT` | `$HOME` | 首次启动时自动授权的默认目录 |
 | `CCWEB_AUTO_START` | `1` | 启动后恢复当前工作区最近一条对话（`0/false` 关闭；没有对话则不新建） |
 | `CCWEB_MAX_SESSIONS` | `8` | 常驻会话上限（单会话约 176 MB 内存） |

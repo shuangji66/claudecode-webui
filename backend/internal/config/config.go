@@ -29,6 +29,9 @@ type Config struct {
 	ProjectsRoot string
 	// DataDir 存放运行期产生的临时数据（CCWEB_DATA_DIR）。
 	DataDir string
+	// ClaudeVersions 是托管 claude 的版本目录（CCWEB_CLAUDE_VERSIONS）。
+	// 每个版本一个子目录；磁盘紧张时可以直接删掉旧版本目录。
+	ClaudeVersions string
 	// ClaudeHome 是派给 claude 子进程的 HOME（CCWEB_CLAUDE_HOME）。
 	// 默认落在数据目录下，使 claude 的会话转录、登录态与其它持久化文件集中可备份。
 	ClaudeHome string
@@ -123,6 +126,7 @@ func Load(version string) Config {
 		ProjectsRoot:      EnvOr("PROJECTS_ROOT", home),
 		DataDir:           dataDir,
 		ClaudeHome:        claudeHome,
+		ClaudeVersions:    EnvOr("CLAUDE_VERSIONS", filepath.Join(dataDir, "claude", "versions")),
 		SettingsFile:      EnvOr("SETTINGS_FILE", filepath.Join(dataDir, "settings.json")),
 		WorkspacesFile:    EnvOr("WORKSPACES_FILE", filepath.Join(dataDir, "workspaces.json")),
 		ConversationsFile: EnvOr("CONVERSATIONS_FILE", filepath.Join(dataDir, "conversations.json")),
