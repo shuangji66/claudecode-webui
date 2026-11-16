@@ -241,11 +241,12 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 移动端输入框下方必须保留 `env(safe-area-inset-bottom)`，否则 iPhone Home Indicator 会盖住输入区。
 - 界面文案走 `useT()`（中文 / English 两参数），默认中文；新增文案不要再硬编码单语。
 - **UI 原语入库，不要重复造**：模态 `common/Dialog`、确认/输入 `common/SystemDialogs`
-  （`askConfirm`/`askPrompt`）、下拉 `common/Select`、菜单 `common/Menu`、按钮 `common/Button`。
+  （`askConfirm`/`askPrompt`）、下拉 `common/Select`、菜单 `common/Menu`、按钮 `common/Button`、
+  折叠块 `common/Collapsible`、文件图标 `common/FileIcon`。
   原生 `window.confirm/prompt/alert` 与 `<select>` 一律不用：它们的配色/圆角/字号由系统决定，
   在飞牛桌面 iframe 里和主题对不上。
 
-### 4.10 子代理（Agent / Task 工具）
+### 4.8 子代理（Agent / Task 工具）
 
 - **子代理的对话不在主转录里**：主 jsonl 没有 sidechain 行，claude 单独写
   `<project>/<session>/subagents/agent-<agentId>.jsonl`（嵌套子代理再深一层，
@@ -277,7 +278,7 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **停止/转后台走控制请求**：`stop_task{task_id}`、`background_tasks{tool_use_id?}`；
   会话进程已被回收时网关返回 409，让前端提示重连，而不是假装停成功。
 
-### 4.8 claude 版本管理（`internal/claudebin`）
+### 4.9 claude 版本管理（`internal/claudebin`）
 
 - **数据源是 npm 平台包**，不是 `downloads.claude.ai/claude.zst`：平台包
   `@anthropic-ai/claude-code-<platform>` 与官方二进制逐字节相同，且国内镜像实测
@@ -297,7 +298,7 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **`/api/info` 只在装配了部署管理时才带 `claude_installed`**：前端据此区分"确实没装"与
   "这套部署不走托管安装"，否则会弹一个装不了东西的提示。
 
-### 4.9 技能管理（`internal/skills`）
+### 4.10 技能管理（`internal/skills`）
 
 - **个人技能目录必须跟着 claude 的 HOME 走**：`process.CleanEnv` 把子进程 HOME 改成
   `CCWEB_CLAUDE_HOME`，所以个人技能是 `$CCWEB_CLAUDE_HOME/.claude/skills`，不是应用自己的

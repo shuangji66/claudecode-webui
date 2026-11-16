@@ -25,23 +25,33 @@ src/
   lib/providerForm.ts  提供商/模型元数据表单转换
   lib/providerCatalog.ts 预置第三方提供商目录（对齐 DSH 的 pi-ai catalog）
   lib/attachments.ts   附件类型/大小/读取
+  lib/autofill.ts      全局禁用浏览器/密码管理器自动填充（App 挂载时补属性）
+  lib/clipboard.ts     复制文本（Clipboard API → execCommand 回退）
+  lib/download.ts      带鉴权的文件下载（fetch → blob → <a download>，token 走头）
+  lib/newChat.ts       「新对话」判定（按对话元数据，不是 items 是否为空）
+  lib/permissionModes.ts 权限模式判定与危险模式标记（唯一入口）
+  lib/sessionExport.ts 会话导出 Markdown（右上角「更多」菜单）
+  lib/sidebarView.ts   左侧栏视图偏好：分组/排序/归档筛选 + 手动顺序（纯函数 + localStorage）
+  lib/subagents.ts     从消息流收集子代理（页头计数 / 审批归属，纯函数）
   lib/usage.ts         用量换算：上下文/缓存命中/tok/s（只从 CLI 的 usage 派生）
   lib/workspace.ts     文件路径/porcelain 分组/unified diff 解析（纯函数）
   lib/conversations.ts 对话归属/最近对话排序（纯函数）
-  lib/subagents.ts     从消息流收集子代理（页头计数 / 审批归属，纯函数）
-  lib/download.ts      带鉴权的文件下载（fetch → blob → <a download>，token 走头）
-  lib/sidebarView.ts   左侧栏视图偏好：分组/排序/归档筛选 + 手动顺序（纯函数 + localStorage）
+  lib/labels.ts        界面词汇表 / claude 指令中文说明（conversationTitle 等）
   lib/fnos.ts          飞牛宿主桥接：目录授权（authorizeUserFile）+ 回包归一化（纯函数部分可测）
   assets/claude-code.svg 左侧栏品牌图标
   store/useAppStore.ts zustand 全局状态（只做状态搬运）
   store/useSidebarStore.ts 右侧栏数据（文件树/Git/预览，所有 fetch 收敛在这里）
   store/useSkillsStore.ts  设置页技能数据（/api/skills 的列表与正文）
-  components/layout/Sidebar.tsx 工作区/对话列表、重命名/归档/删除菜单
-  components/right/    RightSidebar（标签页）/ FilesPanel / GitPanel / TerminalView（单个终端会话）
-                       / SubagentPanel（子代理对话，读旁路转录）
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
-                       / FileIcon（按扩展名给颜色的文件图标 + 文件夹图标）
-  components/          layout / chat / tools / permission / settings
+                       / Collapsible（折叠块）/ FileIcon（按扩展名给颜色的文件图标 + 文件夹图标）
+  components/layout/   Sidebar（工作区/对话列表）/ TopBar / TokenGate / SettingsDrawer
+                       / WorkspaceDialog / SkillsSettings / DeploySettings / HistoryDialog
+                       / ClaudeInstallPrompt
+  components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
+                       / UsageStats / ResultBar / WorkspacePicker
+  components/tools/    ToolCardHost（注册表）/ AgentCard / BashCard / EditCard / GenericCard（兜底）
+  components/permission/ PermissionPanel（按钮由 permission_suggestions 决定）
+  components/right/    RightSidebar（标签页）/ FilesPanel / GitPanel / TerminalView / SubagentPanel
 ```
 
 **分层规则**：组件不直接调 `fetch` 或 `WebSocket`；一律经 store / transport；
@@ -260,8 +270,11 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
 - **`lib/` 下的纯函数必须有单测**：`normalize`（流式去重、tool 配对、ANSI 清洗、
   未知类型忽略）、`diff`（结构化补丁 / old-new 兜底 / null 降级）、`runtime`（base、wsUrl、token）、
   `providerForm`（模型元数据/补丁/强度回落）、`theme`（system 解析/字号夹取）、`labels`（中英）、
-  `attachments`（类型/大小/格式化）、`sessionExport`（Markdown 导出）。
-- 右侧栏纯函数（`workspace`）覆盖 statusOfXY、MM 双分组、unified diff 行号、预览类型。
+  `attachments`（类型/大小/格式化）、`sessionExport`（Markdown 导出）、`newChat`（按元数据判定）、
+  `permissionModes`（危险模式标记）、`sidebarView`（偏好合并/手动顺序）、`clipboard`（回退路径）、
+  `autofill`、`providerCatalog`、`subagents`、`usage`、`fnos`（宿主判定三条件/回包归一化）。
+- 右侧栏纯函数（`workspace`）覆盖 statusOfXY、MM 双分组、unified diff 行号、预览类型、
+  `pickRepo` 默认选中。
 - 对话纯函数（`conversations`）覆盖工作区归属/最长匹配/归档跳过；`labels` 覆盖
   `conversationTitle` 的三级回落；`normalize` 覆盖 transcript 时间戳保留。
 - **组件用 Testing Library**，断言用户可见的结果（文本、按钮），不要断言内部 state。

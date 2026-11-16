@@ -14,7 +14,7 @@ internal/agent/protocol   stream-json 编解码与消息构造（纯函数）
 internal/agent/process    定位 claude、拼参数、净化环境、启动进程
 internal/agent/session    单会话状态机（握手/轮次/审批/中断）
 internal/agent/manager    会话池、上限、空闲回收
-internal/history     转录摘要 + 按 id 回放原始事件行
+internal/history     转录摘要 + 按 id 回放原始事件行 + 子代理旁路转录
 internal/project     工作目录枚举/校验、目录浏览器
 internal/workspace   授权目录 + 当前工作区（workspaces.json）
 internal/conversation 对话元数据（conversations.json：归档/删除/重命名/最近活跃）
@@ -183,11 +183,16 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   下一次请求就没有凭据，网关直接回 13 字节 `invalid token`（HTTP 200、text/plain，
   应用完全收不到请求）；301 还会被 webview 长期缓存，之后连新凭据都带不上。
   相对资源靠 index.html 注入的 `<base href>` 解析，不需要尾斜杠。
-- 新路由必须 `s.authed(...)`；WS 在 handler 内自行校验 token。
-  `/api/settings` 三个端点（GET/PUT/POST test）都属于敏感路由，务必保持鉴权。
+- 设置路由：`GET/PUT /api/settings`、`POST /api/settings/test|models|verify|proxy`——
+  全部敏感（有密钥），务必保持鉴权。`GET /api/health` 不带鉴权（只报存活，不回信息）。
+- 技能路由：`GET /api/skills`、`GET/PUT/DELETE /api/skills/doc`（写入见根 AGENTS.md 4.10）。
 - 工作区路由：`GET/POST/DELETE /api/workspaces`、`POST /api/workspaces/current`、
-  `GET /api/fs/list`。目录浏览是只读但能枚举宿主目录，必须保持鉴权。
-- 对话路由：`GET /api/conversations`、`PATCH /api/conversations`（重命名/归档/touch）、
+  `POST /api/workspaces/rename`（只改显示名）、`GET /api/fs/list`、`POST /api/fs/mkdir`
+  （只接受单层目录名）、`POST /api/fs/access`（写探测）、`POST /api/fs/host-file`（宿主文件
+  读取，唯一不受工作区围栏约束的接口）。目录浏览是只读但能枚举宿主目录，必须保持鉴权。
+  右侧栏文件树的浏览走 `/api/fs/tree|file|raw`（见下方「右侧栏路由」）。
+- 新路由必须 `s.authed(...)`；WS 在 handler 内自行校验 token。
+- 对话路由：`GET /api/conversations`、`PATCH /api/conversations`（重命名/归档/touch/usage）、
   `DELETE /api/conversations?id=`（软删除）、`GET /api/history/transcript?id=`（回放）。
 - 导出路由：`GET /api/history/export?id=` 把会话原始日志打成 zip（主转录 + 会话目录下的
   子代理转录 / meta），`archive/zip` 标准库实现。先判存在再写响应头，否则 404 会变成
@@ -196,14 +201,15 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `POST /api/session/task`（`stop_task` / `background_tasks`）。两者都要挂 `s.authed`；
   agent id 走 `[A-Za-z0-9_-]` 白名单，会话 id 走 `validSessionID`，不能拼路径。
   `POST /api/session` 带 `resume` 时走 `manager.Resume`，不带才新建。
-- 右侧栏路由：`GET /api/fs/tree|file|raw`、`GET /api/git/status|diff|show|log|branches`、
+- 右侧栏路由：`GET /api/fs/tree|file|raw`、`GET /api/git/repos|status|diff|show|log|branches`、
   `POST /api/git/stage|unstage|discard|commit|checkout|pull`、`GET /ws/terminal`。
   全部先过 `authorizedCwd`（`project.Validate` + `workspace.Allows`），再做路径围栏；
   原始字节只放行图片/PDF 并带 `CSP: sandbox`，HTML/SVG 不得同源 inline。
 - `POST /api/settings/proxy` 是敏感路由；先 Apply 设置，再重启全部会话，并返回
   `{settings, sessions, warning}` 供前端直接切换。
-- 部署路由：`GET /api/claude/status`、`POST /api/claude/check|install|active|source`。
-  安装是后台任务，接口立即返回，进度靠轮询 status；全部挂 `s.authed`。
+- 部署路由：`GET /api/claude/status`、`POST /api/claude/check|install|cancel|active|source`、
+  `DELETE /api/claude/version`。安装是后台任务，接口立即返回，进度靠轮询 status，
+  `cancel` 幂等取消进行中的安装并清理临时目录；全部挂 `s.authed`。
   `Deps.Claude` 为 nil 时返回 503，且 `/api/info` 不带 `claude_installed`。
 - `POST /api/session` 与 `/api/session/ensure` 必须先 `project.Validate`，再
   `s.ensureCwdAuthorized`；移除工作区时若仍有会话在用要返回 409。
