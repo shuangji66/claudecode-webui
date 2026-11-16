@@ -47,3 +47,33 @@ func TestFunc(t *testing.T) {
 		t.Fatalf("非法地址应直连，得到 %v", u)
 	}
 }
+
+// Func 与 Env 必须对「本机地址」给出一致结论：Env 里写了 NO_PROXY，
+// Func 却把回环请求塞给代理，会让面板的探测/拉模型列表全部失败，
+// 而 claude 子进程却是好的——用户完全看不出问题在哪。
+func TestFuncSkipsLoopbackLikeEnv(t *testing.T) {
+	fn := Func("http://proxy.example:7890")
+	cases := []struct {
+		url   string
+		proxy bool
+	}{
+		{"http://127.0.0.1:8080/v1/models", false},
+		{"http://localhost:8080/v1/models", false},
+		{"http://[::1]:8080/x", false},
+		{"http://127.5.6.7/x", false},
+		{"https://api.example.com/v1/messages", true},
+	}
+	for _, c := range cases {
+		req, err := http.NewRequest(http.MethodGet, c.url, nil)
+		if err != nil {
+			t.Fatalf("new request %s: %v", c.url, err)
+		}
+		u, err := fn(req)
+		if err != nil {
+			t.Fatalf("Func(%s): %v", c.url, err)
+		}
+		if got := u != nil; got != c.proxy {
+			t.Fatalf("%s: proxy = %v, want %v", c.url, got, c.proxy)
+		}
+	}
+}

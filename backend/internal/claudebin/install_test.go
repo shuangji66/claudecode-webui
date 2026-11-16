@@ -396,3 +396,21 @@ func TestInstallRejectsMissingIntegrity(t *testing.T) {
 		t.Fatal("校验失败却落盘了二进制")
 	}
 }
+
+// 切下载源必须让「可用版本」缓存失效：缓存里是上一个源的版本号，
+// 却会跟着新源一起返回，用户照着列表点安装就会 404。
+func TestSetSourceInvalidatesVersionCache(t *testing.T) {
+	m, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	m.avail = []string{"2.1.325", "2.1.311"}
+	m.availAt = time.Now()
+
+	if err := m.SetSource(SourceHuawei); err != nil {
+		t.Fatalf("SetSource: %v", err)
+	}
+	if len(m.avail) != 0 || !m.availAt.IsZero() {
+		t.Fatalf("切源后仍复用旧缓存: %v @ %v", m.avail, m.availAt)
+	}
+}

@@ -15,6 +15,24 @@ import (
 // 本地回环永远直连：中继、终端、健康检查都在本机，绕到外部代理只会失败。
 const noProxyValue = "localhost,127.0.0.1,::1"
 
+// noProxyHosts 是上面那串的机器可读形式，Func 与 Env 共用一份，避免两边走偏。
+var noProxyHosts = []string{"localhost", "127.0.0.1", "::1", "[::1]"}
+
+// isLoopback 报告 host（不含端口）是否属于「永远直连」的那一组。
+func isLoopback(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	for _, h := range noProxyHosts {
+		if host == h {
+			return true
+		}
+	}
+	// 127.0.0.0/8 全段都是回环。
+	if strings.HasPrefix(host, "127.") {
+		return true
+	}
+	return false
+}
+
 // Func 返回 http.Transport.Proxy 需要的回调；代理为空表示直连。
 //
 // 地址非法时按直连处理：设置层已经校验过协议，这里只是防御性兜底，
@@ -28,7 +46,15 @@ func Func(proxy string) func(*http.Request) (*url.URL, error) {
 	if err != nil || u.Host == "" {
 		return func(*http.Request) (*url.URL, error) { return nil, nil }
 	}
-	return func(*http.Request) (*url.URL, error) { return u, nil }
+	// 回环地址直连，与 Env 注入的 NO_PROXY 保持一致：否则「配了代理」之后
+	// claude 子进程（走 Env）能连本机中继，而面板自己的探测/拉模型列表
+	// （走 Func）却把 127.0.0.1 塞给代理，表现为「claude 能用但设置页全失败」。
+	return func(req *http.Request) (*url.URL, error) {
+		if req != nil && req.URL != nil && isLoopback(req.URL.Hostname()) {
+			return nil, nil
+		}
+		return u, nil
+	}
 }
 
 // Env 返回给子进程用的代理环境变量；代理为空时返回 nil（直连）。

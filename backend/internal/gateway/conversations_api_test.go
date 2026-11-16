@@ -178,3 +178,35 @@ func TestResumeConversationUsesStableID(t *testing.T) {
 		t.Fatalf("已删除对话应 409，实际 %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// 回归：PATCH 里 usage 非法时要整条请求失败，且前面的字段不能被改掉。
+//
+// 旧顺序是「重命名（写盘）→ 归档（写盘）→ usage 校验」，usage 不合法返回 400 时
+// 标题早就改完了，前端把整次请求当失败，界面与服务端状态不一致。
+func TestPatchConversationValidatesBeforeWriting(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	store := withConversationStore(t, srv)
+	writeTranscript(t, srv.d.HistoryDir, "11111111-2222-3333-4444-555555555555", srv.d.ProjectsRoot)
+
+	// 先落一条元数据。
+	if err := store.Touch("11111111-2222-3333-4444-555555555555", srv.d.ProjectsRoot); err != nil {
+		t.Fatal(err)
+	}
+
+	usage := `{"input_tokens":` + strings.Repeat("9", 3000) + `}`
+	body := `{"id":"11111111-2222-3333-4444-555555555555","title":"新标题","usage":` + usage + `}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/conversations", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec2, req)
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("超长 usage 应 400，实际 %d: %s", rec2.Code, rec2.Body.String())
+	}
+	got, ok := store.Get("11111111-2222-3333-4444-555555555555")
+	if !ok {
+		t.Fatal("对话记录丢失")
+	}
+	if got.Title != "" {
+		t.Fatalf("请求失败但标题被改了: %q", got.Title)
+	}
+}

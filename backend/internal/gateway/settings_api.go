@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"ccweb/backend/internal/history"
 	"ccweb/backend/internal/settings"
 )
 
@@ -161,8 +162,14 @@ func (s *Server) handleApplyProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	warnings := make([]string, 0, 1)
 	for _, info := range infos {
-		// 用 resume 保持对话 id 不变；空对话还没有转录，退回 ensure 新建。
+		// 用 resume 保持对话 id 不变。只有「还没有转录的空对话」才允许退回 ensure：
+		// 有转录的对话 Resume 失败必须如实报 warning，不能换一个新 uuid —— 那等于
+		// 把用户的上下文整段丢掉，而前端 active id 仍指向旧对话。
 		if _, err := s.d.Manager.Resume(info.ID, info.Cwd, info.Model, ""); err != nil {
+			if s.d.HistoryDir != "" && history.SessionLogExists(s.d.HistoryDir, info.ID) {
+				warnings = append(warnings, info.Cwd+": "+err.Error())
+				continue
+			}
 			if _, err2 := s.d.Manager.Ensure(info.Cwd, "", ""); err2 != nil {
 				warnings = append(warnings, info.Cwd+": "+err2.Error())
 			}

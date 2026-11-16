@@ -208,6 +208,10 @@ type Store struct {
 	mu   sync.RWMutex
 	path string
 	cur  Settings
+	// writeMu 串行化「合并 → 写盘 → 提交」这一段，保证并发 Apply 不互相覆盖。
+	// mu 只在合并与提交时短暂持有：写盘（CreateTemp/Write/Sync/Rename）不能占着
+	// 读锁，否则拉模型列表、读设置这些路径会被一次 fsync 挡住。
+	writeMu sync.Mutex
 }
 
 // Open 读取配置文件；文件不存在时返回空配置（不是错误）。
@@ -511,6 +515,9 @@ func (s *Store) Public() Public {
 
 // Apply 合并补丁、写盘并更新内存态。
 func (s *Store) Apply(p Patch) (Public, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	s.mu.Lock()
 	next := cloneSettings(s.cur)
 
@@ -573,10 +580,12 @@ func (s *Store) Apply(p Patch) (Public, error) {
 		}
 	}
 
+	// 校验与合并做完就放锁，写盘不在锁内。
+	s.mu.Unlock()
 	if err := writeAtomic(s.path, next); err != nil {
-		s.mu.Unlock()
 		return Public{}, err
 	}
+	s.mu.Lock()
 	s.cur = next
 	s.mu.Unlock()
 	return s.Public(), nil
@@ -622,8 +631,10 @@ func mergeProviders(old []Provider, in []ProviderPatch) ([]Provider, error) {
 		}
 
 		// 密钥语义：空串=沿用旧值；ClearKey 才清空。
+		// 同时提交了新密钥与 clear_key 时以新密钥为准：界面上先点「清除」再输入新值
+		// 是很自然的操作，按 clear_key 优先会把刚输入的密钥和已存的密钥一起抹掉。
 		switch {
-		case patch.ClearKey:
+		case patch.ClearKey && strings.TrimSpace(patch.APIKey) == "" && strings.TrimSpace(patch.AuthToken) == "":
 			p.APIKey, p.AuthToken = "", ""
 		default:
 			p.APIKey = prev.APIKey

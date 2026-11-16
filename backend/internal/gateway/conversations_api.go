@@ -165,6 +165,14 @@ func (s *Server) handlePatchConversation(w http.ResponseWriter, r *http.Request)
 		writeErr(w, "对话不存在", http.StatusNotFound)
 		return
 	}
+	// usage 先校验并落盘：它可能因为超长/非法 JSON 返回 400，而标题与归档的写盘
+	// 是不回滚的 —— 把校验放在最前面，失败时文件里什么都没变。
+	if len(req.Usage) > 0 {
+		if err := s.d.Conversations.SetUsage(req.ID, req.Usage); err != nil {
+			writeErr(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if req.Title != nil {
 		title := strings.Join(strings.Fields(*req.Title), " ")
 		if len([]rune(title)) > 120 {
@@ -184,12 +192,6 @@ func (s *Server) handlePatchConversation(w http.ResponseWriter, r *http.Request)
 		// 归档等价于「从当前视图收起」：顺手结束进程，避免它在后台继续占内存。
 		if *req.Archived {
 			_ = s.d.Manager.Close(req.ID)
-		}
-	}
-	if len(req.Usage) > 0 {
-		if err := s.d.Conversations.SetUsage(req.ID, req.Usage); err != nil {
-			writeErr(w, err.Error(), http.StatusBadRequest)
-			return
 		}
 	}
 	if req.Touch {

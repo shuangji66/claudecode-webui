@@ -137,6 +137,9 @@ type Manager struct {
 	client     *http.Client
 	registries map[string]string
 
+	// writeMu 串行化 state.json 的「快照 → 写盘」，避免并发 persist 互相覆盖。
+	writeMu sync.Mutex
+
 	mu      sync.Mutex
 	st      state
 	job     *Job
@@ -201,6 +204,11 @@ func (m *Manager) load() {
 
 // persist 原子写回状态；失败只在调用方关心（通常是日志），没有返回值给前端。
 func (m *Manager) persist() error {
+	// 快照-写盘必须串行：两个并发调用可以按「拷贝A、拷贝B、写B、写A」的顺序收尾，
+	// 磁盘上留下旧快照，而内存里是新值——下次启动会静默回退用户切换的版本。
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+
 	m.mu.Lock()
 	st := m.st
 	m.mu.Unlock()
@@ -356,6 +364,10 @@ func (m *Manager) SetSource(source string) error {
 	}
 	m.mu.Lock()
 	m.st.Source = source
+	// 可用版本列表属于上一个源：不清掉的话，切源后 5 分钟内 Check 仍返回旧源
+	// 的版本号却标着新源，用户照着列表点安装会 404。
+	m.avail = nil
+	m.availAt = time.Time{}
 	m.mu.Unlock()
 	return m.persist()
 }
