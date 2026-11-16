@@ -305,13 +305,15 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     <aside className="safe-top flex h-full w-full shrink-0 flex-col border-r border-line bg-panel md:w-[280px] md:pt-0">
       {/* 三栏（侧栏 / 对话 / 右侧栏）的表头统一 56px，分隔线才对得齐。 */}
       <div className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3">
-        <button type="button" onClick={startNewChat} className="flex min-w-0 items-center gap-2 text-left" aria-label={t("新对话", "New conversation")}>
+        {/* 品牌区只做标识，不是按钮：点标题/logo 就新建对话太容易误触，
+            「新对话」有下面那个独立按钮。 */}
+        <div className="flex min-w-0 items-center gap-2">
           <BrandMark size={25} className="shrink-0 text-ink" />
           <span className="truncate text-[15px] font-semibold tracking-tight text-ink">Claude Code</span>
           <span className="shrink-0 rounded-[5px] border border-line-strong px-1 py-[1px] text-[9px] font-semibold tracking-wide text-muted">
             CONSOLE
           </span>
-        </button>
+        </div>
         <button
           type="button"
           onClick={onClose ?? onToggleCollapse}
