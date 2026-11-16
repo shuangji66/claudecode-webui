@@ -20,6 +20,7 @@ import (
 	"ccweb/backend/internal/hub"
 	"ccweb/backend/internal/project"
 	"ccweb/backend/internal/settings"
+	"ccweb/backend/internal/skills"
 	"ccweb/backend/internal/workspace"
 )
 
@@ -103,6 +104,7 @@ func newTestServer(t *testing.T, token string) (*Server, *fakeMgr) {
 		ProjectsRoot:  root,
 		Settings:      store,
 		Workspaces:    ws,
+		Skills:        skills.New(filepath.Join(t.TempDir(), "skills")),
 		ClaudeVersion: "2.1.325",
 		StartedAt:     time.Now(),
 	}

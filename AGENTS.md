@@ -18,15 +18,15 @@
   Linux PTY 上的 bash 终端（`xterm.js` 只做渲染）；
 - **授权目录 = 工作区**，持久化在 `workspaces.json`；对话列表来自 claude 转录 +
   `conversations.json` 元数据，启动时恢复上次对话（`--resume`）而不是新建；
-- 设置页分「通用 / 模型 / 代理 / 部署」：默认权限（置顶）、主题、语言、字号、代理、
+- 设置页分「通用 / 模型 / 技能 / 代理 / 部署」：默认权限（置顶）、主题、语言、字号、技能、代理、
   每个模型的推理强度/图片能力/上下文窗口/最大输出，以及 claude 版本的下载源/安装/切换；
 - 输入框 `+` 支持文件/图片附件（图片/PDF/文本），随 prompt 发送；模型与推理等级是
   DSH 风格的两级菜单（按提供商分组，不显示图片标记）；
 - 左侧栏品牌图标使用 `frontend/src/assets/claude-code.svg`；前端不允许呼吸灯/无限 pulse 动画。
 
-部署约定：**只部署 `ccweb` 本身**。`claude` 不再随包分发、也不回退 PATH：由「设置 → 部署」
-从 npm 平台包按版本下载到 `CCWEB_DATA_DIR/claude/versions/<版本>/claude`，面板里切换生效版本。
-`CCWEB_CLAUDE_BIN` 是显式的运维覆盖，优先级最高（用于已经自己管 claude 的机器）。
+部署约定：**只部署 `ccweb` 本身**。`claude` 不随包分发、也不回退 PATH、也不接受环境变量覆盖：
+只能由「设置 → 部署」从 npm 平台包按版本下载到
+`CCWEB_DATA_DIR/claude/versions/<版本>/claude`，面板里切换生效版本。
 
 ## 2. 架构
 
@@ -212,6 +212,24 @@ hub ── manager ── session ── process ── claude (NDJSON)
   建会话时才返回「请去设置 → 部署安装」。
 - **`/api/info` 只在装配了部署管理时才带 `claude_installed`**：前端据此区分"确实没装"与
   "这套部署不走托管安装"，否则会弹一个装不了东西的提示。
+
+### 4.9 技能管理（`internal/skills`）
+
+- **个人技能目录必须跟着 claude 的 HOME 走**：`process.CleanEnv` 把子进程 HOME 改成
+  `CCWEB_CLAUDE_HOME`，所以个人技能是 `$CCWEB_CLAUDE_HOME/.claude/skills`，不是应用自己的
+  `~/.claude/skills`。写错位置会「保存成功但 claude 永远看不到」。
+- **只写 personal / project 两类**：它们就是文件，改完 claude 会热加载，不用重启会话。
+  `synced/`（claude.ai 同步）只读——下次同步会覆盖；插件技能归 `claude plugin`；
+  bundled 技能只能靠 settings 的 `disableBundledSkills` / `skillOverrides`。
+- **写入必须拒绝符号链接目录**：项目技能在工作区里，软链可以把写操作带到工作区外。
+  先 `Lstat` 判软链，再 `MkdirAll`；落盘用同目录临时文件 + rename，避免半截 SKILL.md
+  被 claude 当成正文读进去。
+- **删除只删 skills 根目录的直接子目录且必须含 SKILL.md**：名字来自用户输入，
+  直接 `RemoveAll(root/name)` 等于把路径穿越变成删库。
+- 技能名同时是 `/命令名`：不允许分隔符、点开头、`<`/`>`、控制字符与零宽字符，
+  `synced` 是保留名（与 claude 的加载规则一致）。
+- 新建一个此前不存在的顶级 `.claude/skills` 目录时，claude 没在监听它，
+  需要 `/reload-skills` 才生效（已有目录内的增删改是热加载的）。
 
 ## 5. 命令速查
 

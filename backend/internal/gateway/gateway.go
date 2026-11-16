@@ -22,6 +22,7 @@ import (
 	"ccweb/backend/internal/conversation"
 	"ccweb/backend/internal/hub"
 	"ccweb/backend/internal/settings"
+	"ccweb/backend/internal/skills"
 	"ccweb/backend/internal/workspace"
 )
 
@@ -57,7 +58,9 @@ type Deps struct {
 	Workspaces    *workspace.Store
 	Conversations *conversation.Store
 	// Claude 是 claude 版本管理（下载/切换）；为 nil 时部署相关路由返回 503。
-	Claude        ClaudeDeployer
+	Claude ClaudeDeployer
+	// Skills 管理 SKILL.md（个人/项目）；为 nil 时技能路由返回 503。
+	Skills        *skills.Manager
 	ClaudeVersion string
 	TerminalShell string
 	StartedAt     time.Time
@@ -122,6 +125,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/settings/models", s.authed(s.handleFetchModels))
 	s.mux.HandleFunc("POST /api/settings/verify", s.authed(s.handleVerifyModel))
 	s.mux.HandleFunc("POST /api/settings/proxy", s.authed(s.handleApplyProxy))
+	s.mux.HandleFunc("GET /api/skills", s.authed(s.handleListSkills))
+	s.mux.HandleFunc("GET /api/skills/doc", s.authed(s.handleGetSkill))
+	s.mux.HandleFunc("PUT /api/skills/doc", s.authed(s.handleSaveSkill))
+	s.mux.HandleFunc("DELETE /api/skills/doc", s.authed(s.handleDeleteSkill))
 	s.mux.HandleFunc("GET /api/claude/status", s.authed(s.handleClaudeStatus))
 	s.mux.HandleFunc("POST /api/claude/check", s.authed(s.handleClaudeCheck))
 	s.mux.HandleFunc("POST /api/claude/install", s.authed(s.handleClaudeInstall))

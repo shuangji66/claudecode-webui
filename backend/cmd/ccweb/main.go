@@ -26,6 +26,7 @@ import (
 	"ccweb/backend/internal/history"
 	"ccweb/backend/internal/hub"
 	"ccweb/backend/internal/settings"
+	"ccweb/backend/internal/skills"
 	"ccweb/backend/internal/workspace"
 )
 
@@ -89,6 +90,9 @@ func main() {
 		Settings:      store,
 		Workspaces:    wsStore,
 		Conversations: convStore,
+		// 个人技能挂在 claude 子进程的 HOME 下：process.CleanEnv 会把 HOME 改成
+		// CCWEB_CLAUDE_HOME，所以这里不能用自己的 ~/.claude/skills。
+		Skills:        skills.New(filepath.Join(cfg.ClaudeHome, ".claude", "skills")),
 		Claude:        claudeMgr,
 		ProjectsRoot:  cfg.ProjectsRoot,
 		ClaudeVersion: probeClaudeVersion(mgr.Binary()),

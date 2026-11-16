@@ -24,6 +24,7 @@ internal/terminal    Linux PTY 会话（/dev/ptmx + ioctl，零依赖）
 internal/authz       token 鉴权
 internal/settings    持久化配置（第三方端点/密钥/模型）+ 端点探测
 internal/claudebin   claude 版本管理：npm 平台包下载、sha512 校验、按版本目录隔离与切换
+internal/skills      技能管理：SKILL.md 的列出/读写/删除（个人 + 项目，synced 只读）
 internal/webui       go:embed 前端产物
 ```
 

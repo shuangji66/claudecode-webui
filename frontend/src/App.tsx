@@ -224,7 +224,7 @@ function AppShell() {
         />
       )}
 
-      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsTab} />
+      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsTab} cwd={rightCwd} />
       {/* 一个版本都没装：后端能起来，但开不了会话，首屏直接把人送到部署页 */}
       <ClaudeInstallPrompt
         open={Boolean(info && info.claude_installed === false) && !installPromptDismissed}

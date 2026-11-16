@@ -16,6 +16,7 @@ import {
 import type { ModelSpec } from "../../transport/types";
 import { PROVIDER_PRESETS, findProviderPreset, presetFormFields } from "../../lib/providerCatalog";
 import { DeploySettings } from "./DeploySettings";
+import { SkillsSettings } from "./SkillsSettings";
 import { Select } from "../common/Select";
 import { Dialog } from "../common/Dialog";
 import { askConfirm } from "../common/SystemDialogs";
@@ -36,9 +37,10 @@ import {
   IconSun,
   IconTrash,
   IconType,
+  IconWrench,
 } from "../common/Icons";
 
-type Tab = "general" | "models" | "proxy" | "deploy";
+type Tab = "general" | "models" | "skills" | "proxy" | "deploy";
 
 const PERMISSION_MODES = ["", "default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
 const THEMES = ["light", "dark", "system"] as const;
@@ -48,11 +50,14 @@ export function SettingsDrawer({
   open,
   onClose,
   initialTab,
+  cwd,
 }: {
   open: boolean;
   onClose: () => void;
   /** 从侧栏「有更新」等入口直接落到某一页。 */
   initialTab?: Tab;
+  /** 当前工作区，技能页用它读写项目里的 .claude/skills。 */
+  cwd?: string;
 }) {
   const t = useT();
   const [tab, setTab] = useState<Tab>(initialTab ?? "general");
@@ -84,6 +89,9 @@ export function SettingsDrawer({
             <NavItem active={tab === "models"} icon={<IconSpark size={16} />} onClick={() => setTab("models")}>
               {t("模型", "Models")}
             </NavItem>
+            <NavItem active={tab === "skills"} icon={<IconWrench size={16} />} onClick={() => setTab("skills")}>
+              {t("技能", "Skills")}
+            </NavItem>
             <NavItem active={tab === "proxy"} icon={<IconShield size={16} />} onClick={() => setTab("proxy")}>
               {t("代理", "Proxy")}
             </NavItem>
@@ -104,6 +112,9 @@ export function SettingsDrawer({
             </div>
             <div className={tab === "models" ? "flex h-full min-h-0 flex-col px-4 pt-4 md:px-8 md:pt-6" : "hidden"}>
               <ModelsSettings />
+            </div>
+            <div className={tab === "skills" ? "flex h-full min-h-0 flex-col px-4 pt-4 md:px-8 md:pt-6" : "hidden"}>
+              <SkillsSettings cwd={cwd ?? ""} />
             </div>
             <div
               className={

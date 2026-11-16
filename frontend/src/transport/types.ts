@@ -368,3 +368,36 @@ export interface ClaudeCheck {
   latest: string;
   versions: string[];
 }
+
+/** 技能来源：个人（claude home 下）/ 项目（仓库内）/ claude.ai 同步（只读）。 */
+export type SkillScope = "personal" | "project" | "synced";
+
+/** 一条技能（不含正文）。 */
+export interface SkillEntry {
+  name: string;
+  scope: SkillScope;
+  /** 取自 frontmatter，claude 靠它决定何时自动加载。 */
+  description: string;
+  path: string;
+  updated: string;
+  size: number;
+  read_only: boolean;
+  /** 非空表示 SKILL.md 存在但读不出来。 */
+  invalid?: string;
+}
+
+/** 技能正文。 */
+export interface SkillDoc extends SkillEntry {
+  content: string;
+}
+
+/** /api/skills 的返回。 */
+export interface SkillsPayload {
+  personal: SkillEntry[];
+  project: SkillEntry[];
+  synced: SkillEntry[];
+  /** 项目技能所属的工作目录；空表示没有可用的工作区。 */
+  project_root: string;
+  /** 个人技能目录，界面上说明「存在哪」。 */
+  personal_root: string;
+}

@@ -27,6 +27,7 @@ src/
   assets/claude-code.svg 左侧栏品牌图标
   store/useAppStore.ts zustand 全局状态（只做状态搬运）
   store/useSidebarStore.ts 右侧栏数据（文件树/Git/预览，所有 fetch 收敛在这里）
+  store/useSkillsStore.ts  设置页技能数据（/api/skills 的列表与正文）
   components/layout/Sidebar.tsx 工作区/对话列表、重命名/归档/删除菜单
   components/right/    RightSidebar / FilesPanel / GitPanel / TerminalPanel
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons
@@ -128,9 +129,12 @@ src/
 - 移动端优先：侧边栏在 `md` 以下变成抽屉；输入框用 `max-h` 限制高度；
   输入区、设置页底部栏都要留 `env(safe-area-inset-bottom)`。
 - 长输出必须折叠或限高（`max-h-80 overflow-auto`），否则会毁掉滚动体验。
-- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 代理 / 部署」；通用设置即时保存，
+- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 技能 / 代理 / 部署」；通用设置即时保存，
   模型配置在底部「保存模型设置」统一提交，代理保存后重启所有 claude 会话。
   「部署」页管 claude 版本（下载源 / 安装进度 / 切换生效版本），切换只影响之后新建的会话。
+  「技能」页读写 SKILL.md（`store/useSkillsStore.ts` 收敛请求）：个人技能对所有会话生效，
+  项目技能跟着当前工作区走；claude.ai 同步来的只读。改完 claude 会在当前会话内热加载，
+  不要提示用户重启。
 - 模型页提供商只有一个时默认展开，多个时默认折叠；新建提供商可以选预置（自动填
   ID / 协议 / Base URL / 默认模型）或选「自定义」手填 ID；显示名留空跟随 ID。
   预置里标「需兼容端点」的只适合拉模型列表，claude 对话需要 Anthropic 兼容端点。
