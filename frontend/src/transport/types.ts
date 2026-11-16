@@ -49,6 +49,42 @@ export interface CommandInfo {
   builtin?: boolean;
 }
 
+/** MCP server 的作用域 / 传输类型（与后端 internal/mcp 保持一致）。 */
+export type McpScope = "user" | "project";
+export type McpType = "stdio" | "sse" | "http";
+
+export interface McpServer {
+  name: string;
+  scope: McpScope;
+  type: McpType;
+  command?: string;
+  args?: string[];
+  url?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  /** true = 已从 claude 的配置里摘出来，存在本应用的暂存文件里。 */
+  disabled: boolean;
+  /** 这条配置实际写在哪个文件（排错用）。 */
+  config_path: string;
+}
+
+export interface McpPayload {
+  user: McpServer[];
+  project: McpServer[];
+  project_root: string;
+  user_path: string;
+  project_path: string;
+}
+
+export interface McpProbe {
+  ok: boolean;
+  latency_ms: number;
+  error?: string;
+  server_name?: string;
+  server_version?: string;
+  protocol?: string;
+}
+
 export interface AgentInfo {
   name: string;
   description?: string;

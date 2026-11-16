@@ -38,15 +38,17 @@ src/
   lib/workspace.ts     文件路径/porcelain 分组/unified diff 解析（纯函数）
   lib/conversations.ts 对话归属/最近对话排序（纯函数）
   lib/labels.ts        界面词汇表 / claude 指令中文说明（conversationTitle 等）
+  lib/mcpForm.ts       MCP 表单转换：参数/环境变量的文本互转、校验、一行摘要
   lib/fnos.ts          飞牛宿主桥接：目录授权（authorizeUserFile）+ 回包归一化（纯函数部分可测）
   assets/claude-code.svg 左侧栏品牌图标
   store/useAppStore.ts zustand 全局状态（只做状态搬运）
   store/useSidebarStore.ts 右侧栏数据（文件树/Git/预览，所有 fetch 收敛在这里）
   store/useSkillsStore.ts  设置页技能数据（/api/skills 的列表与正文）
+  store/useMcpStore.ts     设置页 MCP 数据（/api/mcp 的列表、探测结果、停用开关）
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
                        / Collapsible（折叠块）/ FileIcon（按扩展名给颜色的文件图标 + 文件夹图标）
   components/layout/   Sidebar（工作区/对话列表）/ ConversationPreview（会话悬浮预览）/ TopBar / TokenGate / SettingsDrawer
-                       / WorkspaceDialog / SkillsSettings / DeploySettings / HistoryDialog
+                       / WorkspaceDialog / SkillsSettings / McpSettings / DeploySettings / HistoryDialog
                        / ClaudeInstallPrompt
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
                        / UsageStats / ResultBar / WorkspacePicker
@@ -240,7 +242,7 @@ src/
   **宽度必须由「用户偏好 + 当前视口」派生**（`preferredWidth` 存偏好、`useViewportWidth()`
   跟踪 resize、渲染时 `clampWidth(preferredWidth, viewport)`）：只在拖动时 clamp 的话，
   窗口缩小后右侧栏不会自己变窄，会一直把对话挤成一条缝，直到用户拖一下才被纠正。
-- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 技能 / 代理 / 部署 / 关于」；
+- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 技能 / MCP / 代理 / 部署 / 关于」；
   「关于」页只放：一句话特性、版本号（`/api/info` 的 version）、致谢
   （DeepSeek / DeepSeek Harness / dsh-better-sidebar），以及**标题右侧的 GitHub 图标**
   （只有图标不带文字，`aria-label` 说明是仓库链接，`https://github.com/shuangji66/claudecode-webui`，
@@ -251,6 +253,10 @@ src/
   「技能」页读写 SKILL.md（`store/useSkillsStore.ts` 收敛请求）：个人技能对所有会话生效，
   项目技能跟着当前工作区走；claude.ai 同步来的只读。改完 claude 会在当前会话内热加载，
   不要提示用户重启。
+  「MCP」页读写 claude 的两份配置文件（`store/useMcpStore.ts`）：用户级 `.claude.json`
+  与项目级 `.mcp.json`，可增删改、停用/启用、探测连通性。**必须提示「重开会话才生效」**
+  （MCP server 在会话启动时连接），停用项要标出来并说明「配置已摘到本应用暂存」。
+  表单转换在 `lib/mcpForm.ts`（参数一行一个、环境变量 KEY=VALUE），不要塞进组件。
 - 模型页提供商只有一个时默认展开，多个时默认折叠；新建提供商可以选预置（自动填
   ID / 协议 / Base URL / 默认模型）或选「自定义」手填 ID；显示名留空跟随 ID。
   预置里标「需兼容端点」的只适合拉模型列表，claude 对话需要 Anthropic 兼容端点。

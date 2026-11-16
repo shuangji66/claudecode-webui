@@ -18,6 +18,7 @@ import type { ModelSpec } from "../../transport/types";
 import { PROVIDER_PRESETS, findProviderPreset, presetFormFields } from "../../lib/providerCatalog";
 import { DeploySettings } from "./DeploySettings";
 import { SkillsSettings } from "./SkillsSettings";
+import { McpSettings } from "./McpSettings";
 import { Select } from "../common/Select";
 import { setThemePreference, themePreference } from "../../lib/theme";
 import { isDangerousPermissionMode, permissionModeWarning } from "../../lib/permissionModes";
@@ -29,8 +30,8 @@ import {
   IconChevronDown,
   IconDownload,
   IconGauge,
-  IconGitHub,
   IconGlobe,
+  IconGitHub,
   IconImage,
   IconInfo,
   IconMonitor,
@@ -46,7 +47,7 @@ import {
   IconWrench,
 } from "../common/Icons";
 
-type Tab = "general" | "models" | "skills" | "proxy" | "deploy" | "about";
+type Tab = "general" | "models" | "skills" | "mcp" | "proxy" | "deploy" | "about";
 
 const PERMISSION_MODES = ["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
 const THEMES = ["light", "dark", "system"] as const;
@@ -98,6 +99,9 @@ export function SettingsDrawer({
             <NavItem active={tab === "skills"} icon={<IconWrench size={16} />} onClick={() => setTab("skills")}>
               {t("技能", "Skills")}
             </NavItem>
+            <NavItem active={tab === "mcp"} icon={<IconGlobe size={16} />} onClick={() => setTab("mcp")}>
+              {t("MCP", "MCP")}
+            </NavItem>
             <NavItem active={tab === "proxy"} icon={<IconShield size={16} />} onClick={() => setTab("proxy")}>
               {t("代理", "Proxy")}
             </NavItem>
@@ -124,6 +128,9 @@ export function SettingsDrawer({
             </div>
             <div className={tab === "skills" ? "flex h-full min-h-0 flex-col px-4 pt-4 md:px-8 md:pt-6" : "hidden"}>
               <SkillsSettings cwd={cwd ?? ""} />
+            </div>
+            <div className={tab === "mcp" ? "flex h-full min-h-0 flex-col px-4 pt-4 md:px-8 md:pt-6" : "hidden"}>
+              <McpSettings cwd={cwd ?? ""} />
             </div>
             <div
               className={
