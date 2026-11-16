@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { useT } from "../../lib/i18n";
 import { copyText } from "../../lib/clipboard";
 import { rawFileUrl } from "../../lib/runtime";
@@ -14,9 +14,13 @@ import {
   IconExternal,
   IconEye,
   IconEyeOff,
+  IconFolder,
+  IconMore,
   IconRetry,
 } from "../common/Icons";
 import { FileIcon, FolderIcon } from "../common/FileIcon";
+import { Menu, type MenuItem } from "../common/Menu";
+import { fnosHostAvailable, openFnosFileManager, showFnosFileDetails } from "../../lib/fnos";
 
 interface Props {
   cwd: string;
@@ -51,14 +55,26 @@ export function FilesPanel({ cwd, active }: Props) {
   const [fileLoading, setFileLoading] = useState(false);
   const [fileError, setFileError] = useState("");
   const [copied, setCopied] = useState(false);
+  /** 目录/文件行的「更多」菜单（宿主里才有完整项）。 */
+  const [rowMenu, setRowMenu] = useState<{ anchor: HTMLElement; entry: FsEntry } | null>(null);
+  const [actionError, setActionError] = useState("");
   const requestSeq = useRef(0);
 
   useEffect(() => {
     setSelected(null);
     setFile(null);
     setFileError("");
+    setActionError("");
+    setRowMenu(null);
     requestSeq.current += 1;
   }, [cwd]);
+
+  // 菜单里的失败提示几秒后自己消失，别一直挂在面板上。
+  useEffect(() => {
+    if (!actionError) return;
+    const timer = window.setTimeout(() => setActionError(""), 4000);
+    return () => window.clearTimeout(timer);
+  }, [actionError]);
 
   // 侧栏首次显示 / 重开时补一次根目录；setCwd 已加载过则这里什么也不做。
   useEffect(() => {
@@ -91,6 +107,65 @@ export function FilesPanel({ cwd, active }: Props) {
     setFile(null);
     setFileError("");
     setFileLoading(false);
+  };
+
+  /** 相对路径 → NAS 绝对路径（宿主 API 只认绝对路径）。 */
+  const absolute = (rel: string) => (rel ? `${cwd.replace(/\/+$/, "")}/${rel}` : cwd);
+
+  const entryMenuItems = (entry: FsEntry): MenuItem[] => {
+    const host = fnosHostAvailable();
+    const items: MenuItem[] = [];
+    if (host) {
+      items.push({
+        id: "reveal",
+        label: t("在文件夹显示", "Show in folder"),
+        icon: <IconFolder size={13} className="text-muted" />,
+        onSelect: () => void revealEntry(entry),
+      });
+    }
+    items.push({
+      id: "copy",
+      label: entry.type === "dir" ? t("复制文件夹路径", "Copy folder path") : t("复制文件路径", "Copy file path"),
+      icon: <IconCopy size={13} className="text-muted" />,
+      onSelect: () => void copyEntryPath(entry),
+    });
+    if (host) {
+      items.push({
+        id: "details",
+        label: t("文件详情", "File details"),
+        icon: <IconEye size={13} className="text-muted" />,
+        onSelect: () => void showEntryDetails(entry),
+      });
+    }
+    return items;
+  };
+
+  const revealEntry = async (entry: FsEntry) => {
+    // 文件是「在它所在的文件夹里显示」，目录则直接打开自己。
+    const target = entry.type === "dir" ? absolute(entry.path) : absolute(dirName(entry.path));
+    const r = await openFnosFileManager(target);
+    if (!r.ok) {
+      setActionError(
+        r.reason === "bridge"
+          ? t("飞牛宿主连接不可用，请稍后重试", "The fnOS host is not responding; retry later")
+          : t(`打开失败：${r.reason ?? "未知错误"}`, `Open failed: ${r.reason ?? "unknown error"}`),
+      );
+    }
+  };
+
+  const copyEntryPath = async (entry: FsEntry) => {
+    if (!(await copyText(absolute(entry.path)))) setActionError(t("复制失败", "Copy failed"));
+  };
+
+  const showEntryDetails = async (entry: FsEntry) => {
+    const r = await showFnosFileDetails([absolute(entry.path)]);
+    if (!r.ok) {
+      setActionError(
+        r.reason === "bridge"
+          ? t("飞牛宿主连接不可用，请稍后重试", "The fnOS host is not responding; retry later")
+          : t(`查看详情失败：${r.reason ?? "未知错误"}`, `Details failed: ${r.reason ?? "unknown error"}`),
+      );
+    }
   };
 
   const copyPath = async () => {
@@ -157,6 +232,7 @@ export function FilesPanel({ cwd, active }: Props) {
               errors={errors}
               loadDir={loadDir}
               onOpenFile={openFile}
+              onMenu={(e, entry) => setRowMenu({ anchor: e.currentTarget, entry })}
             />
           ))}
           {truncated[""] && (
@@ -164,6 +240,19 @@ export function FilesPanel({ cwd, active }: Props) {
           )}
         </div>
       </div>
+
+      <Menu
+        open={Boolean(rowMenu)}
+        anchor={rowMenu?.anchor ?? null}
+        onClose={() => setRowMenu(null)}
+        width={200}
+        align="end"
+        items={rowMenu ? entryMenuItems(rowMenu.entry) : []}
+      />
+
+      {actionError && (
+        <p className="shrink-0 border-b border-line px-2 py-1 text-[10.5px] text-danger">{actionError}</p>
+      )}
 
       {selected && (
         <FilePreview
@@ -189,9 +278,10 @@ interface TreeNodeProps {
   errors: Record<string, string>;
   loadDir: (path: string, force?: boolean) => Promise<void>;
   onOpenFile: (entry: FsEntry) => void;
+  onMenu: (event: MouseEvent<HTMLButtonElement>, entry: FsEntry) => void;
 }
 
-function TreeNode({ entry, depth, levels, loading, errors, loadDir, onOpenFile }: TreeNodeProps) {
+function TreeNode({ entry, depth, levels, loading, errors, loadDir, onOpenFile, onMenu }: TreeNodeProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const children = levels[entry.path];
@@ -208,6 +298,7 @@ function TreeNode({ entry, depth, levels, loading, errors, loadDir, onOpenFile }
 
   return (
     <>
+      <div className="group/entry flex items-center">
       <button
         type="button"
         onClick={() => {
@@ -216,7 +307,7 @@ function TreeNode({ entry, depth, levels, loading, errors, loadDir, onOpenFile }
         }}
         disabled={disabled}
         title={entry.path}
-        className="flex w-full items-center gap-1 rounded-md py-[3px] pr-1.5 text-left text-ink-2 transition hover:bg-black/[0.045] disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex min-w-0 flex-1 items-center gap-1 rounded-md py-[3px] pr-1.5 text-left text-ink-2 transition hover:bg-black/[0.045] disabled:cursor-not-allowed disabled:opacity-40"
         style={{ paddingLeft: 4 + depth * 13 }}
       >
         <span className="flex w-3.5 shrink-0 items-center justify-center text-faint">
@@ -234,6 +325,19 @@ function TreeNode({ entry, depth, levels, loading, errors, loadDir, onOpenFile }
         )}
         {disabled && <span className="shrink-0 text-[9.5px] text-faint">{t("链接", "link")}</span>}
       </button>
+      {!disabled && (
+        <button
+          type="button"
+          onClick={(e) => onMenu(e, entry)}
+          className="mr-0.5 rounded p-0.5 text-muted opacity-100 transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover/entry:opacity-100 md:focus:opacity-100"
+          aria-label={`${t("更多操作", "More actions")} ${entry.name}`}
+          aria-haspopup="menu"
+          title={t("更多", "More")}
+        >
+          <IconMore size={13} />
+        </button>
+      )}
+      </div>
       {isDir && open && (
         <div>
           {children?.map((child) => (
@@ -246,6 +350,7 @@ function TreeNode({ entry, depth, levels, loading, errors, loadDir, onOpenFile }
               errors={errors}
               loadDir={loadDir}
               onOpenFile={onOpenFile}
+              onMenu={onMenu}
             />
           ))}
           {children === undefined && isLoading && (

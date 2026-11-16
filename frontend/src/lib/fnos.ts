@@ -282,6 +282,29 @@ export interface FnosOpenOutcome {
   reason?: "standalone" | "bridge" | string;
 }
 
+/**
+ * 当前页面能不能调宿主能力（桌面 iframe / App WebView）。
+ *
+ * 右侧栏文件面板据此决定菜单里给不给「在文件夹显示 / 文件详情」——
+ * 不在宿主里只留「复制路径」，不要摆一堆点了就报错的项。
+ */
+export function fnosHostAvailable(): boolean {
+  return inHost();
+}
+
+/** 在飞牛里看文件/文件夹详情（宿主能力，App 需要 appApi >= v1.0）。 */
+export async function showFnosFileDetails(paths: string[]): Promise<FnosOpenOutcome> {
+  if (!inHost()) return { ok: false, reason: "standalone" };
+  const sdk = await trimReady();
+  if (!sdk) return { ok: false, reason: "bridge" };
+  try {
+    await sdk.showFileDetails(paths);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** 在飞牛文件管理器里显示某个目录（「在文件夹显示」）。 */
 export async function openFnosFileManager(path: string): Promise<FnosOpenOutcome> {
   if (!inHost()) return { ok: false, reason: "standalone" };

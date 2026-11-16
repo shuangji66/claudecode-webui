@@ -202,6 +202,9 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 宿主桥接只给**路径**（`pickUserFile` 返回 `string[]`），没有读文件 API。所以图片/PDF
   由后端 `POST /api/fs/host-file` 读成附件，其余类型只把路径写进消息，由 claude 用 Read
   工具自己读。
+- **右侧栏文件面板的行菜单按宿主能力给项**：宿主里（桌面 iframe / App WebView）是
+  「在文件夹显示 / 复制路径 / 文件详情」，不在宿主只留「复制路径」——不要摆一堆点了就报错的项。
+  路径一律先拼成 NAS 绝对路径（宿主 API 只认绝对路径），文件的「在文件夹显示」打开它所在的目录。
 - **`/api/fs/host-file` 是唯一不受工作区围栏约束的读文件接口**（选择器挑的文件本来就在
   工作区外）。边界：只放行图片/PDF（扩展名初筛 + `http.DetectContentType` 复核，改名的
   HTML/SVG 会被拒）、必须是普通文件、≤ 8MB、必须挂 `s.authed`。不要在这条路上加

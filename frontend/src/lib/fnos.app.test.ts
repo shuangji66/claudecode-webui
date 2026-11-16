@@ -19,11 +19,15 @@ vi.mock("@trimjs/web-app", () => {
     authorizeUserFile() {
       return Promise.resolve({ code: 0, data: true });
     }
+    showFileDetails(paths: string[]) {
+      calls.push(...paths);
+      return Promise.resolve({ code: 0 });
+    }
   }
   return { TrimApp, default: TrimApp };
 });
 
-import { openFnosFileManager, pickFnosDir } from "./fnos";
+import { openFnosFileManager, pickFnosDir, showFnosFileDetails } from "./fnos";
 
 const APP_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) FNAppType/ios FNAppVer/1.38.0";
 
@@ -65,5 +69,24 @@ describe("只有原生桥、没有 UA 标识的 WebView", () => {
     } finally {
       delete (window as unknown as { flutter_inappwebview?: unknown }).flutter_inappwebview;
     }
+  });
+});
+
+describe("文件详情", () => {
+  it("App 里能把路径交给宿主显示详情", async () => {
+    calls.length = 0;
+    setUA(APP_UA);
+    await expect(showFnosFileDetails(["/vol1/1000/demo/README.md"])).resolves.toEqual({ ok: true });
+    expect(calls).toEqual(["/vol1/1000/demo/README.md"]);
+  });
+
+  it("普通浏览器里直接跳过，不碰桥接", async () => {
+    calls.length = 0;
+    setUA("Mozilla/5.0 (Macintosh) Chrome/120");
+    await expect(showFnosFileDetails(["/vol1/1000/demo/README.md"])).resolves.toEqual({
+      ok: false,
+      reason: "standalone",
+    });
+    expect(calls).toEqual([]);
   });
 });
