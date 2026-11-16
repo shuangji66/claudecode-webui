@@ -266,7 +266,7 @@ function subagentStatus(v: unknown): SubagentInfo["status"] | undefined {
   return v === "running" || v === "completed" || v === "failed" || v === "stopped" ? v : undefined;
 }
 
-const TASK_SUBTYPES = new Set(["task_started", "task_updated", "task_notification"]);
+const TASK_SUBTYPES = new Set(["task_started", "task_progress", "task_updated", "task_notification"]);
 
 /**
  * 把 system/task_* 事件折进对应的 Agent 工具卡片。
@@ -320,6 +320,17 @@ function applyTaskEvent(items: Item[], m: Raw, at: number): Item[] | undefined {
     next.prompt = str(m.prompt) || prev.prompt;
     if (typeof m.is_backgrounded === "boolean") next.background = m.is_backgrounded;
     next.spawnDepth = int(m.spawn_depth) ?? prev.spawnDepth;
+  } else if (subtype === "task_progress") {
+    // 运行中的进度：只更新用量与一行摘要，状态保持 running。
+    next.summary = str(m.summary) || prev.summary;
+    const usage = asRecord(m.usage);
+    if (usage) {
+      next.usage = {
+        totalTokens: int(usage.total_tokens) ?? 0,
+        toolUses: int(usage.tool_uses) ?? 0,
+        durationMs: int(usage.duration_ms) ?? 0,
+      };
+    }
   } else if (subtype === "task_updated") {
     const patch = asRecord(m.patch) ?? {};
     next.status = subagentStatus(patch.status) ?? prev.status;

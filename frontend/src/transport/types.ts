@@ -63,6 +63,8 @@ export interface PermissionPayload {
   input?: unknown;
   blocked_path?: string;
   tool_use_id?: string;
+  /** 非空表示这次调用来自子代理内部（审批面板据此标归属）。 */
+  agent_id?: string;
   permission_suggestions?: PermissionSuggestion[];
 }
 

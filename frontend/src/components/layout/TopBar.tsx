@@ -1,11 +1,23 @@
 import { useState } from "react";
 import type { SessionInfo } from "../../transport/types";
 import { useT } from "../../lib/i18n";
+import { runningSubagents, type SubagentEntry } from "../../lib/subagents";
 import { Menu } from "../common/Menu";
-import { IconCheck, IconCopy, IconMore, IconPanel, IconSettings, IconSidebarRight } from "../common/Icons";
+import { IconCheck, IconCopy, IconMore, IconPanel, IconSettings, IconSidebarRight, IconSpark } from "../common/Icons";
+
+/** 子代理状态点配色（与侧栏对话状态点一致：进行中强调色、完成绿、失败红、停止琥珀）。 */
+const SUBAGENT_TONE = {
+  running: "bg-brand",
+  completed: "bg-ok",
+  failed: "bg-danger",
+  stopped: "bg-warn",
+} as const;
 
 interface Props {
   session: SessionInfo | null;
+  /** 本会话的子代理（页头「子智能体 N」触发器）。 */
+  subagents: SubagentEntry[];
+  onOpenSubagent: (agentId: string, label: string) => void;
   title: string;
   busy: boolean;
   onToggleSidebar: () => void;
@@ -17,9 +29,10 @@ interface Props {
 }
 
 
-export function TopBar({ session, title, busy, onToggleSidebar, onToggleCollapse, onOpenSettings, onCopySession, rightOpen, onToggleRight }: Props) {
+export function TopBar({ session, title, busy, subagents, onOpenSubagent, onToggleSidebar, onToggleCollapse, onOpenSettings, onCopySession, rightOpen, onToggleRight }: Props) {
   const t = useT();
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const [subAnchor, setSubAnchor] = useState<HTMLElement | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "ok" | "fail">("idle");
 
   const copySession = async () => {
@@ -55,6 +68,36 @@ export function TopBar({ session, title, busy, onToggleSidebar, onToggleCollapse
             {busy && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand" />}
           </div>
         </div>
+
+        {subagents.length > 0 && (
+          <button
+            type="button"
+            onClick={(e) => setSubAnchor((prev) => (prev ? null : e.currentTarget))}
+            className="flex items-center gap-1 rounded-lg px-1.5 py-1 text-muted hover:bg-black/5 hover:text-ink"
+            aria-label={t(`子智能体 ${subagents.length} 个`, `${subagents.length} subagents`)}
+            aria-haspopup="menu"
+            aria-expanded={subAnchor !== null}
+            title={t("子智能体", "Subagents")}
+          >
+            <IconSpark size={15} />
+            <span className="text-[11.5px] font-medium">{subagents.length}</span>
+            {runningSubagents(subagents) > 0 && <span className="h-1.5 w-1.5 rounded-full bg-brand" />}
+          </button>
+        )}
+        <Menu
+          open={subAnchor !== null}
+          anchor={subAnchor}
+          items={subagents.map((sub) => ({
+            id: sub.agentId,
+            label: sub.label,
+            icon: <span className={`h-1.5 w-1.5 rounded-full ${SUBAGENT_TONE[sub.status]}`} />,
+            hint: sub.type,
+            onSelect: () => onOpenSubagent(sub.agentId, sub.label),
+          }))}
+          onClose={() => setSubAnchor(null)}
+          width={260}
+          align="end"
+        />
 
         <button
           type="button"

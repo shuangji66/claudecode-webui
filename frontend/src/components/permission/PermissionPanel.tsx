@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import type { PermissionPayload, PermissionSuggestion } from "../../transport/types";
 import { useT } from "../../lib/i18n";
-import { IconAlert, IconShield } from "../common/Icons";
+import { IconAlert, IconShield, IconSpark } from "../common/Icons";
+import { useAppStore } from "../../store/useAppStore";
+import { subagentLabel } from "../../lib/subagents";
 
 export interface PermissionReply {
   allow: boolean;
@@ -28,6 +30,13 @@ export function PermissionPanel({ perm, onReply }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(() => safePretty(perm.input));
   const [editError, setEditError] = useState<string | null>(null);
+
+  // 子代理里的工具调用会带 agent_id：标出归属，并允许跳到那个子代理的对话。
+  const agentId = perm.agent_id;
+  const activeId = useAppStore((s) => s.activeId);
+  const showSubagent = useAppStore((s) => s.showSubagent);
+  const items = useAppStore((s) => s.items);
+  const fromSubagent = agentId ? subagentLabel(activeId ? (items[activeId] ?? []) : [], agentId) : undefined;
 
   const suggestions = useMemo(() => perm.permission_suggestions ?? [], [perm.permission_suggestions]);
   const addRules = suggestions.find((s) => s.type === "addRules") as Extract<PermissionSuggestion, { type: "addRules" }> | undefined;
@@ -65,6 +74,17 @@ export function PermissionPanel({ perm, onReply }: Props) {
           <IconAlert size={15} />
         </span>
         <span>{t("需要授权：", "Permission required: ")}{perm.display_name || perm.tool_name}</span>
+        {agentId && (
+          <button
+            type="button"
+            onClick={() => showSubagent(agentId, fromSubagent || agentId)}
+            className="inline-flex min-w-0 items-center gap-1 rounded-full bg-amber-100/70 px-2 py-0.5 text-[10px] font-normal text-amber-800 hover:bg-amber-200/70 dark:bg-amber-900/40 dark:text-amber-300"
+            title={t("这次调用来自子代理，点开看它的对话", "This call comes from a subagent; open its chat")}
+          >
+            <IconSpark size={11} />
+            <span className="truncate">{fromSubagent || t("子代理", "Subagent")}</span>
+          </button>
+        )}
         <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-100/70 px-2 py-0.5 text-[10px] font-normal text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
           <IconShield size={11} />
           {t("待确认", "Pending")}

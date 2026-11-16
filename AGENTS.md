@@ -252,7 +252,13 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 打开后子代理帧带 `parent_tool_use_id` + `agent_id`，store 用 `subagentFrame` 把它们分流到
   `subagentItems[sid][agentId]`：既不能进主消息流（和过滤 sidechain 是同一类问题），
   也不能污染主会话的用量统计。子代理面板优先显示这份实时数据，没有才回落到旁路转录。
-- **`tool_progress` 只更新卡片的已跑秒数**（`ToolItem.progress`），不产生新消息。
+- **`tool_progress` 只更新卡片的已跑秒数**（`ToolItem.progress`），不产生新消息；
+  `task_progress` 更新运行中的用量与一行摘要，状态保持 running。
+- **子代理里的审批带 `agent_id`**（实测 2.1.325 的 `can_use_tool` 不带
+  `parent_tool_use_id`）：`protocol.PermissionRequest.AgentID` 必须保留，
+  审批面板据此标「来自子代理 X」并能跳过去。丢掉它，用户就分不清是谁在申请权限。
+- **页头的「子智能体 N」从消息流现算**（`lib/subagents.ts` 的 `subagentEntries`），
+  不额外存一份状态；点开列表用 `showSubagent` 打开右侧栏标签。
 - **停止/转后台走控制请求**：`stop_task{task_id}`、`background_tasks{tool_use_id?}`；
   会话进程已被回收时网关返回 409，让前端提示重连，而不是假装停成功。
 

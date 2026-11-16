@@ -14,6 +14,7 @@ import { sessionToMarkdown } from "../../lib/sessionExport";
 import { copyText } from "../../lib/clipboard";
 import { useLocale, useT } from "../../lib/i18n";
 import { BrandMark, IconAlert, IconRetry } from "../common/Icons";
+import { subagentEntries } from "../../lib/subagents";
 
 interface Props {
   onToggleSidebar: () => void;
@@ -33,6 +34,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
   const currentWorkspace = useAppStore((s) => s.currentWorkspace);
   const workspaces = useAppStore((s) => s.workspaces);
   const startConversationIn = useAppStore((s) => s.startConversationIn);
+  const showSubagent = useAppStore((s) => s.showSubagent);
   const items = useAppStore((s) => s.items);
   const perms = useAppStore((s) => s.perms);
   const inits = useAppStore((s) => s.inits);
@@ -67,6 +69,8 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
     };
   }, [sessions, conversation, activeId]);
   const itemList = activeId ? (items[activeId] ?? []) : [];
+  // 页头「子智能体 N」：从消息流里现算，不额外存一份状态。
+  const subs = useMemo(() => subagentEntries(itemList), [itemList]);
   const init = activeId ? inits[activeId] : undefined;
   const conn = activeId ? (conns[activeId] ?? { state: "idle" as const }) : { state: "idle" as const };
   const state = activeId ? (states[activeId] ?? session?.state ?? "idle") : "idle";
@@ -177,6 +181,8 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
     <div className="flex h-full min-h-0 flex-col bg-canvas">
       <TopBar
         session={session}
+        subagents={subs}
+        onOpenSubagent={showSubagent}
         title={title}
         busy={busy}
         onToggleSidebar={onToggleSidebar}

@@ -389,6 +389,7 @@ func permPayload(p protocol.PermissionRequest) any {
 		"input":                  json.RawMessage(p.Input),
 		"blocked_path":           p.BlockedPath,
 		"tool_use_id":            p.ToolUseID,
+		"agent_id":               p.AgentID,
 		"permission_suggestions": json.RawMessage(p.PermissionSuggestions),
 	}
 }

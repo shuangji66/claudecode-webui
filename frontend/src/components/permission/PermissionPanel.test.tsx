@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { PermissionPanel } from "./PermissionPanel";
 import type { PermissionPayload } from "../../transport/types";
+import { useAppStore } from "../../store/useAppStore";
 
 function perm(over: Partial<PermissionPayload> = {}): PermissionPayload {
   return {
@@ -89,5 +90,38 @@ describe("PermissionPanel", () => {
     fireEvent.click(screen.getByText("执行修改后的输入"));
     expect(onReply).not.toHaveBeenCalled();
     expect(screen.getByText(/JSON/)).toBeInTheDocument();
+  });
+});
+
+describe("PermissionPanel 子代理归属", () => {
+  it("带 agent_id 时标出「来自子代理」，点击打开它的对话", () => {
+    useAppStore.setState({
+      subagentView: null,
+      activeId: "s1",
+      items: {
+        s1: [
+          {
+            id: "i1",
+            seq: 0,
+            ts: 0,
+            kind: "tool",
+            toolUseId: "tu1",
+            name: "Agent",
+            input: {},
+            subagent: { taskId: "a1", agentId: "a1", description: "写文件", status: "running" },
+          },
+        ],
+      },
+    });
+    render(<PermissionPanel perm={perm({ agent_id: "a1" })} onReply={() => {}} />);
+    const badge = screen.getByText("写文件");
+    expect(badge).toBeInTheDocument();
+    fireEvent.click(badge);
+    expect(useAppStore.getState().subagentView).toMatchObject({ agentId: "a1", label: "写文件" });
+  });
+
+  it("主代理的审批不带归属标记", () => {
+    render(<PermissionPanel perm={perm()} onReply={() => {}} />);
+    expect(screen.queryByText("子代理")).toBeNull();
   });
 });

@@ -190,3 +190,22 @@ func TestUserMessageAttachments(t *testing.T) {
 		t.Fatalf("文本文件块 = %+v", msg.Message.Content[3])
 	}
 }
+
+// 子代理里的审批请求带 agent_id（实测没有 parent_tool_use_id），前端据此标归属。
+func TestParsePermissionKeepsAgentID(t *testing.T) {
+	line := []byte(`{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"rm -rf /tmp/x"},"agent_id":"agent-42"}}`)
+	env, err := Decode(line)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	p, ok := ParsePermission(env)
+	if !ok {
+		t.Fatal("应识别为 can_use_tool")
+	}
+	if p.AgentID != "agent-42" {
+		t.Fatalf("AgentID = %q", p.AgentID)
+	}
+	if p.ToolName != "Bash" {
+		t.Fatalf("ToolName = %q", p.ToolName)
+	}
+}

@@ -286,6 +286,8 @@ type PermissionRequest struct {
 	Input       json.RawMessage `json:"input"`
 	BlockedPath string          `json:"blocked_path"`
 	ToolUseID   string          `json:"tool_use_id"`
+	// AgentID 非空表示这次调用发生在子代理内部（实测 2.1.325 带 agent_id，不带 parent_tool_use_id）。
+	AgentID string `json:"agent_id"`
 	// PermissionSuggestions 原样透传给前端，由前端渲染成「始终允许 / 切模式」等按钮。
 	PermissionSuggestions json.RawMessage `json:"permission_suggestions"`
 }
