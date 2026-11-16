@@ -123,6 +123,11 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   **主题不在这里**：`theme` 只缓存在浏览器 localStorage（每台设备各看各的），
   `Settings`/`Public`/`Patch` 都没有这个字段，旧配置里的 `theme` 读时忽略、下次写盘即消失。
   `Open` 时补默认值，`Apply` 时校验，非法值直接报错。
+- **代理变量必须大小写都写**（实测 2.1.325）：这个 CLI 只认小写 `https_proxy`/`http_proxy`，
+  只给大写 `HTTPS_PROXY` 时它一个字节都不走代理（连 `NODE_USE_ENV_PROXY=1` 也救不回来）。
+  `Settings.Env()` 因此两套都注入，`process.CleanEnv` 两套都先剔除继承值。
+  `socks5://` 的 URL 它也不做 SOCKS 握手，而是当成 HTTP 代理发 `CONNECT`——配 socks 时
+  代理端看到的是普通 CONNECT，不是 SOCKS5 greeting。
 - 代理只在进程启动时生效：`POST /api/settings/proxy` 保存后关闭全部会话，再按原 id
   `Resume`（空对话没有转录时才退回 `Ensure`）；`Settings.Env()` 注入大小写两套 proxy 变量和 localhost `NO_PROXY`，
   `process.CleanEnv` 必须剔除继承的代理变量，保证空值=直连。
