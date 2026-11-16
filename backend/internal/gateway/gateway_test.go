@@ -651,3 +651,59 @@ func TestDecodeAttachments(t *testing.T) {
 		t.Fatal("非法 base64 应报错")
 	}
 }
+
+func TestRenameWorkspace(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	rec := httptest.NewRecorder()
+	body := `{"path":"` + srv.d.ProjectsRoot + `","name":"我的项目"}`
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/workspaces/rename", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename code = %d: %s", rec.Code, rec.Body.String())
+	}
+	items, current := decodeWorkspaces(t, rec)
+	if len(items) != 1 || items[0].Name != "我的项目" {
+		t.Fatalf("items = %+v", items)
+	}
+	// 只改显示名：路径与当前工作区都不动
+	if items[0].Path != srv.d.ProjectsRoot || current != srv.d.ProjectsRoot {
+		t.Fatalf("path/current = %q/%q", items[0].Path, current)
+	}
+
+	rec = httptest.NewRecorder()
+	body = `{"path":"/definitely/not/authorized","name":"x"}`
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/workspaces/rename", strings.NewReader(body)))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("未知目录 code = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMkdirDir(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	rec := httptest.NewRecorder()
+	body := `{"path":"` + srv.d.ProjectsRoot + `","name":"新建目录"}`
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/fs/mkdir", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mkdir code = %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(srv.d.ProjectsRoot, "新建目录")
+	if out.Path != want {
+		t.Fatalf("path = %q, want %q", out.Path, want)
+	}
+	if st, err := os.Stat(want); err != nil || !st.IsDir() {
+		t.Fatalf("目录未创建: %v", err)
+	}
+
+	// 名字带分隔符 → 400（不能借这个接口往任意路径写）
+	rec = httptest.NewRecorder()
+	body = `{"path":"` + srv.d.ProjectsRoot + `","name":"a/b"}`
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/fs/mkdir", strings.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("非法名字 code = %d: %s", rec.Code, rec.Body.String())
+	}
+}

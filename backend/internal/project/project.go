@@ -118,3 +118,30 @@ func Browse(path string, hidden bool, limit int) (BrowseResult, error) {
 	sort.Slice(out.Entries, func(i, j int) bool { return out.Entries[i].Name < out.Entries[j].Name })
 	return out, nil
 }
+
+// Mkdir 在 parent 下新建一个子目录，返回子目录的绝对路径。
+//
+// 只接受单层目录名：远程传进来的字符串不能带分隔符，也不能是 . / ..，
+// 否则「新建文件夹」就成了任意路径写入口。父目录必须已存在，同名冲突直接报错
+// （静默复用会让用户以为建了另一个目录）。
+func Mkdir(parent, name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", errors.New("project: 目录名不能为空")
+	}
+	if name == "." || name == ".." || strings.ContainsAny(name, "/\\") || strings.ContainsRune(name, 0) {
+		return "", errors.New("project: 目录名不能包含路径分隔符")
+	}
+	abs, err := Validate(parent)
+	if err != nil {
+		return "", err
+	}
+	child := filepath.Join(abs, name)
+	if err := os.Mkdir(child, 0o755); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return "", errors.New("project: 同名目录已存在")
+		}
+		return "", err
+	}
+	return child, nil
+}

@@ -49,6 +49,13 @@ interface MenuState {
   y: number;
 }
 
+interface WsMenuState {
+  path: string;
+  name: string;
+  x: number;
+  y: number;
+}
+
 export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onAddWorkspace, onOpenHistory }: Props) {
   const t = useT();
   const locale = useLocale();
@@ -59,12 +66,14 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const items = useAppStore((s) => s.items);
   const states = useAppStore((s) => s.states);
   const starting = useAppStore((s) => s.starting);
-  const info = useAppStore((s) => s.info);
   const switchWorkspace = useAppStore((s) => s.switchWorkspace);
   const openConversation = useAppStore((s) => s.openConversation);
   const createSession = useAppStore((s) => s.createSession);
   const closeSession = useAppStore((s) => s.closeSession);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
+  const renameWorkspace = useAppStore((s) => s.renameWorkspace);
+  const startConversationIn = useAppStore((s) => s.startConversationIn);
+  const openWorkspaceInFiles = useAppStore((s) => s.openWorkspaceInFiles);
   const renameConversation = useAppStore((s) => s.renameConversation);
   const archiveConversation = useAppStore((s) => s.archiveConversation);
   const deleteConversation = useAppStore((s) => s.deleteConversation);
@@ -74,6 +83,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const [showArchived, setShowArchived] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentWorkspace ? [currentWorkspace] : []));
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [wsMenu, setWsMenu] = useState<WsMenuState | null>(null);
 
   useEffect(() => {
     if (!currentWorkspace) return;
@@ -95,6 +105,22 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       document.removeEventListener("keydown", onKey);
     };
   }, [menu]);
+
+  useEffect(() => {
+    if (!wsMenu) return;
+    const onDown = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest("[data-ws-menu]")) setWsMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setWsMenu(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [wsMenu]);
 
   const archivedCount = conversations.filter((c) => c.archived).length;
 
@@ -173,10 +199,34 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     });
   };
 
-  const askRemove = async (g: WorkspaceGroup) => {
-    if (g.path === "__other__") return;
-    if (!window.confirm(t(`移除授权目录「${g.path}」？\n移除后不能再在该目录新建对话。`, `Remove authorized directory "${g.path}"?\nYou cannot start new conversations there afterwards.`))) return;
-    await removeWorkspace(g.path);
+  const openWsMenu = (e: React.MouseEvent<HTMLButtonElement>, g: WorkspaceGroup) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setWsMenu({
+      path: g.path,
+      name: g.name,
+      x: Math.max(8, Math.min(rect.right - 176, window.innerWidth - 184)),
+      y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 190)),
+    });
+  };
+
+  const askRenameWorkspace = (m: WsMenuState) => {
+    setWsMenu(null);
+    const next = window.prompt(t("重命名工作区", "Rename workspace"), m.name);
+    if (next === null) return;
+    void renameWorkspace(m.path, next.trim());
+  };
+
+  const revealWorkspace = (m: WsMenuState) => {
+    setWsMenu(null);
+    void openWorkspaceInFiles(m.path);
+  };
+
+  const askRemove = async (path: string, fromMenu = false) => {
+    if (fromMenu) setWsMenu(null);
+    if (path === "__other__") return;
+    if (!window.confirm(t(`移除授权目录「${path}」？\n移除后不能再在该目录新建对话。`, `Remove authorized directory "${path}"?\nYou cannot start new conversations there afterwards.`))) return;
+    await removeWorkspace(path);
   };
 
   const openOne = (c: ConversationInfo) => {
@@ -392,12 +442,22 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                     </button>
                     <button
                       type="button"
-                      onClick={() => void askRemove(g)}
-                      className="rounded-md p-1 text-muted opacity-0 transition hover:bg-black/5 hover:text-danger group-hover:opacity-100"
-                      aria-label={`${t("移除授权目录", "Remove authorized directory")} ${g.path}`}
-                      title={t("移除授权目录", "Remove authorized directory")}
+                      onClick={(e) => openWsMenu(e, g)}
+                      className="rounded-md p-1 text-muted transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+                      aria-label={`${t("工作区操作", "Workspace actions")} ${g.path}`}
+                      aria-haspopup="menu"
+                      title={t("更多", "More")}
                     >
-                      <IconTrash size={14} />
+                      <IconMore size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void startConversationIn(g.path)}
+                      className="rounded-md p-1 text-muted transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+                      aria-label={`${t("在该工作区新建对话", "New conversation in this workspace")} ${g.path}`}
+                      title={t("新建对话", "New conversation")}
+                    >
+                      <IconPlus size={14} />
                     </button>
                   </>
                 )}
@@ -464,11 +524,29 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             {connLabel}
           </span>
         </button>
-        <div className="flex items-center justify-between px-2 pt-1 text-[10px] text-faint">
-          <span className="truncate font-mono">{currentWorkspace ? baseName(currentWorkspace) : t("未选择工作区", "No workspace")}</span>
-          <span>v{info?.version ?? "-"}</span>
-        </div>
       </div>
+
+      {wsMenu && (
+        <div
+          data-ws-menu
+          role="menu"
+          className="fixed z-[70] w-[176px] rounded-xl border border-line bg-canvas p-1 shadow-soft"
+          style={{ left: wsMenu.x, top: wsMenu.y }}
+        >
+          <button type="button" role="menuitem" onClick={() => askRenameWorkspace(wsMenu)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-ink hover:bg-panel-strong">
+            <IconPencil size={13} className="text-muted" />
+            {t("重命名", "Rename")}
+          </button>
+          <button type="button" role="menuitem" onClick={() => revealWorkspace(wsMenu)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-ink hover:bg-panel-strong">
+            <IconFolder size={13} className="text-muted" />
+            {t("在文件夹显示", "Show in files")}
+          </button>
+          <button type="button" role="menuitem" onClick={() => void askRemove(wsMenu.path, true)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-danger hover:bg-danger/[0.06]">
+            <IconTrash size={13} />
+            {t("删除工作区", "Delete workspace")}
+          </button>
+        </div>
+      )}
 
       {menu && menuConv && (
         <div

@@ -252,6 +252,35 @@ func (s *Store) Remove(raw string) error {
 	})
 }
 
+// Rename 只改授权目录的显示名，不动路径。
+//
+// 路径是授权键（会话 cwd、workspaces.json、前端当前工作区都按它匹配），
+// 「重命名」只影响侧栏展示，绝不能顺手 os.Rename 真目录。name 为空时回落到目录名。
+func (s *Store) Rename(raw, name string) (Entry, error) {
+	abs := filepath.Clean(raw)
+	name = strings.TrimSpace(name)
+	if runes := []rune(name); len(runes) > 64 {
+		name = string(runes[:64])
+	}
+	var out Entry
+	err := s.mutate(func(f *storedFile) error {
+		for i := range f.Workspaces {
+			if f.Workspaces[i].Path != abs {
+				continue
+			}
+			if name == "" {
+				f.Workspaces[i].Name = nameOf(abs)
+			} else {
+				f.Workspaces[i].Name = name
+			}
+			out = entryOf(f.Workspaces[i])
+			return nil
+		}
+		return ErrNotFound
+	})
+	return out, err
+}
+
 // SetCurrent 切换当前工作区并刷新 last_used。
 func (s *Store) SetCurrent(raw string) error {
 	abs := filepath.Clean(raw)

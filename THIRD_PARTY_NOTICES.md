@@ -35,6 +35,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## 飞牛应用 SDK（@trimjs/web-app）
+
+- 项目：`@trimjs/web-app`（飞牛 fnOS 提供给微应用的宿主桥接 SDK）
+- 版本：`0.5.0`
+- 许可证：发布的 npm 包内未声明许可证，此处不附许可文本
+- 使用方式：仅作为运行时依赖引入，用于调用宿主能力（目录授权 `authorizeUserFile`）。
+  未修改其代码，也未内联进入口包（`main.tsx` 里按需动态 import）。
+
 ## xterm.js
 
 - 项目：`xtermjs/xterm.js`（npm：`@xterm/xterm`、`@xterm/addon-fit`）

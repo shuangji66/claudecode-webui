@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { SessionInfo } from "../../transport/types";
-import type { ConnInfo } from "../../store/useAppStore";
-import { clockTime, permissionLabel } from "../../lib/labels";
+import { permissionLabel } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
-import { IconCheck, IconCopy, IconFolder, IconMore, IconPanel, IconSettings, IconSidebarRight } from "../common/Icons";
+import { IconCheck, IconCopy, IconMore, IconPanel, IconSettings, IconSidebarRight } from "../common/Icons";
 
 export type ChatTab = "chat" | "overview";
 
 interface Props {
   session: SessionInfo | null;
   title: string;
-  conn: ConnInfo;
   busy: boolean;
   tab: ChatTab;
   mode: string;
@@ -24,15 +22,7 @@ interface Props {
 }
 
 
-const CONN_DOT: Record<string, string> = {
-  idle: "bg-faint",
-  connecting: "bg-warn",
-  open: "bg-ok",
-  reconnecting: "bg-warn",
-  closed: "bg-danger",
-};
-
-export function TopBar({ session, title, conn, busy, tab, mode, onTab, onToggleSidebar, onToggleCollapse, onOpenSettings, onCopySession, rightOpen, onToggleRight }: Props) {
+export function TopBar({ session, title, busy, tab, mode, onTab, onToggleSidebar, onToggleCollapse, onOpenSettings, onCopySession, rightOpen, onToggleRight }: Props) {
   const t = useT();
   const locale = useLocale();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -66,13 +56,6 @@ export function TopBar({ session, title, conn, busy, tab, mode, onTab, onToggleS
       }, 900);
     }
   };
-  const connText =
-    conn.state === "open" ? t("已连接", "Connected")
-      : conn.state === "reconnecting" ? t("重连中", "Reconnecting")
-        : conn.state === "connecting" ? t("连接中", "Connecting")
-          : conn.state === "closed" ? t("已断开", "Disconnected")
-            : t("未连接", "Not connected");
-
   return (
     <header className="safe-top shrink-0 border-b border-line bg-canvas md:pt-0">
       <div className="flex h-[56px] items-center gap-2 px-3 md:px-4">
@@ -103,20 +86,7 @@ export function TopBar({ session, title, conn, busy, tab, mode, onTab, onToggleS
             </span>
             {busy && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand sm:hidden" />}
           </div>
-          <div className="flex min-w-0 items-center gap-1 text-[10.5px] text-faint">
-            <IconFolder size={11} className="shrink-0" />
-            <span className="truncate font-mono" title={session?.cwd}>
-              {session?.cwd ?? t("选择工作区开始", "Choose a workspace to start")}
-            </span>
-            {session?.last_active && <span className="hidden shrink-0 sm:inline">· {clockTime(Date.parse(session.last_active), locale)}</span>}
-          </div>
         </div>
-
-        <span className="hidden items-center gap-1.5 text-[11px] text-muted sm:flex" title={conn.reason}>
-          <span className={`h-1.5 w-1.5 rounded-full ${CONN_DOT[conn.state] ?? "bg-faint"}`} />
-          {connText}
-        </span>
-        <span className={`h-1.5 w-1.5 rounded-full sm:hidden ${CONN_DOT[conn.state] ?? "bg-faint"}`} title={connText} />
 
         <button
           type="button"

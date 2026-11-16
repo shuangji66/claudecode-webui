@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import type { FsListing } from "../../transport/types";
 import { baseName } from "../../lib/labels";
+import { authorizeFnosDir, pickFnosDir } from "../../lib/fnos";
 import { useT } from "../../lib/i18n";
 import { IconChevronRight, IconClose, IconFolder, IconFolderPlus, IconSearch, IconTrash } from "../common/Icons";
 
@@ -26,11 +27,13 @@ export function WorkspaceDialog({ open, onClose }: Props) {
   const browseDirs = useAppStore((s) => s.browseDirs);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
+  const mkdirDir = useAppStore((s) => s.mkdirDir);
 
   const [path, setPath] = useState("");
   const [listing, setListing] = useState<FsListing | null>(null);
   const [hidden, setHidden] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [authorizing, setAuthorizing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const load = async (p: string, showHidden = hidden) => {
@@ -71,10 +74,72 @@ export function WorkspaceDialog({ open, onClose }: Props) {
   // 用户可能改了输入框但没点「前往」；提交时以输入框为准，避免
   // 把当前列表目录当成目标授权出去。
   const target = (path.trim() || listing?.path || "").trim();
+  const busy = authorizing || workspaceBusy;
   const submit = async () => {
     if (!target) return;
-    const ok = await addWorkspace(target);
-    if (ok) onClose();
+    setErr(null);
+    setAuthorizing(true);
+    try {
+      // 先请飞牛把该目录的 ACL 授予应用用户，再登记工作区：ACL 没写进去，
+      // claude 起来后读写真目录会被 trim_acl 拒掉（表现为一切都没权限）。
+      const verdict = await authorizeFnosDir(target);
+      if (verdict.state === "denied") {
+        setErr(
+          verdict.reason === "cancel"
+            ? t("已取消飞牛目录授权，未添加工作区。", "fnOS authorization cancelled; the directory was not added.")
+            : t(`飞牛目录授权失败：${verdict.message}`, `fnOS authorization failed: ${verdict.message}`),
+        );
+        return;
+      }
+      if (verdict.state === "skipped") {
+        // 不在飞牛宿主里（直连端口 / 本地开发）：按旧行为继续，不阻塞添加目录。
+        console.warn("[fnos] 跳过飞牛目录授权:", verdict.reason);
+      }
+      if (await addWorkspace(target)) onClose();
+    } finally {
+      setAuthorizing(false);
+    }
+  };
+
+  // 「选择飞牛目录」：用户自己挑，挑完即授权（飞牛选择器本身就是授权入口）。
+  const pickFnos = async () => {
+    setErr(null);
+    setAuthorizing(true);
+    try {
+      const picked = await pickFnosDir({
+        title: t("选择工作区目录", "Choose a workspace directory"),
+        okText: t("添加", "Add"),
+      });
+      if (picked.state === "skipped") {
+        setErr(t("当前不在飞牛宿主中，无法打开飞牛目录选择器；可在上方浏览目录后点「添加」。", "Not running inside fnOS, so the fnOS picker is unavailable; browse above and use Add instead."));
+        return;
+      }
+      if (picked.state === "denied") {
+        if (picked.reason === "message") setErr(t(`飞牛目录选择失败：${picked.message}`, `fnOS directory pick failed: ${picked.message}`));
+        return;
+      }
+      if (await addWorkspace(picked.path)) onClose();
+    } finally {
+      setAuthorizing(false);
+    }
+  };
+
+  // 「新建文件夹」：在当前浏览的目录下建一层，然后直接进去。
+  const mkdir = async () => {
+    const parent = (listing?.path || path).trim();
+    if (!parent) return;
+    const name = window.prompt(t("新建文件夹名称", "New folder name"), "");
+    if (name === null) return;
+    setErr(null);
+    setLoading(true);
+    try {
+      const created = await mkdirDir(parent, name);
+      await load(created);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const toggleHidden = (v: boolean) => {
@@ -97,7 +162,7 @@ export function WorkspaceDialog({ open, onClose }: Props) {
           <div className="min-w-0 flex-1">
             <h2 className="text-[15px] font-semibold text-ink">{t("添加授权目录", "Add authorized directory")}</h2>
             <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
-              {t("授权后该目录可作为工作区，Claude 会在其中读写文件。选择后立即切换并启动会话。", "Authorize this directory as a workspace; Claude can read and write there. It switches and starts a session immediately.")}
+              {t("选中后飞牛会弹窗确认目录授权；确认后该目录成为工作区，Claude 在其中读写文件并立即启动会话。", "fnOS asks you to confirm the directory authorization; once confirmed it becomes a workspace where Claude reads and writes, and a session starts immediately.")}
             </p>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink" aria-label={t("关闭", "Close")}>
@@ -191,31 +256,49 @@ export function WorkspaceDialog({ open, onClose }: Props) {
         </div>
 
         <div className="border-t border-line px-4 pb-[calc(env(safe-area-inset-bottom,0px)+12px)] pt-3 md:pb-3">
-          <div className="mb-2 flex items-center gap-3">
-            <label className="flex items-center gap-1.5 text-[11px] text-muted">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={busy || loading}
+              onClick={() => void pickFnos()}
+              className="flex items-center gap-1.5 rounded-[10px] border border-line-strong px-3 py-1.5 text-[12px] font-medium text-ink hover:bg-panel-strong disabled:opacity-40"
+            >
+              <IconFolder size={14} />
+              {t("选择飞牛目录", "Choose in fnOS")}
+            </button>
+            <button
+              type="button"
+              disabled={busy || loading || !target}
+              onClick={() => void mkdir()}
+              className="flex items-center gap-1.5 rounded-[10px] border border-line-strong px-3 py-1.5 text-[12px] font-medium text-ink hover:bg-panel-strong disabled:opacity-40"
+            >
+              <IconFolderPlus size={14} />
+              {t("新建文件夹", "New folder")}
+            </button>
+            <label className="ml-auto flex items-center gap-1.5 text-[11px] text-muted">
               <input type="checkbox" checked={hidden} onChange={(e) => toggleHidden(e.target.checked)} className="accent-[var(--c-brand)]" />
               {t("显示隐藏目录", "Show hidden")}
             </label>
-            <span className="ml-auto max-w-[60%] truncate font-mono text-[10px] text-faint" title={target}>
-              {target || t("未选择目录", "No directory selected")}
-            </span>
           </div>
           <div className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-faint" title={target}>
+              {target || t("未选择目录", "No directory selected")}
+            </span>
             <button
               type="button"
               onClick={onClose}
-              className="rounded-[10px] border border-line-strong px-3.5 py-2 text-[12px] font-medium text-ink hover:bg-panel-strong"
+              className="shrink-0 rounded-[10px] border border-line-strong px-3.5 py-2 text-[12px] font-medium text-ink hover:bg-panel-strong"
             >
               {t("取消", "Cancel")}
             </button>
             <button
               type="button"
-              disabled={!target || workspaceBusy || loading}
+              disabled={!target || busy || loading}
               onClick={() => void submit()}
-              className="ml-auto flex items-center gap-1.5 rounded-[10px] bg-brand px-4 py-2 text-[12px] font-medium text-white hover:bg-brand-hover disabled:opacity-40"
+              className="flex shrink-0 items-center gap-1.5 rounded-[10px] bg-brand px-4 py-2 text-[12px] font-medium text-white hover:bg-brand-hover disabled:opacity-40"
             >
               <IconFolderPlus size={14} />
-              {workspaceBusy ? t("授权中…", "Authorizing…") : t("授权并切换", "Authorize & switch")}
+              {busy ? t("授权中…", "Authorizing…") : t("添加", "Add")}
             </button>
           </div>
           {workspaces.length > 0 && (

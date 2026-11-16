@@ -22,6 +22,7 @@ src/
   lib/attachments.ts   附件类型/大小/读取
   lib/workspace.ts     文件路径/porcelain 分组/unified diff 解析（纯函数）
   lib/conversations.ts 对话归属/最近对话排序（纯函数）
+  lib/fnos.ts          飞牛宿主桥接：目录授权（authorizeUserFile）+ 回包归一化（纯函数部分可测）
   assets/claude-code.svg 左侧栏品牌图标
   store/useAppStore.ts zustand 全局状态（只做状态搬运）
   store/useSidebarStore.ts 右侧栏数据（文件树/Git/预览，所有 fetch 收敛在这里）
@@ -69,6 +70,14 @@ src/
     “新对话”。不要用目录名当空对话标题。
 19. **归档/删除后**要刷新对话列表；删除是软删除，前端不要把转录当作可删除文件。
     当前对话被归档/删除时，打开同工作区下一条非归档对话；没有就回到新对话空态。
+20. **添加授权目录必须先过飞牛授权**。应用以独立应用用户运行，用户能浏览不代表
+    claude 能读写：目录 ACL 要由飞牛 `authorizeUserFile(path)` 授予（前端宿主桥接，
+    后端 `trim.file.*` 只能查/删，不能授权）。`WorkspaceDialog` 里授权被取消/报错就
+    不许登记工作区；拿不到宿主（直连端口、`make dev`）才降级放行。
+    不做版本分流：不按飞牛 App / 系统版本换通路。
+    「选择飞牛目录」是 `pickUserFile`（挑选即授权，登记时不再二次确认）；「新建文件夹」
+    走 `mkdirDir` → `POST /api/fs/mkdir`。工作区行的「更多」菜单只有重命名 / 在文件夹显示 /
+    删除工作区三项，别把会话菜单的归档/结束进程混进去。
 
 ## 3. 状态管理（zustand）
 

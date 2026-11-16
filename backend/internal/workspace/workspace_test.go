@@ -241,3 +241,48 @@ func TestAutoStartPathFallsBackToExisting(t *testing.T) {
 		t.Fatalf("当前目录消失后应退回父目录，实际 %q", got)
 	}
 }
+
+func TestRenameOnlyChangesDisplayName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "proj")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(dir, "workspaces.json"), path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	entry, err := s.Rename(path, "  我的项目  ")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if entry.Name != "我的项目" || entry.Path != path {
+		t.Fatalf("entry = %+v", entry)
+	}
+	// 磁盘上的目录名不变
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("原目录不应被移动: %v", err)
+	}
+
+	// 重新打开仍然是新名字（已落盘）
+	reopened, err := Open(filepath.Join(dir, "workspaces.json"), path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if items := reopened.List(); len(items) != 1 || items[0].Name != "我的项目" {
+		t.Fatalf("reopen list = %+v", items)
+	}
+
+	// 空名字回落成目录名
+	if entry, err = reopened.Rename(path, "   "); err != nil {
+		t.Fatalf("Rename empty: %v", err)
+	}
+	if entry.Name != "proj" {
+		t.Fatalf("空名字应回落为目录名，得到 %q", entry.Name)
+	}
+
+	if _, err := reopened.Rename(filepath.Join(dir, "other"), "x"); err == nil {
+		t.Fatal("不在列表里的目录应返回 ErrNotFound")
+	}
+}

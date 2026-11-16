@@ -11,6 +11,7 @@
 import { create } from "zustand";
 import { apiFetch } from "../lib/runtime";
 import { appendError, appendUser, applyCLI } from "../lib/normalize";
+import { openFnosFileManager } from "../lib/fnos";
 import type { Item } from "../lib/model";
 import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
 import type {
@@ -126,8 +127,15 @@ interface AppState {
   refreshWorkspaces: () => Promise<void>;
   addWorkspace: (path: string, open?: boolean) => Promise<boolean>;
   removeWorkspace: (path: string) => Promise<boolean>;
+  renameWorkspace: (path: string, name: string) => Promise<boolean>;
   switchWorkspace: (path: string) => Promise<void>;
+  /** 在指定工作区里新建一条对话（先切当前工作区，再创建；不打开旧对话）。 */
+  startConversationIn: (path: string) => Promise<void>;
+  /** 在飞牛文件管理器里显示目录；失败走全局错误条。 */
+  openWorkspaceInFiles: (path: string) => Promise<void>;
   browseDirs: (path: string, hidden: boolean) => Promise<FsListing>;
+  /** 在目录选择器里新建一层文件夹，返回新目录绝对路径；失败直接抛错给弹窗展示。 */
+  mkdirDir: (parent: string, name: string) => Promise<string>;
   ensureSession: (cwd?: string) => Promise<SessionInfo | null>;
   createSession: (cwd?: string) => Promise<void>;
   openConversation: (id: string, force?: boolean) => Promise<boolean>;
@@ -575,6 +583,75 @@ export const useAppStore = create<AppState>()((set, get) => ({
     } finally {
       set({ workspaceBusy: false });
     }
+  },
+
+  renameWorkspace: async (path, name) => {
+    set({ workspaceBusy: true, error: null });
+    try {
+      const r = await apiFetch<WorkspacesPayload>("/api/workspaces/rename", {
+        method: "POST",
+        body: JSON.stringify({ path, name }),
+      });
+      set({
+        workspaces: r.workspaces ?? [],
+        currentWorkspace: r.current ?? get().currentWorkspace,
+        workspaceRoot: r.root ?? get().workspaceRoot,
+      });
+      return true;
+    } catch (e) {
+      set({ error: errText(e) });
+      return false;
+    } finally {
+      set({ workspaceBusy: false });
+    }
+  },
+
+  startConversationIn: async (path) => {
+    const target = path || get().currentWorkspace;
+    if (!target) {
+      set({ error: "请先添加并选择一个授权目录" });
+      return;
+    }
+    // 先切当前工作区，否则侧栏高亮和会话归属会跟新对话错位。
+    if (target !== get().currentWorkspace) {
+      set({ workspaceBusy: true, error: null });
+      try {
+        const r = await apiFetch<WorkspacesPayload>("/api/workspaces/current", {
+          method: "POST",
+          body: JSON.stringify({ path: target }),
+        });
+        set({
+          workspaces: r.workspaces ?? [],
+          currentWorkspace: r.current ?? target,
+          workspaceRoot: r.root ?? get().workspaceRoot,
+        });
+      } catch (e) {
+        set({ error: errText(e) });
+        return;
+      } finally {
+        set({ workspaceBusy: false });
+      }
+    }
+    await get().createSession(target);
+  },
+
+  openWorkspaceInFiles: async (path) => {
+    const r = await openFnosFileManager(path);
+    if (r.ok) return;
+    set({
+      error:
+        r.reason === "standalone" || r.reason === "bridge"
+          ? "当前不在飞牛宿主中，无法打开文件管理器"
+          : `打开目录失败：${r.reason ?? "未知错误"}`,
+    });
+  },
+
+  mkdirDir: async (parent, name) => {
+    const r = await apiFetch<{ path: string }>("/api/fs/mkdir", {
+      method: "POST",
+      body: JSON.stringify({ path: parent, name }),
+    });
+    return r.path;
   },
 
   switchWorkspace: async (path) => {

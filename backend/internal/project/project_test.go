@@ -105,3 +105,36 @@ func TestBrowseSkipsFilesAndHidden(t *testing.T) {
 		t.Fatalf("hidden entries = %+v", got.Entries)
 	}
 }
+
+func TestMkdirCreatesSingleLevel(t *testing.T) {
+	root := t.TempDir()
+	got, err := Mkdir(root, "新目录 ")
+	if err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+	if got != filepath.Join(root, "新目录") {
+		t.Fatalf("path = %q", got)
+	}
+	if st, err := os.Stat(got); err != nil || !st.IsDir() {
+		t.Fatalf("目录未创建: %v", err)
+	}
+}
+
+func TestMkdirRejectsBadNames(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"", "   ", ".", "..", "a/b", `a\b`} {
+		if _, err := Mkdir(root, name); err == nil {
+			t.Fatalf("名字 %q 应被拒绝", name)
+		}
+	}
+	if _, err := Mkdir(filepath.Join(root, "nope"), "x"); err == nil {
+		t.Fatal("父目录不存在应报错")
+	}
+	// 同名目录不能再建一次
+	if _, err := Mkdir(root, "dup"); err != nil {
+		t.Fatalf("首次 Mkdir: %v", err)
+	}
+	if _, err := Mkdir(root, "dup"); err == nil {
+		t.Fatal("同名目录应报错")
+	}
+}

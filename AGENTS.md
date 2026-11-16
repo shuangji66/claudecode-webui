@@ -147,7 +147,27 @@ hub ── manager ── session ── process ── claude (NDJSON)
   （`normal` 只给目录，点开无法 diff）。解析按 NUL 字段走，不能按空格 split，
   否则带空格的路径会被截断。
 
-### 4.6 前端侧
+### 4.6 工作区目录的 ACL（飞牛）
+
+- **能浏览 ≠ 能读写**。应用以独立应用用户（如 `ClaudeCode`）运行，`/vol1/@appshare` 这类
+  祖先目录是 mode 000，只靠 `trim_acl` 授予穿越。用户在目录选择器里看到的目录，是应用
+  用户已经有权列出的；但把**新目录**加为工作区后，claude 子进程仍然会被拒。
+- **授权只能在前端做**。飞牛后端 API（`trim.file.getUserAccessibleFolders` /
+  `delUserAccessibleFolder`，见 `POST /api/v1/trimapp`，unix socket
+  `/var/run/trim_open_gateway_apiscope.socket`）只能查/删，不能授予；授予必须走
+  需要用户确认的 `authorizeUserFile(path)`（`@trimjs/web-app` 宿主桥接）。
+- 所以 `WorkspaceDialog` 先 `authorizeFnosDir(path)` 再 `POST /api/workspaces`：用户取消
+  或宿主报错就不登记目录。拿不到宿主（直连端口 / `make dev`）才降级放行。
+- **握手要趁早**：宿主只在 iframe 挂载后 60 秒内应答 postMessage 握手，`main.tsx` 里
+  `primeFnosSdk()` 必须在入口发起；超时后 SDK 会退化成永不 settle 的连接（按钮点了没反应）。
+- 不做版本分流：dsh 那边按飞牛 App 版本切网页授权页，本应用只跑微应用 iframe，不适用。
+- 「选择飞牛目录」（`pickUserFile`）本身就是授权入口，挑完直接登记，不要再弹一次确认框。
+- 「新建文件夹」走 `POST /api/fs/mkdir`：只接受**单层目录名**，带分隔符/`.`/`..` 一律 400；
+  它是宿主写操作，和浏览接口一样必须挂 `s.authed`。
+- 「重命名工作区」走 `POST /api/workspaces/rename`，**只改显示名**，绝不 `os.Rename` 真目录
+  （路径是授权键：会话 cwd、workspaces.json、前端当前工作区都按它匹配）。
+
+### 4.7 前端侧
 
 - `--include-partial-messages` 会**先给逐字增量、再给完整消息**。两套都追加会导致
   每句话显示两遍；`lib/normalize.ts` 的做法是「替换流式气泡」。

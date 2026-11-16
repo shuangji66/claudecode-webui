@@ -108,6 +108,56 @@ func (s *Server) handleSetCurrentWorkspace(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, s.currentWorkspaces())
 }
 
+// handleRenameWorkspace 只改授权目录的显示名（侧栏、选择器里用它），不动真实路径。
+func (s *Server) handleRenameWorkspace(w http.ResponseWriter, r *http.Request) {
+	if s.d.Workspaces == nil {
+		writeErr(w, "工作区存储未启用", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeErr(w, "请求体解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Path) == "" {
+		writeErr(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	if _, err := s.d.Workspaces.Rename(req.Path, req.Name); err != nil {
+		code := http.StatusBadRequest
+		if errors.Is(err, workspace.ErrNotFound) {
+			code = http.StatusNotFound
+		}
+		writeErr(w, err.Error(), code)
+		return
+	}
+	writeJSON(w, s.currentWorkspaces())
+}
+
+// handleMkdir 在指定目录下新建一层子目录，供「添加授权目录」弹窗的「新建文件夹」使用。
+//
+// 与浏览接口一样属于敏感能力（能在宿主机上创建目录），因此同样挂在 authed 后面；
+// 目录名只允许单层，不允许分隔符（见 project.Mkdir）。
+func (s *Server) handleMkdir(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeErr(w, "请求体解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	dir, err := project.Mkdir(req.Path, req.Name)
+	if err != nil {
+		writeErr(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]string{"path": dir})
+}
+
 // fsPayload 是「添加授权目录」浏览器的返回。
 type fsPayload struct {
 	Path    string        `json:"path"`

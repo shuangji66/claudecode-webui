@@ -166,7 +166,6 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
       <TopBar
         session={session}
         title={title}
-        conn={conn}
         busy={busy}
         tab={tab}
         mode={mode}
