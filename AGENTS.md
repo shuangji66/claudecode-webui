@@ -19,7 +19,7 @@
   `xterm.js` 只做渲染）；
 - **授权目录 = 工作区**，持久化在 `workspaces.json`；对话列表来自 claude 转录 +
   `conversations.json` 元数据，启动时恢复上次对话（`--resume`）而不是新建；
-- 设置页分「通用 / 模型 / 技能 / 代理 / 部署」：默认权限（置顶）、主题、语言、字号、技能、代理、
+- 设置页分「通用 / 模型 / 技能 / MCP / 代理 / 部署」：默认权限（置顶）、主题、语言、字号、技能、代理、
   每个模型的推理强度/图片能力/上下文窗口/最大输出，以及 claude 版本的下载源/安装/切换；
 - 输入框 `+` 是添加菜单（对齐 DSH）：本地文件/图片、从飞牛选择、以及 claude 的 `/` 指令；
   附件随 prompt 发送。模型与推理等级是 DSH 风格的两级菜单（按提供商分组，不显示图片标记）；
@@ -323,6 +323,27 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `synced` 是保留名（与 claude 的加载规则一致）。
 - 新建一个此前不存在的顶级 `.claude/skills` 目录时，claude 没在监听它，
   需要 `/reload-skills` 才生效（已有目录内的增删改是热加载的）。
+
+### 4.11 MCP 管理（`internal/mcp`）
+
+- **真源是两份文件**：用户级 `$CCWEB_CLAUDE_HOME/.claude.json` 的 `mcpServers`
+  （注意是 claude 子进程的 HOME，不是宿主机 `~/.claude.json`），项目级
+  `<工作区>/.mcp.json` 的同名字段。`claude mcp add` 是交互式命令，本项目没有终端给它。
+- **`.claude.json` 只碰 `mcpServers`**：它是 claude 自己的状态文件（projects / 计数器 /
+  迁移标记），用 `map[string]json.RawMessage` 读写，其他键保留原始字节；换成
+  `map[string]any` 会把数字改成浮点、把未知结构重排。
+- **写入要逐层拒绝符号链接**（从 claude HOME 或工作区起算），并原子替换（同目录临时
+  文件 + rename）：工作区里一个 `.mcp.json -> /某处` 就能把写操作带到工作区外；写到一半
+  被 claude 读到就是「配置损坏」。
+- **停用 = 把整条配置摘到本应用自己的暂存文件**（`CCWEB_DATA_DIR/mcp-disabled.json`），
+  启用再原样写回。不用 claude 的 `disabledMcpjsonServers`：那个只对项目级生效，用户级
+  没有官方开关，两种作用域要同一套语义。代价是停用期间外部工具看不到这条配置。
+- **探测只认已保存的服务名**（scope+name），绝不接受请求里带命令进来——那等于给接口
+  开了「免审批执行任意命令」。stdio 走一次 `initialize` JSON-RPC；http POST 一帧
+  initialize；sse 只看握手。探测是面板自己的出站请求，必须接 `netproxy`（`SetProxySource`）。
+- **改完不会热加载**：MCP server 在会话启动时连接，界面与文档都要说「重开会话才生效」。
+- 服务名会成为工具前缀 `mcp__<名字>__<工具>`，所以名字只允许 `[A-Za-z0-9._-]`；工具卡片
+  仍然靠 `GenericCard` 兜底渲染，不要为某个 server 写专用卡片。
 
 ## 5. 命令速查
 

@@ -21,6 +21,7 @@ import (
 	"ccweb/backend/internal/config"
 	"ccweb/backend/internal/conversation"
 	"ccweb/backend/internal/hub"
+	"ccweb/backend/internal/mcp"
 	"ccweb/backend/internal/settings"
 	"ccweb/backend/internal/skills"
 	"ccweb/backend/internal/workspace"
@@ -60,7 +61,10 @@ type Deps struct {
 	// Claude 是 claude 版本管理（下载/切换）；为 nil 时部署相关路由返回 503。
 	Claude ClaudeDeployer
 	// Skills 管理 SKILL.md（个人/项目）；为 nil 时技能路由返回 503。
-	Skills        *skills.Manager
+	Skills *skills.Manager
+	// Mcp 管理 MCP server 配置（用户级 .claude.json / 项目级 .mcp.json）；
+	// 为 nil 时相关路由返回 503。
+	Mcp           *mcp.Manager
 	ClaudeVersion string
 	TerminalShell string
 	StartedAt     time.Time
@@ -136,6 +140,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/skills/doc", s.authed(s.handleGetSkill))
 	s.mux.HandleFunc("PUT /api/skills/doc", s.authed(s.handleSaveSkill))
 	s.mux.HandleFunc("DELETE /api/skills/doc", s.authed(s.handleDeleteSkill))
+	s.mux.HandleFunc("GET /api/mcp", s.authed(s.handleListMcp))
+	s.mux.HandleFunc("POST /api/mcp", s.authed(s.handleSaveMcp))
+	s.mux.HandleFunc("DELETE /api/mcp", s.authed(s.handleDeleteMcp))
+	s.mux.HandleFunc("POST /api/mcp/enabled", s.authed(s.handleSetMcpEnabled))
+	s.mux.HandleFunc("POST /api/mcp/probe", s.authed(s.handleProbeMcp))
 	s.mux.HandleFunc("GET /api/claude/status", s.authed(s.handleClaudeStatus))
 	s.mux.HandleFunc("POST /api/claude/check", s.authed(s.handleClaudeCheck))
 	s.mux.HandleFunc("POST /api/claude/install", s.authed(s.handleClaudeInstall))

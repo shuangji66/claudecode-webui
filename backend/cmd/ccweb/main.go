@@ -21,14 +21,15 @@ import (
 	"ccweb/backend/internal/claudebin"
 	"ccweb/backend/internal/config"
 	"ccweb/backend/internal/conversation"
+	"ccweb/backend/internal/envpath"
 	"ccweb/backend/internal/gateway"
+	"ccweb/backend/internal/gitctl"
 	"ccweb/backend/internal/history"
 	"ccweb/backend/internal/hub"
+	"ccweb/backend/internal/mcp"
 	"ccweb/backend/internal/settings"
 	"ccweb/backend/internal/skills"
 	"ccweb/backend/internal/workspace"
-	"ccweb/backend/internal/gitctl"
-	"ccweb/backend/internal/envpath"
 )
 
 // version 由 -ldflags "-X main.version=..." 注入。
@@ -84,6 +85,8 @@ func main() {
 	settings.SetProxySource(proxyNow)
 	claudebin.SetProxySource(proxyNow)
 	gitctl.SetProxySource(proxyNow)
+	// MCP 探测是面板自己发的出站请求，不会自动继承设置里的代理。
+	mcp.SetProxySource(proxyNow)
 
 	mgr := manager.New(cfg, resolveClaude, store, func(sid string, ev session.Event) {
 		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data})
@@ -102,7 +105,13 @@ func main() {
 		Conversations: convStore,
 		// 个人技能挂在 claude 子进程的 HOME 下：process.CleanEnv 会把 HOME 改成
 		// CCWEB_CLAUDE_HOME，所以这里不能用自己的 ~/.claude/skills。
-		Skills:        skills.New(filepath.Join(cfg.ClaudeHome, ".claude", "skills")),
+		Skills: skills.New(filepath.Join(cfg.ClaudeHome, ".claude", "skills")),
+		// MCP 配置：用户级是 claude 子进程 HOME 下的 .claude.json（不是宿主机的
+		// ~/.claude.json），项目级按工作区现算；停用暂存放本应用自己的数据目录。
+		Mcp: mcp.New(
+			filepath.Join(cfg.ClaudeHome, ".claude.json"),
+			filepath.Join(cfg.DataDir, "mcp-disabled.json"),
+		),
 		Claude:        claudeMgr,
 		ProjectsRoot:  cfg.ProjectsRoot,
 		ClaudeVersion: probeClaudeVersion(mgr.Binary()),
