@@ -201,7 +201,7 @@ export function AboutSettings() {
             {t(" — 模型与技术支持", " — models and technical support")}
           </li>
           <li>
-            <span className="font-medium text-ink">DeepSeekRuntime</span>
+            <span className="font-medium text-ink">DeepSeek Harness</span>
             {t(" — 界面交互、消息模型与子代理设计的参考", " — reference for the UI, message model and subagent design")}
           </li>
           <li>

@@ -19,8 +19,7 @@ describe("AboutSettings", () => {
 
   it("致谢 DeepSeek / DeepSeekRuntime / dsh-better-sidebar", () => {
     render(<AboutSettings />);
-    expect(screen.getByText("DeepSeek")).toBeInTheDocument();
-    expect(screen.getByText("DeepSeekRuntime")).toBeInTheDocument();
+    expect(screen.getByText("DeepSeek Harness")).toBeInTheDocument();
     expect(screen.getByText("dsh-better-sidebar")).toBeInTheDocument();
   });
 
