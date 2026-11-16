@@ -114,6 +114,9 @@ src/
     会让命令不经审批直接执行，误点一次就已经跑完了。`lib/permissionModes.ts` 是唯一判定入口，
     下拉选项带 `danger`（触发器与菜单项都变红），切换前用 `askConfirm` 弹一句人话说明。
     新增设置权限模式的入口也必须走同一套。
+    **权限模式菜单没有「空模式」**：`""` 与 `default` 在 CLI 侧等价（不传参数就是 default），
+    以前并排列出「标准模式 / 默认模式」两项，既重复、选中空值还会让后端报「mode 为空」。
+    现在只列 default/acceptEdits/plan/dontAsk/bypassPermissions，`permissionLabel("")` 按 default 显示。
 23. **左侧栏的「分组 / 排序 / 筛选」走 `lib/sidebarView.ts`**：分组（按工作区 / 按工作区树 /
     单列表）、排序（手动 / 最近更新）、筛选（隐藏已归档 / 全部 / 仅已归档）三种偏好存在
     localStorage（`ccweb-sidebar-view`），手动顺序存在 `ccweb-session-order`

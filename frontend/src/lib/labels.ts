@@ -56,7 +56,6 @@ export function clockTime(ts: number, locale: Locale = "zh"): string {
 }
 
 const MODE_LABELS: Record<string, string> = {
-  "": "标准模式",
   default: "默认模式",
   acceptEdits: "接受编辑",
   plan: "计划模式",
@@ -65,10 +64,11 @@ const MODE_LABELS: Record<string, string> = {
 };
 
 export function permissionLabel(mode: string | undefined, locale: Locale = "zh"): string {
-  const key = mode ?? "";
+  // 空值表示「没显式指定」，CLI 的行为就是 default：菜单里不再单列一项，
+  // 显示上也统一成「默认模式」，免得出现「标准模式 / 默认模式」两个同义词。
+  const key = mode || "default";
   if (locale === "en") {
     const en: Record<string, string> = {
-      "": "Standard",
       default: "Default",
       acceptEdits: "Accept edits",
       plan: "Plan",
@@ -77,7 +77,7 @@ export function permissionLabel(mode: string | undefined, locale: Locale = "zh")
     };
     return en[key] ?? key;
   }
-  return MODE_LABELS[key] ?? key ?? "标准模式";
+  return MODE_LABELS[key] ?? key;
 }
 
 export function stateLabel(state: string | undefined, locale: Locale = "zh"): string {

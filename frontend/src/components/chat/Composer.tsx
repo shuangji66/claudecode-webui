@@ -42,7 +42,8 @@ interface Props {
   footer?: ReactNode;
 }
 
-const PERMISSION_MODES = ["", "default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
+/** 权限模式选项。没有「空模式」：空值与 default 等价，单列一项只会让人以为有两种默认。 */
+const PERMISSION_MODES = ["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
 
 /** 输入卡：Enter 发送、Shift+Enter 换行；"/" 唤起命令补全。 */
 export function Composer({
@@ -356,7 +357,7 @@ export function Composer({
             <Select
               variant="ghost"
               ariaLabel={t("权限模式", "Permission mode")}
-              value={permissionMode}
+              value={permissionMode || "default"}
               onChange={(next) => void changeMode(next)}
               disabled={disabled}
               leading={<IconShield size={13} className="shrink-0" />}

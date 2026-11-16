@@ -43,7 +43,10 @@ describe("labels", () => {
   });
 
   it("permissionLabel 映射已知模式", () => {
-    expect(permissionLabel("")).toBe("标准模式");
+    // 空值 = 没显式指定，显示成默认模式（曾经是单独的「标准模式」，和默认模式重复）。
+    expect(permissionLabel("")).toBe("默认模式");
+    expect(permissionLabel(undefined)).toBe("默认模式");
+    expect(permissionLabel("")).toBe(permissionLabel("default"));
     expect(permissionLabel("acceptEdits")).toBe("接受编辑");
     expect(permissionLabel("custom")).toBe("custom");
   });

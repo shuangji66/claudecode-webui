@@ -43,7 +43,7 @@ import {
 
 type Tab = "general" | "models" | "skills" | "proxy" | "deploy";
 
-const PERMISSION_MODES = ["", "default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
+const PERMISSION_MODES = ["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions"];
 const THEMES = ["light", "dark", "system"] as const;
 const LOCALES = ["zh", "en"] as const;
 
@@ -207,7 +207,7 @@ function GeneralSettings() {
         <Select
           className="max-w-xs"
           ariaLabel={t("默认权限", "Default permission")}
-          value={settings?.permission_mode ?? ""}
+          value={settings?.permission_mode || "default"}
           onChange={(next) => void changeDefaultMode(next)}
           options={PERMISSION_MODES.map((m) => ({
             value: m,
