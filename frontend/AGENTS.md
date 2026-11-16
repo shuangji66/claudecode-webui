@@ -35,6 +35,7 @@ src/
   store/useSkillsStore.ts  设置页技能数据（/api/skills 的列表与正文）
   components/layout/Sidebar.tsx 工作区/对话列表、重命名/归档/删除菜单
   components/right/    RightSidebar（标签页）/ FilesPanel / GitPanel / TerminalView（单个终端会话）
+                       / SubagentPanel（子代理对话，读旁路转录）
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
   components/          layout / chat / tools / permission / settings
 ```
@@ -153,7 +154,7 @@ src/
 | `user` | 本地插入 / CLI 回显去重 | 右对齐浅色气泡 |
 | `assistant` | `assistant.content[].text`（一条消息可有多个 text 块，各自成段）或 `stream_event` 增量 | 左对齐气泡 + Markdown（标题/列表/表格/引用/链接/代码块），`streaming` 时显示光标 |
 | `thinking` | `assistant.content[].thinking` | 折叠块 |
-| `tool` | `assistant.content[].tool_use` + `user.content[].tool_result` | 按工具名分派卡片 |
+| `tool` | `assistant.content[].tool_use` + `user.content[].tool_result` | 按工具名分派卡片（Agent/Task 用 `AgentCard`，带子代理状态与「查看对话」） |
 | `result` | `result` 消息 | 耗时/被拒数（不显示费用）；出错时显示 `result.result` 里的原因与 subtype |
 | `system` | `system`（非 init/status） | 等宽小字，需清洗 ANSI |
 | `error` | 后端 `error` 事件 / 连接关闭 | 红色提示 |

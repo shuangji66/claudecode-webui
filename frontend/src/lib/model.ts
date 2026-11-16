@@ -29,6 +29,25 @@ export interface ThinkingItem extends BaseItem {
   text: string;
 }
 
+/** 一个子代理（claude 的 Task/Agent 任务）的实时状态。 */
+export interface SubagentInfo {
+  /** claude 的任务 id，也是子代理 id（task_started 的 task_id）。 */
+  taskId: string;
+  /** 查看子代理转录要用的 id；没有 task 事件时从 tool_result 的 agentId 里补。 */
+  agentId?: string;
+  /** subagent_type，例如 general-purpose / Explore。 */
+  type?: string;
+  description?: string;
+  prompt?: string;
+  status: "running" | "completed" | "failed" | "stopped";
+  /** true 表示在后台跑（run_in_background / 被转到后台）。 */
+  background?: boolean;
+  spawnDepth?: number;
+  summary?: string;
+  outputFile?: string;
+  usage?: { totalTokens: number; toolUses: number; durationMs: number };
+}
+
 /** tool_result 里带的图片（base64）；渲染成缩略图，不把 base64 当正文塞进 <pre>。 */
 export interface ToolImage {
   mediaType: string;
@@ -47,6 +66,8 @@ export interface ToolItem extends BaseItem {
   structured?: unknown;
   /** 结果里的图片（Read 读图、截图类工具）。 */
   images?: ToolImage[];
+  /** 子代理状态（只有 Agent/Task 工具会有）。 */
+  subagent?: SubagentInfo;
 }
 
 export interface SystemItem extends BaseItem {

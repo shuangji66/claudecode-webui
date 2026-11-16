@@ -8,7 +8,7 @@
 //   3. 未知消息类型原样忽略，不抛错（协议会随 CLI 版本漂移）。
 
 import { applyUsageMessage, formatTokens } from "./usage";
-import type { Item, ToolImage } from "./model";
+import type { Item, SubagentInfo, ToolImage } from "./model";
 
 let idCounter = 0;
 function nextId(): string {
@@ -131,7 +131,8 @@ export function applyCLI(items: Item[], msg: unknown, at = Date.now()): Item[] {
     case "result":
       return applyResult(items, m, at);
     case "system":
-      return applySystem(items, m, at);
+      // 任务事件（子代理 / 后台命令）要先折进对应的工具卡片，再走通用 system 渲染。
+      return applyTaskEvent(items, m, at) ?? applySystem(items, m, at);
     default:
       return items;
   }
@@ -217,6 +218,12 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
       // 防御性去重：同一 tool_use_id 若重复到达（重连回放、CLI 重试），
       // 不应生成两张卡片——否则 tool_result 会被回填到两张卡上。
       if (toolUseId && out.some((it) => it.kind === "tool" && it.toolUseId === toolUseId)) {
+        // 任务事件可能先造了占位卡（后台子代理）：把真正的入参并进去，别丢 model/isolation。
+        out = out.map((it) =>
+          it.kind === "tool" && it.toolUseId === toolUseId
+            ? { ...it, name: block.name as string, input: block.input }
+            : it,
+        );
         continue;
       }
       out = [
@@ -241,6 +248,117 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
       { id: nextId(), seq: seqOf(out), ts: at, kind: "assistant", text: leftover, streaming: false },
       ...out.slice(insertAt),
     ];
+  }
+  return out;
+}
+
+function str(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
+function int(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+function subagentStatus(v: unknown): SubagentInfo["status"] | undefined {
+  return v === "running" || v === "completed" || v === "failed" || v === "stopped" ? v : undefined;
+}
+
+const TASK_SUBTYPES = new Set(["task_started", "task_updated", "task_notification"]);
+
+/**
+ * 把 system/task_* 事件折进对应的 Agent 工具卡片。
+ *
+ * 实测（2.1.325）：task_started 带 tool_use_id + description + subagent_type + spawn_depth，
+ * task_updated 只带 task_id 与 patch，task_notification 带 status + summary + usage。
+ * 三者都可能比工具卡片先到（后台任务），所以找不到卡片时按 tool_use_id 先造一张占位卡。
+ */
+function applyTaskEvent(items: Item[], m: Raw, at: number): Item[] | undefined {
+  const subtype = str(m.subtype);
+  if (!TASK_SUBTYPES.has(subtype)) return undefined;
+  const taskId = str(m.task_id);
+  if (!taskId) return undefined;
+  const toolUseId = str(m.tool_use_id);
+
+  let out = items;
+  let index = out.findIndex(
+    (it) =>
+      it.kind === "tool" &&
+      ((toolUseId !== "" && it.toolUseId === toolUseId) || it.subagent?.taskId === taskId),
+  );
+  if (index < 0) {
+    // task_updated 没有 tool_use_id：此时卡片一定已经在列表里，找不到就忽略。
+    if (!toolUseId) return items;
+    const description = str(m.description);
+    const prompt = str(m.prompt);
+    const type = str(m.subagent_type);
+    out = [
+      ...out,
+      {
+        id: nextId(),
+        seq: seqOf(out),
+        ts: at,
+        kind: "tool",
+        toolUseId,
+        name: "Agent",
+        input: { description, prompt, subagent_type: type },
+        subagent: { taskId, status: "running" },
+      },
+    ];
+    index = out.length - 1;
+  }
+
+  const item = out[index] as Extract<Item, { kind: "tool" }>;
+  const prev: SubagentInfo = item.subagent ?? { taskId, status: "running" };
+  const next: SubagentInfo = { ...prev, taskId, agentId: prev.agentId ?? taskId };
+
+  if (subtype === "task_started") {
+    next.type = str(m.subagent_type) || prev.type;
+    next.description = str(m.description) || prev.description;
+    next.prompt = str(m.prompt) || prev.prompt;
+    if (typeof m.is_backgrounded === "boolean") next.background = m.is_backgrounded;
+    next.spawnDepth = int(m.spawn_depth) ?? prev.spawnDepth;
+  } else if (subtype === "task_updated") {
+    const patch = asRecord(m.patch) ?? {};
+    next.status = subagentStatus(patch.status) ?? prev.status;
+  } else {
+    next.status = subagentStatus(m.status) ?? prev.status;
+    next.summary = str(m.summary) || prev.summary;
+    next.outputFile = str(m.output_file) || prev.outputFile;
+    const usage = asRecord(m.usage);
+    if (usage) {
+      next.usage = {
+        totalTokens: int(usage.total_tokens) ?? 0,
+        toolUses: int(usage.tool_uses) ?? 0,
+        durationMs: int(usage.duration_ms) ?? 0,
+      };
+    }
+  }
+
+  return [...out.slice(0, index), { ...item, subagent: next }, ...out.slice(index + 1)];
+}
+
+const AGENT_ID_RE = /\bagentId:\s*([A-Za-z0-9_-]{1,128})/;
+const SUBAGENT_USAGE_RE =
+  /<usage>[\s\S]*?subagent_tokens:\s*(\d+)[\s\S]*?tool_uses:\s*(\d+)[\s\S]*?duration_ms:\s*(\d+)[\s\S]*?<\/usage>/;
+
+/**
+ * 从 Agent 工具的 tool_result 里读回 agentId 与用量。
+ *
+ * 回放历史时只有这段文本（主转录里没有 task_* 行），「查看子代理对话」要靠它。
+ */
+export function subagentFromResult(text: string, isError: boolean): Partial<SubagentInfo> | undefined {
+  const idMatch = AGENT_ID_RE.exec(text);
+  const usageMatch = SUBAGENT_USAGE_RE.exec(text);
+  if (!idMatch && !usageMatch) return undefined;
+  const out: Partial<SubagentInfo> = { status: isError ? "failed" : "completed" };
+  if (idMatch) out.agentId = idMatch[1];
+  if (usageMatch) {
+    out.usage = {
+      totalTokens: Number(usageMatch[1]),
+      toolUses: Number(usageMatch[2]),
+      durationMs: Number(usageMatch[3]),
+    };
   }
   return out;
 }
@@ -270,17 +388,31 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
       const text = textOfContent(block.content);
       const images = imagesOfContent(block.content);
       const isError = block.is_error === true;
-      out = out.map((it) =>
-        it.kind === "tool" && it.toolUseId === toolUseId
+      out = out.map((it) => {
+        if (it.kind !== "tool" || it.toolUseId !== toolUseId) return it;
+        // Agent 工具的最终报告里带着 agentId 与 <usage>：回放历史时没有 task 事件，
+        // 靠它把卡片补成「已完成 + 用量 + 可查看对话」。
+        const sub =
+          it.name === "Agent" || it.name === "Task"
+            ? subagentFromResult(text, isError)
+            : undefined;
+        const subagent: SubagentInfo | undefined = sub
           ? {
-              ...it,
-              result: text,
-              isError,
-              structured: structured ?? it.structured,
-              ...(images.length > 0 ? { images } : {}),
+              taskId: it.subagent?.taskId ?? sub.agentId ?? "",
+              ...it.subagent,
+              ...sub,
+              status: sub.status ?? it.subagent?.status ?? "running",
             }
-          : it,
-      );
+          : it.subagent;
+        return {
+          ...it,
+          result: text,
+          isError,
+          structured: structured ?? it.structured,
+          ...(images.length > 0 ? { images } : {}),
+          ...(subagent ? { subagent } : {}),
+        };
+      });
     }
     return out;
   }

@@ -4,17 +4,22 @@ import { useSidebarStore } from "../../store/useSidebarStore";
 import { FilesPanel } from "./FilesPanel";
 import { GitPanel } from "./GitPanel";
 import { Menu, type MenuItem } from "../common/Menu";
-import { IconClose, IconFolder, IconGitBranch, IconPanel, IconPlus, IconTerminal } from "../common/Icons";
+import { IconClose, IconFolder, IconGitBranch, IconPanel, IconPlus, IconSpark, IconTerminal } from "../common/Icons";
+import { SubagentPanel } from "./SubagentPanel";
+import { useAppStore } from "../../store/useAppStore";
 
 const TerminalView = lazy(() => import("./TerminalView"));
 
-/** 一个标签页；终端每个会话各占一个。 */
-type TabKind = "files" | "git" | "terminal";
+/** 一个标签页；终端每个会话各占一个，子代理对话按 agentId 各占一个。 */
+type TabKind = "files" | "git" | "terminal" | "subagent";
 
 interface Tab {
   id: string;
   kind: TabKind;
   label: string;
+  /** 子代理标签：打开时的会话 id 与 agent id（切换对话后仍指向原来那个子代理）。 */
+  sessionId?: string;
+  agentId?: string;
 }
 
 interface Props {
@@ -44,7 +49,7 @@ function clampWidth(width: number): number {
   return Math.round(Math.min(Math.max(width, RIGHT_MIN_WIDTH), Math.min(RIGHT_MAX_WIDTH, viewportMax)));
 }
 
-const KIND_ICON = { files: IconFolder, git: IconGitBranch, terminal: IconTerminal } as const;
+const KIND_ICON = { files: IconFolder, git: IconGitBranch, terminal: IconTerminal, subagent: IconSpark } as const;
 
 /**
  * 右侧栏：顶部一排标签页（文件 / Git / 每个终端各一个），桌面停靠、移动端全屏抽屉。
@@ -62,6 +67,19 @@ export function RightSidebar({ cwd, onClose }: Props) {
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const termSeq = useRef(0);
   const drag = useRef<{ startX: number; startWidth: number } | null>(null);
+  const subagentView = useAppStore((s) => s.subagentView);
+  const activeSession = useAppStore((s) => s.activeId);
+  const handledSubagent = useRef(0);
+
+  // 聊天里的「查看对话」只放一个请求到 store，标签的打开/切换留在这里做。
+  useEffect(() => {
+    if (!subagentView || subagentView.nonce === handledSubagent.current) return;
+    handledSubagent.current = subagentView.nonce;
+    if (!activeSession) return;
+    openSubagentTab(activeSession, subagentView.agentId, subagentView.label);
+    // openSubagentTab 只依赖 setState，故意不放进依赖数组。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subagentView, activeSession]);
 
   // 工作区切换/侧栏重开只在这里触发一次；所有面板都读同一份 store。
   useEffect(() => {
@@ -131,6 +149,17 @@ export function RightSidebar({ cwd, onClose }: Props) {
     const id = `term-${n}`;
     // 第一个叫 bash，之后编号；序号单调递增，关掉中间那个也不会重排。
     setTabs((prev) => [...prev, { id, kind: "terminal", label: n === 1 ? "bash" : `bash ${n}` }]);
+    setActive(id);
+  };
+
+  /** 打开某个子代理的对话：同一个 agent 只占一个标签。 */
+  const openSubagentTab = (sessionId: string, agentId: string, label: string) => {
+    const id = `sub-${sessionId}-${agentId}`;
+    setTabs((prev) =>
+      prev.some((tab) => tab.id === id)
+        ? prev
+        : [...prev, { id, kind: "subagent", label: label || t("子代理", "Subagent"), sessionId, agentId }],
+    );
     setActive(id);
   };
 
@@ -315,6 +344,9 @@ export function RightSidebar({ cwd, onClose }: Props) {
               <div key={tab.id} className={tab.id === active ? "absolute inset-0" : "hidden"}>
                 {tab.kind === "files" && <FilesPanel cwd={cwd} active={tab.id === active} />}
                 {tab.kind === "git" && <GitPanel cwd={cwd} active={tab.id === active} />}
+                {tab.kind === "subagent" && tab.agentId && (
+                  <SubagentPanel sessionId={tab.sessionId ?? ""} agentId={tab.agentId} />
+                )}
                 {tab.kind === "terminal" && (
                   <Suspense
                     fallback={

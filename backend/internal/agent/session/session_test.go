@@ -467,3 +467,46 @@ func TestOversizedLineReportsError(t *testing.T) {
 		t.Fatal("超长行之后会话应当关闭")
 	}
 }
+
+// 停止子代理走控制请求；task_id 必须原样带过去，CLI 靠它定位任务。
+func TestStopTaskSendsControlRequest(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.StopTask("task-1"); err != nil {
+		t.Fatalf("StopTask: %v", err)
+	}
+	msg := fc.next()
+	if msg["type"] != "control_request" {
+		t.Fatalf("type = %v", msg["type"])
+	}
+	req, _ := msg["request"].(map[string]any)
+	if req["subtype"] != "stop_task" || req["task_id"] != "task-1" {
+		t.Fatalf("request = %+v", req)
+	}
+	if err := sess.StopTask(""); err == nil {
+		t.Fatal("空 task_id 应报错")
+	}
+}
+
+func TestBackgroundTasksSendsControlRequest(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.BackgroundTasks("toolu_01"); err != nil {
+		t.Fatalf("BackgroundTasks: %v", err)
+	}
+	req, _ := fc.next()["request"].(map[string]any)
+	if req["subtype"] != "background_tasks" || req["tool_use_id"] != "toolu_01" {
+		t.Fatalf("request = %+v", req)
+	}
+
+	// 不带 tool_use_id = 全部前台任务（Ctrl+B 语义），字段必须缺省而不是空串。
+	if err := sess.BackgroundTasks(""); err != nil {
+		t.Fatalf("BackgroundTasks(all): %v", err)
+	}
+	req, _ = fc.next()["request"].(map[string]any)
+	if _, ok := req["tool_use_id"]; ok {
+		t.Fatalf("空 tool_use_id 不应出现: %+v", req)
+	}
+}

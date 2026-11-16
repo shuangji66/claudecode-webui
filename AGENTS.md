@@ -234,6 +234,24 @@ hub ── manager ── session ── process ── claude (NDJSON)
   原生 `window.confirm/prompt/alert` 与 `<select>` 一律不用：它们的配色/圆角/字号由系统决定，
   在飞牛桌面 iframe 里和主题对不上。
 
+### 4.10 子代理（Agent / Task 工具）
+
+- **子代理的对话不在主转录里**：主 jsonl 没有 sidechain 行，claude 单独写
+  `<project>/<session>/subagents/agent-<agentId>.jsonl`（嵌套子代理再深一层，
+  目前只读直接子级）。「查看子代理对话」只能走这条旁路（`history.LoadSubagentTranscript`）。
+- **实时状态来自 `system/task_*`**（2.1.325 实测）：`task_started` 带 task_id /
+  tool_use_id / description / subagent_type / spawn_depth / is_backgrounded；
+  `task_updated` 只有 task_id + patch（如 `patch.status`）；`task_notification` 带
+  status / summary / usage / output_file。**task_id 就是 agentId**。
+- **回放只能靠 tool_result**：主转录里没有 task_* 行，Agent 的 tool_result 文本带着
+  `agentId: …` 与 `<usage>subagent_tokens / tool_uses / duration_ms</usage>`，
+  `subagentFromResult` 从这里补状态、用量与「查看对话」的入口。
+- **不打开 `--forward-subagent-text` 就看不到子代理说的话**（只有任务事件与最终报告）。
+  打开后子代理帧带 `parent_tool_use_id` + `agent_id`，必须分流到子代理视图，
+  绝不能混进主消息流（和过滤 sidechain 是同一类问题）。
+- **停止/转后台走控制请求**：`stop_task{task_id}`、`background_tasks{tool_use_id?}`；
+  会话进程已被回收时网关返回 409，让前端提示重连，而不是假装停成功。
+
 ### 4.8 claude 版本管理（`internal/claudebin`）
 
 - **数据源是 npm 平台包**，不是 `downloads.claude.ai/claude.zst`：平台包

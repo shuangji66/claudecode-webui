@@ -225,3 +225,60 @@ func TestIsLocalCommandEcho(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadSubagentTranscriptReadsSidecar(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-4555-8666-777777777777"
+	writeJSONL(t, filepath.Join(root, "p", id+".jsonl"),
+		`{"type":"user","message":{"role":"user","content":"delegate"}}`,
+	)
+	sub := filepath.Join(root, "p", id, "subagents")
+	writeJSONL(t, filepath.Join(sub, "agent-abc123.jsonl"),
+		`{"type":"user","isSidechain":true,"message":{"role":"user","content":[{"type":"text","text":"say hi"}]}}`,
+		`{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}`,
+		`{"type":"attachment","isSidechain":true,"message":{"content":""}}`,
+	)
+	meta := `{"agentType":"general-purpose","description":"probe child","toolUseId":"toolu_01","spawnDepth":1,"finished":true}`
+	if err := os.WriteFile(filepath.Join(sub, "agent-abc123.meta.json"), []byte(meta), 0o644); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+
+	tr, err := LoadSubagentTranscript(root, id, "abc123")
+	if err != nil {
+		t.Fatalf("LoadSubagentTranscript: %v", err)
+	}
+	// sidechain 行是子代理转录的正文，必须保留（主转录则相反，要丢掉）。
+	if len(tr.Lines) != 2 {
+		t.Fatalf("lines = %d: %s", len(tr.Lines), tr.Lines)
+	}
+	if tr.Agent != "abc123" {
+		t.Fatalf("Agent = %q", tr.Agent)
+	}
+	if tr.Meta == nil || tr.Meta.Description != "probe child" || !tr.Meta.Finished {
+		t.Fatalf("meta = %+v", tr.Meta)
+	}
+}
+
+func TestLoadSubagentTranscriptRejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	id := "44444444-5555-4666-8777-888888888888"
+	writeJSONL(t, filepath.Join(root, "p", id+".jsonl"), `{"type":"user","message":{"content":"x"}}`)
+	for _, agent := range []string{"../etc/passwd", "a/b", "", "a b", strings.Repeat("x", 129)} {
+		if _, err := LoadSubagentTranscript(root, id, agent); err == nil {
+			t.Fatalf("agent=%q 应被拒绝", agent)
+		}
+	}
+	// 会话 id 也要过白名单。
+	if _, err := LoadSubagentTranscript(root, "../etc/passwd", "abc"); err == nil {
+		t.Fatal("非法会话 id 应被拒绝")
+	}
+}
+
+func TestLoadSubagentTranscriptMissingFile(t *testing.T) {
+	root := t.TempDir()
+	id := "55555555-6666-4777-8888-999999999999"
+	writeJSONL(t, filepath.Join(root, "p", id+".jsonl"), `{"type":"user","message":{"content":"x"}}`)
+	if _, err := LoadSubagentTranscript(root, id, "nope"); err != ErrTranscriptNotFound {
+		t.Fatalf("err = %v, want ErrTranscriptNotFound", err)
+	}
+}

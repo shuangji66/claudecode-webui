@@ -5,6 +5,7 @@ import {
   __resetIds,
   imagesOfContent,
   isLocalCommandEcho,
+  subagentFromResult,
   prependSystem,
   stripAnsi,
   textOfContent,
@@ -481,5 +482,121 @@ describe("prependSystem", () => {
     const items = prependSystem([{ id: "x", seq: 0, ts: 1, kind: "user", text: "hi" }], "更早的消息已被省略");
     expect(items[0]).toMatchObject({ kind: "system", text: "更早的消息已被省略" });
     expect(items[1]).toMatchObject({ kind: "user", text: "hi" });
+  });
+});
+
+describe("子代理任务事件", () => {
+  beforeEach(() => __resetIds());
+
+  const toolUse = {
+    type: "assistant",
+    message: {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_01",
+          name: "Agent",
+          input: { description: "probe child", prompt: "say hi", subagent_type: "general-purpose" },
+        },
+      ],
+    },
+  };
+
+  it("task_started / task_updated / task_notification 折进 Agent 卡片", () => {
+    let items = applyCLI([], toolUse);
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "task_started",
+      task_id: "task-1",
+      tool_use_id: "toolu_01",
+      description: "probe child",
+      subagent_type: "general-purpose",
+      spawn_depth: 1,
+      is_backgrounded: false,
+    });
+    expect((items[0] as Extract<Item, { kind: "tool" }>).subagent).toMatchObject({
+      taskId: "task-1",
+      status: "running",
+      type: "general-purpose",
+      spawnDepth: 1,
+      background: false,
+    });
+
+    items = applyCLI(items, { type: "system", subtype: "task_updated", task_id: "task-1", patch: { status: "completed" } });
+    expect((items[0] as Extract<Item, { kind: "tool" }>).subagent?.status).toBe("completed");
+
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-1",
+      tool_use_id: "toolu_01",
+      status: "completed",
+      summary: "child says hello",
+      usage: { total_tokens: 19, tool_uses: 3, duration_ms: 81 },
+    });
+    const sub = (items[0] as Extract<Item, { kind: "tool" }>).subagent;
+    expect(sub).toMatchObject({
+      status: "completed",
+      summary: "child says hello",
+      usage: { totalTokens: 19, toolUses: 3, durationMs: 81 },
+    });
+    // 任务事件不能额外生成消息项。
+    expect(items).toHaveLength(1);
+  });
+
+  it("任务事件先到：先造占位卡，真实入参到达时合并", () => {
+    let items = applyCLI([], {
+      type: "system",
+      subtype: "task_started",
+      task_id: "task-2",
+      tool_use_id: "toolu_02",
+      description: "bg child",
+      subagent_type: "Explore",
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "tool", toolUseId: "toolu_02", name: "Agent" });
+
+    items = applyCLI(items, {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_02",
+            name: "Agent",
+            input: { description: "bg child", prompt: "p", subagent_type: "Explore", run_in_background: true },
+          },
+        ],
+      },
+    });
+    expect(items).toHaveLength(1);
+    expect((items[0] as Extract<Item, { kind: "tool" }>).input).toMatchObject({ run_in_background: true });
+  });
+
+  it("回放时从 tool_result 里补 agentId 与用量", () => {
+    let items = applyCLI([], toolUse);
+    const text = [
+      "report follows:",
+      "  child says hello",
+      "agentId: abc123 (use SendMessage with to: 'abc123')",
+      "<usage>subagent_tokens: 15",
+      "tool_uses: 2",
+      "duration_ms: 83</usage>",
+    ].join("\n");
+    items = applyCLI(items, {
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_01", content: text }] },
+    });
+    expect((items[0] as Extract<Item, { kind: "tool" }>).subagent).toMatchObject({
+      agentId: "abc123",
+      status: "completed",
+      usage: { totalTokens: 15, toolUses: 2, durationMs: 83 },
+    });
+  });
+
+  it("subagentFromResult 对普通工具输出返回 undefined", () => {
+    expect(subagentFromResult("just output", false)).toBeUndefined();
   });
 });

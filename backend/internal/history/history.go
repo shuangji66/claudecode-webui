@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -216,9 +217,17 @@ func LoadTranscript(projectsDir, id string) (Transcript, error) {
 		return Transcript{}, err
 	}
 	defer f.Close()
+	// 主转录里丢掉 sidechain 行：子代理的消息不能混进主消息流。
+	return scanTranscript(f, id, false)
+}
 
+// scanTranscript 读一份 jsonl 里可回放的行。
+//
+// keepSidechain 在两种调用里相反：主转录要丢掉 sidechain（那是子代理的话），
+// 而子代理自己的转录文件里每一行都带 isSidechain，正是要保留的内容。
+func scanTranscript(r io.Reader, id string, keepSidechain bool) (Transcript, error) {
 	out := Transcript{ID: id, Lines: make([]json.RawMessage, 0, 128)}
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	total := 0
 	for sc.Scan() {
@@ -238,7 +247,7 @@ func LoadTranscript(projectsDir, id string) (Transcript, error) {
 		if out.Cwd == "" && meta.Cwd != "" {
 			out.Cwd = meta.Cwd
 		}
-		if meta.IsSidechain || meta.IsMeta {
+		if meta.IsMeta || (meta.IsSidechain && !keepSidechain) {
 			continue
 		}
 		switch meta.Type {
@@ -295,6 +304,74 @@ func findTranscript(projectsDir, id string) (string, error) {
 
 func validSessionID(id string) bool {
 	if len(id) < 8 || len(id) > 64 {
+		return false
+	}
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// SubagentMeta 是子代理转录旁的 meta.json（best-effort：读不到不算错）。
+type SubagentMeta struct {
+	AgentType   string `json:"agentType,omitempty"`
+	Description string `json:"description,omitempty"`
+	ToolUseID   string `json:"toolUseId,omitempty"`
+	SpawnDepth  int    `json:"spawnDepth,omitempty"`
+	Finished    bool   `json:"finished,omitempty"`
+}
+
+// SubagentTranscript 是一个子代理的对话回放。
+type SubagentTranscript struct {
+	Transcript
+	// Agent 是 claude 给这个子代理的 id（也是任务 id）。
+	Agent string        `json:"agent"`
+	Meta  *SubagentMeta `json:"meta,omitempty"`
+}
+
+// LoadSubagentTranscript 读取子代理的转录。
+//
+// 子代理的对话**不在主转录里**：主 jsonl 没有 sidechain 行，claude 把它单独写在
+// <project>/<session>/subagents/agent-<agent>.jsonl（嵌套子代理再深一层，本函数
+// 只取直接子级）。所以「查看子代理对话」必须走这条旁路，不能靠回放主转录。
+func LoadSubagentTranscript(projectsDir, sessionID, agentID string) (SubagentTranscript, error) {
+	if !validSessionID(sessionID) || !validAgentID(agentID) {
+		return SubagentTranscript{}, ErrTranscriptNotFound
+	}
+	path, err := findTranscript(projectsDir, sessionID)
+	if err != nil {
+		return SubagentTranscript{}, err
+	}
+	dir := filepath.Join(filepath.Dir(path), sessionID, "subagents")
+	f, err := os.Open(filepath.Join(dir, "agent-"+agentID+".jsonl"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return SubagentTranscript{}, ErrTranscriptNotFound
+		}
+		return SubagentTranscript{}, err
+	}
+	defer f.Close()
+
+	tr, err := scanTranscript(f, agentID, true)
+	if err != nil {
+		return SubagentTranscript{}, err
+	}
+	out := SubagentTranscript{Transcript: tr, Agent: agentID}
+	if b, err := os.ReadFile(filepath.Join(dir, "agent-"+agentID+".meta.json")); err == nil {
+		var meta SubagentMeta
+		if json.Unmarshal(b, &meta) == nil {
+			out.Meta = &meta
+		}
+	}
+	return out, nil
+}
+
+// validAgentID 只接受字母数字与 '-' '_'：agent id 来自前端，不能拼路径。
+func validAgentID(id string) bool {
+	if len(id) < 1 || len(id) > 128 {
 		return false
 	}
 	for _, r := range id {

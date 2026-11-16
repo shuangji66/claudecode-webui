@@ -110,6 +110,11 @@ interface AppState {
   activeId: string | null;
 
   items: Record<string, Item[]>;
+  /**
+   * 要在右侧栏打开的子代理对话。右侧栏的标签是它自己管的，这里只放一个「请求」，
+   * nonce 让重复点同一张卡片也能把标签切回来。
+   */
+  subagentView: { agentId: string; label: string; nonce: number } | null;
   perms: Record<string, PermissionPayload[]>;
   inits: Record<string, InitPayload>;
   states: Record<string, string>;
@@ -195,6 +200,10 @@ interface AppState {
   sendPrompt: (text: string, attachments?: WireAttachment[], attachmentLabel?: string) => Promise<void>;
   interrupt: () => void;
   setPermissionMode: (mode: string) => void;
+  /** 在右侧栏打开某个子代理的对话。 */
+  showSubagent: (agentId: string, label: string) => void;
+  /** 停止一个后台任务（子代理 / 后台命令）。 */
+  stopTask: (taskId: string) => Promise<void>;
   replyPermission: (
     req: PermissionPayload,
     allow: boolean,
@@ -346,6 +355,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   conversations: [],
   activeId: null,
   items: {},
+  subagentView: null,
   perms: {},
   inits: {},
   states: {},
@@ -1267,6 +1277,26 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const id = get().activeId;
     if (!id) return;
     clients.get(id)?.send({ kind: "permission_mode", mode });
+  },
+
+  showSubagent: (agentId, label) => {
+    if (!agentId) return;
+    set((s) => ({
+      subagentView: { agentId, label: label || "subagent", nonce: (s.subagentView?.nonce ?? 0) + 1 },
+    }));
+  },
+
+  stopTask: async (taskId) => {
+    const id = get().activeId;
+    if (!id || !taskId) return;
+    try {
+      await apiFetch("/api/session/task", {
+        method: "POST",
+        body: JSON.stringify({ id, action: "stop", task_id: taskId }),
+      });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : "停止任务失败" });
+    }
   },
 
   replyPermission: (req, allow, updatedInput, updatedPermissions, message) => {

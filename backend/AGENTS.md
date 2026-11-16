@@ -182,6 +182,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `GET /api/fs/list`。目录浏览是只读但能枚举宿主目录，必须保持鉴权。
 - 对话路由：`GET /api/conversations`、`PATCH /api/conversations`（重命名/归档/touch）、
   `DELETE /api/conversations?id=`（软删除）、`GET /api/history/transcript?id=`（回放）。
+- 子代理路由：`GET /api/history/subagent?id=&agent=`（读旁路转录）、
+  `POST /api/session/task`（`stop_task` / `background_tasks`）。两者都要挂 `s.authed`；
+  agent id 走 `[A-Za-z0-9_-]` 白名单，会话 id 走 `validSessionID`，不能拼路径。
   `POST /api/session` 带 `resume` 时走 `manager.Resume`，不带才新建。
 - 右侧栏路由：`GET /api/fs/tree|file|raw`、`GET /api/git/status|diff|show|log|branches`、
   `POST /api/git/stage|unstage|discard|commit|checkout|pull`、`GET /ws/terminal`。

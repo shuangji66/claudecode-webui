@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import type { ToolItem } from "../../lib/model";
+import { AgentCard } from "./AgentCard";
 import { BashCard } from "./BashCard";
 import { EditCard } from "./EditCard";
 import { GenericCard } from "./GenericCard";
@@ -12,6 +13,9 @@ import { GenericCard } from "./GenericCard";
  * 渲染成空白。新增工具只需在这里加一行。
  */
 const registry: Record<string, ComponentType<{ item: ToolItem }>> = {
+  // 模型侧的工具名是 Agent（init 里显示为 Task），两个都注册。
+  Agent: AgentCard,
+  Task: AgentCard,
   Bash: BashCard,
   Edit: EditCard,
   Write: EditCard,

@@ -350,6 +350,21 @@ export interface TranscriptPayload {
   truncated?: boolean;
 }
 
+/** 子代理转录旁的 meta.json（读不到时后端不带这个字段）。 */
+export interface SubagentMeta {
+  agentType?: string;
+  description?: string;
+  toolUseId?: string;
+  spawnDepth?: number;
+  finished?: boolean;
+}
+
+/** /api/history/subagent 的回放数据：子代理对话不在主转录里，走这条旁路。 */
+export interface SubagentTranscriptPayload extends TranscriptPayload {
+  agent: string;
+  meta?: SubagentMeta;
+}
+
 /** 一个已安装的 claude 版本（/api/claude/status）。 */
 export interface ClaudeVersion {
   version: string;

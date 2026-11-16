@@ -34,6 +34,9 @@ const (
 	SubtypeSetModel          = "set_model"
 	SubtypeSetPermissionMode = "set_permission_mode"
 	SubtypeCanUseTool        = "can_use_tool"
+	// 任务控制：子代理 / 后台命令（2.1.325 实测有这两个控制请求）。
+	SubtypeStopTask        = "stop_task"
+	SubtypeBackgroundTasks = "background_tasks"
 )
 
 // InitializeRequestID 是初始化握手的固定 request_id，便于日志与排查。
@@ -304,4 +307,31 @@ func ParsePermission(env Envelope) (PermissionRequest, bool) {
 	}
 	p.RequestID = env.RequestID
 	return p, true
+}
+
+// StopTask 构造停止一个后台任务的控制请求（子代理、后台命令都用 task_id）。
+func StopTask(requestID, taskID string) []byte {
+	return mustMarshal(map[string]any{
+		"type":       TypeControlRequest,
+		"request_id": requestID,
+		"request": map[string]any{
+			"subtype": SubtypeStopTask,
+			"task_id": taskID,
+		},
+	})
+}
+
+// BackgroundTasks 构造「转到后台」的控制请求。
+//
+// toolUseID 为空时针对全部前台任务（等价 Ctrl+B），否则只转那一个。
+func BackgroundTasks(requestID, toolUseID string) []byte {
+	req := map[string]any{"subtype": SubtypeBackgroundTasks}
+	if toolUseID != "" {
+		req["tool_use_id"] = toolUseID
+	}
+	return mustMarshal(map[string]any{
+		"type":       TypeControlRequest,
+		"request_id": requestID,
+		"request":    req,
+	})
 }

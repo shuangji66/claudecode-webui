@@ -191,6 +191,22 @@ func (s *Session) SetModel(model string) error {
 	return s.writeLine(protocol.SetModel("ccweb-model", model))
 }
 
+// StopTask 停止一个后台任务（子代理、后台命令）。
+//
+// 不等回包：停止是单向意图，CLI 会再发 task_notification 告诉我们结果；
+// 等回包会让 HTTP 请求挂在这里。
+func (s *Session) StopTask(taskID string) error {
+	if taskID == "" {
+		return errors.New("session: task_id 为空")
+	}
+	return s.writeLine(protocol.StopTask("ccweb-stop-"+taskID, taskID))
+}
+
+// BackgroundTasks 把前台任务转到后台；toolUseID 为空表示全部前台任务。
+func (s *Session) BackgroundTasks(toolUseID string) error {
+	return s.writeLine(protocol.BackgroundTasks("ccweb-bg-"+toolUseID, toolUseID))
+}
+
 // SetPermissionMode 切换权限模式。
 func (s *Session) SetPermissionMode(mode string) error {
 	if mode == "" {

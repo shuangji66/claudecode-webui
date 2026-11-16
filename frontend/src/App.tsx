@@ -74,6 +74,12 @@ function AppShell() {
   const [tokenEpoch, setTokenEpoch] = useState(0);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [rightOpen, setRightOpen] = useState(readRightOpen);
+  const subagentView = useAppStore((s) => s.subagentView);
+
+  // 聊天里点「查看对话」：右侧栏可能还没开，这里替用户打开。
+  useEffect(() => {
+    if (subagentView) setRightOpen(true);
+  }, [subagentView]);
 
   useEffect(() => {
     void bootstrap();
