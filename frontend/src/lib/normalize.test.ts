@@ -109,6 +109,44 @@ describe("normalize", () => {
     expect(items[0]).toMatchObject({ kind: "thinking", text: "先想想" });
   });
 
+  // 上游中继（Anthropic 兼容代理）会把同一段内容重放多份：实测一次 /doctor 回复里
+  // 一个 message 的 thinking 与 text 各被复制了三份，界面与导出就出现「同一段回答三遍」。
+  // 同一条消息内「紧邻且逐字相同」的同类块只保留一份。
+  it("同一消息里被重放的 thinking/text 块只渲染一次", () => {
+    const items = applyCLI([], {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "我先跑只读检查" },
+          { type: "thinking", thinking: "我先跑只读检查" },
+          { type: "thinking", thinking: "我先跑只读检查" },
+          { type: "text", text: "I'll run the doctor checks." },
+          { type: "text", text: "I'll run the doctor checks." },
+          { type: "text", text: "I'll run the doctor checks." },
+        ],
+      },
+    });
+    expect(items.map((i) => i.kind)).toEqual(["thinking", "assistant"]);
+    expect(items[1]).toMatchObject({ text: "I'll run the doctor checks." });
+  });
+
+  it("相邻但内容不同、或中间隔着工具的块仍然各自成段", () => {
+    const items = applyCLI([], {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "先看文件" },
+          { type: "text", text: "再跑测试" },
+          { type: "tool_use", id: "tu1", name: "Bash", input: { command: "ls" } },
+          { type: "text", text: "再跑测试" },
+        ],
+      },
+    });
+    expect(items.map((i) => i.kind)).toEqual(["assistant", "assistant", "tool", "assistant"]);
+  });
+
   it("result 记录成本、耗时与被拒工具数", () => {
     const items = applyCLI([], {
       type: "result",

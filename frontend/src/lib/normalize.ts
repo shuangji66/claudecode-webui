@@ -206,12 +206,22 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
   if (insertAt < 0) insertAt = out.length;
 
   let textCount = 0;
+  // 上游中继（Anthropic 兼容代理）会把同一条消息的内容块重放多份：实测一次 /doctor
+  // 回复里 thinking 与 text 各被复制了三份，界面与导出就变成「同一段回答三遍」。
+  // tool_use 早就按 id 去重了，正文/思考没有 id，只能按「紧邻且逐字相同」判重。
+  // 中间隔着别的块（tool_use、内容不同的正文）就不算重复，避免把模型真的重复
+  // 说的两句话吞掉。
+  let prevKind = "";
+  let prevText = "";
   for (const b of blocks) {
     const block = asRecord(b);
     if (!block) continue;
     if (block.type === "text") {
       const text = typeof block.text === "string" ? block.text : "";
       if (!text) continue;
+      if (prevKind === "text" && prevText === text) continue;
+      prevKind = "text";
+      prevText = text;
       textCount += 1;
       // 一条消息可能有多个 text 块（正文 → tool_use → 正文）：全部保留，各自成段。
       out = [
@@ -219,11 +229,16 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
         { id: nextId(), seq: seqOf(out), ts: at, kind: "assistant", text, streaming: false },
       ];
     } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
+      if (prevKind === "thinking" && prevText === block.thinking) continue;
+      prevKind = "thinking";
+      prevText = block.thinking;
       out = [
         ...out,
         { id: nextId(), seq: seqOf(out), ts: at, kind: "thinking", text: block.thinking },
       ];
     } else if (block.type === "tool_use" && typeof block.name === "string") {
+      prevKind = "tool";
+      prevText = "";
       const toolUseId = typeof block.id === "string" ? block.id : "";
       // 防御性去重：同一 tool_use_id 若重复到达（重连回放、CLI 重试），
       // 不应生成两张卡片——否则 tool_result 会被回填到两张卡上。
