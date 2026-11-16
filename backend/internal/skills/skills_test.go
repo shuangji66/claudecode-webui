@@ -159,6 +159,66 @@ func TestSaveRefusesSymlinkedDir(t *testing.T) {
 	}
 }
 
+// 中间层是符号链接时（工作区里的恶意仓库把 `.claude` 或 `.claude/skills` 换成软链），
+// 保存与删除都不能跟出去：只查叶子目录挡不住 MkdirAll / RemoveAll。
+func TestSaveAndDeleteRefuseSymlinkedParent(t *testing.T) {
+	outside := t.TempDir()
+	content := "---\ndescription: x\n---\n"
+
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, ws string)
+	}{
+		{
+			name: "claude 目录是软链",
+			setup: func(t *testing.T, ws string) {
+				if err := os.Symlink(outside, filepath.Join(ws, ".claude")); err != nil {
+					t.Skipf("当前环境不支持符号链接: %v", err)
+				}
+			},
+		},
+		{
+			name: "skills 目录是软链",
+			setup: func(t *testing.T, ws string) {
+				if err := os.MkdirAll(filepath.Join(ws, ".claude"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, filepath.Join(ws, ".claude", "skills")); err != nil {
+					t.Skipf("当前环境不支持符号链接: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := newManager(t)
+			ws := t.TempDir()
+			tc.setup(t, ws)
+
+			if _, err := m.Save(ScopeProject, ws, "evil", content); !errors.Is(err, ErrSymlink) {
+				t.Fatalf("Save 应 ErrSymlink，实际 %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(outside, "evil", "SKILL.md")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("不应写到工作区外: %v", err)
+			}
+
+			// 先在工作区外造一个「含 SKILL.md」的目录，删除也不能够到它。
+			target := filepath.Join(outside, "victim")
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.Delete(ScopeProject, ws, "victim"); !errors.Is(err, ErrSymlink) {
+				t.Fatalf("Delete 应 ErrSymlink，实际 %v", err)
+			}
+			if _, err := os.Stat(target); err != nil {
+				t.Fatalf("不应删到工作区外: %v", err)
+			}
+		})
+	}
+}
+
 func TestDeleteOnlyRemovesDirectChildWithSkillFile(t *testing.T) {
 	m, root := newManager(t)
 	// 只有 SKILL.md 的目录才允许删；空目录/普通文件一律 ErrNotFound。

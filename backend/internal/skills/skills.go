@@ -124,6 +124,59 @@ func (m *Manager) skillDir(scope, cwd, name string) (dir string, readOnly bool, 
 	return filepath.Join(root, name), readOnly, nil
 }
 
+// rejectSymlinkPath 拒绝「从受管根到目标目录之间任意一层是符号链接」。
+//
+// 只检查叶子目录是不够的：MkdirAll / CreateTemp / RemoveAll 都会跟随中间层，
+// 工作区里一个 `.claude -> /某处` 的软链就能把「保存技能」变成往工作区外写
+// SKILL.md、把「删除技能」变成删工作区外的目录。所以要从工作区（个人技能则是
+// 技能根）开始逐层 Lstat，遇到第一层软链就拒绝。
+//
+// 路径不存在是正常的（技能目录本来就可能还没建）：某一层不存在时后面的层
+// 必然也不存在，MkdirAll 不会再跟随任何软链，直接放行。
+func (m *Manager) rejectSymlinkPath(scope, cwd, dir string) error {
+	root, _, err := m.root(scope, cwd)
+	if err != nil {
+		return err
+	}
+	// 个人技能根由应用自己创建，根本身也不允许是软链。
+	if isSymlink(root) {
+		return ErrSymlink
+	}
+	// 项目技能从 cwd 起算：`.claude` 与 `.claude/skills` 都可能被换成软链。
+	base := root
+	if scope == ScopeProject {
+		base = cwd
+	}
+	rel, err := filepath.Rel(base, dir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ErrInvalidName
+	}
+	if rel == "." {
+		return nil
+	}
+	cur := base
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return ErrSymlink
+		}
+	}
+	return nil
+}
+
+// isSymlink 报告 path 是否存在且是符号链接；不存在不算。
+func isSymlink(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.Mode()&os.ModeSymlink != 0
+}
+
 // ValidName 判断名字能否作为技能目录名。
 //
 // 规则比 claude 宽松的部分（中文、空格）保留，只挡掉会变成路径穿越、
@@ -238,11 +291,9 @@ func (m *Manager) Save(scope, cwd, name, content string) (Doc, error) {
 	if len(content) > maxContent {
 		return Doc{}, ErrTooLarge
 	}
-	// 目录本身是符号链接时，写入会落到受管目录之外（工作区里的恶意仓库、
-	// 或手工建的软链都可能这样）。这里只允许真实目录。
-	if fi, err := os.Lstat(dir); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		return Doc{}, ErrSymlink
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	// 目录（含中间层）是符号链接时，写入会落到受管目录之外（工作区里的恶意仓库、
+	// 或手工建的软链都可能这样）。这里逐层确认整条路径都是真实目录。
+	if err := m.rejectSymlinkPath(scope, cwd, dir); err != nil {
 		return Doc{}, err
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -288,6 +339,11 @@ func (m *Manager) Delete(scope, cwd, name string) error {
 	}
 	if filepath.Dir(filepath.Clean(dir)) != filepath.Clean(root) {
 		return ErrInvalidName
+	}
+	// 父目录（.claude / skills）被换成软链时，下面的 RemoveAll 会删到工作区外。
+	// 叶子本身是软链的情况不在这里拦：那种只删链接、不跟进目标。
+	if err := m.rejectSymlinkPath(scope, cwd, filepath.Dir(dir)); err != nil {
+		return err
 	}
 	fi, err := os.Lstat(dir)
 	if errors.Is(err, os.ErrNotExist) {

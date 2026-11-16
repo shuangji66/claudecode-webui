@@ -254,9 +254,11 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **只写 personal / project 两类**：它们就是文件，改完 claude 会热加载，不用重启会话。
   `synced/`（claude.ai 同步）只读——下次同步会覆盖；插件技能归 `claude plugin`；
   bundled 技能只能靠 settings 的 `disableBundledSkills` / `skillOverrides`。
-- **写入必须拒绝符号链接目录**：项目技能在工作区里，软链可以把写操作带到工作区外。
-  先 `Lstat` 判软链，再 `MkdirAll`；落盘用同目录临时文件 + rename，避免半截 SKILL.md
-  被 claude 当成正文读进去。
+- **写入必须逐层拒绝符号链接**：项目技能在工作区里，软链可以把写操作带到工作区外。
+  只 `Lstat` 叶子目录不够——`MkdirAll`/`CreateTemp`/`RemoveAll` 会跟随中间层，工作区里
+  一个 `.claude -> /某处` 就能让「保存技能」写到工作区外、「删除技能」删到工作区外。
+  必须从工作区（个人技能则是技能根）一路 `Lstat` 到目标目录；落盘用同目录临时文件 +
+  rename，避免半截 SKILL.md 被 claude 当成正文读进去。
 - **删除只删 skills 根目录的直接子目录且必须含 SKILL.md**：名字来自用户输入，
   直接 `RemoveAll(root/name)` 等于把路径穿越变成删库。
 - 技能名同时是 `/命令名`：不允许分隔符、点开头、`<`/`>`、控制字符与零宽字符，
