@@ -299,7 +299,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const menuConv = menu ? conversations.find((c) => c.id === menu.id) ?? null : null;
 
   return (
-    <aside className="safe-top flex h-full w-[280px] shrink-0 flex-col border-r border-line bg-panel md:pt-0">
+    <aside className="safe-top flex h-full w-full shrink-0 flex-col border-r border-line bg-panel md:w-[280px] md:pt-0">
       <div className="flex h-[58px] shrink-0 items-center gap-2 px-3">
         <button type="button" onClick={startNewChat} className="flex min-w-0 items-center gap-2 text-left" aria-label={t("新对话", "New conversation")}>
           <BrandMark size={25} className="shrink-0 text-ink" />

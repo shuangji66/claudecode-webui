@@ -184,8 +184,15 @@ function AppShell() {
       </div>
 
       {sidebarOpen && (
-        <div className="fixed inset-0 z-40 flex md:hidden">
-          <div className="h-full w-[86vw] max-w-[330px] shadow-2xl">
+        <div className="fixed inset-0 z-40 md:hidden">
+          {/* 遮罩必须自己铺满视口：不要依赖 flex-1，否则侧栏宽度变化时会留出未遮罩的条带。 */}
+          <button
+            type="button"
+            aria-label={t("关闭侧栏", "Close sidebar")}
+            className="absolute inset-0 h-full w-full bg-black/35"
+            onClick={() => setSidebarOpen(false)}
+          />
+          <div className="relative z-10 h-full w-[86vw] max-w-[330px] shadow-2xl">
             <Sidebar
               onClose={() => setSidebarOpen(false)}
               onOpenSettings={openSettings}
@@ -194,12 +201,6 @@ function AppShell() {
               onOpenHistory={openHistory}
             />
           </div>
-          <button
-            type="button"
-            aria-label={t("关闭侧栏", "Close sidebar")}
-            className="h-full flex-1 bg-black/35"
-            onClick={() => setSidebarOpen(false)}
-          />
         </div>
       )}
 
