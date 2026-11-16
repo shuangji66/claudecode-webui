@@ -66,6 +66,9 @@ src/
    新增文案不要只写中文。
 8. 主题由 `<html data-theme="light|dark">` 决定，Tailwind 的 `dark:` 已绑定该属性；
    禁止再用 `@media (prefers-color-scheme: dark)` 覆盖设计令牌。
+   **主题偏好只存浏览器**（`ccweb-theme-pref`，`lib/theme.ts` 的 `themePreference` /
+   `setThemePreference`），不进 `settings.json`：设置页切主题不调后端，`applyPreferences`
+   也绝不读 `settings.theme`。`index.html` 的启动脚本读同一份缓存，避免闪白。
 9. 强调色是陶土色 `#D97757`，统一用 `bg-brand/text-brand/border-brand`。
 10. 移动端输入区必须保留 `env(safe-area-inset-bottom)`；设置页底部操作栏同样要留安全区。
 11. 不要加呼吸灯/无限 pulse 动画；状态点用静态圆点，流式光标也不闪烁。

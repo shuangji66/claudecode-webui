@@ -118,8 +118,10 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   新增字段时保持老配置（只有 `models: ["id"]`）可读。
 - 推理强度没有控制请求，只在 `process.Args` 里用 `--effort` 固定；已有会话改强度
   只能提示「新会话生效」，不要假装热切换。
-- 界面偏好 `theme`（system/light/dark）、`locale`（zh/en）、`font_size`（12–20）、
-  `proxy_url`（http/https/socks5/socks5h，空=直连）也落在 `settings.json`；
+- 界面偏好 `locale`（zh/en）、`font_size`（12–20）、
+  `proxy_url`（http/https/socks5/socks5h，空=直连）落在 `settings.json`；
+  **主题不在这里**：`theme` 只缓存在浏览器 localStorage（每台设备各看各的），
+  `Settings`/`Public`/`Patch` 都没有这个字段，旧配置里的 `theme` 读时忽略、下次写盘即消失。
   `Open` 时补默认值，`Apply` 时校验，非法值直接报错。
 - 代理只在进程启动时生效：`POST /api/settings/proxy` 保存后关闭全部会话，再按原 id
   `Resume`（空对话没有转录时才退回 `Ensure`）；`Settings.Env()` 注入大小写两套 proxy 变量和 localhost `NO_PROXY`，

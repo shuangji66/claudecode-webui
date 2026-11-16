@@ -156,7 +156,7 @@ export interface PublicSettings {
   permission_mode: string;
   auto_compact_window: string;
   disable_unknown_model_window: boolean;
-  theme?: "system" | "light" | "dark" | string;
+  /** 主题不在服务端：只缓存在浏览器（localStorage）。 */
   locale?: "zh" | "en" | string;
   font_size?: number;
   proxy_url?: string;

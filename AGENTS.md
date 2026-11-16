@@ -218,7 +218,8 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - `Edit` 的 diff 优先取 `tool_use_result.structuredPatch`，没有才退回 `old_string/new_string`。
 - 浏览器无法给 WebSocket 设自定义头，鉴权只能走 `?token=`。
 - 主题用 `<html data-theme>` 切换，Tailwind 的 `dark:` 已绑定到该属性；不要再写
-  `@media (prefers-color-scheme: dark)` 覆盖令牌。
+  `@media (prefers-color-scheme: dark)` 覆盖令牌。**主题偏好只缓存在浏览器**
+  （localStorage `ccweb-theme-pref`），不进 `settings.json`——换设备各自决定。
 - 强调色固定为陶土色 `#D97757`，用 `bg-brand/text-brand` 等语义类，不要写死 slate/blue。
 - **唯一允许的循环动画**是侧栏对话「进行中」的进度环（`common/StateDot` 的 `ongoing`，
   1.5s 匀速旋转，对齐 DSH），且 `prefers-reduced-motion` 下必须静止；呼吸灯/pulse 仍然禁止。

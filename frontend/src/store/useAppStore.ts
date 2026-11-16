@@ -82,7 +82,6 @@ export interface SettingsPatch {
   permission_mode?: string;
   auto_compact_window?: string;
   disable_unknown_model_window?: boolean;
-  theme?: string;
   locale?: string;
   font_size?: number;
   proxy_url?: string;

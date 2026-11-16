@@ -130,7 +130,6 @@ export function normalizeSettings(s: PublicSettings | null): PublicSettings | nu
   const providers = (s.providers as unknown as PublicProvider[] | null | undefined) ?? [];
   return {
     ...s,
-    theme: s.theme || "system",
     locale: s.locale || "zh",
     font_size: s.font_size || 15,
     proxy_url: s.proxy_url || "",

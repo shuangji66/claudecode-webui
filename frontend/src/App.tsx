@@ -40,7 +40,7 @@ export default function App() {
 
   useEffect(() => {
     applyPreferences(settings);
-    return watchSystemTheme(settings, () => applyPreferences(settings));
+    return watchSystemTheme(() => applyPreferences(settings));
   }, [settings]);
 
   // 地址/密钥输入框不该被浏览器当成登录表单；只装一次，动态节点由 observer 处理。

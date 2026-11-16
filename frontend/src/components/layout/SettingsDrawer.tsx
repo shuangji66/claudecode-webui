@@ -18,6 +18,7 @@ import { PROVIDER_PRESETS, findProviderPreset, presetFormFields } from "../../li
 import { DeploySettings } from "./DeploySettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { Select } from "../common/Select";
+import { setThemePreference, themePreference } from "../../lib/theme";
 import { isDangerousPermissionMode, permissionModeWarning } from "../../lib/permissionModes";
 import { Dialog } from "../common/Dialog";
 import { askConfirm } from "../common/SystemDialogs";
@@ -171,7 +172,8 @@ function GeneralSettings() {
     if (ok) setSavedAt(Date.now());
   };
 
-  const theme = settings?.theme || "system";
+  // 主题只存在浏览器：进页面读缓存，切换直接写 DOM + localStorage，不调后端。
+  const [theme, setTheme] = useState(themePreference);
   const locale = settings?.locale || "zh";
   const fontSize = settings?.font_size || 15;
 
@@ -229,7 +231,10 @@ function GeneralSettings() {
                 key={item}
                 type="button"
                 aria-pressed={active}
-                onClick={() => void save({ theme: item })}
+                onClick={() => {
+                  setThemePreference(item);
+                  setTheme(item);
+                }}
                 className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12px] ${
                   active ? "bg-panel-strong font-medium text-ink" : "text-muted hover:text-ink"
                 }`}

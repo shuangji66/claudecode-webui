@@ -443,11 +443,11 @@ func TestModelMetaPrunedWhenModelRemoved(t *testing.T) {
 func TestPreferencesPatchAndDefaults(t *testing.T) {
 	s, path := openTemp(t)
 	got := s.Get()
-	if got.Theme != DefaultTheme || got.Locale != DefaultLocale || got.FontSize != DefaultFontSize {
+	if got.Locale != DefaultLocale || got.FontSize != DefaultFontSize {
 		t.Fatalf("默认界面偏好 = %+v", got)
 	}
-	theme, locale, size := "dark", "en", 17
-	if _, err := s.Apply(Patch{Theme: &theme, Locale: &locale, FontSize: &size}); err != nil {
+	locale, size := "en", 17
+	if _, err := s.Apply(Patch{Locale: &locale, FontSize: &size}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	reopened, err := Open(path)
@@ -455,14 +455,10 @@ func TestPreferencesPatchAndDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = reopened.Get()
-	if got.Theme != "dark" || got.Locale != "en" || got.FontSize != 17 {
+	if got.Locale != "en" || got.FontSize != 17 {
 		t.Fatalf("重开后偏好 = %+v", got)
 	}
 
-	badTheme := "neon"
-	if _, err := s.Apply(Patch{Theme: &badTheme}); err == nil {
-		t.Fatal("非法主题应报错")
-	}
 	badLocale := "fr"
 	if _, err := s.Apply(Patch{Locale: &badLocale}); err == nil {
 		t.Fatal("非法语言应报错")
@@ -533,4 +529,42 @@ func TestProxyURLValidation(t *testing.T) {
 	if _, err := s.Apply(Patch{ProxyURL: strPtr("socks4://x:1")}); err == nil {
 		t.Fatal("不支持的协议应报错")
 	}
+}
+
+// 主题只缓存在浏览器：settings.json 里不该再有 theme；旧文件里的 theme 在下次写盘时消失。
+func TestThemeNotPersisted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte(`{"theme":"dark","locale":"en"}`), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// 旧配置里的 theme 读进来也不认（结构体已经没有这个字段）。
+	if got := s.Public(); strings.Contains(mustJSON(t, got), "theme") {
+		t.Fatalf("Public 不应包含 theme: %s", mustJSON(t, got))
+	}
+
+	locale := "zh"
+	if _, err := s.Apply(Patch{Locale: &locale}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if strings.Contains(string(raw), `"theme"`) {
+		t.Fatalf("写盘后仍带 theme: %s", raw)
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(b)
 }

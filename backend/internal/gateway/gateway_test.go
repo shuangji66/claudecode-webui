@@ -627,7 +627,7 @@ func TestSettingsModelMetaAndPreferences(t *testing.T) {
 	  "providers":[{"id":"gw","name":"网关","protocol":"anthropic-messages","base_url":"https://gw.example",
 	    "models":["m1"],"model_meta":{"m1":{"name":"模型一","reasoning_efforts":["low","high"],"default_reasoning_effort":"high","supports_image":true}}}],
 	  "selected":{"provider":"gw","model":"m1","effort":"low"},
-	  "theme":"dark","locale":"en","font_size":16
+	  "locale":"en","font_size":16
 	}`
 	rec := putSettings(t, srv, body)
 	if rec.Code != http.StatusOK {
@@ -645,14 +645,13 @@ func TestSettingsModelMetaAndPreferences(t *testing.T) {
 		Selected struct {
 			Effort string `json:"effort"`
 		} `json:"selected"`
-		Theme    string `json:"theme"`
 		Locale   string `json:"locale"`
 		FontSize int    `json:"font_size"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &pub); err != nil {
 		t.Fatal(err)
 	}
-	if pub.Theme != "dark" || pub.Locale != "en" || pub.FontSize != 16 {
+	if pub.Locale != "en" || pub.FontSize != 16 {
 		t.Fatalf("prefs = %+v", pub)
 	}
 	if pub.Selected.Effort != "low" {

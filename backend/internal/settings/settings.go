@@ -36,18 +36,17 @@ const (
 // SupportedProtocols 是允许选择的协议。
 var SupportedProtocols = []string{ProtocolAnthropic, ProtocolOpenAI, ProtocolResponses, ProtocolGemini}
 
-// 界面偏好的默认值与允许范围。主题与语言都落在服务端，换设备也能保持一致。
+// 界面偏好的默认值与允许范围。语言与字号落在服务端；
+// **主题不持久化**：它只缓存在浏览器（localStorage），换设备各自决定。
 const (
-	DefaultTheme    = "system"
 	DefaultLocale   = "zh"
 	DefaultFontSize = 15
 	MinFontSize     = 12
 	MaxFontSize     = 20
 )
 
-// SupportedThemes / SupportedLocales / SupportedEfforts 是配置校验白名单。
+// SupportedLocales / SupportedEfforts 是配置校验白名单。
 var (
-	SupportedThemes  = []string{"system", "light", "dark"}
 	SupportedLocales = []string{"zh", "en"}
 	SupportedEfforts = []string{"low", "medium", "high", "xhigh", "max"}
 )
@@ -126,8 +125,7 @@ type Settings struct {
 	AutoCompactWindow         string `json:"auto_compact_window"`
 	DisableUnknownModelWindow bool   `json:"disable_unknown_model_window"`
 
-	// 界面偏好（服务端持久化，所有设备共享）。
-	Theme    string `json:"theme"`
+	// 界面偏好（服务端持久化，所有设备共享）。主题不在这里：它只存浏览器。
 	Locale   string `json:"locale"`
 	FontSize int    `json:"font_size"`
 
@@ -156,7 +154,6 @@ type Public struct {
 	AutoCompactWindow         string `json:"auto_compact_window"`
 	DisableUnknownModelWindow bool   `json:"disable_unknown_model_window"`
 
-	Theme    string `json:"theme"`
 	Locale   string `json:"locale"`
 	FontSize int    `json:"font_size"`
 
@@ -201,7 +198,6 @@ type Patch struct {
 	PermissionMode            *string          `json:"permission_mode"`
 	AutoCompactWindow         *string          `json:"auto_compact_window"`
 	DisableUnknownModelWindow *bool            `json:"disable_unknown_model_window"`
-	Theme                     *string          `json:"theme"`
 	Locale                    *string          `json:"locale"`
 	FontSize                  *int             `json:"font_size"`
 	ProxyURL                  *string          `json:"proxy_url"`
@@ -235,9 +231,6 @@ func Open(path string) (*Store, error) {
 
 // normalizePreferences 给老配置补上界面偏好默认值。
 func normalizePreferences(v *Settings) {
-	if !containsString(SupportedThemes, v.Theme) {
-		v.Theme = DefaultTheme
-	}
 	if !containsString(SupportedLocales, v.Locale) {
 		v.Locale = DefaultLocale
 	}
@@ -486,7 +479,6 @@ func (s *Store) Public() Public {
 		PermissionMode:            cur.PermissionMode,
 		AutoCompactWindow:         cur.AutoCompactWindow,
 		DisableUnknownModelWindow: cur.DisableUnknownModelWindow,
-		Theme:                     cur.Theme,
 		Locale:                    cur.Locale,
 		FontSize:                  cur.FontSize,
 		ProxyURL:                  cur.ProxyURL,
@@ -541,14 +533,6 @@ func (s *Store) Apply(p Patch) (Public, error) {
 	}
 	if p.DisableUnknownModelWindow != nil {
 		next.DisableUnknownModelWindow = *p.DisableUnknownModelWindow
-	}
-	if p.Theme != nil {
-		theme := strings.TrimSpace(*p.Theme)
-		if !containsString(SupportedThemes, theme) {
-			s.mu.Unlock()
-			return Public{}, fmt.Errorf("settings: 不支持的主题 %q", theme)
-		}
-		next.Theme = theme
 	}
 	if p.Locale != nil {
 		locale := strings.TrimSpace(*p.Locale)
