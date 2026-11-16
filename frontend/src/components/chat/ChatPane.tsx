@@ -237,7 +237,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
 
       {activeId && !newChat && (
         <div className="min-h-0 flex-1 overflow-hidden">
-          <MessageList items={itemList} empty={t("开始新的对话", "Start a new conversation")} />
+          <MessageList items={itemList} resetKey={activeId ?? undefined} empty={t("开始新的对话", "Start a new conversation")} />
         </div>
       )}
 
