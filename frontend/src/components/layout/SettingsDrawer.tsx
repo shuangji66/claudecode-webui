@@ -27,7 +27,6 @@ import {
   IconCheck,
   IconChevronDown,
   IconDownload,
-  IconExternal,
   IconGauge,
   IconGitHub,
   IconGlobe,
@@ -165,18 +164,28 @@ export function AboutSettings() {
   const version = info?.version ? `v${info.version}` : "";
   return (
     <div className="mx-auto max-w-2xl space-y-7">
-      <div className="flex items-center gap-3">
-        <BrandMark size={40} className="text-ink" />
-        <div className="min-w-0">
+      <div className="flex items-start gap-3">
+        <BrandMark size={40} className="shrink-0 text-ink" />
+        <div className="min-w-0 flex-1">
           <h3 className="text-[15px] font-semibold text-ink">Claude Code WebUI</h3>
           {version && <p className="text-[11.5px] text-muted">{version}</p>}
         </div>
+        <a
+          href="https://github.com/shuangji66/claudecode-webui"
+          target="_blank"
+          rel="noreferrer noopener"
+          aria-label={t("GitHub 仓库", "GitHub repository")}
+          title="github.com/shuangji66/claudecode-webui"
+          className="rounded-lg p-1.5 text-muted transition hover:bg-panel-strong hover:text-ink"
+        >
+          <IconGitHub size={18} />
+        </a>
       </div>
 
       <p className="text-[12.5px] leading-relaxed text-ink-2">
         {t(
-          "把本地 claude CLI 包成可视化 Web 控制台：消息、思考、工具卡片、diff 与审批全部结构化渲染，右侧栏带文件、Git 和真正的终端。整个应用是一个 Go 二进制，只监听 unix socket，由飞牛网关反代。",
-          "A visual console for the local claude CLI: messages, thinking, tool cards, diffs and approvals rendered structurally, with files, Git and a real terminal in the side panel. One Go binary, listening only on a unix socket behind the fnOS gateway.",
+          "把本地 claude CLI 包成可视化 Web 控制台：消息、思考、工具卡片、diff 与审批全部结构化渲染，右侧栏带文件、Git 和真正的终端。",
+          "A visual console for the local claude CLI: messages, thinking, tool cards, diffs and approvals rendered structurally, with files, Git and a real terminal in the side panel.",
         )}
       </p>
 
@@ -190,7 +199,7 @@ export function AboutSettings() {
             {t(" — 模型与技术支持", " — models and technical support")}
           </li>
           <li>
-            <span className="font-medium text-ink">DeepSeekRuntime（DSH）</span>
+            <span className="font-medium text-ink">DeepSeekRuntime</span>
             {t(" — 界面交互、消息模型与子代理设计的参考", " — reference for the UI, message model and subagent design")}
           </li>
           <li>
@@ -200,18 +209,6 @@ export function AboutSettings() {
         </ul>
       </Section>
 
-      <Section title={t("源码", "Source")}>
-        <a
-          href="https://github.com/shuangji66/claudecode-webui"
-          target="_blank"
-          rel="noreferrer noopener"
-          className="inline-flex items-center gap-2 rounded-lg border border-line-strong px-3 py-2 text-[12px] text-ink transition hover:bg-panel-strong"
-        >
-          <IconGitHub size={16} />
-          <span>shuangji66/claudecode-webui</span>
-          <IconExternal size={13} className="text-muted" />
-        </a>
-      </Section>
     </div>
   );
 }
