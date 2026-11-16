@@ -28,9 +28,12 @@ type fakeMgr struct {
 	resumed []string
 	closed  []string
 	failOn  string
+	inUse   map[string]bool
 }
 
 func (f *fakeMgr) Binary() string { return "/opt/cc/claude" }
+
+func (f *fakeMgr) InUse(bin string) bool { return f.inUse[bin] }
 
 func (f *fakeMgr) Create(cwd, model, mode string) (manager.Info, error) {
 	if f.failOn == "create" {

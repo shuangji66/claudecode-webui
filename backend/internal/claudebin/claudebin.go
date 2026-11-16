@@ -70,6 +70,8 @@ var (
 	ErrBusy = errors.New("claudebin: 已有安装任务在进行")
 	// ErrInstalled 表示该版本已经装好。
 	ErrInstalled = errors.New("claudebin: 该版本已安装")
+	// ErrActive 表示要删除的版本正在生效。
+	ErrActive = errors.New("claudebin: 正在使用的版本不能删除")
 )
 
 // Version 是已安装的一个版本。
@@ -315,6 +317,31 @@ func (m *Manager) CancelInstall() error {
 		return nil
 	}
 	cancel()
+	return nil
+}
+
+// Delete 删除一个已安装但未生效的版本目录。
+//
+// 生效版本不能删：它可能是下一次新建会话要用的二进制。仍在运行的会话由网关
+// 通过 Manager.InUse 先拦一道（切换版本只影响新会话，旧进程可能还在用旧版本）。
+func (m *Manager) Delete(version string) error {
+	version = trimVersion(version)
+	if !validVersion(version) {
+		return fmt.Errorf("claudebin: 非法的版本号 %q", version)
+	}
+	if !hasVersion(m.Installed(), version) {
+		return fmt.Errorf("claudebin: 版本 %s 未安装", version)
+	}
+	// 持锁完成「检查生效版本 + 删除目录」，避免 SetActive 在中间把该版本切成生效版本。
+	// 这里只做本地目录删除，不涉及网络 I/O。
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.st.Active == version {
+		return ErrActive
+	}
+	if err := os.RemoveAll(filepath.Join(m.root, version)); err != nil {
+		return fmt.Errorf("claudebin: 删除版本 %s: %w", version, err)
+	}
 	return nil
 }
 

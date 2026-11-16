@@ -20,6 +20,8 @@ type fakeDeploy struct {
 	activeErr  error
 	installed  []string
 	cancelled  int
+	deleted    []string
+	deleteErr  error
 	activated  []string
 	sources    []string
 }
@@ -40,6 +42,14 @@ func (f *fakeDeploy) StartInstall(version, source string) error {
 
 func (f *fakeDeploy) CancelInstall() error {
 	f.cancelled++
+	return nil
+}
+
+func (f *fakeDeploy) Delete(version string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	f.deleted = append(f.deleted, version)
 	return nil
 }
 
@@ -83,6 +93,7 @@ func TestClaudeRoutesRequireToken(t *testing.T) {
 		{http.MethodPost, "/api/claude/check"},
 		{http.MethodPost, "/api/claude/install"},
 		{http.MethodPost, "/api/claude/cancel"},
+		{http.MethodDelete, "/api/claude/version"},
 		{http.MethodPost, "/api/claude/active"},
 		{http.MethodPost, "/api/claude/source"},
 	} {
@@ -163,6 +174,60 @@ func TestClaudeCancel(t *testing.T) {
 	}
 	if f.cancelled != 1 {
 		t.Fatalf("取消未透传: %d", f.cancelled)
+	}
+}
+
+func TestClaudeDeleteVersion(t *testing.T) {
+	f := &fakeDeploy{status: claudebin.Status{Installed: []claudebin.Version{
+		{Version: "2.1.325", Path: "/data/versions/2.1.325/claude"},
+		{Version: "2.1.324", Path: "/data/versions/2.1.324/claude"},
+	}}}
+	srv := withDeploy(t, f)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/claude/version?version=2.1.324", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("删除失败: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(f.deleted) != 1 || f.deleted[0] != "2.1.324" {
+		t.Fatalf("删除请求未透传: %v", f.deleted)
+	}
+}
+
+func TestClaudeDeleteVersionInUse(t *testing.T) {
+	f := &fakeDeploy{status: claudebin.Status{Installed: []claudebin.Version{
+		{Version: "2.1.324", Path: "/data/versions/2.1.324/claude"},
+	}}}
+	srv := withDeploy(t, f)
+	srv.d.Manager.(*fakeMgr).inUse = map[string]bool{"/data/versions/2.1.324/claude": true}
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/claude/version?version=2.1.324", ""))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("使用中的版本应 409，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(f.deleted) != 0 {
+		t.Fatalf("不应删除: %v", f.deleted)
+	}
+}
+
+func TestClaudeDeleteVersionActiveOrMissing(t *testing.T) {
+	f := &fakeDeploy{
+		status:    claudebin.Status{Installed: []claudebin.Version{{Version: "2.1.325", Path: "/data/versions/2.1.325/claude"}}},
+		deleteErr: claudebin.ErrActive,
+	}
+	srv := withDeploy(t, f)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/claude/version?version=2.1.325", ""))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("生效版本应 409，实际 %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/claude/version?version=9.9.9", ""))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("未安装版本应 404，实际 %d", rec.Code)
 	}
 }
 

@@ -13,6 +13,7 @@ const stderrTailBytes = 8 << 10
 
 // Proc 是一个已启动的 claude 子进程，同时实现会话所需的双工 Transport。
 type Proc struct {
+	bin    string
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
@@ -47,7 +48,7 @@ func Spawn(bin string, args []string, cwd string, env []string) (*Proc, error) {
 		return nil, fmt.Errorf("process: 启动 %s 失败: %w", bin, err)
 	}
 
-	p := &Proc{cmd: cmd, stdin: stdin, stdout: stdout, waited: make(chan struct{})}
+	p := &Proc{bin: bin, cmd: cmd, stdin: stdin, stdout: stdout, waited: make(chan struct{})}
 
 	// stderr 必须持续排空，否则管道写满会阻塞子进程；只保留尾部用于报错。
 	go func() {
@@ -83,6 +84,9 @@ func (p *Proc) StderrTail() string {
 	defer p.stderrMu.Unlock()
 	return p.stderrBuf.String()
 }
+
+// Bin 返回启动该进程的二进制路径（用于判断某个版本是否仍被会话使用）。
+func (p *Proc) Bin() string { return p.bin }
 
 // Pid 返回子进程 pid。
 func (p *Proc) Pid() int { return p.cmd.Process.Pid }

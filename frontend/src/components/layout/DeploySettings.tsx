@@ -10,8 +10,9 @@ import { useT } from "../../lib/i18n";
 import { formatBytes } from "../../lib/attachments";
 import { Select } from "../common/Select";
 import { Button } from "../common/Button";
-import { IconAlert, IconCheck, IconClose, IconDownload, IconRefresh } from "../common/Icons";
-import type { ClaudeJobPhase, ClaudeSource } from "../../transport/types";
+import { askConfirm } from "../common/SystemDialogs";
+import { IconAlert, IconCheck, IconClose, IconDownload, IconRefresh, IconTrash } from "../common/Icons";
+import type { ClaudeJobPhase, ClaudeSource, ClaudeVersion } from "../../transport/types";
 
 const SOURCES: { value: ClaudeSource; zh: string; en: string }[] = [
   { value: "npmmirror", zh: "npmmirror 国内镜像（推荐）", en: "npmmirror (China mirror, recommended)" },
@@ -48,6 +49,7 @@ export function DeploySettings() {
   const checkClaudeUpdate = useAppStore((s) => s.checkClaudeUpdate);
   const installClaude = useAppStore((s) => s.installClaude);
   const cancelClaudeInstall = useAppStore((s) => s.cancelClaudeInstall);
+  const deleteClaudeVersion = useAppStore((s) => s.deleteClaudeVersion);
   const setClaudeActive = useAppStore((s) => s.setClaudeActive);
   const setClaudeSource = useAppStore((s) => s.setClaudeSource);
 
@@ -88,6 +90,19 @@ export function DeploySettings() {
     setInstalling(true);
     await installClaude(version, claude?.source);
     setInstalling(false);
+  };
+
+  const removeVersion = async (v: ClaudeVersion) => {
+    const ok = await askConfirm({
+      title: t("删除 claude 版本", "Delete claude version"),
+      message: t(
+        `删除 ${v.version}？该版本目录会被移除；正在使用的版本和仍被会话使用的版本不能删。`,
+        `Delete ${v.version}? Its version directory is removed; the active version and versions still used by running sessions cannot be deleted.`,
+      ),
+      danger: true,
+      confirmText: t("删除", "Delete"),
+    });
+    if (ok) await deleteClaudeVersion(v.version);
   };
 
   const pct = job && job.total > 0 ? Math.min(100, Math.round((job.downloaded / job.total) * 100)) : 0;
@@ -171,6 +186,18 @@ export function DeploySettings() {
                   >
                     {isActive ? t("当前", "Current") : t("切换到此版本", "Use this")}
                   </Button>
+                  {!isActive && (
+                    <button
+                      type="button"
+                      onClick={() => void removeVersion(v)}
+                      disabled={busy}
+                      className="rounded-md p-1 text-muted hover:bg-black/5 hover:text-danger disabled:opacity-30"
+                      aria-label={`${t("删除版本", "Delete version")} ${v.version}`}
+                      title={t("删除版本", "Delete version")}
+                    >
+                      <IconTrash size={14} />
+                    </button>
+                  )}
                 </li>
               );
             })}

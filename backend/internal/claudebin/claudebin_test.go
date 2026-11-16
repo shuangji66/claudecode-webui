@@ -114,3 +114,32 @@ func TestStartInstallRejectsBadVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteInactiveVersion(t *testing.T) {
+	dir := t.TempDir()
+	writeFakeVersion(t, dir, "2.1.325")
+	writeFakeVersion(t, dir, "2.1.324")
+	m, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got := m.Active(); got != "2.1.325" {
+		t.Fatalf("初始生效版本 = %q", got)
+	}
+
+	if err := m.Delete("2.1.324"); err != nil {
+		t.Fatalf("删除未使用版本: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "2.1.324")); !os.IsNotExist(err) {
+		t.Fatalf("版本目录应已删除: %v", err)
+	}
+	if err := m.Delete("2.1.325"); !errors.Is(err, ErrActive) {
+		t.Fatalf("生效版本应拒绝删除，实际 %v", err)
+	}
+	if err := m.Delete("9.9.9"); err == nil {
+		t.Fatal("未安装版本应报错")
+	}
+	if err := m.Delete("../2.1.324"); err == nil {
+		t.Fatal("路径穿越应被拒绝")
+	}
+}

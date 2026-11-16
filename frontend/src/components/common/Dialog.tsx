@@ -31,6 +31,8 @@ interface Props {
   bare?: boolean;
   /** 覆盖面板尺寸（例如设置页固定的宽高）。 */
   panelClassName?: string;
+  /** 移动端铺满整个视口（设置页这类全屏模态），桌面端仍由 panelClassName 控制。 */
+  fullScreen?: boolean;
   closeOnBackdrop?: boolean;
   hideClose?: boolean;
 }
@@ -61,6 +63,7 @@ export function Dialog({
   bodyScroll = true,
   bare = false,
   panelClassName = "",
+  fullScreen = false,
   closeOnBackdrop = true,
   hideClose = false,
 }: Props) {
@@ -91,6 +94,15 @@ export function Dialog({
 
   if (!open) return null;
 
+  // fullScreen 时不再套用默认的 max-h / 圆角：由调用方的 panelClassName 自己决定，
+  // 否则 max-h-[88dvh] 会把 h-[100dvh] 截短，移动端顶部留出一条未覆盖的区域。
+  const sizing = fullScreen
+    ? ""
+    : sheet
+      ? "h-[90dvh] md:h-auto md:max-h-[84vh]"
+      : "max-h-[88dvh] md:max-h-[84vh]";
+  const rounding = fullScreen ? "" : "rounded-t-2xl md:rounded-2xl";
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 md:items-center md:p-6"
@@ -109,9 +121,7 @@ export function Dialog({
         role="dialog"
         aria-modal="true"
         aria-label={label}
-        className={`flex w-full flex-col overflow-hidden rounded-t-2xl bg-canvas shadow-2xl md:rounded-2xl ${WIDTH[size]} ${
-          sheet ? "h-[90dvh] md:h-auto md:max-h-[84vh]" : "max-h-[88dvh] md:max-h-[84vh]"
-        } ${panelClassName}`}
+        className={`flex w-full flex-col overflow-hidden bg-canvas shadow-2xl ${rounding} ${WIDTH[size]} ${sizing} ${panelClassName}`}
       >
         {(title || description || icon) && (
           <header className="safe-top flex items-start gap-3 border-b border-line px-4 py-3.5 md:pt-3.5">

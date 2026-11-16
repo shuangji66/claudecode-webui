@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../common/SystemDialogs", () => ({ askConfirm: vi.fn().mockResolvedValue(true) }));
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { DeploySettings } from "./DeploySettings";
 import { ClaudeInstallPrompt } from "./ClaudeInstallPrompt";
@@ -9,6 +11,7 @@ const loadClaudeStatus = vi.fn();
 const checkClaudeUpdate = vi.fn();
 const installClaude = vi.fn();
 const cancelClaudeInstall = vi.fn();
+const deleteClaudeVersion = vi.fn();
 const setClaudeActive = vi.fn();
 const setClaudeSource = vi.fn();
 
@@ -31,6 +34,7 @@ beforeEach(() => {
   checkClaudeUpdate.mockReset();
   installClaude.mockReset().mockResolvedValue(true);
   cancelClaudeInstall.mockReset().mockResolvedValue(true);
+  deleteClaudeVersion.mockReset().mockResolvedValue(true);
   setClaudeActive.mockReset().mockResolvedValue(true);
   setClaudeSource.mockReset().mockResolvedValue(true);
   useAppStore.setState({
@@ -40,6 +44,7 @@ beforeEach(() => {
     checkClaudeUpdate,
     installClaude,
     cancelClaudeInstall,
+    deleteClaudeVersion,
     setClaudeActive,
     setClaudeSource,
   });
@@ -83,6 +88,13 @@ describe("DeploySettings", () => {
     expect(screen.getByRole("option", { name: /腾讯云镜像/ })).toBeTruthy();
     expect(screen.getByRole("option", { name: /华为云镜像/ })).toBeTruthy();
     expect(screen.getByRole("option", { name: /官方 npm registry/ })).toBeTruthy();
+  });
+
+  it("已安装未使用的版本可删除，生效版本没有删除按钮", async () => {
+    render(<DeploySettings />);
+    expect(screen.queryByRole("button", { name: "删除版本 2.1.325" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "删除版本 2.1.311" }));
+    await waitFor(() => expect(deleteClaudeVersion).toHaveBeenCalledWith("2.1.311"));
   });
 
   it("安装中可取消", async () => {

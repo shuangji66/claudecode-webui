@@ -36,6 +36,7 @@ type WireEvent struct {
 // 抽成接口是为了让网关可以脱离真实 claude 二进制做单元测试。
 type SessionManager interface {
 	Binary() string
+	InUse(bin string) bool
 	Create(cwd, model, permissionMode string) (manager.Info, error)
 	Resume(id, cwd, model, permissionMode string) (manager.Info, error)
 	Ensure(cwd, model, permissionMode string) (manager.Info, error)
@@ -125,6 +126,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/claude/check", s.authed(s.handleClaudeCheck))
 	s.mux.HandleFunc("POST /api/claude/install", s.authed(s.handleClaudeInstall))
 	s.mux.HandleFunc("POST /api/claude/cancel", s.authed(s.handleClaudeCancel))
+	s.mux.HandleFunc("DELETE /api/claude/version", s.authed(s.handleClaudeDelete))
 	s.mux.HandleFunc("POST /api/claude/active", s.authed(s.handleClaudeActive))
 	s.mux.HandleFunc("POST /api/claude/source", s.authed(s.handleClaudeSource))
 	s.mux.HandleFunc("GET /ws", s.handleWS)

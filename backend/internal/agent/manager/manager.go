@@ -322,6 +322,20 @@ func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string)
 	return info, nil
 }
 
+// InUse 报告是否有正在运行的会话从 bin 启动。
+//
+// 删除旧版本目录前必须问一次：切换版本只影响新会话，旧进程可能仍在用旧版本。
+func (m *Manager) InUse(bin string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, proc := range m.procs {
+		if proc.Bin() == bin {
+			return true
+		}
+	}
+	return false
+}
+
 // Get 按 id 取会话。
 func (m *Manager) Get(id string) (*session.Session, bool) {
 	m.mu.Lock()

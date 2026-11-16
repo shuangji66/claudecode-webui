@@ -140,6 +140,8 @@ interface AppState {
   installClaude: (version: string, source?: string) => Promise<boolean>;
   /** 取消正在进行的安装；没有任务时后端幂等返回当前状态。 */
   cancelClaudeInstall: () => Promise<boolean>;
+  /** 删除一个已安装且未生效的版本。 */
+  deleteClaudeVersion: (version: string) => Promise<boolean>;
   setClaudeActive: (version: string) => Promise<boolean>;
   setClaudeSource: (source: string) => Promise<boolean>;
 
@@ -591,6 +593,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ claudeError: null });
     try {
       const st = await apiFetch<ClaudeStatus>("/api/claude/cancel", { method: "POST" });
+      set({ claude: st });
+      return true;
+    } catch (e) {
+      set({ claudeError: errText(e) });
+      return false;
+    }
+  },
+
+  deleteClaudeVersion: async (version) => {
+    set({ claudeError: null });
+    try {
+      const st = await apiFetch<ClaudeStatus>(`/api/claude/version?version=${encodeURIComponent(version)}`, {
+        method: "DELETE",
+      });
       set({ claude: st });
       return true;
     } catch (e) {

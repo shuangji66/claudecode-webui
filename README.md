@@ -56,7 +56,7 @@ location /app/ccweb/ {
 | `CCWEB_WORKSPACES_FILE` | `$DATA_DIR/workspaces.json` | 授权目录与当前工作区，权限 0600 |
 | `CCWEB_CONVERSATIONS_FILE` | `$DATA_DIR/conversations.json` | 对话元数据（归档/删除/重命名/最近活跃），权限 0600 |
 | `CCWEB_CLAUDE_HOME` | `$DATA_DIR/claude` | 派给 claude 子进程的 HOME（登录态与转录落在这里） |
-| `CCWEB_CLAUDE_VERSIONS` | `$DATA_DIR/claude/versions` | 托管 claude 的版本目录（每个版本一个子目录，可手动删除旧版本） |
+| `CCWEB_CLAUDE_VERSIONS` | `$DATA_DIR/claude/versions` | 托管 claude 的版本目录（每个版本一个子目录；部署页可删除未生效版本） |
 | `CCWEB_PROJECTS_ROOT` | `$HOME` | 首次启动时自动授权的默认目录 |
 | `CCWEB_AUTO_START` | `1` | 启动后恢复当前工作区最近一条对话（`0/false` 关闭；没有对话则不新建） |
 | `CCWEB_MAX_SESSIONS` | `8` | 常驻会话上限（单会话约 176 MB 内存） |

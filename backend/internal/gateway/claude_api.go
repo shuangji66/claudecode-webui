@@ -20,6 +20,7 @@ type ClaudeDeployer interface {
 	Check(ctx context.Context) (claudebin.CheckResult, error)
 	StartInstall(version, source string) error
 	CancelInstall() error
+	Delete(version string) error
 	SetActive(version string) error
 	SetSource(source string) error
 }
@@ -119,6 +120,42 @@ func (s *Server) handleClaudeCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.d.Claude.CancelInstall(); err != nil {
 		writeErr(w, "取消安装失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, s.d.Claude.Status())
+}
+
+// handleClaudeDelete 删除一个已安装且未生效的版本；仍在运行的会话用的版本不能删。
+func (s *Server) handleClaudeDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDeploy(w) {
+		return
+	}
+	version := strings.TrimSpace(r.URL.Query().Get("version"))
+	if version == "" {
+		writeErr(w, "缺少要删除的版本号", http.StatusBadRequest)
+		return
+	}
+	var bin string
+	for _, v := range s.d.Claude.Status().Installed {
+		if v.Version == version {
+			bin = v.Path
+			break
+		}
+	}
+	if bin == "" {
+		writeErr(w, "该版本未安装", http.StatusNotFound)
+		return
+	}
+	if s.d.Manager.InUse(bin) {
+		writeErr(w, "该版本仍被运行中的会话使用，请先结束这些会话", http.StatusConflict)
+		return
+	}
+	if err := s.d.Claude.Delete(version); err != nil {
+		if errors.Is(err, claudebin.ErrActive) {
+			writeErr(w, err.Error(), http.StatusConflict)
+		} else {
+			writeErr(w, err.Error(), http.StatusBadRequest)
+		}
 		return
 	}
 	writeJSON(w, s.d.Claude.Status())
