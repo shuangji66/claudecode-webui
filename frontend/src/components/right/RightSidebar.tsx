@@ -58,15 +58,20 @@ export function clampWidth(width: number, viewport = typeof window === "undefine
   return Math.round(Math.min(Math.max(width, RIGHT_MIN_WIDTH), max));
 }
 
-/** 视口够宽才停靠；否则右侧栏盖在对话上（浮层），中间不会被压窄。 */
-export function useDockedRight(): boolean {
-  const [docked, setDocked] = useState(() => (typeof window === "undefined" ? true : window.innerWidth >= DOCK_MIN));
+/**
+ * 跟踪视口宽度。
+ *
+ * 停靠判定和宽度收敛都必须是**响应式**的：窗口缩小时右侧栏要自己跟着变窄，
+ * 而不是等用户拖一下才被 clamp 住。
+ */
+export function useViewportWidth(): number {
+  const [viewport, setViewport] = useState(() => (typeof window === "undefined" ? 1440 : window.innerWidth));
   useEffect(() => {
-    const onResize = () => setDocked(window.innerWidth >= DOCK_MIN);
+    const onResize = () => setViewport(window.innerWidth);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  return docked;
+  return viewport;
 }
 
 const KIND_ICON = { files: IconFolder, git: IconGitBranch, terminal: IconTerminal, subagent: IconSpark } as const;
@@ -80,8 +85,11 @@ const KIND_ICON = { files: IconFolder, git: IconGitBranch, terminal: IconTermina
 export function RightSidebar({ cwd, onClose }: Props) {
   const t = useT();
   const setCwd = useSidebarStore((s) => s.setCwd);
-  const [width, setWidth] = useState(readWidth);
-  const docked = useDockedRight();
+  // 存的是用户偏好；实际宽度每次都按当前视口收敛，窗口缩小后立刻跟着变窄。
+  const [preferredWidth, setPreferredWidth] = useState(readWidth);
+  const viewport = useViewportWidth();
+  const docked = viewport >= DOCK_MIN;
+  const width = clampWidth(preferredWidth, viewport);
   // 初始停在开始页：不自动开「文件」标签，由用户点卡片或 + 决定。
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState("");
@@ -108,8 +116,8 @@ export function RightSidebar({ cwd, onClose }: Props) {
   }, [cwd, setCwd]);
 
   const applyWidth = (next: number) => {
-    const value = clampWidth(next);
-    setWidth(value);
+    const value = clampWidth(next, viewport);
+    setPreferredWidth(value);
     try {
       localStorage.setItem(WIDTH_KEY, String(value));
     } catch {

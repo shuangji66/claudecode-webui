@@ -98,6 +98,19 @@ describe("RightSidebar 停靠与宽度", () => {
     expect(clampWidth(680, 800)).toBe(300);
   });
 
+  it("窗口缩小时宽度自动收敛，不用等用户拖动", () => {
+    localStorage.setItem("ccweb-right-width", "680");
+    setViewport(1600);
+    render(<RightSidebar cwd="/w" onClose={() => {}} />);
+    const aside = screen.getByLabelText("工作区侧栏");
+    expect(aside.style.getPropertyValue("--right-w")).toBe("680px");
+
+    // 1600 → 1100：右栏最多 1100 - 280(左栏) - 420(对话) = 400
+    setViewport(1100);
+    fireEvent(window, new Event("resize"));
+    expect(aside.style.getPropertyValue("--right-w")).toBe("400px");
+  });
+
   it("视口够宽才停靠，窄屏改成浮层", () => {
     setViewport(1400);
     const wide = render(<RightSidebar cwd="/w" onClose={() => {}} />);
