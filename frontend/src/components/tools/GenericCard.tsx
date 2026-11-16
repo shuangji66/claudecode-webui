@@ -28,6 +28,18 @@ export function GenericCard({ item }: { item: ToolItem }) {
             </pre>
           </Collapsible>
         )}
+        {item.images && item.images.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {item.images.map((img, i) => (
+              <img
+                key={`${i}-${img.mediaType}`}
+                src={`data:${img.mediaType};base64,${img.data}`}
+                alt={t("工具结果图片", "Tool result image")}
+                className="max-h-80 w-auto rounded-lg border border-line"
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

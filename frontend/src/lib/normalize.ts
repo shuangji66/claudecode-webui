@@ -7,8 +7,8 @@
 //   2. tool_use ↔ tool_result 配对：结果消息里的 tool_use_id 必须回填到对应工具卡片。
 //   3. 未知消息类型原样忽略，不抛错（协议会随 CLI 版本漂移）。
 
-import { applyUsageMessage } from "./usage";
-import type { Item } from "./model";
+import { applyUsageMessage, formatTokens } from "./usage";
+import type { Item, ToolImage } from "./model";
 
 let idCounter = 0;
 function nextId(): string {
@@ -25,36 +25,84 @@ function seqOf(items: Item[]): number {
   return items.length === 0 ? 0 : items[items.length - 1].seq + 1;
 }
 
+/** 内联 JSON 兜底的上限：未知块里可能藏着 base64，整段塞进 DOM 会把页面拖死。 */
+const MAX_INLINE_JSON = 4000;
+
+function humanBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 非文本块（图片/文档）的占位说明：base64 绝不能当正文渲染。 */
+function describeBlock(block: Raw): string | undefined {
+  if (block.type !== "image" && block.type !== "document") return undefined;
+  const src = asRecord(block.source);
+  const mediaType = typeof src?.media_type === "string" ? src.media_type : "";
+  const data = typeof src?.data === "string" ? src.data : "";
+  // base64 长度 ≈ 字节数 * 4/3，估算够用了，别真去解码。
+  const size = data ? humanBytes(Math.floor((data.length * 3) / 4)) : "";
+  const kind = block.type === "image" ? "图片" : "文档";
+  return `[${kind}${mediaType ? ` ${mediaType}` : ""}${size ? `，约 ${size}` : ""}]`;
+}
+
+function jsonPreview(v: unknown): string {
+  let s: string;
+  try {
+    s = JSON.stringify(v) ?? String(v);
+  } catch {
+    return String(v);
+  }
+  return s.length > MAX_INLINE_JSON ? `${s.slice(0, MAX_INLINE_JSON)}…（共 ${s.length} 字符，已省略）` : s;
+}
+
 /** 把 tool_result 的 content（字符串或内容块数组）压成纯文本。 */
 export function textOfContent(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     const parts: string[] = [];
     for (const b of content) {
-      if (b && typeof b === "object") {
-        const block = b as Record<string, unknown>;
-        if (block.type === "text" && typeof block.text === "string") {
-          parts.push(block.text);
-        } else if (typeof block.text === "string") {
-          parts.push(block.text);
-        }
-      } else if (typeof b === "string") {
+      if (typeof b === "string") {
         parts.push(b);
+        continue;
       }
+      const block = asRecord(b);
+      if (!block) continue;
+      if (typeof block.text === "string") {
+        parts.push(block.text);
+        continue;
+      }
+      const placeholder = describeBlock(block);
+      if (placeholder) parts.push(placeholder);
     }
     if (parts.length > 0) return parts.join("\n");
-    try {
-      return JSON.stringify(content);
-    } catch {
-      return String(content);
-    }
+    return jsonPreview(content);
   }
   if (content == null) return "";
-  try {
-    return JSON.stringify(content);
-  } catch {
-    return String(content);
+  return jsonPreview(content);
+}
+
+const IMAGE_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const MAX_TOOL_IMAGES = 8;
+const MAX_TOOL_IMAGE_BYTES = 4 << 20;
+
+/** 抽出 tool_result 里的图片，交给卡片渲染缩略图（文本侧只留占位符）。 */
+export function imagesOfContent(content: unknown): ToolImage[] {
+  if (!Array.isArray(content)) return [];
+  const out: ToolImage[] = [];
+  for (const b of content) {
+    if (out.length >= MAX_TOOL_IMAGES) break;
+    const block = asRecord(b);
+    if (!block || block.type !== "image") continue;
+    const src = asRecord(block.source);
+    const mediaType = typeof src?.media_type === "string" ? src.media_type : "";
+    const data = typeof src?.data === "string" ? src.data : "";
+    if (!IMAGE_MEDIA_TYPES.has(mediaType) || !data) continue;
+    // 超限的图不往前端塞，避免一条工具结果把标签页内存撑爆。
+    if (data.length * 0.75 > MAX_TOOL_IMAGE_BYTES) continue;
+    out.push({ mediaType, data });
   }
+  return out;
 }
 
 type Raw = Record<string, unknown>;
@@ -134,32 +182,32 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
   const content = message?.content;
   const blocks = Array.isArray(content) ? content : [];
 
+  // 先把悬着的流式气泡摘掉：完整消息里带着全部内容块，按块顺序重建才能保住 CLI 的
+  // 真实顺序（thinking → text → tool_use）。留着它会把正文永远排在思考之前。
   let out = items;
-  const textBlock = blocks.find((b) => asRecord(b)?.type === "text");
-  const text = typeof asRecord(textBlock)?.text === "string" ? (asRecord(textBlock)!.text as string) : "";
-
+  let leftover = "";
   const last = out[out.length - 1];
-  const hasStreaming = last && last.kind === "assistant" && last.streaming;
+  if (last && last.kind === "assistant" && last.streaming) {
+    leftover = last.text;
+    out = out.slice(0, -1);
+  }
+  // 流式气泡原来的位置：只有增量、没有正文块时要把字补回这里，别挪到工具卡片后面。
+  const insertAt = out.length;
 
-  if (text) {
-    if (hasStreaming) {
-      // 关键：替换流式气泡，而不是再 push 一条，否则整段回答会重复显示。
-      out = [...out.slice(0, -1), { ...(last as Extract<Item, { kind: "assistant" }>), text, streaming: false }];
-    } else {
+  let textCount = 0;
+  for (const b of blocks) {
+    const block = asRecord(b);
+    if (!block) continue;
+    if (block.type === "text") {
+      const text = typeof block.text === "string" ? block.text : "";
+      if (!text) continue;
+      textCount += 1;
+      // 一条消息可能有多个 text 块（正文 → tool_use → 正文）：全部保留，各自成段。
       out = [
         ...out,
         { id: nextId(), seq: seqOf(out), ts: at, kind: "assistant", text, streaming: false },
       ];
-    }
-  } else if (hasStreaming) {
-    // 纯工具/思考回合：把悬着的流式气泡收尾，避免一直转圈。
-    out = [...out.slice(0, -1), { ...(last as Extract<Item, { kind: "assistant" }>), streaming: false }];
-  }
-
-  for (const b of blocks) {
-    const block = asRecord(b);
-    if (!block) continue;
-    if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
+    } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
       out = [
         ...out,
         { id: nextId(), seq: seqOf(out), ts: at, kind: "thinking", text: block.thinking },
@@ -185,7 +233,26 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
       ];
     }
   }
+
+  // 只收到流式增量、没有正文块（例如被中断的回合）：把已收到的字补回原位置，别丢。
+  if (textCount === 0 && leftover) {
+    out = [
+      ...out.slice(0, insertAt),
+      { id: nextId(), seq: seqOf(out), ts: at, kind: "assistant", text: leftover, streaming: false },
+      ...out.slice(insertAt),
+    ];
+  }
   return out;
+}
+
+/** 文本文件附件的回显形态：`<file name="a.txt">…</file>`（见 protocol.UserMessage）。 */
+const FILE_BLOCK_RE = /^<file name="([^"]*)">/;
+
+function fileNameOfBlock(block: unknown): string | undefined {
+  const text = asRecord(block)?.text;
+  if (typeof text !== "string") return undefined;
+  const m = FILE_BLOCK_RE.exec(text);
+  return m?.[1] || undefined;
 }
 
 function applyUser(items: Item[], m: Raw, at: number): Item[] {
@@ -201,10 +268,17 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
       const block = asRecord(r)!;
       const toolUseId = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
       const text = textOfContent(block.content);
+      const images = imagesOfContent(block.content);
       const isError = block.is_error === true;
       out = out.map((it) =>
         it.kind === "tool" && it.toolUseId === toolUseId
-          ? { ...it, result: text, isError, structured: structured ?? it.structured }
+          ? {
+              ...it,
+              result: text,
+              isError,
+              structured: structured ?? it.structured,
+              ...(images.length > 0 ? { images } : {}),
+            }
           : it,
       );
     }
@@ -216,22 +290,28 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
   if (isLocalCommandEcho(textOfContent(content))) return items;
 
   // 附件消息会被 CLI 原样回显（图片/PDF 是 image/document block，文本文件是
-  // 额外的 text block）。本地气泡只显示提示词与文件名，不能按文本内容精确
-  // 去重，否则会出现两条用户消息。
+  // 额外的 text block）。回放历史时没有本地气泡兜底，这里必须自己拼出
+  // 「提示词 + 附件名」——否则内联的文件全文会当成用户说的话显示出来。
   const textBlocks = blocks.filter((b) => asRecord(b)?.type === "text");
-  const hasFileBlock = textBlocks.some((b) => {
-    const value = asRecord(b)?.text;
-    return typeof value === "string" && value.startsWith("<file name=");
-  });
-  const attachmentEcho =
-    blocks.some((b) => asRecord(b)?.type !== "text") || textBlocks.length > 1 || hasFileBlock;
+  const fileBlocks = textBlocks.filter((b) => fileNameOfBlock(b) !== undefined);
+  const promptBlocks = textBlocks.filter((b) => fileNameOfBlock(b) === undefined);
+  const binaryCount = blocks.filter((b) => {
+    const type = asRecord(b)?.type;
+    return type === "image" || type === "document";
+  }).length;
+  const attachmentEcho = binaryCount > 0 || textBlocks.length > 1 || fileBlocks.length > 0;
   if (attachmentEcho) {
     const last = items[items.length - 1];
     if (last && last.kind === "user") return items;
-    const firstText = textOfContent(textBlocks);
+    const prompt = textOfContent(promptBlocks);
+    const names = fileBlocks
+      .map(fileNameOfBlock)
+      .filter((n): n is string => typeof n === "string" && n !== "");
+    if (binaryCount > 0) names.push(`${binaryCount} 个图片/PDF`);
+    const display = [prompt, ...names.map((n) => `附件：${n}`)].filter(Boolean).join("\n");
     return [
       ...items,
-      { id: nextId(), seq: seqOf(items), ts: at, kind: "user", text: firstText || "附件" },
+      { id: nextId(), seq: seqOf(items), ts: at, kind: "user", text: display || "附件" },
     ];
   }
 
@@ -253,6 +333,14 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
 
 function applyResult(items: Item[], m: Raw, at: number): Item[] {
   const denials = Array.isArray(m.permission_denials) ? (m.permission_denials as unknown[]) : [];
+  const isError = m.is_error === true;
+  const raw = typeof m.result === "string" ? m.result : "";
+  const errors = Array.isArray(m.errors)
+    ? m.errors.filter((e): e is string => typeof e === "string")
+    : [];
+  // 失败原因就在 result / errors 里（API 报错、超出最大轮数…）。成功回合的 result
+  // 与最后一条 assistant 正文是同一段话，只在出错时展示，免得同一段出现两遍。
+  const text = isError ? stripAnsi(raw || errors.join("\n")) : "";
   return [
     ...items,
     {
@@ -262,7 +350,9 @@ function applyResult(items: Item[], m: Raw, at: number): Item[] {
       kind: "result",
       costUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : undefined,
       durationMs: typeof m.duration_ms === "number" ? m.duration_ms : undefined,
-      isError: m.is_error === true,
+      isError,
+      subtype: typeof m.subtype === "string" ? m.subtype : undefined,
+      text: text || undefined,
       denials,
       usage: applyUsageMessage(undefined, m),
     },
@@ -272,6 +362,25 @@ function applyResult(items: Item[], m: Raw, at: number): Item[] {
 function applySystem(items: Item[], m: Raw, at: number): Item[] {
   // init 只用于填充顶栏元信息，不进消息流；status 同理。
   if (m.subtype === "init" || m.subtype === "status") return items;
+  // 上下文压缩是回合之间真实发生过的事，转录里也有；不显示的话用户会以为
+  // 历史无缘无故变短了。
+  if (m.subtype === "compact_boundary") {
+    const meta = asRecord(m.compact_metadata);
+    const trigger = meta?.trigger === "manual" ? "手动" : "自动";
+    const pre =
+      typeof meta?.pre_tokens === "number" ? `，压缩前 ${formatTokens(meta.pre_tokens)} tokens` : "";
+    return [
+      ...items,
+      {
+        id: nextId(),
+        seq: seqOf(items),
+        ts: at,
+        kind: "system",
+        subtype: "compact_boundary",
+        text: `上下文已${trigger}压缩${pre}`,
+      },
+    ];
+  }
   // 本地命令回显也可能走 system 通道，同样整条丢弃。
   if (typeof m.content === "string" && isLocalCommandEcho(m.content)) return items;
   // hooks 输出等以 system + content 字符串形式上送，需要展示（并清洗 ANSI）。
@@ -291,17 +400,40 @@ function applySystem(items: Item[], m: Raw, at: number): Item[] {
   return items;
 }
 
+// CSI（颜色/光标/清屏）、OSC（窗口标题、超链接）、其余单字符 ESC 序列。
+// 只清颜色不够用：进度条、光标控制、超链接都会出现在 hooks 输出里，
+// 留在正文里就是一堆 `[2K`、`]8;;` 之类的乱码。
 // eslint-disable-next-line no-control-regex
-const ANSI_RE = /\u001b\[[0-9;]*m/g;
+const OSC_RE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
+// eslint-disable-next-line no-control-regex
+const CSI_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
+// eslint-disable-next-line no-control-regex
+const ESC_RE = /\u001b[@-_]/g;
 
-/** 去掉终端 ANSI 颜色转义（hooks 输出里常见）。 */
+/** 去掉终端转义，并把 `\r` 覆盖还原成最终那一版（进度条会把同一行刷很多遍）。 */
 export function stripAnsi(s: string): string {
-  return s.replace(ANSI_RE, "");
+  return s
+    .replace(/\r\n/g, "\n")
+    .replace(OSC_RE, "")
+    .replace(CSI_RE, "")
+    .replace(ESC_RE, "")
+    .split("\n")
+    .map((line) => (line.includes("\r") ? line.slice(line.lastIndexOf("\r") + 1) : line))
+    .join("\n");
 }
 
 /** 本地插入一条用户消息（不等后端回显）。 */
 export function appendUser(items: Item[], text: string): Item[] {
   return [...items, { id: nextId(), seq: seqOf(items), ts: Date.now(), kind: "user", text }];
+}
+
+/** 在列表开头插一条系统提示（例如「更早的消息已省略」）。 */
+export function prependSystem(items: Item[], text: string): Item[] {
+  const ts = items[0]?.ts ?? Date.now();
+  return [
+    { id: nextId(), seq: (items[0]?.seq ?? 0) - 1, ts, kind: "system", text },
+    ...items,
+  ];
 }
 
 /** 本地插入一条错误提示。 */

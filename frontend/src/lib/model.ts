@@ -29,6 +29,12 @@ export interface ThinkingItem extends BaseItem {
   text: string;
 }
 
+/** tool_result 里带的图片（base64）；渲染成缩略图，不把 base64 当正文塞进 <pre>。 */
+export interface ToolImage {
+  mediaType: string;
+  data: string;
+}
+
 export interface ToolItem extends BaseItem {
   kind: "tool";
   toolUseId: string;
@@ -39,6 +45,8 @@ export interface ToolItem extends BaseItem {
   isError?: boolean;
   /** 结构化结果（如 Edit 的 structuredPatch），用于 diff 渲染。 */
   structured?: unknown;
+  /** 结果里的图片（Read 读图、截图类工具）。 */
+  images?: ToolImage[];
 }
 
 export interface SystemItem extends BaseItem {
@@ -52,6 +60,10 @@ export interface ResultItem extends BaseItem {
   costUsd?: number;
   durationMs?: number;
   isError?: boolean;
+  /** 出错时的原因（CLI 的 result / errors 字段）；成功回合为空。 */
+  text?: string;
+  /** CLI 的结果子类型，例如 error_max_turns。 */
+  subtype?: string;
   denials?: unknown[];
   /** 本回合的用量快照（转录回放时靠它还原上下文/tok/s，见 lib/usage）。 */
   usage?: UsageSnapshot;

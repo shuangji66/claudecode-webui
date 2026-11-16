@@ -10,7 +10,7 @@
 
 import { create } from "zustand";
 import { apiFetch } from "../lib/runtime";
-import { appendError, appendUser, applyCLI, isTurnResult } from "../lib/normalize";
+import { appendError, appendUser, applyCLI, isTurnResult, prependSystem } from "../lib/normalize";
 import { applyUsageMessage, mergeUsage, usageFromTranscript, type UsageSnapshot } from "../lib/usage";
 import { openFnosFileManager } from "../lib/fnos";
 import type { Item } from "../lib/model";
@@ -1037,6 +1037,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
           const at = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : NaN;
           next = applyCLI(next, line, Number.isFinite(at) ? at : Date.now());
         }
+        // 后端只回放最近 20k 行 / 16MB；被截断时必须说出来，否则用户会以为
+        // 这段对话本来就这么短。
+        if (tr.truncated) next = prependSystem(next, "更早的消息已被省略（只保留最近一段转录）");
         // 转录里带着 usage（assistant 行），重开对话时据此还原底部统计；
         // 转录算不出的 API 耗时 / 窗口，用上次持久化的快照补。实时快照不覆盖。
         const snap = mergeUsage(conv.usage, usageFromTranscript(tr.lines ?? []));

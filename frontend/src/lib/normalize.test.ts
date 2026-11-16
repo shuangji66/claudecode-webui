@@ -1,5 +1,14 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { applyCLI, appendUser, __resetIds, isLocalCommandEcho, stripAnsi, textOfContent } from "./normalize";
+import {
+  applyCLI,
+  appendUser,
+  __resetIds,
+  imagesOfContent,
+  isLocalCommandEcho,
+  prependSystem,
+  stripAnsi,
+  textOfContent,
+} from "./normalize";
 import type { Item } from "./model";
 
 function assistantText(text: string) {
@@ -130,15 +139,16 @@ describe("normalize", () => {
     expect(items).toEqual([]);
   });
 
-  it("纯工具回合时把悬着的流式气泡收尾", () => {
-    let items: Item[] = applyCLI([], delta(""));
-    expect(items).toHaveLength(1);
+  // 纯工具回合（正文还没落地就先发了 tool_use）不能留一个永远转圈的气泡。
+  // 现在收尾时按内容块顺序重建：已收到的流式文字补回原位、streaming 置 false。
+  it("纯工具回合不会留下悬着的流式气泡", () => {
+    let items: Item[] = applyCLI([], delta("先读文件"));
     items = applyCLI(items, {
       type: "assistant",
       message: { content: [{ type: "tool_use", id: "t", name: "Read", input: {} }] },
     });
-    const assistant = items.find((i) => i.kind === "assistant");
-    expect(assistant).toMatchObject({ streaming: false });
+    expect(items.filter((i) => i.kind === "assistant" && i.streaming)).toHaveLength(0);
+    expect(items.map((i) => i.kind)).toEqual(["assistant", "tool"]);
   });
 });
 
@@ -274,5 +284,202 @@ describe("result 的用量", () => {
     expect(last.usage?.contextTokens).toBe(9312);
     expect(last.usage?.contextWindow).toBe(200000);
     expect(last.usage?.apiMs).toBe(22);
+  });
+});
+
+describe("内容块保真", () => {
+  beforeEach(() => __resetIds());
+
+  it("同一条消息里的多个 text 块都保留", () => {
+    const items = applyCLI([], {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "先看文件" },
+          { type: "tool_use", id: "tu1", name: "Read", input: { file_path: "a.ts" } },
+          { type: "text", text: "读完了，结论如下" },
+        ],
+      },
+    });
+    expect(items.map((i) => i.kind)).toEqual(["assistant", "tool", "assistant"]);
+    expect(items[2]).toMatchObject({ text: "读完了，结论如下" });
+  });
+
+  it("thinking 按内容块顺序排在正文之前", () => {
+    const items = applyCLI([], {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "先想想" },
+          { type: "text", text: "答案" },
+        ],
+      },
+    });
+    expect(items.map((i) => i.kind)).toEqual(["thinking", "assistant"]);
+  });
+
+  it("流式气泡收尾时仍按块顺序重建", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, delta("答"));
+    items = applyCLI(items, {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "想" },
+          { type: "text", text: "答案" },
+        ],
+      },
+    });
+    expect(items).toHaveLength(2);
+    expect(items.map((i) => i.kind)).toEqual(["thinking", "assistant"]);
+    expect(items[1]).toMatchObject({ text: "答案", streaming: false });
+  });
+
+  it("只有流式增量、没有正文块时补回原位置", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, delta("半句"));
+    items = applyCLI(items, {
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }] },
+    });
+    expect(items.map((i) => i.kind)).toEqual(["assistant", "tool"]);
+    expect(items[0]).toMatchObject({ text: "半句", streaming: false });
+  });
+});
+
+describe("result 失败原因", () => {
+  beforeEach(() => __resetIds());
+
+  it("出错回合带出 CLI 给的 result 文本", () => {
+    const items = applyCLI([], {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      result: "API Error: 400 bad request",
+      duration_ms: 1200,
+    });
+    expect(items[0]).toMatchObject({
+      kind: "result",
+      isError: true,
+      text: "API Error: 400 bad request",
+      subtype: "error_during_execution",
+    });
+  });
+
+  it("成功回合不重复展示 result 文本", () => {
+    const items = applyCLI([], { type: "result", subtype: "success", is_error: false, result: "答案" });
+    expect((items[0] as Extract<Item, { kind: "result" }>).text).toBeUndefined();
+  });
+});
+
+describe("compact_boundary", () => {
+  beforeEach(() => __resetIds());
+
+  it("上下文压缩留下一条系统提示", () => {
+    const items = applyCLI([], {
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "auto", pre_tokens: 200000 },
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "system", subtype: "compact_boundary" });
+    const text = (items[0] as Extract<Item, { kind: "system" }>).text;
+    expect(text).toContain("上下文已自动压缩");
+    expect(text).toContain("195.3K");
+  });
+});
+
+describe("tool_result 里的图片", () => {
+  it("base64 不再当正文，改占位符", () => {
+    const content = [{ type: "image", source: { type: "base64", media_type: "image/png", data: "A".repeat(4000) } }];
+    const text = textOfContent(content);
+    expect(text).toBe("[图片 image/png，约 3 KB]");
+    expect(text).not.toContain("AAAA");
+  });
+
+  it("图片挂到工具卡片上", () => {
+    let items: Item[] = applyCLI([], {
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "tool_use", id: "tu1", name: "Read", input: {} }] },
+    });
+    items = applyCLI(items, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "tu1",
+            content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } }],
+          },
+        ],
+      },
+    });
+    const tool = items[0] as Extract<Item, { kind: "tool" }>;
+    expect(tool.images).toHaveLength(1);
+    expect(tool.images?.[0].mediaType).toBe("image/png");
+    expect(tool.result).toContain("[图片 image/png");
+  });
+
+  it("非图片媒体类型不渲染", () => {
+    expect(
+      imagesOfContent([{ type: "image", source: { type: "base64", media_type: "image/svg+xml", data: "AA" } }]),
+    ).toHaveLength(0);
+  });
+});
+
+describe("附件回放", () => {
+  beforeEach(() => __resetIds());
+
+  it("文本文件附件不再把全文当用户消息", () => {
+    const items = applyCLI([], {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "读一下" },
+          { type: "text", text: '<file name="a.txt">\n机密内容\n</file>' },
+        ],
+      },
+    });
+    expect(items).toHaveLength(1);
+    expect((items[0] as Extract<Item, { kind: "user" }>).text).toBe("读一下\n附件：a.txt");
+  });
+
+  it("图片附件只报数量", () => {
+    const items = applyCLI([], {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "看图" },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "AA" } },
+        ],
+      },
+    });
+    expect((items[0] as Extract<Item, { kind: "user" }>).text).toBe("看图\n附件：1 个图片/PDF");
+  });
+});
+
+describe("stripAnsi 扩展", () => {
+  it("清掉光标/清屏/OSC 等非颜色转义", () => {
+    expect(stripAnsi("\u001b[2K\u001b[1G处理中")).toBe("处理中");
+    expect(stripAnsi("\u001b]0;title\u0007ok")).toBe("ok");
+  });
+
+  it("回车覆盖只保留最后一次", () => {
+    expect(stripAnsi("进度 10%\r进度 100%\r完成")).toBe("完成");
+    expect(stripAnsi("a\r\nb")).toBe("a\nb");
+  });
+});
+
+describe("prependSystem", () => {
+  it("在开头插入系统提示", () => {
+    const items = prependSystem([{ id: "x", seq: 0, ts: 1, kind: "user", text: "hi" }], "更早的消息已被省略");
+    expect(items[0]).toMatchObject({ kind: "system", text: "更早的消息已被省略" });
+    expect(items[1]).toMatchObject({ kind: "user", text: "hi" });
   });
 });
