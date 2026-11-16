@@ -129,8 +129,15 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
   // 转录回放时 store 里没有实时快照，就退回最后一条 result 上挂的那份。
   const liveUsage = activeId ? usage[activeId] : undefined;
   const lastResultUsage = [...itemList].reverse().find((i) => i.kind === "result")?.usage;
-  const snap = liveUsage ?? lastResultUsage;
-  const turns = itemList.filter((i) => i.kind === "result").length;
+  // 窗口优先用 CLI 在 result.modelUsage 里给的；转录还原时拿不到，退回设置里配的模型窗口。
+  const windowFromSettings = selectedOption?.spec.context_window;
+  const base = liveUsage ?? lastResultUsage;
+  const snap =
+    base && base.contextWindow === undefined && windowFromSettings
+      ? { ...base, contextWindow: windowFromSettings }
+      : base;
+  // 「轮」用用户消息数：重开对话时转录里没有 result 行，用 result 计数会归零。
+  const turns = itemList.filter((i) => i.kind === "user").length;
 
   const footer = (
     <>

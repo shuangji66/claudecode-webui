@@ -27,6 +27,8 @@ type conversationEntry struct {
 	Provider   string    `json:"provider,omitempty"`
 	Model      string    `json:"model,omitempty"`
 	Effort     string    `json:"effort,omitempty"`
+	// Usage 是前端存的用量快照（上下文 / 缓存命中 / tok/s），重开对话时用来还原底部统计。
+	Usage json.RawMessage `json:"usage,omitempty"`
 }
 
 // handleListConversations 合并 claude 转录、应用元数据和当前存活会话。
@@ -77,6 +79,7 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 			e.Provider = rec.Provider
 			e.Model = rec.Model
 			e.Effort = rec.Effort
+			e.Usage = rec.Usage
 			if rec.Deleted {
 				deleted[rec.ID] = true
 				delete(byID, rec.ID)
@@ -136,6 +139,8 @@ type patchConversationReq struct {
 	Title    *string `json:"title,omitempty"`
 	Archived *bool   `json:"archived,omitempty"`
 	Touch    bool    `json:"touch,omitempty"`
+	// Usage 是前端算好的用量快照；给了就存，不影响其它字段。
+	Usage json.RawMessage `json:"usage,omitempty"`
 }
 
 // handlePatchConversation 处理重命名 / 归档 / 打开时刷新最近活跃。
@@ -178,6 +183,12 @@ func (s *Server) handlePatchConversation(w http.ResponseWriter, r *http.Request)
 		// 归档等价于「从当前视图收起」：顺手结束进程，避免它在后台继续占内存。
 		if *req.Archived {
 			_ = s.d.Manager.Close(req.ID)
+		}
+	}
+	if len(req.Usage) > 0 {
+		if err := s.d.Conversations.SetUsage(req.ID, req.Usage); err != nil {
+			writeErr(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 	}
 	if req.Touch {

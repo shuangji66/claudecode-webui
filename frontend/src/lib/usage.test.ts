@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   applyUsageMessage,
+  mergeUsage,
+  usageFromTranscript,
   cacheHitRate,
   contextPercent,
   contextTokens,
@@ -98,5 +100,75 @@ describe("applyUsageMessage", () => {
   it("不认识的消息不产生快照", () => {
     expect(applyUsageMessage(undefined, { type: "assistant" })).toBeUndefined();
     expect(applyUsageMessage(undefined, "nope")).toBeUndefined();
+  });
+});
+
+describe("usageFromTranscript", () => {
+  // 真实转录里的一回合：assistant 行带 usage，cost-state 行带累计 API 耗时。
+  const LINES = [
+    { type: "user", message: { role: "user", content: "hi" } },
+    {
+      type: "assistant",
+      message: { role: "assistant", usage: { input_tokens: 12, cache_creation_input_tokens: 300, cache_read_input_tokens: 9000, output_tokens: 7 } },
+    },
+    { type: "cost-state", totalAPIDuration: 23, modelUsage: { "claude-sonnet-4-5": { outputTokens: 7 } } },
+  ];
+
+  it("重开对话时能从转录还原上下文 / 缓存命中 / 输出", () => {
+    const snap = usageFromTranscript(LINES)!;
+    expect(snap.contextTokens).toBe(9312);
+    expect(snap.cacheHitRate).toBeCloseTo(9000 / 9312, 5);
+    expect(snap.outputTokens).toBe(7);
+    expect(snap.apiMs).toBe(23);
+  });
+
+  it("多条 cost-state 时用差值算最近一回合的 API 耗时", () => {
+    const snap = usageFromTranscript([
+      ...LINES,
+      { type: "assistant", message: { usage: { input_tokens: 12, cache_read_input_tokens: 9000, output_tokens: 5 } } },
+      { type: "cost-state", totalAPIDuration: 40, modelUsage: {} },
+    ])!;
+    expect(snap.apiMs).toBe(17);
+    expect(snap.outputTokens).toBe(5);
+  });
+
+  it("用 api-request → assistant 的时间戳算本回合 API 耗时（交互模式没有 cost-state）", () => {
+    const snap = usageFromTranscript([
+      { type: "api-request", timestamp: "2026-11-16T10:50:42.453Z" },
+      {
+        type: "assistant",
+        timestamp: "2026-11-16T10:50:43.970Z",
+        message: { usage: { input_tokens: 12, cache_read_input_tokens: 9000, output_tokens: 7 } },
+      },
+    ])!;
+    expect(snap.apiMs).toBe(1517);
+    expect(snap.outputTokens).toBe(7);
+    expect(snap.contextTokens).toBe(9012);
+  });
+
+  it("转录里没有 usage 时返回 undefined，不编数字", () => {
+    expect(usageFromTranscript([{ type: "user", message: { content: "hi" } }])).toBeUndefined();
+    expect(usageFromTranscript([])).toBeUndefined();
+  });
+});
+
+describe("mergeUsage", () => {
+  it("转录的 token 数优先，持久化那份补 API 耗时与窗口", () => {
+    const persisted = { contextTokens: 5000, contextWindow: 200000, apiMs: 40, outputTokens: 3 };
+    const live = { contextTokens: 9312, cacheHitRate: 0.96, outputTokens: 7 };
+    expect(mergeUsage(persisted, live)).toEqual({
+      contextTokens: 9312,
+      cacheHitRate: 0.96,
+      outputTokens: 7,
+      apiMs: 40,
+      contextWindow: 200000,
+    });
+  });
+
+  it("只有一边时原样返回；都没有返回 undefined", () => {
+    const only = { contextTokens: 1 };
+    expect(mergeUsage(undefined, only)).toBe(only);
+    expect(mergeUsage(only, undefined)).toBe(only);
+    expect(mergeUsage(undefined, undefined)).toBeUndefined();
   });
 });

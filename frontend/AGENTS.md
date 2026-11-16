@@ -130,9 +130,14 @@ src/
   `result.modelUsage.<model>.contextWindow` 才是模型窗口（init 里没有）。CLI **不提供**
   「步骤数」「实时 tok/s」「官方上下文百分比」——步数用工具调用次数、tok/s 用输出 ÷ API 耗时、
   上下文用 (input+cache_read+cache_creation) ÷ contextWindow，都是同一套数据的换算，
-  不要在界面上编造。转录回放时 store 没有实时快照，回落到最后一条 result 上挂的 usage。
+  不要在界面上编造。
   上下文占用显示成一个小圆环（`UsageStats` 里的 `UsageRing`，≥70% 转琥珀、≥85% 转红），
   旁边跟百分比；绝对值和缓存命中率放 `title` 里。
+- **用量要跟着对话持久化**：每回合结束（`result`）把快照 `PATCH /api/conversations {id, usage}`
+  存进 `conversations.json`（内容没变就不发）。重开对话时：转录里的 `assistant.message.usage`
+  给出最新的 token 数（更准），持久化那份补上转录里没有的 `apiMs` / `contextWindow`
+  （`mergeUsage`）；实时 WS 快照优先，不覆盖。窗口再兜底用设置里的模型窗口。
+  只存快照、不存派生指标——tok/s 与百分比都是算出来的。
 - 新增事件类型：先改 `transport/types.ts` → 再在 `applyEvent` 里分支 → 最后补测试。
 
 ## 4. 消息模型（Item）

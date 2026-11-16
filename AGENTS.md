@@ -217,6 +217,8 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **输入框下方的用量行**（轮数 / 工具数 / tok/s / 上下文%）全部来自 claude CLI 的
   `usage` 与 `modelUsage.contextWindow`（见 `lib/usage.ts`）；CLI 没有「步骤数」与
   「实时 tok/s」，对应显示的是换算值，不要把它说成官方指标，也不要为此去猜。
+  快照随对话存进 `conversations.json`（`PATCH /api/conversations {usage}`），重开对话时
+  用转录的 `assistant.message.usage` + 存下的 `apiMs` 还原，别在浏览器里另存一份。
 - 移动端输入框下方必须保留 `env(safe-area-inset-bottom)`，否则 iPhone Home Indicator 会盖住输入区。
 - 界面文案走 `useT()`（中文 / English 两参数），默认中文；新增文案不要再硬编码单语。
 - **UI 原语入库，不要重复造**：模态 `common/Dialog`、确认/输入 `common/SystemDialogs`

@@ -38,7 +38,13 @@ type Record struct {
 	Provider   string    `json:"provider,omitempty"`
 	Model      string    `json:"model,omitempty"`
 	Effort     string    `json:"effort,omitempty"`
+	// Usage 是前端算好的用量快照（上下文 / 缓存命中 / tok/s 的原料）。
+	// 后端不解释内容，只保证它是合法 JSON 对象；重开对话时原样返回给前端。
+	Usage json.RawMessage `json:"usage,omitempty"`
 }
+
+// maxUsageBytes 是单条用量快照的上限：它只有几个数字，正常不到 200 字节。
+const maxUsageBytes = 2 << 10
 
 type storedFile struct {
 	Version int               `json:"version"`
@@ -143,6 +149,31 @@ func (s *Store) Touch(id, cwd string) error {
 			rec.Cwd = filepath.Clean(cwd)
 		}
 		rec.LastActive = now
+		f.Records[id] = rec
+		return nil
+	})
+}
+
+// SetUsage 保存一次用量快照；传 nil 表示清空。
+//
+// 只做「是不是合法 JSON 对象、有没有超长」两道校验：内容由前端从 CLI 的 usage 算出来，
+// 后端没有能力也不应该重新推导。
+func (s *Store) SetUsage(id string, usage json.RawMessage) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("conversation: id 不能为空")
+	}
+	if len(usage) > maxUsageBytes {
+		return fmt.Errorf("conversation: 用量快照超过 %d 字节", maxUsageBytes)
+	}
+	if len(usage) > 0 && !json.Valid(usage) {
+		return errors.New("conversation: 用量快照不是合法 JSON")
+	}
+	return s.mutate(func(f *storedFile) error {
+		rec, ok := f.Records[id]
+		if !ok {
+			return ErrNotFound
+		}
+		rec.Usage = append(json.RawMessage(nil), usage...)
 		f.Records[id] = rec
 		return nil
 	})

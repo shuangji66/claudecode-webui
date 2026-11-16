@@ -141,3 +141,79 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
 
   return undefined;
 }
+
+/**
+ * 从 claude 转录（jsonl 行）还原一次用量快照。
+ *
+ * 为什么需要它：页面重开 / 切回旧对话时 WS 上没有实时事件，store 里的快照是空的，
+ * 底部那行统计就消失了。转录里其实都有：
+ *   - `assistant` 行的 `message.usage`：最近一次请求的 input/cache/output（与实时一致）；
+ *   - `api-request` 行是请求发出时刻、`assistant` 行是回复落盘时刻，两者之差就是这次
+ *     请求的 API 耗时（实测慢速 mock：sleep 1.5s → 差值 1517ms），用它算 tok/s；
+ *   - `cost-state` 行（只在 print 模式出现）作为兜底：累计 API 耗时取相邻差值。
+ * 窗口转录里没有，由调用方用设置里的模型窗口兜底。
+ */
+export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined {
+  let totals: UsageTotals | undefined;
+  let prevApiMs = 0;
+  let apiMsFromTs: number | undefined;
+  let apiMsFromCost: number | undefined;
+  let lastRequestAt: number | undefined;
+  let window: number | undefined;
+  for (const line of lines) {
+    if (!line || typeof line !== "object") continue;
+    const m = line as Record<string, unknown>;
+    const ts = typeof m.timestamp === "string" ? Date.parse(m.timestamp) : NaN;
+    if (m.type === "api-request") {
+      if (Number.isFinite(ts)) lastRequestAt = ts;
+    } else if (m.type === "assistant") {
+      const t = totalsFromUsage((m.message as Record<string, unknown> | undefined)?.usage);
+      if (t) totals = t;
+      if (lastRequestAt !== undefined && Number.isFinite(ts) && ts >= lastRequestAt) {
+        apiMsFromTs = ts - lastRequestAt;
+      }
+      lastRequestAt = undefined;
+    } else if (m.type === "cost-state") {
+      if (typeof m.totalAPIDuration === "number") {
+        // 每条 cost-state 都是累计值：与本条之前的差值才是「最近一回合」的 API 耗时。
+        apiMsFromCost = Math.max(0, m.totalAPIDuration - prevApiMs);
+        prevApiMs = m.totalAPIDuration;
+      }
+      const modelUsage = m.modelUsage as Record<string, unknown> | undefined;
+      if (modelUsage) {
+        for (const entry of Object.values(modelUsage)) {
+          const w = (entry as Record<string, unknown> | undefined)?.contextWindow;
+          if (typeof w === "number" && w > 0) window = w;
+        }
+      }
+    }
+  }
+  const apiMs = apiMsFromTs ?? apiMsFromCost;
+  if (!totals && apiMs === undefined) return undefined;
+  return {
+    contextTokens: totals ? contextTokens(totals) : 0,
+    cacheHitRate: totals ? cacheHitRate(totals) : undefined,
+    outputTokens: totals?.output,
+    apiMs,
+    contextWindow: window,
+  };
+}
+
+/**
+ * 合并两份快照：转录回放给的是「最近一次请求」的 token 数（更准），
+ * 持久化那份补上转录里没有的 API 耗时与上下文窗口。
+ */
+export function mergeUsage(
+  persisted: UsageSnapshot | undefined,
+  live: UsageSnapshot | undefined,
+): UsageSnapshot | undefined {
+  if (!persisted) return live;
+  if (!live) return persisted;
+  return {
+    contextTokens: live.contextTokens || persisted.contextTokens,
+    cacheHitRate: live.cacheHitRate ?? persisted.cacheHitRate,
+    outputTokens: live.outputTokens ?? persisted.outputTokens,
+    apiMs: live.apiMs ?? persisted.apiMs,
+    contextWindow: live.contextWindow ?? persisted.contextWindow,
+  };
+}

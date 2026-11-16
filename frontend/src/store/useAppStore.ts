@@ -11,7 +11,7 @@
 import { create } from "zustand";
 import { apiFetch } from "../lib/runtime";
 import { appendError, appendUser, applyCLI, isTurnResult } from "../lib/normalize";
-import { applyUsageMessage, type UsageSnapshot } from "../lib/usage";
+import { applyUsageMessage, mergeUsage, usageFromTranscript, type UsageSnapshot } from "../lib/usage";
 import { openFnosFileManager } from "../lib/fnos";
 import type { Item } from "../lib/model";
 import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
@@ -239,6 +239,24 @@ function writeActiveId(id: string | null): void {
     else localStorage.removeItem(ACTIVE_KEY);
   } catch {
     // 隐私模式忽略
+  }
+}
+
+/**
+ * 把用量快照写进对话元数据（conversations.json）。
+ *
+ * 失败不打扰用户：这只是底部统计的缓存，实时数据仍然在 store 里。
+ * 内容没变就不发请求（同一回合的多次 result 不该重复落盘）。
+ */
+const persistedUsage = new Map<string, string>();
+async function persistUsage(id: string, usage: UsageSnapshot): Promise<void> {
+  const encoded = JSON.stringify(usage);
+  if (persistedUsage.get(id) === encoded) return;
+  persistedUsage.set(id, encoded);
+  try {
+    await apiFetch("/api/conversations", { method: "PATCH", body: JSON.stringify({ id, usage }) });
+  } catch {
+    persistedUsage.delete(id);
   }
 }
 
@@ -1019,7 +1037,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
           const at = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : NaN;
           next = applyCLI(next, line, Number.isFinite(at) ? at : Date.now());
         }
-        if (next.length > 0) set((s) => ({ items: { ...s.items, [id]: next } }));
+        // 转录里带着 usage（assistant 行），重开对话时据此还原底部统计；
+        // 转录算不出的 API 耗时 / 窗口，用上次持久化的快照补。实时快照不覆盖。
+        const snap = mergeUsage(conv.usage, usageFromTranscript(tr.lines ?? []));
+        if (next.length > 0) {
+          set((s) => ({
+            items: { ...s.items, [id]: next },
+            ...(snap && !s.usage[id] ? { usage: { ...s.usage, [id]: snap } } : {}),
+          }));
+        }
       } catch {
         // 新对话还没有转录；实时 WS 会补上后续消息。
       }
@@ -1327,6 +1353,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
           ...(finished ? { doneIds: { ...s.doneIds, [sid]: true } } : {}),
           ...(usage ? { usage: { ...s.usage, [sid]: usage } } : {}),
         }));
+        // 一回合结束就把用量写进对话元数据：页面重开 / 换设备打开时底部统计不丢。
+        if (usage && isTurnResult(ev.data)) void persistUsage(sid, usage);
         return;
       }
       default:

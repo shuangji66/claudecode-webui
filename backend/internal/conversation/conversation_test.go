@@ -1,7 +1,10 @@
 package conversation
 
 import (
+	"encoding/json"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -105,5 +108,54 @@ func TestEnsureDoesNotOverwriteUserState(t *testing.T) {
 	rec, _ := s.Get("id")
 	if rec.Title != "keep" || !rec.Archived {
 		t.Fatalf("Ensure 覆盖了用户状态: %+v", rec)
+	}
+}
+
+func TestSetUsage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conversations.json")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := st.Touch("c1", "/w"); err != nil {
+		t.Fatalf("Touch: %v", err)
+	}
+
+	usage := json.RawMessage(`{"contextTokens":9312,"contextWindow":200000,"apiMs":22}`)
+	if err := st.SetUsage("c1", usage); err != nil {
+		t.Fatalf("SetUsage: %v", err)
+	}
+	// 重新打开：必须从磁盘读回来
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	rec, ok := st2.Get("c1")
+	if !ok {
+		t.Fatal("记录丢失")
+	}
+	// 落盘用的是缩进格式，比较语义而不是字节
+	var got, want map[string]any
+	if err := json.Unmarshal(rec.Usage, &got); err != nil {
+		t.Fatalf("usage 不是合法 JSON: %v", err)
+	}
+	if err := json.Unmarshal(usage, &want); err != nil {
+		t.Fatalf("want 不是合法 JSON: %v", err)
+	}
+	if len(got) != len(want) || got["contextTokens"] != want["contextTokens"] || got["apiMs"] != want["apiMs"] {
+		t.Fatalf("usage = %s, want %s", rec.Usage, usage)
+	}
+
+	// 不存在的对话、非法 JSON、超长快照都要报错
+	if err := st.SetUsage("nope", usage); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("未知 id 应返回 ErrNotFound: %v", err)
+	}
+	if err := st.SetUsage("c1", json.RawMessage(`{`)); err == nil {
+		t.Fatal("非法 JSON 应报错")
+	}
+	big := json.RawMessage(`{"x":"` + strings.Repeat("a", maxUsageBytes) + `"}`)
+	if err := st.SetUsage("c1", big); err == nil {
+		t.Fatal("超长快照应报错")
 	}
 }

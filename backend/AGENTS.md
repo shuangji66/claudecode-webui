@@ -135,7 +135,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 
 - 新建会话生成 UUID，同时作为 manager id 与 claude `--session-id`；恢复用同一个 UUID
   `--resume`。`Manager.Resume` 对已在运行的 id 直接返回现有 info，并在 createMu 内串行化。
-- `conversation.Store` 只存应用增量（标题/归档/删除/last_active/模型），转录仍由 claude 写。
+- `conversation.Store` 只存应用增量（标题/归档/删除/last_active/模型/用量快照），转录仍由 claude 写。
+  用量快照（`usage`）是前端从 CLI 的 `usage` 算好的几个数字，后端不解释内容，只校验
+  是合法 JSON 且 ≤ 2KB（`SetUsage`），随对话一起读写。
   删除写墓碑，不删 jsonl；`LastFor`/列表/自动预热都必须跳过 deleted/archived。
 - 新会话在首条 prompt 成功后才 `Touch` 元数据；否则后端重启后会出现没有转录、无法 resume 的条目。
 - `--resume` 不会回放 transcript；`GET /api/history/transcript` 返回原始事件行，

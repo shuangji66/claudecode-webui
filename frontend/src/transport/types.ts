@@ -322,6 +322,8 @@ export interface GitBranches {
 }
 
 /** 侧栏对话列表的一行（后端合并转录 + 元数据 + 实时会话）。 */
+import type { UsageSnapshot } from "../lib/usage";
+
 export interface ConversationInfo {
   id: string;
   cwd: string;
@@ -336,6 +338,8 @@ export interface ConversationInfo {
   provider?: string;
   model?: string;
   effort?: string;
+  /** 上次保存的用量快照（上下文 / 缓存 / tok/s 的原料），重开对话时还原底部统计。 */
+  usage?: UsageSnapshot;
 }
 
 /** /api/history/transcript 的回放数据；lines 是 claude 原始事件行。 */
