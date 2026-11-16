@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Item } from "../../lib/model";
 import { AssistantBubble } from "./AssistantBubble";
 import { ResultBar } from "./ResultBar";
@@ -98,6 +98,8 @@ export function MessageList({
   const turns = useMemo(() => turnsOf(items), [items]);
   const [activeTurn, setActiveTurn] = useState(0);
   const rafPending = useRef<number | null>(null);
+  /** 滚动停止计时器：停止后重量一次几何，兜住「上方内容高度变化」的情况。 */
+  const scrollSettle = useRef<number | null>(null);
   /** 跳转目标被窗口截掉时，先展开再滚。 */
   const pendingJump = useRef<string | null>(null);
 
@@ -121,20 +123,80 @@ export function MessageList({
     scrollToItem(turn.id);
   };
 
-  /** 视口顶部落在哪一轮（节流到每帧一次）。 */
-  const syncActiveTurn = () => {
-    const sc = scroller.current;
-    if (!sc || turns.length === 0) return;
-    const base = sc.getBoundingClientRect().top;
-    const tops = turns.map((turn) => {
-      const el = sc.querySelector<HTMLElement>(`[data-item-id="${turn.id}"]`);
-      return el ? el.getBoundingClientRect().top - base + sc.scrollTop : Number.POSITIVE_INFINITY;
-    });
-    setActiveTurn(activeTurnIndex(tops, sc.scrollTop));
-  };
-
   const hidden = Math.max(0, items.length - limit);
   const shown = hidden > 0 ? items.slice(-limit) : items;
+
+  /**
+   * 每一轮用户消息相对「滚动内容顶部」的距离，缓存给滚动帧用。
+   *
+   * 以前 onScroll 每帧对每一轮做 querySelector + getBoundingClientRect：读几何会
+   * 触发强制同步布局，几百轮的会话滚一下就几百次查询 + 一次重排。现在几何只在
+   * 「内容 / 窗口 / 尺寸」变化时量一次（且只量真正渲染出来的那批），滚动帧只做
+   * 一次数组比较。
+   */
+  const turnTops = useRef<number[]>([]);
+  /** 上一次量几何时的「轮次签名 + 窗口起点」：相同就不必再量。 */
+  const turnSig = useRef<string>("");
+
+  const measureTurns = useCallback(
+    (force = false) => {
+      const sc = scroller.current;
+      if (!sc || turns.length === 0) {
+        turnTops.current = [];
+        turnSig.current = "";
+        return;
+      }
+      // 流式追加只会往最后一轮里加内容，不会移动任何轮的锚点位置：签名没变就不量。
+      // 这样长对话流式输出时一次布局读取都不会发生（真正需要重量的是新的一轮、
+      // 展开更早的消息、以及容器尺寸变化）。
+      const sig = `${hidden}#${turns.map((tn) => tn.id).join("|")}`;
+      if (!force && sig === turnSig.current) return;
+      turnSig.current = sig;
+      // 被「最近 N 条」窗口截掉的轮次没有 DOM 节点，但它们一定在视口上方：
+      // 用 -Infinity 参与比较，不必去查一个不存在的元素。
+      const origin = sc.getBoundingClientRect().top - sc.scrollTop;
+      turnTops.current = turns.map((turn) => {
+        if (turn.index < hidden) return Number.NEGATIVE_INFINITY;
+        const el = sc.querySelector<HTMLElement>(`[data-item-id="${turn.id}"]`);
+        return el ? el.getBoundingClientRect().top - origin : Number.NEGATIVE_INFINITY;
+      });
+    },
+    [turns, hidden],
+  );
+
+  /** 视口顶部落在哪一轮：只读缓存，不碰 DOM。 */
+  const syncActiveTurn = useCallback(() => {
+    const sc = scroller.current;
+    if (!sc || turnTops.current.length === 0) return;
+    setActiveTurn(activeTurnIndex(turnTops.current, sc.scrollTop));
+  }, []);
+
+  // 内容、窗口或容器尺寸变化后重新量一次，并按当前滚动位置校准刻度。
+  useLayoutEffect(() => {
+    measureTurns();
+    // 容器还没布局出来（隐藏的标签页、测试环境）时几何全是 0，校准只会把刻度
+    // 算到最后一轮；等真的滚起来再算。
+    if ((scroller.current?.scrollHeight ?? 0) > 0) syncActiveTurn();
+  }, [measureTurns, syncActiveTurn]);
+
+  useEffect(() => {
+    const sc = scroller.current;
+    if (!sc || typeof ResizeObserver === "undefined") return;
+    let raf = 0;
+    // 视口宽度/高度变化会改变换行与行高，缓存随之失效；合并到一帧里重量。
+    const ro = new ResizeObserver(() => {
+      window.cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(() => {
+        measureTurns(true); // 尺寸变了行高就变了，必须重量
+        syncActiveTurn();
+      });
+    });
+    ro.observe(sc);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, [measureTurns, syncActiveTurn]);
 
   useEffect(() => {
     setLimit(VISIBLE_STEP);
@@ -189,9 +251,23 @@ export function MessageList({
     }
   }, [items.length, hidden]);
 
+  // 滚动停止后重量一次：折叠/展开卡片、图片加载完成都会让上面的高度变化，
+  // 而轮次签名没变、缓存不会自动失效。趁用户没在滚（也没有布局竞争）时补一次。
+  useEffect(() => {
+    return () => {
+      if (scrollSettle.current !== null) window.clearTimeout(scrollSettle.current);
+    };
+  }, []);
+
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
+    if (scrollSettle.current !== null) window.clearTimeout(scrollSettle.current);
+    scrollSettle.current = window.setTimeout(() => {
+      scrollSettle.current = null;
+      measureTurns(true);
+      syncActiveTurn();
+    }, 150);
     distFromBottom.current = el.scrollHeight - el.scrollTop;
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
     stick.current = near;

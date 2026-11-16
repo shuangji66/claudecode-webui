@@ -91,3 +91,38 @@ describe("MessageList 轮次刻度", () => {
     expect(screen.getByText("问题 0")).toBeInTheDocument();
   });
 });
+
+describe("MessageList 滚动性能", () => {
+  function conversation(turns: number): Item[] {
+    const out: Item[] = [];
+    for (let i = 0; i < turns; i += 1) {
+      out.push({ id: `u${i}`, seq: i * 2, ts: 0, kind: "user", text: `问题 ${i}` });
+      out.push({ id: `a${i}`, seq: i * 2 + 1, ts: 0, kind: "assistant", text: `回答 ${i}`, streaming: false });
+    }
+    return out;
+  }
+
+  const flushFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+  it("滚动帧只读缓存，不再逐轮 querySelector + 读几何", async () => {
+    render(<MessageList items={conversation(60)} />);
+    const el = sizedScroller();
+
+    const rectSpy = vi.spyOn(Element.prototype, "getBoundingClientRect");
+    const querySpy = vi.spyOn(Element.prototype, "querySelector");
+    rectSpy.mockClear();
+    querySpy.mockClear();
+
+    // 连续滚 8 帧：旧实现每帧对每一轮做一次 querySelector + getBoundingClientRect，
+    // 60 轮就是 480 次查询与 8 次强制布局。
+    for (let i = 0; i < 8; i += 1) {
+      fireEvent.scroll(el);
+      await flushFrame();
+    }
+
+    expect(rectSpy.mock.calls.length).toBe(0);
+    expect(querySpy.mock.calls.length).toBe(0);
+    rectSpy.mockRestore();
+    querySpy.mockRestore();
+  });
+});
