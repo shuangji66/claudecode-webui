@@ -28,6 +28,7 @@ import (
 	"ccweb/backend/internal/skills"
 	"ccweb/backend/internal/workspace"
 	"ccweb/backend/internal/gitctl"
+	"ccweb/backend/internal/envpath"
 )
 
 // version 由 -ldflags "-X main.version=..." 注入。
@@ -37,6 +38,13 @@ func main() {
 	logger := log.New(os.Stdout, "[ccweb] ", log.LstdFlags)
 
 	cfg := config.Load(version)
+
+	// 启动器可能用空环境 exec（fnOS 的 fpk 脚本漏写 export PATH 时就是这样）：
+	// 进程里没有 PATH，exec.LookPath 会直接失败，git 面板与内置终端全废。
+	// 先补一个默认 PATH，再往下装配。
+	if envpath.Apply() {
+		logger.Printf("环境里没有 PATH，已回落到 %s", envpath.Default)
+	}
 
 	h := hub.New()
 

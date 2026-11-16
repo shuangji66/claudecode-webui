@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"ccweb/backend/internal/envpath"
 	"ccweb/backend/internal/netproxy"
 )
 
@@ -406,7 +407,8 @@ func gitEnv() []string {
 	if proxySource != nil {
 		out = append(out, netproxy.Env(proxySource())...)
 	}
-	return append(out, "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1")
+	out = append(out, "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1")
+	return envpath.Ensure(out)
 }
 
 // limitedBuffer 是带上限的 stdout/stderr 收集器；超过上限只标记，不无限增长。

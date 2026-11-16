@@ -34,7 +34,8 @@ func FindShell(preferred string) (string, error) {
 	if p := strings.TrimSpace(preferred); p != "" {
 		candidates = append(candidates, p)
 	}
-	candidates = append(candidates, os.Getenv("SHELL"), "bash", "sh")
+	// 绝对路径兜底：启动器没给 PATH 时 LookPath 会失败，但 /bin/sh 一定在。
+	candidates = append(candidates, os.Getenv("SHELL"), "bash", "sh", "/bin/bash", "/usr/bin/bash", "/bin/sh", "/usr/bin/sh")
 	for _, c := range candidates {
 		c = strings.TrimSpace(c)
 		if c == "" {

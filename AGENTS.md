@@ -121,7 +121,13 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - `os.Pipe` 有内核缓冲，`net.Pipe` 没有 —— 测试里用 `net.Pipe` 很容易自锁。
 - 环境变量重复时**后者生效**：`process.CleanEnv` 先剔除 `HOME`/`PWD` 再追加。
 - **不能剔除 `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY`**：自定义中继是本项目的基础能力。
-- `GOCACHE`/`GOMODCACHE` 用项目内目录（宿主缓存常不可写），Makefile 已设置。
+- **启动器可能不给 PATH**：飞牛（fnOS）的 fpk 启动脚本漏写 `export PATH="$PATH"` 时，
+  应用是被空环境 exec 起来的——进程里**没有 PATH 变量**，而 Go 的 `exec.LookPath`
+  对空 PATH 直接失败（不会回落到 `/bin:/usr/bin`），于是 git 面板（spawn `git`）与
+  内置终端（找 `bash`/`sh`）双双不可用，claude 会话却正常（它用托管版本的绝对路径）。
+  `internal/envpath` 负责兜底：启动时 `Apply()` 补进程 PATH，`process.CleanEnv` /
+  `gitctl.gitEnv` 给子进程补，`terminal.FindShell` 还有 `/bin/sh` 绝对路径兜底。
+  **新增任何 spawn 系统命令的代码都要意识到 PATH 可能为空。**
 - `go:embed all:embed` 要求目录存在；`embed/.gitkeep` 负责保留目录，
   `embed/index.html` 是构建产物、已在 `.gitignore` 里，`make clean` 直接删除。
 

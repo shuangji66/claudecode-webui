@@ -181,6 +181,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `GIT_TERMINAL_PROMPT=0`。输出上限 8 MiB，超限报错而不是截断解析。
 - 路径前加 `--literal-pathspecs`，rev/hash/分支前加 `--end-of-options`；提交只传
   `commit -m`，不碰用户身份。
+- **PATH 不能假设存在**：`internal/envpath` 是唯一的兜底入口（`Apply` 补进程、
+  `Ensure` 补子进程）。`gitctl` 与 `terminal` 都依赖 `exec.LookPath`，空 PATH 会让
+  两者直接不可用；新增 spawn 系统命令的代码同样要先 `Ensure`。
 - `terminal` 在 Linux 上用 `/dev/ptmx` 自建 PTY；非 Linux 返回 `ErrUnsupported`。
   终端进程与 WS 连接同生命周期，`Close` 先 SIGHUP 整个会话，2 秒后 SIGKILL。
   PTY 输出必须走 WS 二进制帧，上行命令才用 JSON 文本。

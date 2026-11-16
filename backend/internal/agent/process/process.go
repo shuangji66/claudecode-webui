@@ -6,6 +6,7 @@ package process
 
 import (
 	"strings"
+	"ccweb/backend/internal/envpath"
 )
 
 // Options 描述一次 claude 调用的启动参数。
@@ -119,5 +120,7 @@ func CleanEnv(inherited []string, home, cwd string) []string {
 	if cwd != "" {
 		out = append(out, "PWD="+cwd)
 	}
-	return out
+	// 启动器可能没给 PATH（fnOS 的 fpk 脚本漏了 export PATH）：claude 里的
+	// bash 工具、git 都会因此失效，这里兜一个默认值。
+	return envpath.Ensure(out)
 }

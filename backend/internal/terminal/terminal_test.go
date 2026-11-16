@@ -4,6 +4,7 @@ package terminal
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -84,5 +85,18 @@ func TestSessionEcho(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("cwd 被破坏: %v", err)
+	}
+}
+
+func TestFindShellWithoutPath(t *testing.T) {
+	// 启动器用空环境 exec 时 PATH 是空的：仍然要能找到 /bin/sh。
+	t.Setenv("PATH", "")
+	t.Setenv("SHELL", "")
+	shell, err := FindShell("")
+	if err != nil {
+		t.Skipf("这台机器没有 /bin/sh 或 /usr/bin/sh: %v", err)
+	}
+	if !filepath.IsAbs(shell) {
+		t.Fatalf("shell 应为绝对路径，得到 %q", shell)
 	}
 }

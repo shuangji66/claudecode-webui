@@ -152,3 +152,28 @@ func TestArgsForwardSubagentText(t *testing.T) {
 		t.Fatal("开启时应带 --forward-subagent-text")
 	}
 }
+
+func TestCleanEnvEnsuresPath(t *testing.T) {
+	// 空环境（启动器没给 PATH）时也要补一个可用的 PATH，否则 claude 里的
+	// bash 工具与 git 都找不到。
+	t.Setenv("PATH", "")
+	env := CleanEnv(nil, "/home/cc", "/w")
+	found := false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") && strings.TrimPrefix(kv, "PATH=") != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("环境里应有非空 PATH: %v", env)
+	}
+
+	// 已有 PATH 时保持原样（不要覆盖用户的 PATH）。
+	t.Setenv("PATH", "/custom/bin")
+	env = CleanEnv([]string{"PATH=/custom/bin"}, "/home/cc", "/w")
+	for _, kv := range env {
+		if kv == "PATH=" || strings.HasPrefix(kv, "PATH=") && kv != "PATH=/custom/bin" {
+			t.Fatalf("PATH 被改写: %v", env)
+		}
+	}
+}
