@@ -78,6 +78,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 ## 5. 进程层规则（`agent/process`）
 
 - `Args()` 的第一个不变量：**`--permission-prompt-tool stdio` 永远存在**。
+- **能力开关必须探测后再加**：`--forward-subagent-text` 只有较新版本认识，
+  `manager.supportsFlag` 跑一次 `claude --help` 并按二进制路径缓存结果。
+  无条件加参数会让旧版本（面板可以切版本）起不来，表现成「会话启动失败」。
 - `Effort` 非空时追加 `--effort <level>`；CLI 只接受 low/medium/high/xhigh/max，
   设置层已做白名单过滤，不要在 process 层再放行任意字符串。
 - `CleanEnv()` 剔除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`HOME`、`PWD`，

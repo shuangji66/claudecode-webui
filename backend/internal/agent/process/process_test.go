@@ -142,3 +142,13 @@ func TestCleanEnvStripsProxy(t *testing.T) {
 		t.Fatalf("普通环境变量不应被误删: %v", env)
 	}
 }
+
+// 子代理正文转发是能力开关：默认不带，只有探测到二进制支持时才加。
+func TestArgsForwardSubagentText(t *testing.T) {
+	if slices.Contains(Args(Options{IncludePartialMessages: true}), "--forward-subagent-text") {
+		t.Fatal("未开启时不应带 --forward-subagent-text")
+	}
+	if !slices.Contains(Args(Options{ForwardSubagentText: true}), "--forward-subagent-text") {
+		t.Fatal("开启时应带 --forward-subagent-text")
+	}
+}

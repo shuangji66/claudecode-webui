@@ -5,6 +5,7 @@ import type { Item } from "../../lib/model";
 import type { SubagentTranscriptPayload } from "../../transport/types";
 import { MessageList } from "../chat/MessageList";
 import { useT } from "../../lib/i18n";
+import { useAppStore } from "../../store/useAppStore";
 
 /**
  * 一个子代理的对话。
@@ -17,6 +18,8 @@ export function SubagentPanel({ sessionId, agentId }: { sessionId: string; agent
   const [items, setItems] = useState<Item[]>([]);
   const [meta, setMeta] = useState<SubagentTranscriptPayload["meta"]>(undefined);
   const [state, setState] = useState<"loading" | "ok" | "missing">("loading");
+  // 实时帧（--forward-subagent-text）优先：转录是落盘快照，会比界面慢一拍。
+  const live = useAppStore((s) => s.subagentItems[sessionId]?.[agentId]);
 
   useEffect(() => {
     let alive = true;
@@ -81,7 +84,10 @@ export function SubagentPanel({ sessionId, agentId }: { sessionId: string; agent
         <p className="mt-0.5 truncate text-[10.5px] text-muted">{subtitle || agentId}</p>
       </div>
       <div className="min-h-0 flex-1">
-        <MessageList items={items} empty={t("子代理还没有输出", "No output from this subagent yet")} />
+        <MessageList
+          items={live && live.length > 0 ? live : items}
+          empty={t("子代理还没有输出", "No output from this subagent yet")}
+        />
       </div>
     </div>
   );

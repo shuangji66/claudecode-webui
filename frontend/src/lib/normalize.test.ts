@@ -8,6 +8,7 @@ import {
   subagentFromResult,
   prependSystem,
   stripAnsi,
+  subagentFrame,
   textOfContent,
 } from "./normalize";
 import type { Item } from "./model";
@@ -598,5 +599,40 @@ describe("子代理任务事件", () => {
 
   it("subagentFromResult 对普通工具输出返回 undefined", () => {
     expect(subagentFromResult("just output", false)).toBeUndefined();
+  });
+});
+
+describe("子代理帧分流", () => {
+  it("parent_tool_use_id 非空才算子代理帧，agent_id 优先作为桶键", () => {
+    expect(subagentFrame({ type: "assistant", parent_tool_use_id: null })).toBeUndefined();
+    expect(subagentFrame({ type: "assistant" })).toBeUndefined();
+    expect(subagentFrame({ type: "assistant", parent_tool_use_id: "toolu_01", agent_id: "task-1" })).toEqual({
+      agentId: "task-1",
+      toolUseId: "toolu_01",
+    });
+    // 没有 agent_id 时用 tool_use_id 兜底，至少能分到一个桶里。
+    expect(subagentFrame({ type: "user", parent_tool_use_id: "toolu_02" })).toEqual({
+      agentId: "toolu_02",
+      toolUseId: "toolu_02",
+    });
+  });
+});
+
+describe("tool_progress", () => {
+  beforeEach(() => __resetIds());
+
+  it("只更新卡片的已跑秒数，不产生新消息", () => {
+    let items = applyCLI([], {
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "tool_use", id: "tu1", name: "Bash", input: { command: "sleep 60" } }] },
+    });
+    items = applyCLI(items, { type: "tool_progress", tool_use_id: "tu1", tool_name: "Bash", elapsed_time_seconds: 12 });
+    expect(items).toHaveLength(1);
+    expect((items[0] as Extract<Item, { kind: "tool" }>).progress).toBe(12);
+  });
+
+  it("对不上的 tool_use_id 直接忽略", () => {
+    const items = applyCLI([], { type: "tool_progress", tool_use_id: "nope", elapsed_time_seconds: 3 });
+    expect(items).toEqual([]);
   });
 });

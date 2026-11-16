@@ -68,6 +68,8 @@ export interface ToolItem extends BaseItem {
   images?: ToolImage[];
   /** 子代理状态（只有 Agent/Task 工具会有）。 */
   subagent?: SubagentInfo;
+  /** tool_progress 给的已运行秒数；没有进度事件时为空。 */
+  progress?: number;
 }
 
 export interface SystemItem extends BaseItem {

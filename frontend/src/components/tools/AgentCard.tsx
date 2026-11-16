@@ -37,7 +37,9 @@ export function AgentCard({ item }: { item: ToolItem }) {
 
   const statusLabel =
     status === "running"
-      ? t("运行中…", "Running…")
+      ? typeof item.progress === "number"
+        ? t(`运行中 ${item.progress}s`, `Running ${item.progress}s`)
+        : t("运行中…", "Running…")
       : status === "completed"
         ? t("完成", "Done")
         : status === "failed"

@@ -22,7 +22,13 @@ export function BashCard({ item }: Props) {
         <span className="font-medium text-ink">Bash</span>
         {desc && <span className="truncate text-[11px] text-muted">{desc}</span>}
         <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] ${running ? "bg-brand-soft text-brand" : item.isError ? "bg-rose-50 text-danger dark:bg-rose-950/30" : "bg-panel-strong text-muted"}`}>
-          {running ? t("运行中…", "Running…") : item.isError ? t("失败", "Failed") : t("完成", "Done")}
+          {running
+            ? typeof item.progress === "number"
+              ? t(`运行中 ${item.progress}s`, `Running ${item.progress}s`)
+              : t("运行中…", "Running…")
+            : item.isError
+              ? t("失败", "Failed")
+              : t("完成", "Done")}
         </span>
       </div>
       <pre className="overflow-x-auto bg-[#0f1115] px-3 py-2.5 text-[12px] leading-relaxed text-[#d9e0e8]">

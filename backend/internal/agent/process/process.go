@@ -24,6 +24,9 @@ type Options struct {
 	AddDirs []string
 	// IncludePartialMessages 打开逐 token 流式（stream_event）。
 	IncludePartialMessages bool
+	// ForwardSubagentText 把子代理的正文与思考也转发到 stdout（带 parent_tool_use_id）。
+	// 只有较新版本支持，调用方要先用 manager.supportsFlag 探测。
+	ForwardSubagentText bool
 }
 
 // Args 返回传给 claude 的参数列表（不含程序名）。
@@ -40,6 +43,9 @@ func Args(o Options) []string {
 	}
 	if o.IncludePartialMessages {
 		args = append(args, "--include-partial-messages")
+	}
+	if o.ForwardSubagentText {
+		args = append(args, "--forward-subagent-text")
 	}
 	if o.Model != "" {
 		args = append(args, "--model", o.Model)

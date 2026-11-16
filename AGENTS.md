@@ -246,9 +246,13 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **回放只能靠 tool_result**：主转录里没有 task_* 行，Agent 的 tool_result 文本带着
   `agentId: …` 与 `<usage>subagent_tokens / tool_uses / duration_ms</usage>`，
   `subagentFromResult` 从这里补状态、用量与「查看对话」的入口。
-- **不打开 `--forward-subagent-text` 就看不到子代理说的话**（只有任务事件与最终报告）。
-  打开后子代理帧带 `parent_tool_use_id` + `agent_id`，必须分流到子代理视图，
-  绝不能混进主消息流（和过滤 sidechain 是同一类问题）。
+- **子代理的正文要靠 `--forward-subagent-text` 才有**（不带时只有任务事件与最终报告）。
+  这个参数只有较新版本才有，`manager.supportsFlag` 用 `claude --help` 探测一次并按二进制
+  路径缓存——**不要无条件加到 `process.Args`**，旧版本会因为未知参数直接起不来。
+- 打开后子代理帧带 `parent_tool_use_id` + `agent_id`，store 用 `subagentFrame` 把它们分流到
+  `subagentItems[sid][agentId]`：既不能进主消息流（和过滤 sidechain 是同一类问题），
+  也不能污染主会话的用量统计。子代理面板优先显示这份实时数据，没有才回落到旁路转录。
+- **`tool_progress` 只更新卡片的已跑秒数**（`ToolItem.progress`），不产生新消息。
 - **停止/转后台走控制请求**：`stop_task{task_id}`、`background_tasks{tool_use_id?}`；
   会话进程已被回收时网关返回 409，让前端提示重连，而不是假装停成功。
 

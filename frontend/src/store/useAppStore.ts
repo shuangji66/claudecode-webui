@@ -10,7 +10,7 @@
 
 import { create } from "zustand";
 import { apiFetch } from "../lib/runtime";
-import { appendError, appendUser, applyCLI, isTurnResult, prependSystem } from "../lib/normalize";
+import { appendError, appendUser, applyCLI, isTurnResult, prependSystem, subagentFrame } from "../lib/normalize";
 import { applyUsageMessage, mergeUsage, usageFromTranscript, type UsageSnapshot } from "../lib/usage";
 import { openFnosFileManager } from "../lib/fnos";
 import type { Item } from "../lib/model";
@@ -110,6 +110,13 @@ interface AppState {
   activeId: string | null;
 
   items: Record<string, Item[]>;
+  /**
+   * 子代理的实时消息：`subagentItems[sid][agentId]`。
+   *
+   * 打开 --forward-subagent-text 后子代理的正文会混在同一个 stdout 里（带
+   * parent_tool_use_id），必须按 agent 分流到这里，绝不能进主消息流。
+   */
+  subagentItems: Record<string, Record<string, Item[]>>;
   /**
    * 要在右侧栏打开的子代理对话。右侧栏的标签是它自己管的，这里只放一个「请求」，
    * nonce 让重复点同一张卡片也能把标签切回来。
@@ -355,6 +362,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   conversations: [],
   activeId: null,
   items: {},
+  subagentItems: {},
   subagentView: null,
   perms: {},
   inits: {},
@@ -1375,6 +1383,22 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return;
       }
       case "cli": {
+        // 子代理内部的帧（parent_tool_use_id 非空）单独归桶：它们既不能进主消息流，
+        // 也不能污染主会话的用量统计。
+        const sub = subagentFrame(ev.data);
+        if (sub) {
+          set((s) => {
+            const byAgent = s.subagentItems[sid] ?? {};
+            const prev = byAgent[sub.agentId] ?? [];
+            return {
+              subagentItems: {
+                ...s.subagentItems,
+                [sid]: { ...byAgent, [sub.agentId]: applyCLI(prev, ev.data) },
+              },
+            };
+          });
+          return;
+        }
         // 一轮结束时给「没在看的对话」打上完成标记：正在看的对话结果就在眼前，
         // 再挂一个绿点只会让人以为自己漏了什么。
         const finished = get().activeId !== sid && isTurnResult(ev.data);

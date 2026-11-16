@@ -133,6 +133,8 @@ export function applyCLI(items: Item[], msg: unknown, at = Date.now()): Item[] {
     case "system":
       // 任务事件（子代理 / 后台命令）要先折进对应的工具卡片，再走通用 system 渲染。
       return applyTaskEvent(items, m, at) ?? applySystem(items, m, at);
+    case "tool_progress":
+      return applyToolProgress(items, m);
     default:
       return items;
   }
@@ -336,6 +338,32 @@ function applyTaskEvent(items: Item[], m: Raw, at: number): Item[] | undefined {
   }
 
   return [...out.slice(0, index), { ...item, subagent: next }, ...out.slice(index + 1)];
+}
+
+/**
+ * 判断一条帧是否产生于子代理内部。
+ *
+ * 打开 --forward-subagent-text 后，子代理的正文/思考会带着 parent_tool_use_id 与
+ * agent_id 混在同一个 stdout 里；store 必须把它们分流到子代理视图，
+ * 否则子代理说的话会糊进主对话（和转录里过滤 isSidechain 是同一类问题）。
+ */
+export function subagentFrame(msg: unknown): { agentId: string; toolUseId: string } | undefined {
+  const m = asRecord(msg);
+  if (!m) return undefined;
+  const toolUseId = typeof m.parent_tool_use_id === "string" ? m.parent_tool_use_id : "";
+  if (!toolUseId) return undefined;
+  const agentId = typeof m.agent_id === "string" && m.agent_id ? m.agent_id : toolUseId;
+  return { agentId, toolUseId };
+}
+
+/** tool_progress 只更新卡片上的「已跑 N 秒」，不产生新消息。 */
+function applyToolProgress(items: Item[], m: Raw): Item[] {
+  const toolUseId = str(m.tool_use_id);
+  const elapsed = int(m.elapsed_time_seconds);
+  if (!toolUseId || elapsed === undefined) return items;
+  return items.map((it) =>
+    it.kind === "tool" && it.toolUseId === toolUseId ? { ...it, progress: elapsed } : it,
+  );
 }
 
 const AGENT_ID_RE = /\bagentId:\s*([A-Za-z0-9_-]{1,128})/;

@@ -56,6 +56,11 @@ type Manager struct {
 	procs    map[string]*process.Proc
 	metas    map[string]meta
 
+	// capMu/caps 缓存「某个 claude 二进制是否认识某个参数」：面板能切换版本，
+	// 给旧版本传未知参数会直接起不来，所以探测一次并缓存。
+	capMu sync.Mutex
+	caps  map[string]bool
+
 	closing chan struct{}
 }
 
@@ -73,6 +78,7 @@ func New(cfg config.Config, resolve func() (string, error), store *settings.Stor
 		sessions: make(map[string]*session.Session),
 		procs:    make(map[string]*process.Proc),
 		metas:    make(map[string]meta),
+		caps:     make(map[string]bool),
 		closing:  make(chan struct{}),
 	}
 	go m.reapLoop()
@@ -262,6 +268,11 @@ func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string)
 		permissionMode = m.cfg.PermissionMode
 	}
 	effort := cfgSet.DefaultEffort()
+	// 先解析二进制：参数里的能力开关要按版本探测，不能盲加。
+	bin, err := m.resolve()
+	if err != nil {
+		return Info{}, fmt.Errorf("manager: %w；请在「设置 → 部署」里安装 claude", err)
+	}
 	args := process.Args(process.Options{
 		Model:          model,
 		PermissionMode: permissionMode,
@@ -274,15 +285,12 @@ func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string)
 			return ""
 		}(),
 		IncludePartialMessages: true,
+		ForwardSubagentText:    m.supportsFlag(bin, "--forward-subagent-text"),
 	})
 	// 先净化继承环境，再追加设置里的 ANTHROPIC_*（后者生效，从而覆盖宿主机同名变量）。
 	env := process.CleanEnv(os.Environ(), m.cfg.ClaudeHome, abs)
 	env = append(env, cfgSet.Env()...)
 
-	bin, err := m.resolve()
-	if err != nil {
-		return Info{}, fmt.Errorf("manager: %w；请在「设置 → 部署」里安装 claude", err)
-	}
 	proc, err := process.Spawn(bin, args, abs, env)
 	if err != nil {
 		return Info{}, err
