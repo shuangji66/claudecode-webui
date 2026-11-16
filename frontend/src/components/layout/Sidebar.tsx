@@ -150,6 +150,18 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     return ws ? ws.name || baseName(ws.path) : baseName(cwd);
   };
 
+  // 标题只由「自定义标题 + 首条用户消息」决定。流式增量每帧都在改 items，
+  // 但不会改这两者；用一个签名把它们抽出来，分组就能在流式期间保持稳定，
+  // 不必每个 token 重算全部分组与排序。
+  const titleSig = useMemo(() => {
+    let sig = "";
+    for (const c of conversations) {
+      const first = (items[c.id] ?? []).find((i) => i.kind === "user");
+      sig += `${c.id}\u0001${c.title ?? ""}\u0001${first && first.kind === "user" ? first.text : ""}\u0002`;
+    }
+    return `${locale}\u0003${sig}`;
+  }, [conversations, items, locale]);
+
   const groups = useMemo<WorkspaceGroup[]>(() => {
     const visible = conversations.filter((c) => matchArchive(c, view.archive));
     // 手动排序只在 manual 模式生效；其它模式一律按最近更新。
@@ -209,7 +221,9 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     return result
       .map((g) => ({ ...g, conversations: g.conversations.filter((c) => matches(c, g.name)) }))
       .filter((g) => g.conversations.length > 0 || g.name.toLowerCase().includes(q));
-  }, [workspaces, conversations, view, order, query, items, locale, t]);
+    // titleSig 是 items 的「标题投影」：只有它变了才需要重算分组。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaces, conversations, view, order, query, titleSig, t]);
 
   const endHover = () => {
     if (hoverTimer.current) {

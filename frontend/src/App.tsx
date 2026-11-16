@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAppStore } from "./store/useAppStore";
-import { getToken } from "./lib/runtime";
+import { getToken, setToken } from "./lib/runtime";
 import { applyPreferences, watchSystemTheme } from "./lib/theme";
 import { installAutofillGuard } from "./lib/autofill";
 import { I18nProvider, useT } from "./lib/i18n";
@@ -120,14 +120,30 @@ function AppShell() {
           <p className="mt-1 max-w-md break-words text-[12px] leading-relaxed text-muted">{error ?? t("正在加载配置与会话列表", "Loading settings and sessions")}</p>
         </div>
         {!loading && (
-          <button
-            type="button"
-            onClick={() => void bootstrap()}
-            className="flex items-center gap-1.5 rounded-full border border-line-strong px-4 py-2 text-[12px] font-medium text-ink hover:bg-panel-strong"
-          >
-            <IconRetry size={14} />
-            {t("重试", "Retry")}
-          </button>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={() => void bootstrap()}
+              className="flex items-center gap-1.5 rounded-full border border-line-strong px-4 py-2 text-[12px] font-medium text-ink hover:bg-panel-strong"
+            >
+              <IconRetry size={14} />
+              {t("重试", "Retry")}
+            </button>
+            {/* 令牌过期/填错时只会显示「无法连接服务」，没有入口换一个 —— 只能清缓存。
+                这里直接把本地令牌清掉，回到令牌门。 */}
+            {(error ?? "").toLowerCase().includes("unauthorized") && (
+              <button
+                type="button"
+                onClick={() => {
+                  setToken("");
+                  setTokenEpoch((n) => n + 1);
+                }}
+                className="rounded-full border border-line-strong px-4 py-2 text-[12px] font-medium text-ink hover:bg-panel-strong"
+              >
+                {t("重新输入令牌", "Enter a new token")}
+              </button>
+            )}
+          </div>
         )}
       </div>
     );
