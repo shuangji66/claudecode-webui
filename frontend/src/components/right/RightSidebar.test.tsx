@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { RightSidebar } from "./RightSidebar";
+import { RightSidebar, clampWidth } from "./RightSidebar";
 
 // 面板本身另有实现细节（文件树 / Git / xterm），这里只验证标签页自己的开合逻辑。
 vi.mock("./FilesPanel", () => ({ FilesPanel: () => <div>FILES</div> }));
@@ -81,5 +81,32 @@ describe("RightSidebar 标签页", () => {
 
     expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
     expect(screen.queryByText("FILES")).toBeNull();
+  });
+});
+
+describe("RightSidebar 停靠与宽度", () => {
+  function setViewport(width: number) {
+    Object.defineProperty(window, "innerWidth", { value: width, configurable: true, writable: true });
+  }
+
+  it("宽度不能把对话区挤到 420px 以下", () => {
+    // 1108 - 280(左栏) - 420(对话) = 408
+    expect(clampWidth(680, 1108)).toBe(408);
+    // 宽屏下用户值说了算
+    expect(clampWidth(680, 1600)).toBe(680);
+    // 视口再小也不低于最小宽度（此时会切浮层，不参与挤压）
+    expect(clampWidth(680, 800)).toBe(300);
+  });
+
+  it("视口够宽才停靠，窄屏改成浮层", () => {
+    setViewport(1400);
+    const wide = render(<RightSidebar cwd="/w" onClose={() => {}} />);
+    expect(screen.getByLabelText("调整侧栏宽度")).not.toHaveClass("hidden");
+    wide.unmount();
+
+    setViewport(900);
+    render(<RightSidebar cwd="/w" onClose={() => {}} />);
+    expect(screen.getByLabelText("调整侧栏宽度")).toHaveClass("hidden");
+    setViewport(1024);
   });
 });

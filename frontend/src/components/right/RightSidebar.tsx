@@ -31,6 +31,12 @@ const WIDTH_KEY = "ccweb-right-width";
 export const RIGHT_MIN_WIDTH = 300;
 const RIGHT_MAX_WIDTH = 680;
 const RIGHT_DEFAULT_WIDTH = 380;
+/** 桌面左侧栏宽度（与 Sidebar 的 md:w-[280px] 一致）。 */
+const LEFT_WIDTH = 280;
+/** 对话区最小可用宽度：右侧栏再宽也不能把中间挤成一条缝。 */
+const MIN_CHAT_WIDTH = 420;
+/** 低于这个视口宽度就改成浮层，不再和对话区抢横向空间。 */
+const DOCK_MIN = LEFT_WIDTH + MIN_CHAT_WIDTH + RIGHT_MIN_WIDTH;
 /** 与后端 maxTerminals 一致：一个进程最多 8 个终端。 */
 const MAX_TERMINALS = 8;
 
@@ -44,9 +50,23 @@ function readWidth(): number {
   return RIGHT_DEFAULT_WIDTH;
 }
 
-function clampWidth(width: number): number {
-  const viewportMax = typeof window === "undefined" ? RIGHT_MAX_WIDTH : Math.max(RIGHT_MIN_WIDTH, window.innerWidth * 0.7);
-  return Math.round(Math.min(Math.max(width, RIGHT_MIN_WIDTH), Math.min(RIGHT_MAX_WIDTH, viewportMax)));
+/** 宽度同时受三件事约束：用户拖动值、视口比例、以及「给对话区留够地方」。 */
+export function clampWidth(width: number, viewport = typeof window === "undefined" ? 1440 : window.innerWidth): number {
+  const viewportMax = Math.max(RIGHT_MIN_WIDTH, viewport * 0.7);
+  const chatMax = viewport - LEFT_WIDTH - MIN_CHAT_WIDTH;
+  const max = Math.max(RIGHT_MIN_WIDTH, Math.min(RIGHT_MAX_WIDTH, viewportMax, chatMax));
+  return Math.round(Math.min(Math.max(width, RIGHT_MIN_WIDTH), max));
+}
+
+/** 视口够宽才停靠；否则右侧栏盖在对话上（浮层），中间不会被压窄。 */
+export function useDockedRight(): boolean {
+  const [docked, setDocked] = useState(() => (typeof window === "undefined" ? true : window.innerWidth >= DOCK_MIN));
+  useEffect(() => {
+    const onResize = () => setDocked(window.innerWidth >= DOCK_MIN);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return docked;
 }
 
 const KIND_ICON = { files: IconFolder, git: IconGitBranch, terminal: IconTerminal, subagent: IconSpark } as const;
@@ -61,6 +81,7 @@ export function RightSidebar({ cwd, onClose }: Props) {
   const t = useT();
   const setCwd = useSidebarStore((s) => s.setCwd);
   const [width, setWidth] = useState(readWidth);
+  const docked = useDockedRight();
   // 初始停在开始页：不自动开「文件」标签，由用户点卡片或 + 决定。
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState("");
@@ -214,14 +235,20 @@ export function RightSidebar({ cwd, onClose }: Props) {
 
   return (
     <>
-      <button
-        type="button"
-        aria-label={t("关闭右侧栏", "Close right sidebar")}
-        className="fixed inset-0 z-40 bg-black/35 md:hidden"
-        onClick={onClose}
-      />
+      {!docked && (
+        <button
+          type="button"
+          aria-label={t("关闭右侧栏", "Close right sidebar")}
+          className="fixed inset-0 z-40 bg-black/35"
+          onClick={onClose}
+        />
+      )}
       <aside
-        className="safe-top fixed inset-y-0 right-0 z-50 flex h-[100dvh] w-full max-w-[460px] flex-col border-l border-line bg-canvas shadow-2xl md:relative md:z-auto md:h-full md:max-w-none md:shadow-none md:w-[var(--right-w)]"
+        className={`safe-top flex flex-col border-l border-line bg-canvas ${
+          docked
+            ? "relative z-auto h-full w-[var(--right-w)]"
+            : "fixed inset-y-0 right-0 z-50 h-[100dvh] w-full max-w-[460px] shadow-2xl"
+        }`}
         style={style}
         aria-label={t("工作区侧栏", "Workspace sidebar")}
       >
@@ -236,7 +263,7 @@ export function RightSidebar({ cwd, onClose }: Props) {
           onPointerCancel={onResizeEnd}
           onDoubleClick={() => applyWidth(RIGHT_DEFAULT_WIDTH)}
           onKeyDown={onResizeKey}
-          className="absolute inset-y-0 -left-1 hidden w-2 cursor-col-resize hover:bg-brand/30 md:block"
+          className={`absolute inset-y-0 -left-1 w-2 cursor-col-resize hover:bg-brand/30 ${docked ? "" : "hidden"}`}
           title={t("拖动调整宽度，双击复位", "Drag to resize, double-click to reset")}
         />
 

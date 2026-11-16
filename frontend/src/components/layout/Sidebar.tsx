@@ -461,8 +461,9 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   return (
     <aside className="safe-top flex h-full w-full shrink-0 flex-col border-r border-line bg-panel md:w-[280px] md:pt-0">
-      {/* 三栏（侧栏 / 对话 / 右侧栏）的表头统一 56px，分隔线才对得齐。 */}
-      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3">
+      {/* 高度和其它两栏的表头对齐（56px），但不画分隔线：品牌区和工作区之间
+          不需要一条横线，留白已经够区分。 */}
+      <div className="flex h-14 shrink-0 items-center gap-2 px-3">
         {/* 品牌区只做标识，不是按钮：点标题/logo 就新建对话太容易误触，
             「新对话」有下面那个独立按钮。 */}
         <div className="flex min-w-0 items-center gap-2">
