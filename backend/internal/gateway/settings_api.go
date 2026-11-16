@@ -161,8 +161,11 @@ func (s *Server) handleApplyProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	warnings := make([]string, 0, 1)
 	for _, info := range infos {
-		if _, err := s.d.Manager.Ensure(info.Cwd, "", ""); err != nil {
-			warnings = append(warnings, info.Cwd+": "+err.Error())
+		// 用 resume 保持对话 id 不变；空对话还没有转录，退回 ensure 新建。
+		if _, err := s.d.Manager.Resume(info.ID, info.Cwd, info.Model, ""); err != nil {
+			if _, err2 := s.d.Manager.Ensure(info.Cwd, "", ""); err2 != nil {
+				warnings = append(warnings, info.Cwd+": "+err2.Error())
+			}
 		}
 	}
 	writeJSON(w, map[string]any{

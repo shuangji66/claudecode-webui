@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
-import type { SessionInfo, WorkspaceEntry } from "../../transport/types";
-import { baseName, relativeTime, sessionTitle, stateLabel } from "../../lib/labels";
+import type { ConversationInfo, WorkspaceEntry } from "../../transport/types";
+import { baseName, conversationTitle, relativeTime, stateLabel } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
+import { belongs } from "../../lib/conversations";
 import {
   BrandMark,
+  IconArchive,
   IconChevronDown,
   IconChevronRight,
   IconClock,
@@ -12,10 +14,13 @@ import {
   IconFolder,
   IconFolderPlus,
   IconHistory,
+  IconMore,
   IconPanel,
+  IconPencil,
   IconPlus,
   IconSearch,
   IconSettings,
+  IconStop,
   IconTerminal,
   IconTrash,
 } from "../common/Icons";
@@ -35,12 +40,13 @@ interface WorkspaceGroup {
   name: string;
   exists: boolean;
   workspace: WorkspaceEntry | null;
-  sessions: SessionInfo[];
+  conversations: ConversationInfo[];
 }
 
-/** 判断会话是否属于某个工作区（工作区本身或它的子目录）。 */
-function belongs(cwd: string, workspacePath: string): boolean {
-  return cwd === workspacePath || cwd.startsWith(`${workspacePath}/`);
+interface MenuState {
+  id: string;
+  x: number;
+  y: number;
 }
 
 export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onAddWorkspace, onOpenHistory }: Props) {
@@ -48,27 +54,49 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const locale = useLocale();
   const workspaces = useAppStore((s) => s.workspaces);
   const currentWorkspace = useAppStore((s) => s.currentWorkspace);
-  const sessions = useAppStore((s) => s.sessions);
+  const conversations = useAppStore((s) => s.conversations);
   const activeId = useAppStore((s) => s.activeId);
   const items = useAppStore((s) => s.items);
   const states = useAppStore((s) => s.states);
-  const conns = useAppStore((s) => s.conns);
   const starting = useAppStore((s) => s.starting);
   const info = useAppStore((s) => s.info);
   const switchWorkspace = useAppStore((s) => s.switchWorkspace);
-  const setActive = useAppStore((s) => s.setActive);
+  const openConversation = useAppStore((s) => s.openConversation);
   const createSession = useAppStore((s) => s.createSession);
   const closeSession = useAppStore((s) => s.closeSession);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
+  const renameConversation = useAppStore((s) => s.renameConversation);
+  const archiveConversation = useAppStore((s) => s.archiveConversation);
+  const deleteConversation = useAppStore((s) => s.deleteConversation);
 
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentWorkspace ? [currentWorkspace] : []));
+  const [menu, setMenu] = useState<MenuState | null>(null);
 
   useEffect(() => {
     if (!currentWorkspace) return;
     setExpanded((prev) => (prev.has(currentWorkspace) ? prev : new Set(prev).add(currentWorkspace)));
   }, [currentWorkspace]);
+
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest("[data-conv-menu]")) setMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenu(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menu]);
+
+  const archivedCount = conversations.filter((c) => c.archived).length;
 
   const groups = useMemo<WorkspaceGroup[]>(() => {
     const result: WorkspaceGroup[] = workspaces.map((w) => ({
@@ -76,53 +104,51 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       name: w.name || baseName(w.path),
       exists: w.exists,
       workspace: w,
-      sessions: [],
+      conversations: [],
     }));
-    const others: SessionInfo[] = [];
-    for (const s of sessions) {
-      // 嵌套工作区（/data 与 /data/proj）必须归到最长匹配，不能先命中父目录。
+    const others: ConversationInfo[] = [];
+    for (const c of conversations) {
+      if (!showArchived && c.archived) continue;
       const group = result
-        .filter((g) => belongs(s.cwd, g.path))
+        .filter((g) => belongs(c.cwd, g.path))
         .sort((a, b) => b.path.length - a.path.length)[0];
-      if (group) group.sessions.push(s);
-      else others.push(s);
+      if (group) group.conversations.push(c);
+      else others.push(c);
     }
     if (others.length > 0) {
-      result.push({ path: "__other__", name: t("其他会话", "Other sessions"), exists: true, workspace: null, sessions: others });
+      result.push({ path: "__other__", name: t("其他对话", "Other conversations"), exists: true, workspace: null, conversations: others });
+    }
+    for (const g of result) {
+      g.conversations.sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""));
     }
     const q = query.trim().toLowerCase();
-    for (const g of result) {
-      g.sessions.sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""));
-    }
     if (!q) return result;
     return result
       .map((g) => ({
         ...g,
-        sessions: g.sessions.filter(
-          (s) =>
-            sessionTitle(s.cwd, items[s.id], locale).toLowerCase().includes(q) ||
-            s.cwd.toLowerCase().includes(q) ||
+        conversations: g.conversations.filter(
+          (c) =>
+            conversationTitle(c.title, items[c.id], locale).toLowerCase().includes(q) ||
+            c.cwd.toLowerCase().includes(q) ||
             g.name.toLowerCase().includes(q),
         ),
       }))
-      .filter((g) => g.sessions.length > 0 || g.name.toLowerCase().includes(q));
-  }, [workspaces, sessions, query, items, locale]);
+      .filter((g) => g.conversations.length > 0 || g.name.toLowerCase().includes(q));
+  }, [workspaces, conversations, showArchived, query, items, locale, t]);
 
-  const activeConn = activeId ? (conns[activeId]?.state ?? "idle") : "idle";
+  const activeConn = activeId ? (states[activeId] ?? "idle") : "idle";
   const connLabel =
-    activeConn === "open"
-      ? t("已连接", "Connected")
-      : activeConn === "reconnecting"
-        ? t("重连中", "Reconnecting")
-        : activeConn === "connecting"
-          ? t("连接中", "Connecting")
-          : activeConn === "closed"
-            ? t("已断开", "Disconnected")
-            : t("未连接", "Not connected");
-  const connTone =
-    activeConn === "open" ? "bg-ok" : activeConn === "reconnecting" || activeConn === "connecting" ? "bg-warn" : "bg-faint";
+    activeConn === "busy"
+      ? t("运行中", "Running")
+      : activeConn === "ready"
+        ? t("已连接", "Connected")
+        : activeConn === "starting"
+          ? t("启动中", "Starting")
+          : t("未连接", "Not connected");
+  const connTone = activeConn === "busy" || activeConn === "starting" ? "bg-warn" : activeConn === "ready" ? "bg-ok" : "bg-faint";
 
   const startNewChat = () => {
+    if (starting) return;
     if (!currentWorkspace) {
       onAddWorkspace();
       return;
@@ -149,13 +175,50 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   const askRemove = async (g: WorkspaceGroup) => {
     if (g.path === "__other__") return;
-    if (!window.confirm(t(`移除授权目录「${g.path}」？\n移除后不能再在该目录新建会话。`, `Remove authorized directory "${g.path}"?\nYou cannot start new sessions there afterwards.`))) return;
+    if (!window.confirm(t(`移除授权目录「${g.path}」？\n移除后不能再在该目录新建对话。`, `Remove authorized directory "${g.path}"?\nYou cannot start new conversations there afterwards.`))) return;
     await removeWorkspace(g.path);
   };
 
-  const closeOne = async (s: SessionInfo) => {
-    if (!window.confirm(t(`关闭会话「${sessionTitle(s.cwd, items[s.id], locale)}」？\n会终止对应的 claude 进程。`, `Close session "${sessionTitle(s.cwd, items[s.id], locale)}"?\nThe claude process will be terminated.`))) return;
-    await closeSession(s.id);
+  const openOne = (c: ConversationInfo) => {
+    setMenu(null);
+    void openConversation(c.id);
+    onClose?.();
+  };
+
+  const titleOf = (c: ConversationInfo) => conversationTitle(c.title, items[c.id], locale);
+
+  const askRename = (c: ConversationInfo) => {
+    setMenu(null);
+    const next = window.prompt(t("重命名对话", "Rename conversation"), titleOf(c));
+    if (next === null) return;
+    void renameConversation(c.id, next.trim());
+  };
+
+  const askArchive = (c: ConversationInfo) => {
+    setMenu(null);
+    void archiveConversation(c.id, !c.archived);
+  };
+
+  const askDelete = (c: ConversationInfo) => {
+    setMenu(null);
+    if (!window.confirm(t(`删除对话「${titleOf(c)}」？\n会从列表移除并结束运行中的进程，转录文件仍保留。`, `Delete conversation "${titleOf(c)}"?\nIt is removed from the list and any running process is stopped; the transcript file is kept.`))) return;
+    void deleteConversation(c.id);
+  };
+
+  const askStop = (c: ConversationInfo) => {
+    setMenu(null);
+    if (!window.confirm(t(`结束对话「${titleOf(c)}」的 claude 进程？\n对话仍保留，下次点击会恢复。`, `Stop the claude process for "${titleOf(c)}"?\nThe conversation stays and can be resumed later.`))) return;
+    void closeSession(c.id);
+  };
+
+  const openMenu = (e: React.MouseEvent<HTMLButtonElement>, c: ConversationInfo) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMenu({
+      id: c.id,
+      x: Math.max(8, Math.min(rect.right - 168, window.innerWidth - 176)),
+      y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - 210)),
+    });
   };
 
   if (collapsed) {
@@ -167,9 +230,10 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         <button
           type="button"
           onClick={startNewChat}
-          className="mt-4 flex h-9 w-9 items-center justify-center rounded-full border border-line-strong bg-canvas text-ink hover:bg-panel-strong"
-          aria-label={t("新对话", "New chat")}
-          title={t("新对话", "New chat")}
+          disabled={starting}
+          className="mt-4 flex h-9 w-9 items-center justify-center rounded-full border border-line-strong bg-canvas text-ink hover:bg-panel-strong disabled:opacity-40"
+          aria-label={t("新对话", "New conversation")}
+          title={t("新对话", "New conversation")}
         >
           <IconPlus size={17} />
         </button>
@@ -197,10 +261,12 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     );
   }
 
+  const menuConv = menu ? conversations.find((c) => c.id === menu.id) ?? null : null;
+
   return (
     <aside className="safe-top flex h-full w-[280px] shrink-0 flex-col border-r border-line bg-panel md:pt-0">
       <div className="flex h-[58px] shrink-0 items-center gap-2 px-3">
-        <button type="button" onClick={startNewChat} className="flex min-w-0 items-center gap-2 text-left" aria-label={t("新对话", "New chat")}>
+        <button type="button" onClick={startNewChat} className="flex min-w-0 items-center gap-2 text-left" aria-label={t("新对话", "New conversation")}>
           <BrandMark size={25} className="shrink-0 text-ink" />
           <span className="truncate text-[15px] font-semibold tracking-tight text-ink">Claude Code</span>
           <span className="shrink-0 rounded-[5px] border border-line-strong px-1 py-[1px] text-[9px] font-semibold tracking-wide text-muted">
@@ -222,10 +288,11 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         <button
           type="button"
           onClick={startNewChat}
-          className="flex w-full items-center justify-center gap-2 rounded-[10px] border border-line-strong bg-canvas py-2 text-[13px] font-medium text-ink transition hover:bg-panel-strong"
+          disabled={starting}
+          className="flex w-full items-center justify-center gap-2 rounded-[10px] border border-line-strong bg-canvas py-2 text-[13px] font-medium text-ink transition hover:bg-panel-strong disabled:opacity-50"
         >
           <IconPlus size={15} />
-          {starting ? t("正在启动…", "Starting…") : t("新对话", "New chat")}
+          {starting ? t("正在启动…", "Starting…") : t("新对话", "New conversation")}
         </button>
       </div>
 
@@ -239,10 +306,20 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
               if (searchOpen) setQuery("");
             }}
             className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
-            aria-label={t("搜索会话", "Search sessions")}
+            aria-label={t("搜索对话", "Search conversations")}
             title={t("搜索", "Search")}
           >
             <IconSearch size={15} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowArchived((v) => !v)}
+            className={`rounded-md p-1.5 hover:bg-black/5 ${showArchived ? "text-brand" : "text-muted hover:text-ink"}`}
+            aria-label={showArchived ? t("隐藏已归档", "Hide archived") : t("显示已归档", "Show archived")}
+            aria-pressed={showArchived}
+            title={showArchived ? t("隐藏已归档", "Hide archived") : t(`显示已归档${archivedCount ? `（${archivedCount}）` : ""}`, `Show archived${archivedCount ? ` (${archivedCount})` : ""}`)}
+          >
+            <IconArchive size={15} />
           </button>
           <button
             type="button"
@@ -262,7 +339,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={t("搜索工作区或会话", "Search workspaces or sessions")}
+            placeholder={t("搜索工作区或对话", "Search workspaces or conversations")}
             className="w-full rounded-lg border border-line-strong bg-canvas px-2.5 py-1.5 text-[12px] outline-none placeholder:text-faint focus:border-brand/60"
           />
         </div>
@@ -293,13 +370,13 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                   disabled={g.path === "__other__" || !g.exists}
                   className={`side-row min-w-0 flex-1 ${isCurrent ? "text-ink" : "text-ink-2"} ${!g.exists ? "opacity-50" : ""}`}
                   data-active={isCurrent}
-                  title={g.path === "__other__" ? t("不在授权目录内的运行会话", "Running sessions outside authorized directories") : g.path}
+                  title={g.path === "__other__" ? t("不在授权目录内的对话", "Conversations outside authorized directories") : g.path}
                 >
                   {g.path === "__other__" ? <IconTerminal size={15} className="shrink-0 text-muted" /> : <IconFolder size={15} className="shrink-0 text-muted" />}
                   <span className="truncate text-[12.5px] font-medium">{g.name}</span>
                   {!g.exists && g.path !== "__other__" && <span className="shrink-0 text-[10px] text-warn">{t("不可用", "Missing")}</span>}
-                  {g.sessions.length > 0 && (
-                    <span className="ml-auto shrink-0 rounded-full bg-black/[0.06] px-1.5 text-[10px] text-muted">{g.sessions.length}</span>
+                  {g.conversations.length > 0 && (
+                    <span className="ml-auto shrink-0 rounded-full bg-black/[0.06] px-1.5 text-[10px] text-muted">{g.conversations.length}</span>
                   )}
                 </button>
                 {g.path !== "__other__" && (
@@ -308,7 +385,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                       type="button"
                       onClick={() => toggleGroup(g.path)}
                       className="rounded-md p-1 text-muted hover:bg-black/5 hover:text-ink"
-                      aria-label={open ? t("收起会话", "Collapse sessions") : t("展开会话", "Expand sessions")}
+                      aria-label={open ? t("收起对话", "Collapse conversations") : t("展开对话", "Expand conversations")}
                       title={open ? t("收起", "Collapse") : t("展开", "Expand")}
                     >
                       {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
@@ -328,44 +405,41 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
               {open && (
                 <div className="mb-1 ml-2 border-l border-line pl-1.5">
-                  {g.sessions.length === 0 && (
+                  {g.conversations.length === 0 && (
                     <p className="px-2 py-1.5 text-[11px] text-faint">
-                      {isCurrent && starting ? t("正在启动 Claude…", "Starting Claude…") : t("暂无会话", "No sessions")}
+                      {isCurrent && starting ? t("正在启动 Claude…", "Starting Claude…") : t("暂无对话", "No conversations")}
                     </p>
                   )}
-                  {g.sessions.map((s) => {
-                    const state = states[s.id] ?? s.state;
-                    const active = s.id === activeId;
+                  {g.conversations.map((c) => {
+                    const active = c.id === activeId;
+                    const liveState = c.live ? (states[c.id] ?? c.state ?? "ready") : "";
+                    const dot =
+                      liveState === "busy" ? "bg-warn" : liveState === "ready" ? "bg-ok" : liveState === "starting" ? "bg-warn" : "bg-faint";
                     return (
-                      <div key={s.id} className="group/session flex items-center gap-0.5">
+                      <div key={c.id} className="group/session flex items-center gap-0.5">
                         <button
                           type="button"
-                          onClick={() => {
-                            setActive(s.id);
-                            onClose?.();
-                          }}
-                          className="side-row min-w-0 flex-1"
+                          onClick={() => openOne(c)}
+                          className={`side-row min-w-0 flex-1 ${c.archived ? "opacity-60" : ""}`}
                           data-active={active}
-                          title={`${s.cwd}\n${stateLabel(state, locale)}`}
+                          title={`${c.cwd}\n${c.live ? stateLabel(liveState, locale) : t("未运行（点击恢复）", "Not running (click to resume)")}`}
                         >
-                          <span
-                            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                              state === "busy" ? "bg-warn" : state === "ready" ? "bg-ok" : state === "closed" ? "bg-danger" : "bg-faint"
-                            }`}
-                          />
-                          <span className={`truncate text-[12px] ${active ? "text-ink" : "text-ink-2"}`}>
-                            {sessionTitle(s.cwd, items[s.id], locale)}
-                          </span>
-                          <span className="ml-auto shrink-0 text-[10px] text-faint">{relativeTime(s.last_active ?? s.created_at, Date.now(), locale)}</span>
+                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+                          <span className={`truncate text-[12px] ${active ? "text-ink" : "text-ink-2"}`}>{titleOf(c)}</span>
+                          {c.archived && (
+                            <span className="shrink-0 rounded-full bg-black/[0.06] px-1 text-[9px] text-muted">{t("归档", "Archived")}</span>
+                          )}
+                          <span className="ml-auto shrink-0 text-[10px] text-faint">{relativeTime(c.last_active, Date.now(), locale)}</span>
                         </button>
                         <button
                           type="button"
-                          onClick={() => void closeOne(s)}
-                          className="rounded-md p-1 text-muted opacity-0 transition hover:bg-black/5 hover:text-danger group-hover/session:opacity-100"
-                          aria-label={t("关闭会话", "Close session")}
-                          title={t("关闭会话", "Close session")}
+                          onClick={(e) => openMenu(e, c)}
+                          className="rounded-md p-1 text-muted opacity-100 transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover/session:opacity-100 md:focus:opacity-100"
+                          aria-label={`${t("管理对话", "Manage conversation")} ${titleOf(c)}`}
+                          aria-haspopup="menu"
+                          title={t("管理对话", "Manage conversation")}
                         >
-                          <IconClose size={13} />
+                          <IconMore size={14} />
                         </button>
                       </div>
                     );
@@ -395,6 +469,34 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
           <span>v{info?.version ?? "-"}</span>
         </div>
       </div>
+
+      {menu && menuConv && (
+        <div
+          data-conv-menu
+          role="menu"
+          className="fixed z-[70] w-[168px] rounded-xl border border-line bg-canvas p-1 shadow-soft"
+          style={{ left: menu.x, top: menu.y }}
+        >
+          <button type="button" role="menuitem" onClick={() => askRename(menuConv)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-ink hover:bg-panel-strong">
+            <IconPencil size={13} className="text-muted" />
+            {t("重命名", "Rename")}
+          </button>
+          <button type="button" role="menuitem" onClick={() => askArchive(menuConv)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-ink hover:bg-panel-strong">
+            <IconArchive size={13} className="text-muted" />
+            {menuConv.archived ? t("取消归档", "Unarchive") : t("归档", "Archive")}
+          </button>
+          {menuConv.live && (
+            <button type="button" role="menuitem" onClick={() => askStop(menuConv)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-ink hover:bg-panel-strong">
+              <IconStop size={13} className="text-muted" />
+              {t("结束进程", "Stop process")}
+            </button>
+          )}
+          <button type="button" role="menuitem" onClick={() => askDelete(menuConv)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] text-danger hover:bg-danger/[0.06]">
+            <IconTrash size={13} />
+            {t("删除", "Delete")}
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

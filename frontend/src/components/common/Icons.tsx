@@ -408,3 +408,21 @@ export function IconSync(props: Props) {
     </Svg>
   );
 }
+
+export function IconArchive(props: Props) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="4" width="18" height="4" rx="1.5" />
+      <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M10 12h4" />
+    </Svg>
+  );
+}
+
+export function IconPencil(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M4 20h4l10.5-10.5a2.1 2.1 0 0 0-3-3L5 17v3z" />
+      <path d="m13.5 6.5 3 3" />
+    </Svg>
+  );
+}

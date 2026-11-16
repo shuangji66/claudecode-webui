@@ -444,7 +444,7 @@ function ProxySettings() {
   }, [settings?.proxy_url]);
 
   const save = async () => {
-    if (sessions.length > 0 && !window.confirm(t(`保存后需要重启 ${sessions.length} 个 claude 会话，当前对话上下文会丢失。继续？`, `Saving will restart ${sessions.length} claude session(s); current context will be lost. Continue?`))) {
+    if (sessions.length > 0 && !window.confirm(t(`保存后需要重启 ${sessions.length} 个 claude 会话；对话记录会保留并自动恢复。继续？`, `Saving will restart ${sessions.length} claude session(s); conversations are kept and will be resumed. Continue?`))) {
       return;
     }
     setLocalError(null);
@@ -458,7 +458,7 @@ function ProxySettings() {
       <div>
         <h3 className="text-[15px] font-semibold text-ink">{t("代理", "Proxy")}</h3>
         <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
-          {t("为 claude 子进程设置 HTTP / HTTPS / SOCKS5 代理；留空表示直连。保存后会重启所有正在运行的 claude 会话。", "Set an HTTP / HTTPS / SOCKS5 proxy for the claude subprocess. Leave blank for direct access. Saving restarts all running claude sessions.")}
+          {t("为 claude 子进程设置 HTTP / HTTPS / SOCKS5 代理；留空表示直连。保存后会重启所有正在运行的 claude 会话，对话会用 --resume 恢复。", "Set an HTTP / HTTPS / SOCKS5 proxy for the claude subprocess. Leave blank for direct access. Saving restarts all running claude sessions and resumes them with --resume.")}
         </p>
       </div>
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseName, permissionLabel, relativeTime, sessionTitle, stateLabel } from "./labels";
+import { baseName, conversationTitle, permissionLabel, relativeTime, sessionTitle, stateLabel } from "./labels";
 import type { Item } from "./model";
 
 describe("labels", () => {
@@ -18,6 +18,12 @@ describe("labels", () => {
 
   it("sessionTitle 没有消息时用目录名", () => {
     expect(sessionTitle("/data/proj", [])).toBe("proj");
+  });
+
+  it("conversationTitle 优先自定义标题，其次首条消息，最后新对话", () => {
+    expect(conversationTitle("自定义", [])).toBe("自定义");
+    expect(conversationTitle("", [{ id: "1", seq: 0, ts: 0, kind: "user", text: "问题" }])).toBe("问题");
+    expect(conversationTitle("", [])).toBe("新对话");
   });
 
   it("relativeTime 覆盖分钟/小时/天", () => {

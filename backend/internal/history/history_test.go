@@ -1,8 +1,10 @@
 package history
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -121,5 +123,57 @@ func TestTruncate(t *testing.T) {
 	}
 	if got := truncate("短", 10); got != "短" {
 		t.Fatalf("不应截断: %q", got)
+	}
+}
+
+func TestLoadTranscriptFiltersAndOrders(t *testing.T) {
+	root := t.TempDir()
+	id := "11111111-2222-4333-8444-555555555555"
+	writeJSONL(t, filepath.Join(root, "p", id+".jsonl"),
+		`{"type":"summary","summary":"s"}`,
+		`{"type":"user","cwd":"/tmp/work","isSidechain":true,"message":{"role":"user","content":"subagent"}}`,
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":"meta"}}`,
+		`{"type":"user","cwd":"/tmp/work","message":{"role":"user","content":"你好"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"收到"}]}}`,
+		`{"type":"file-history-snapshot","snapshot":{}}`,
+	)
+	tr, err := LoadTranscript(root, id)
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+	if tr.Cwd != "/tmp/work" {
+		t.Fatalf("Cwd = %q", tr.Cwd)
+	}
+	if len(tr.Lines) != 2 {
+		t.Fatalf("lines = %d: %s", len(tr.Lines), tr.Lines)
+	}
+	if !json.Valid(tr.Lines[0]) || !json.Valid(tr.Lines[1]) {
+		t.Fatal("返回行必须是合法 JSON")
+	}
+	if _, err := LoadTranscript(root, "../etc/passwd"); err == nil {
+		t.Fatal("非法 id 应报错")
+	}
+}
+
+func TestLoadTranscriptKeepsTail(t *testing.T) {
+	root := t.TempDir()
+	id := "22222222-3333-4444-8555-666666666666"
+	oldLines, oldBytes := maxTranscriptLines, maxTranscriptBytes
+	maxTranscriptLines, maxTranscriptBytes = 2, 1<<20
+	t.Cleanup(func() { maxTranscriptLines, maxTranscriptBytes = oldLines, oldBytes })
+	writeJSONL(t, filepath.Join(root, "p", id+".jsonl"),
+		`{"type":"user","message":{"content":"one"}}`,
+		`{"type":"user","message":{"content":"two"}}`,
+		`{"type":"user","message":{"content":"three"}}`,
+	)
+	tr, err := LoadTranscript(root, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tr.Lines) != 2 || !tr.Truncated {
+		t.Fatalf("lines=%d truncated=%v", len(tr.Lines), tr.Truncated)
+	}
+	if !strings.Contains(string(tr.Lines[1]), "three") {
+		t.Fatalf("应保留最后一行: %s", tr.Lines)
 	}
 }

@@ -286,3 +286,28 @@ export interface GitBranches {
   current: string;
   names: string[];
 }
+
+/** 侧栏对话列表的一行（后端合并转录 + 元数据 + 实时会话）。 */
+export interface ConversationInfo {
+  id: string;
+  cwd: string;
+  /** 自定义标题优先；为空时前端用首条消息 / 目录名回落。 */
+  title: string;
+  created_at: string;
+  last_active: string;
+  messages: number;
+  archived: boolean;
+  live: boolean;
+  state?: string;
+  provider?: string;
+  model?: string;
+  effort?: string;
+}
+
+/** /api/history/transcript 的回放数据；lines 是 claude 原始事件行。 */
+export interface TranscriptPayload {
+  id: string;
+  cwd?: string;
+  lines: unknown[];
+  truncated?: boolean;
+}

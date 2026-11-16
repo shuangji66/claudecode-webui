@@ -67,6 +67,7 @@ function AppShell() {
   const clearError = useAppStore((s) => s.clearError);
   const activeId = useAppStore((s) => s.activeId);
   const sessions = useAppStore((s) => s.sessions);
+  const conversations = useAppStore((s) => s.conversations);
   const currentWorkspace = useAppStore((s) => s.currentWorkspace);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -149,7 +150,10 @@ function AppShell() {
     setHistoryOpen(true);
   };
 
-  const rightCwd = sessions.find((s) => s.id === activeId)?.cwd ?? currentWorkspace;
+  const rightCwd =
+    conversations.find((c) => c.id === activeId)?.cwd ??
+    sessions.find((s) => s.id === activeId)?.cwd ??
+    currentWorkspace;
   const toggleRight = () => setRightOpen((v) => !v);
 
   return (

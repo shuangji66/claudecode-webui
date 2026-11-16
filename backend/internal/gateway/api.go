@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 
 	"ccweb/backend/internal/agent/manager"
 	"ccweb/backend/internal/history"
@@ -17,17 +18,18 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // handleInfo 返回前端启动所需的环境信息。
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
-		"version":         s.d.Cfg.Version,
-		"base_url":        s.d.Cfg.BaseURL,
-		"socket":          s.d.Cfg.AdminSock,
-		"claude_bin":      s.d.Manager.Binary(),
-		"claude_version":  s.d.ClaudeVersion,
-		"projects_root":   s.d.ProjectsRoot,
-		"data_dir":        s.d.Cfg.DataDir,
-		"claude_home":     s.d.Cfg.ClaudeHome,
-		"settings_file":   s.d.Cfg.SettingsFile,
-		"workspaces_file": s.d.Cfg.WorkspacesFile,
-		"auto_start":      s.d.Cfg.AutoStart,
+		"version":            s.d.Cfg.Version,
+		"base_url":           s.d.Cfg.BaseURL,
+		"socket":             s.d.Cfg.AdminSock,
+		"claude_bin":         s.d.Manager.Binary(),
+		"claude_version":     s.d.ClaudeVersion,
+		"projects_root":      s.d.ProjectsRoot,
+		"data_dir":           s.d.Cfg.DataDir,
+		"claude_home":        s.d.Cfg.ClaudeHome,
+		"settings_file":      s.d.Cfg.SettingsFile,
+		"workspaces_file":    s.d.Cfg.WorkspacesFile,
+		"conversations_file": s.d.Cfg.ConversationsFile,
+		"auto_start":         s.d.Cfg.AutoStart,
 		"current_workspace": func() string {
 			if s.d.Workspaces == nil {
 				return ""
@@ -49,6 +51,8 @@ type createSessionReq struct {
 	Cwd            string `json:"cwd"`
 	Model          string `json:"model"`
 	PermissionMode string `json:"permission_mode"`
+	// Resume 非空时恢复该 id 对应的 claude 对话，而不是新建。
+	Resume string `json:"resume,omitempty"`
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
@@ -66,17 +70,38 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err.Error(), http.StatusForbidden)
 		return
 	}
-	info, err := s.d.Manager.Create(abs, req.Model, req.PermissionMode)
+	if req.Resume != "" && s.d.Conversations != nil {
+		if rec, ok := s.d.Conversations.Get(req.Resume); ok {
+			if rec.Deleted {
+				writeErr(w, "该对话已删除", http.StatusConflict)
+				return
+			}
+			if rec.Cwd != "" && filepath.Clean(rec.Cwd) != abs {
+				writeErr(w, "该对话属于其它工作目录", http.StatusConflict)
+				return
+			}
+		}
+	}
+	var info manager.Info
+	if req.Resume != "" {
+		info, err = s.d.Manager.Resume(req.Resume, abs, req.Model, req.PermissionMode)
+	} else {
+		info, err = s.d.Manager.Create(abs, req.Model, req.PermissionMode)
+	}
 	if err != nil {
 		writeErr(w, err.Error(), http.StatusConflict)
 		return
+	}
+	if req.Resume != "" {
+		// 打开已有对话 = 一次「最近活跃」；新建的空对话等首条消息再落元数据。
+		s.touchConversation(info)
 	}
 	s.touchWorkspace(abs)
 	writeJSON(w, info)
 }
 
-// handleEnsureSession 返回同目录下已存在的会话；没有则创建。
-// 前端启动 / 切换工作区走这个端点，避免与后端自动拉起重复启动 claude。
+// handleEnsureSession 兼容旧客户端：同目录已有存活会话则返回，没有则新建。
+// 新版前端按对话 id 走 /api/session {resume}，不再用这个按目录 ensure 的入口。
 func (s *Server) handleEnsureSession(w http.ResponseWriter, r *http.Request) {
 	var req createSessionReq
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {

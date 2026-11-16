@@ -10,6 +10,7 @@ package history
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -159,4 +160,128 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// ErrTranscriptNotFound 表示按 id 找不到转录文件。
+var ErrTranscriptNotFound = errors.New("history: 找不到该对话的转录")
+
+// Transcript 是一次对话的原始事件行，供前端按与实时 CLI 相同的
+// normalize 逻辑回放。Lines 已过滤 sidechain / meta 行，按原始顺序排列。
+type Transcript struct {
+	ID        string            `json:"id"`
+	Cwd       string            `json:"cwd,omitempty"`
+	Lines     []json.RawMessage `json:"lines"`
+	Truncated bool              `json:"truncated,omitempty"`
+}
+
+// 回放上限：太长会把浏览器和 JSON 响应一起拖垮，只保留最近的一段。
+var (
+	maxTranscriptLines = 20000
+	maxTranscriptBytes = 16 << 20
+)
+
+// LoadTranscript 按会话 id 找到转录并读取可回放的行。
+//
+// id 来自历史列表 / 对话元数据，只接受字母数字与 '-' '_'，不能拼路径。
+func LoadTranscript(projectsDir, id string) (Transcript, error) {
+	if !validSessionID(id) {
+		return Transcript{}, ErrTranscriptNotFound
+	}
+	path, err := findTranscript(projectsDir, id)
+	if err != nil {
+		return Transcript{}, err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return Transcript{}, err
+	}
+	defer f.Close()
+
+	out := Transcript{ID: id, Lines: make([]json.RawMessage, 0, 128)}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
+	total := 0
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var meta struct {
+			Type        string `json:"type"`
+			IsSidechain bool   `json:"isSidechain"`
+			IsMeta      bool   `json:"isMeta"`
+			Cwd         string `json:"cwd"`
+		}
+		if err := json.Unmarshal(line, &meta); err != nil {
+			continue
+		}
+		if out.Cwd == "" && meta.Cwd != "" {
+			out.Cwd = meta.Cwd
+		}
+		if meta.IsSidechain || meta.IsMeta {
+			continue
+		}
+		switch meta.Type {
+		case "user", "assistant", "system", "result":
+		default:
+			continue
+		}
+		// Scanner 复用底层数组，必须复制后再保留。
+		copied := append(json.RawMessage(nil), line...)
+		out.Lines = append(out.Lines, copied)
+		total += len(copied)
+		for len(out.Lines) > maxTranscriptLines || (total > maxTranscriptBytes && len(out.Lines) > 1) {
+			total -= len(out.Lines[0])
+			out.Lines = out.Lines[1:]
+			out.Truncated = true
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return Transcript{}, err
+	}
+	return out, nil
+}
+
+// findTranscript 在 projectsDir/<project>/<id>.jsonl 中查找；同 id 有多份时取最新。
+func findTranscript(projectsDir, id string) (string, error) {
+	entries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", ErrTranscriptNotFound
+		}
+		return "", err
+	}
+	var best string
+	var bestMod time.Time
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		cand := filepath.Join(projectsDir, e.Name(), id+".jsonl")
+		st, err := os.Stat(cand)
+		if err != nil || st.IsDir() {
+			continue
+		}
+		if best == "" || st.ModTime().After(bestMod) {
+			best = cand
+			bestMod = st.ModTime()
+		}
+	}
+	if best == "" {
+		return "", ErrTranscriptNotFound
+	}
+	return best, nil
+}
+
+func validSessionID(id string) bool {
+	if len(id) < 8 || len(id) > 64 {
+		return false
+	}
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }

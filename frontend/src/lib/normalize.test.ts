@@ -201,3 +201,10 @@ describe("附件回显去重", () => {
     expect(items).toHaveLength(1);
   });
 });
+
+describe("applyCLI timestamp", () => {
+  it("回放转录时可保留原始时间", () => {
+    const items = applyCLI([], { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } }, 123456);
+    expect(items[0]?.ts).toBe(123456);
+  });
+});

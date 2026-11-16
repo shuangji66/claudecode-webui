@@ -36,7 +36,11 @@ type Config struct {
 	SettingsFile string
 	// WorkspacesFile 是授权目录 / 当前工作区的持久化路径（CCWEB_WORKSPACES_FILE）。
 	WorkspacesFile string
-	// AutoStart 为 true 时，进程启动后自动在当前工作区拉起一个 claude 会话（CCWEB_AUTO_START）。
+	// ConversationsFile 是对话元数据（归档/删除/重命名/最近活跃）的持久化路径
+	// （CCWEB_CONVERSATIONS_FILE）。
+	ConversationsFile string
+	// AutoStart 为 true 时，进程启动后恢复当前工作区最近的一条对话（CCWEB_AUTO_START）；
+	// 没有历史对话时不新建，由前端创建第一条。
 	AutoStart bool
 	// MaxSessions 是最多同时常驻的 claude 子进程数（CCWEB_MAX_SESSIONS）。
 	MaxSessions int
@@ -112,21 +116,22 @@ func Load(version string) Config {
 	baseURL = strings.TrimRight(baseURL, "/")
 
 	return Config{
-		AdminSock:      EnvOr("ADMIN_SOCK", filepath.Join(dataDir, "ccweb.sock")),
-		BaseURL:        baseURL,
-		ClaudeBin:      EnvOr("CLAUDE_BIN", ""),
-		AuthToken:      EnvOr("AUTH_TOKEN", ""),
-		ProjectsRoot:   EnvOr("PROJECTS_ROOT", home),
-		DataDir:        dataDir,
-		ClaudeHome:     claudeHome,
-		SettingsFile:   EnvOr("SETTINGS_FILE", filepath.Join(dataDir, "settings.json")),
-		WorkspacesFile: EnvOr("WORKSPACES_FILE", filepath.Join(dataDir, "workspaces.json")),
-		AutoStart:      envBool("AUTO_START", true),
-		MaxSessions:    maxSessions,
-		IdleTimeout:    idle,
-		PermissionMode: EnvOr("PERMISSION_MODE", ""),
-		Model:          EnvOr("MODEL", ""),
-		TerminalShell:  EnvOr("TERMINAL_SHELL", ""),
-		Version:        version,
+		AdminSock:         EnvOr("ADMIN_SOCK", filepath.Join(dataDir, "ccweb.sock")),
+		BaseURL:           baseURL,
+		ClaudeBin:         EnvOr("CLAUDE_BIN", ""),
+		AuthToken:         EnvOr("AUTH_TOKEN", ""),
+		ProjectsRoot:      EnvOr("PROJECTS_ROOT", home),
+		DataDir:           dataDir,
+		ClaudeHome:        claudeHome,
+		SettingsFile:      EnvOr("SETTINGS_FILE", filepath.Join(dataDir, "settings.json")),
+		WorkspacesFile:    EnvOr("WORKSPACES_FILE", filepath.Join(dataDir, "workspaces.json")),
+		ConversationsFile: EnvOr("CONVERSATIONS_FILE", filepath.Join(dataDir, "conversations.json")),
+		AutoStart:         envBool("AUTO_START", true),
+		MaxSessions:       maxSessions,
+		IdleTimeout:       idle,
+		PermissionMode:    EnvOr("PERMISSION_MODE", ""),
+		Model:             EnvOr("MODEL", ""),
+		TerminalShell:     EnvOr("TERMINAL_SHELL", ""),
+		Version:           version,
 	}
 }

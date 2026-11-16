@@ -55,9 +55,10 @@ location /app/ccweb/ {
 | `CCWEB_DATA_DIR` | `$TMPDIR/ccweb` | **数据目录**：socket、设置、授权目录、claude 家目录都在这下面 |
 | `CCWEB_SETTINGS_FILE` | `$DATA_DIR/settings.json` | 持久化配置（含第三方端点、密钥与界面偏好），权限 0600 |
 | `CCWEB_WORKSPACES_FILE` | `$DATA_DIR/workspaces.json` | 授权目录与当前工作区，权限 0600 |
+| `CCWEB_CONVERSATIONS_FILE` | `$DATA_DIR/conversations.json` | 对话元数据（归档/删除/重命名/最近活跃），权限 0600 |
 | `CCWEB_CLAUDE_HOME` | `$DATA_DIR/claude` | 派给 claude 子进程的 HOME（登录态与转录落在这里） |
 | `CCWEB_PROJECTS_ROOT` | `$HOME` | 首次启动时自动授权的默认目录 |
-| `CCWEB_AUTO_START` | `1` | 进程启动后自动在当前工作区拉起 claude（`0/false` 关闭） |
+| `CCWEB_AUTO_START` | `1` | 启动后恢复当前工作区最近一条对话（`0/false` 关闭；没有对话则不新建） |
 | `CCWEB_MAX_SESSIONS` | `8` | 常驻会话上限（单会话约 176 MB 内存） |
 | `CCWEB_IDLE_TIMEOUT` | `30m` | 空闲会话回收阈值 |
 | `CCWEB_PERMISSION_MODE` | 空 | 新会话默认权限模式 |
@@ -71,8 +72,8 @@ location /app/ccweb/ {
 
 - 首次启动会把 `CCWEB_PROJECTS_ROOT` 写进 `workspaces.json` 作为默认工作区；
 - 点工作区标题右侧的文件夹图标打开服务器目录浏览器，授权任意目录后立即切换过去；
-- 切换工作区时若该目录没有运行中的会话，会通过 `POST /api/session/ensure` 自动拉起 claude；
-- 会话创建只允许落在授权目录（及其子目录）内，直接调 API 传别的路径会得到 403；
+- 点工作区时自动打开它最近活跃的对话；没有对话才新建一条；
+- 对话创建只允许落在授权目录（及其子目录）内，直接调 API 传别的路径会得到 403；
 - 目录被移动/卸载时列表会标记「不可用」，`CCWEB_AUTO_START` 会退到第一个仍存在的目录。
 
 服务端目录浏览接口是 `GET /api/fs/list`（需要鉴权），只读、只列目录。
@@ -117,10 +118,34 @@ AI 生成提交信息——这些要么依赖它的宿主事件日志，要么�
 - 图片 / PDF 的原始字节预览有类型白名单并带 `CSP: sandbox`，HTML/SVG 只能当文本看，
   避免工作区文件以同源页面身份执行脚本读到 token。
 
-## APP 启动自动拉起 claude
+## 对话持久化与恢复
 
-`CCWEB_AUTO_START=1`（默认）时，进程启动后异步 `ensure` 当前工作区的会话。前端打开时
-如果还没会话，也会再 ensure 一次；`manager.Ensure` 内部串行化，不会重复启动。
+侧栏的对话列表来自两处，并以后端接口合并后的结果为准：
+
+1. **claude 转录**：`$CCWEB_CLAUDE_HOME/.claude/projects/**/*.jsonl`，提供标题、消息数与时间；
+2. **应用元数据**：`conversations.json`，保存自定义标题、归档、软删除、最近打开时间和模型信息。
+
+新建对话时后端生成一个 UUID，同时作为应用侧会话 id 和 claude 的 `--session-id`；
+因此转录文件名、侧栏条目、前端 localStorage 中的 `ccweb-active-session` 完全一致。
+恢复对话时用 `--resume <uuid>` 拉起新进程，再用 `/api/history/transcript` 回放旧事件，
+前端走与实时流相同的 `lib/normalize.ts`，所以工具卡片、thinking、diff 都能还原。
+
+行为：
+
+- 进入前端优先恢复上次打开的对话（localStorage）；没有则选当前工作区最近活跃的一条；
+- 上次的对话被归档/删除、或工作区一条对话都没有时，自动新建一条空对话；
+- 列表支持重命名、归档/取消归档、删除；「删除」是软删除（写墓碑、保留转录文件），
+  并会结束正在运行的进程；
+- 空闲回收或后端重启后，点对话条目会用同一 id 恢复；切换工作区会打开该工作区最近的对话。
+
+> `--resume` 只恢复上下文，不会把历史消息重新推到 stdout；所以转录回放是必需的，
+> 不能只靠 CLI 输出重建界面。
+
+## APP 启动预热
+
+`CCWEB_AUTO_START=1`（默认）时，进程启动后异步恢复当前工作区最近的一条对话
+（而不是新建空对话）。前端仍会按自己保存的 active id 选择；`manager.Resume` 对同一
+id 会复用进程，重复调用不会多起 claude。没有历史对话时后端不做任何事，由前端创建第一条。
 
 ## 设置页
 
@@ -130,6 +155,7 @@ AI 生成提交信息——这些要么依赖它的宿主事件日志，要么�
   会话字号（12–20px）、新建会话的默认权限模式；修改即时写入 `settings.json`。
 - **代理**：为 claude 子进程设置 HTTP/HTTPS/SOCKS5 代理，留空直连。保存后
   `POST /api/settings/proxy` 会重启所有运行中的 claude 会话，使代理变量立即生效；
+  重启用 `--resume` 恢复同一对话 id，对话记录不会丢；
   代理同时写入 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `SOCKS_PROXY`（大小写都有），
   `localhost` 与 `127.0.0.1` 自动走 `NO_PROXY`。
 - **模型**：按协议管理提供商。新建提供商时要手动填写**提供商 ID**，显示名留空则跟随 ID；
@@ -210,11 +236,13 @@ $CCWEB_DATA_DIR/
   ccweb.sock          # 唯一监听入口
   settings.json       # 设置 + 界面偏好（0600）
   workspaces.json     # 授权目录 + 当前工作区（0600）
+  conversations.json  # 对话元数据：标题/归档/删除/最近活跃（0600）
   claude/             # claude 的 HOME：登录态、~/.claude/projects 转录
 ```
 
-会话列表/历史就是读 `$CCWEB_CLAUDE_HOME/.claude/projects/**/*.jsonl`。
-把 `CCWEB_CLAUDE_HOME` 指回 `$HOME` 可复用操作者已有的登录态（但数据就不再集中）。
+会话转录读 `$CCWEB_CLAUDE_HOME/.claude/projects/**/*.jsonl`；侧栏的归档/重命名等状态
+读 `conversations.json`。把 `CCWEB_CLAUDE_HOME` 指回 `$HOME` 可复用操作者已有的登录态
+（但数据就不再集中）。
 
 ## 安全提醒
 
@@ -256,9 +284,13 @@ backend/
       process/          定位 claude、参数拼装、环境净化、进程启动
       session/          单会话状态机（握手 / 轮次 / 审批 / 中断）
       manager/          会话池、上限、空闲回收
-    history/            读取 ~/.claude/projects/**/*.jsonl
+    history/            读取 ~/.claude/projects/**/*.jsonl（摘要 + 转录回放）
+    conversation/       对话元数据（conversations.json：归档/删除/重命名/最近活跃）
     project/            工作目录枚举与校验、目录浏览器
     workspace/          授权目录与当前工作区（workspaces.json）
+    fsapi/              右侧栏文件树 / 预览的路径围栏
+    gitctl/             右侧栏 Git 面板（系统 git CLI）
+    terminal/           右侧栏 Linux PTY 终端
     authz/              Bearer / query token 鉴权
     webui/              前端产物内嵌（go:embed）
 frontend/

@@ -19,6 +19,7 @@ import (
 	"ccweb/backend/internal/agent/session"
 	"ccweb/backend/internal/authz"
 	"ccweb/backend/internal/config"
+	"ccweb/backend/internal/conversation"
 	"ccweb/backend/internal/hub"
 	"ccweb/backend/internal/settings"
 	"ccweb/backend/internal/workspace"
@@ -36,6 +37,7 @@ type WireEvent struct {
 type SessionManager interface {
 	Binary() string
 	Create(cwd, model, permissionMode string) (manager.Info, error)
+	Resume(id, cwd, model, permissionMode string) (manager.Info, error)
 	Ensure(cwd, model, permissionMode string) (manager.Info, error)
 	Get(id string) (*session.Session, bool)
 	List() []manager.Info
@@ -52,6 +54,7 @@ type Deps struct {
 	ProjectsRoot  string
 	Settings      *settings.Store
 	Workspaces    *workspace.Store
+	Conversations *conversation.Store
 	ClaudeVersion string
 	TerminalShell string
 	StartedAt     time.Time
@@ -104,6 +107,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/git/checkout", s.authed(s.handleGitCheckout))
 	s.mux.HandleFunc("POST /api/git/sync", s.authed(s.handleGitSync))
 	s.mux.HandleFunc("GET /api/history", s.authed(s.handleListHistory))
+	s.mux.HandleFunc("GET /api/history/transcript", s.authed(s.handleHistoryTranscript))
+	s.mux.HandleFunc("GET /api/conversations", s.authed(s.handleListConversations))
+	s.mux.HandleFunc("PATCH /api/conversations", s.authed(s.handlePatchConversation))
+	s.mux.HandleFunc("DELETE /api/conversations", s.authed(s.handleDeleteConversation))
 	s.mux.HandleFunc("GET /api/settings", s.authed(s.handleGetSettings))
 	s.mux.HandleFunc("PUT /api/settings", s.authed(s.handlePutSettings))
 	s.mux.HandleFunc("POST /api/settings/test", s.authed(s.handleTestProvider))

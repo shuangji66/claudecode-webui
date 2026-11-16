@@ -62,27 +62,28 @@ function asRecord(v: unknown): Raw | undefined {
   return v && typeof v === "object" ? (v as Raw) : undefined;
 }
 
-/** 处理一条 CLI 原始消息，返回新的列表（不修改入参）。 */
-export function applyCLI(items: Item[], msg: unknown): Item[] {
+/** 处理一条 CLI 原始消息，返回新的列表（不修改入参）。
+ *  at 用于回放历史转录时保留原始时间，不传则用当前时间。 */
+export function applyCLI(items: Item[], msg: unknown, at = Date.now()): Item[] {
   const m = asRecord(msg);
   if (!m) return items;
   switch (m.type) {
     case "stream_event":
-      return applyStreamEvent(items, m);
+      return applyStreamEvent(items, m, at);
     case "assistant":
-      return applyAssistant(items, m);
+      return applyAssistant(items, m, at);
     case "user":
-      return applyUser(items, m);
+      return applyUser(items, m, at);
     case "result":
-      return applyResult(items, m);
+      return applyResult(items, m, at);
     case "system":
-      return applySystem(items, m);
+      return applySystem(items, m, at);
     default:
       return items;
   }
 }
 
-function applyStreamEvent(items: Item[], m: Raw): Item[] {
+function applyStreamEvent(items: Item[], m: Raw, at: number): Item[] {
   const ev = asRecord(m.event);
   if (!ev || ev.type !== "content_block_delta") return items;
   const delta = asRecord(ev.delta);
@@ -97,7 +98,7 @@ function applyStreamEvent(items: Item[], m: Raw): Item[] {
     {
       id: nextId(),
       seq: seqOf(items),
-      ts: Date.now(),
+      ts: at,
       kind: "assistant",
       text: delta.text,
       streaming: true,
@@ -105,7 +106,7 @@ function applyStreamEvent(items: Item[], m: Raw): Item[] {
   ];
 }
 
-function applyAssistant(items: Item[], m: Raw): Item[] {
+function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
   const message = asRecord(m.message);
   const content = message?.content;
   const blocks = Array.isArray(content) ? content : [];
@@ -124,7 +125,7 @@ function applyAssistant(items: Item[], m: Raw): Item[] {
     } else {
       out = [
         ...out,
-        { id: nextId(), seq: seqOf(out), ts: Date.now(), kind: "assistant", text, streaming: false },
+        { id: nextId(), seq: seqOf(out), ts: at, kind: "assistant", text, streaming: false },
       ];
     }
   } else if (hasStreaming) {
@@ -138,7 +139,7 @@ function applyAssistant(items: Item[], m: Raw): Item[] {
     if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
       out = [
         ...out,
-        { id: nextId(), seq: seqOf(out), ts: Date.now(), kind: "thinking", text: block.thinking },
+        { id: nextId(), seq: seqOf(out), ts: at, kind: "thinking", text: block.thinking },
       ];
     } else if (block.type === "tool_use" && typeof block.name === "string") {
       const toolUseId = typeof block.id === "string" ? block.id : "";
@@ -152,7 +153,7 @@ function applyAssistant(items: Item[], m: Raw): Item[] {
         {
           id: nextId(),
           seq: seqOf(out),
-          ts: Date.now(),
+          ts: at,
           kind: "tool",
           toolUseId,
           name: block.name,
@@ -164,7 +165,7 @@ function applyAssistant(items: Item[], m: Raw): Item[] {
   return out;
 }
 
-function applyUser(items: Item[], m: Raw): Item[] {
+function applyUser(items: Item[], m: Raw, at: number): Item[] {
   const message = asRecord(m.message);
   const content = message?.content;
   const blocks = Array.isArray(content) ? content : [];
@@ -203,7 +204,7 @@ function applyUser(items: Item[], m: Raw): Item[] {
     const firstText = textOfContent(textBlocks);
     return [
       ...items,
-      { id: nextId(), seq: seqOf(items), ts: Date.now(), kind: "user", text: firstText || "附件" },
+      { id: nextId(), seq: seqOf(items), ts: at, kind: "user", text: firstText || "附件" },
     ];
   }
 
@@ -220,17 +221,17 @@ function applyUser(items: Item[], m: Raw): Item[] {
   ) {
     return items;
   }
-  return [...items, { id: nextId(), seq: seqOf(items), ts: Date.now(), kind: "user", text }];
+  return [...items, { id: nextId(), seq: seqOf(items), ts: at, kind: "user", text }];
 }
 
-function applyResult(items: Item[], m: Raw): Item[] {
+function applyResult(items: Item[], m: Raw, at: number): Item[] {
   const denials = Array.isArray(m.permission_denials) ? (m.permission_denials as unknown[]) : [];
   return [
     ...items,
     {
       id: nextId(),
       seq: seqOf(items),
-      ts: Date.now(),
+      ts: at,
       kind: "result",
       costUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : undefined,
       durationMs: typeof m.duration_ms === "number" ? m.duration_ms : undefined,
@@ -240,7 +241,7 @@ function applyResult(items: Item[], m: Raw): Item[] {
   ];
 }
 
-function applySystem(items: Item[], m: Raw): Item[] {
+function applySystem(items: Item[], m: Raw, at: number): Item[] {
   // init 只用于填充顶栏元信息，不进消息流；status 同理。
   if (m.subtype === "init" || m.subtype === "status") return items;
   // hooks 输出等以 system + content 字符串形式上送，需要展示（并清洗 ANSI）。
@@ -250,7 +251,7 @@ function applySystem(items: Item[], m: Raw): Item[] {
       {
         id: nextId(),
         seq: seqOf(items),
-        ts: Date.now(),
+        ts: at,
         kind: "system",
         subtype: typeof m.subtype === "string" ? m.subtype : undefined,
         text: stripAnsi(m.content),

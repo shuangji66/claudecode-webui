@@ -23,6 +23,7 @@ import (
 
 type fakeMgr struct {
 	created []string
+	resumed []string
 	closed  []string
 	failOn  string
 }
@@ -35,6 +36,11 @@ func (f *fakeMgr) Create(cwd, model, mode string) (manager.Info, error) {
 	}
 	f.created = append(f.created, cwd)
 	return manager.Info{ID: "sess-1", Cwd: cwd, State: "ready"}, nil
+}
+
+func (f *fakeMgr) Resume(id, cwd, model, mode string) (manager.Info, error) {
+	f.resumed = append(f.resumed, id)
+	return manager.Info{ID: id, Cwd: cwd, State: "ready"}, nil
 }
 
 func (f *fakeMgr) Ensure(cwd, model, mode string) (manager.Info, error) {
@@ -619,8 +625,8 @@ func TestApplyProxyPersistsAndRestartsSessions(t *testing.T) {
 	if len(mgr.closed) != 1 || mgr.closed[0] != "sess-1" {
 		t.Fatalf("旧会话应被关闭: %v", mgr.closed)
 	}
-	if len(mgr.created) != 1 || mgr.created[0] != "/tmp" {
-		t.Fatalf("应按原目录重启: %v", mgr.created)
+	if len(mgr.resumed) != 1 || mgr.resumed[0] != "sess-1" {
+		t.Fatalf("应按原对话 id 恢复: %v", mgr.resumed)
 	}
 	if len(body.Sessions) != 1 {
 		t.Fatalf("sessions = %+v", body.Sessions)

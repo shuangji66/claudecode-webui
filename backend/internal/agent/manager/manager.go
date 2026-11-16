@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,14 +82,63 @@ func New(cfg config.Config, exePath string, store *settings.Store, emit func(str
 func (m *Manager) Binary() string { return m.bin }
 
 // Create 新建一个会话并完成握手。
+//
+// 会话 id 同时作为 claude 的 --session-id：这样转录文件名、应用侧记录和
+// 前端 active id 是同一个 UUID，重启后可以用 --resume 精确恢复。
 func (m *Manager) Create(cwd, model, permissionMode string) (Info, error) {
+	abs, err := normalizeCwd(cwd)
+	if err != nil {
+		return Info{}, err
+	}
+	id, err := newUUID()
+	if err != nil {
+		return Info{}, fmt.Errorf("manager: 生成会话 id: %w", err)
+	}
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+	return m.create(abs, id, "", model, permissionMode)
+}
+
+// Resume 用已有对话 id 恢复一个 claude 进程。
+//
+// 同 id 已经在运行就直接返回现有会话；否则以 --resume 启动，并沿用原 id，
+// 这样前后端所有引用（transcript、active id、对话元数据）保持稳定。
+func (m *Manager) Resume(id, cwd, model, permissionMode string) (Info, error) {
+	id = strings.TrimSpace(id)
+	if !validUUID(id) {
+		return Info{}, errors.New("manager: 非法的对话 id")
+	}
 	abs, err := normalizeCwd(cwd)
 	if err != nil {
 		return Info{}, err
 	}
 	m.createMu.Lock()
 	defer m.createMu.Unlock()
-	return m.create(abs, model, permissionMode)
+
+	if info, ok := m.infoByID(id); ok {
+		if filepath.Clean(info.Cwd) != abs {
+			return Info{}, errors.New("manager: 该对话属于其它工作目录")
+		}
+		return info, nil
+	}
+	return m.create(abs, id, id, model, permissionMode)
+}
+
+// Info 按 id 返回会话描述。
+func (m *Manager) Info(id string) (Info, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	if !ok {
+		return Info{}, false
+	}
+	info := infoOf(s)
+	if mt, ok := m.metas[id]; ok {
+		info.Provider = mt.Provider
+		info.Model = mt.Model
+		info.Effort = mt.Effort
+	}
+	return info, true
 }
 
 // Ensure 返回 cwd 下已存在的会话；没有则新建。
@@ -106,7 +156,29 @@ func (m *Manager) Ensure(cwd, model, permissionMode string) (Info, error) {
 	if info, ok := m.findByCwd(abs); ok {
 		return info, nil
 	}
-	return m.create(abs, model, permissionMode)
+	id, err := newUUID()
+	if err != nil {
+		return Info{}, fmt.Errorf("manager: 生成会话 id: %w", err)
+	}
+	return m.create(abs, id, "", model, permissionMode)
+}
+
+// infoByID 返回某个 id 的存活会话描述；已退出的会话视为不存在，
+// 这样 Resume 会重新拉起进程而不是返回一个 closed 的壳。
+func (m *Manager) infoByID(id string) (Info, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[id]
+	if !ok || s.State() == session.StateClosed {
+		return Info{}, false
+	}
+	info := infoOf(s)
+	if mt, ok := m.metas[id]; ok {
+		info.Provider = mt.Provider
+		info.Model = mt.Model
+		info.Effort = mt.Effort
+	}
+	return info, true
 }
 
 // findByCwd 返回该目录下最近活跃的存活会话。
@@ -153,7 +225,8 @@ func normalizeCwd(cwd string) (string, error) {
 }
 
 // create 在 createMu 已持有的前提下启动会话。
-func (m *Manager) create(abs, model, permissionMode string) (Info, error) {
+// sessionID 是应用侧 / CLI 共用的 id；resumeID 非空时走 --resume。
+func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string) (Info, error) {
 	m.reapIdle()
 	m.pruneClosed()
 
@@ -180,9 +253,16 @@ func (m *Manager) create(abs, model, permissionMode string) (Info, error) {
 	}
 	effort := cfgSet.DefaultEffort()
 	args := process.Args(process.Options{
-		Model:                  model,
-		PermissionMode:         permissionMode,
-		Effort:                 effort,
+		Model:          model,
+		PermissionMode: permissionMode,
+		Effort:         effort,
+		Resume:         resumeID,
+		SessionID: func() string {
+			if resumeID == "" {
+				return sessionID
+			}
+			return ""
+		}(),
 		IncludePartialMessages: true,
 	})
 	// 先净化继承环境，再追加设置里的 ANTHROPIC_*（后者生效，从而覆盖宿主机同名变量）。
@@ -194,7 +274,7 @@ func (m *Manager) create(abs, model, permissionMode string) (Info, error) {
 		return Info{}, err
 	}
 
-	id := newID()
+	id := sessionID
 	sess := session.New(id, abs, proc, func(ev session.Event) {
 		if m.emit != nil {
 			m.emit(id, ev)
@@ -347,10 +427,37 @@ func infoOf(s *session.Session) Info {
 	}
 }
 
-func newID() string {
-	var b [8]byte
+// newUUID 生成 RFC 4122 v4 UUID；claude 的 --session-id 要求这个格式。
+func newUUID() (string, error) {
+	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("s%d", time.Now().UnixNano())
+		return "", err
 	}
-	return hex.EncodeToString(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%s-%s-%s-%s-%s",
+		hex.EncodeToString(b[0:4]),
+		hex.EncodeToString(b[4:6]),
+		hex.EncodeToString(b[6:8]),
+		hex.EncodeToString(b[8:10]),
+		hex.EncodeToString(b[10:16]),
+	), nil
+}
+
+func validUUID(id string) bool {
+	if len(id) != 36 {
+		return false
+	}
+	for i, r := range id {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if r != '-' {
+				return false
+			}
+			continue
+		}
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
 }

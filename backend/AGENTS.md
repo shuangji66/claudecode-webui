@@ -14,9 +14,10 @@ internal/agent/protocol   stream-json 编解码与消息构造（纯函数）
 internal/agent/process    定位 claude、拼参数、净化环境、启动进程
 internal/agent/session    单会话状态机（握手/轮次/审批/中断）
 internal/agent/manager    会话池、上限、空闲回收
-internal/history     转录文件读取
+internal/history     转录摘要 + 按 id 回放原始事件行
 internal/project     工作目录枚举/校验、目录浏览器
 internal/workspace   授权目录 + 当前工作区（workspaces.json）
+internal/conversation 对话元数据（conversations.json：归档/删除/重命名/最近活跃）
 internal/fsapi       工作区内文件树/文本预览/原始字节（路径围栏 + 符号链接校验）
 internal/gitctl      Git 面板后端：status/diff/stage/commit/log/branch/sync
 internal/terminal    Linux PTY 会话（/dev/ptmx + ioctl，零依赖）
@@ -104,8 +105,8 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 界面偏好 `theme`（system/light/dark）、`locale`（zh/en）、`font_size`（12–20）、
   `proxy_url`（http/https/socks5/socks5h，空=直连）也落在 `settings.json`；
   `Open` 时补默认值，`Apply` 时校验，非法值直接报错。
-- 代理只在进程启动时生效：`POST /api/settings/proxy` 保存后关闭全部会话并 `Ensure`
-  原目录的新会话；`Settings.Env()` 注入大小写两套 proxy 变量和 localhost `NO_PROXY`，
+- 代理只在进程启动时生效：`POST /api/settings/proxy` 保存后关闭全部会话，再按原 id
+  `Resume`（空对话没有转录时才退回 `Ensure`）；`Settings.Env()` 注入大小写两套 proxy 变量和 localhost `NO_PROXY`，
   `process.CleanEnv` 必须剔除继承的代理变量，保证空值=直连。
 - 模型列表解析的显示名只取 `display_name` / `displayName` / `title` / `label` / `name`，
   绝不能把 `description` 当显示名；`name` 等于 ID 时按空处理，前端回落 ID。
@@ -121,7 +122,19 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 旧配置（顶层 base_url/api_key + 四个别名）在 `Open()` 时自动迁移成一个 provider，
   迁移后清空旧字段。
 
-## 5.2 右侧栏后端（`fsapi` / `gitctl` / `terminal`）
+## 5.2 对话持久化（`conversation` / `history` / `manager`）
+
+- 新建会话生成 UUID，同时作为 manager id 与 claude `--session-id`；恢复用同一个 UUID
+  `--resume`。`Manager.Resume` 对已在运行的 id 直接返回现有 info，并在 createMu 内串行化。
+- `conversation.Store` 只存应用增量（标题/归档/删除/last_active/模型），转录仍由 claude 写。
+  删除写墓碑，不删 jsonl；`LastFor`/列表/自动预热都必须跳过 deleted/archived。
+- 新会话在首条 prompt 成功后才 `Touch` 元数据；否则后端重启后会出现没有转录、无法 resume 的条目。
+- `--resume` 不会回放 transcript；`GET /api/history/transcript` 返回原始事件行，
+  前端用 `applyCLI` 回放并保留 `timestamp`。`history.LoadTranscript` 过滤
+  `isSidechain`/`isMeta` 与 queue-operation 等非消息类型，最多保留最近 20k 行/16MB。
+- `CCWEB_AUTO_START` 预热只做 Resume，不新建；没有对话时留给前端创建。
+
+## 5.3 右侧栏后端（`fsapi` / `gitctl` / `terminal`）
 
 - `fsapi.Root` 同时保存传入路径与 `EvalSymlinks` 后的真实路径；每次解析都要求真实路径
   仍在根内。不要为了「方便」改成纯词法判断——符号链接可以从工作区跳到 `/etc`。
@@ -145,6 +158,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `/api/settings` 三个端点（GET/PUT/POST test）都属于敏感路由，务必保持鉴权。
 - 工作区路由：`GET/POST/DELETE /api/workspaces`、`POST /api/workspaces/current`、
   `GET /api/fs/list`。目录浏览是只读但能枚举宿主目录，必须保持鉴权。
+- 对话路由：`GET /api/conversations`、`PATCH /api/conversations`（重命名/归档/touch）、
+  `DELETE /api/conversations?id=`（软删除）、`GET /api/history/transcript?id=`（回放）。
+  `POST /api/session` 带 `resume` 时走 `manager.Resume`，不带才新建。
 - 右侧栏路由：`GET /api/fs/tree|file|raw`、`GET /api/git/status|diff|show|log|branches`、
   `POST /api/git/stage|unstage|discard|commit|checkout|sync`、`GET /ws/terminal`。
   全部先过 `authorizedCwd`（`project.Validate` + `workspace.Allows`），再做路径围栏；
@@ -167,10 +183,12 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - **状态机用假对端**：`session` 的测试用 `os.Pipe` 对（**不要用 `net.Pipe`**，无缓冲会自锁），
   假 CLI 按真实协议回包。
 - **网关用 fake manager**：`gateway_test.go` 里的 `fakeMgr` 实现 `SessionManager`
-  （含 `Ensure`），这样不依赖 claude 二进制。
+  （含 `Resume`/`Ensure`），这样不依赖 claude 二进制。
 - 附件：`protocol.UserMessage` 负责 image/document/text content block；`gateway/ws.go`
   的 `decodeAttachments` 负责类型/大小/UTF-8 校验。WS 单帧上限 16MB，前端总附件 10MB。
 - `workspace` 的种子、增删、嵌套最长匹配、`Allows/ AutoStartPath` 必须有表驱动测试。
+- 对话：`conversation` 覆盖 Touch/重命名/归档/删除/嵌套 cwd/持久化；`history` 覆盖 transcript
+  过滤与尾部截断；网关覆盖列表合并、删除隐藏、resume 鉴权/目录校验。
 - 右侧栏：`fsapi` 覆盖路径穿越、符号链接逃逸、隐藏文件、截断与二进制；`gitctl` 覆盖
   porcelain v2 / numstat / log 解析与真实临时仓库；网关覆盖未授权 cwd、raw 类型白名单、
   WS 升级前鉴权。

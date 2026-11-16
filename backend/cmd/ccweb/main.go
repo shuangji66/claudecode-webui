@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,7 +19,9 @@ import (
 	"ccweb/backend/internal/agent/session"
 	"ccweb/backend/internal/authz"
 	"ccweb/backend/internal/config"
+	"ccweb/backend/internal/conversation"
 	"ccweb/backend/internal/gateway"
+	"ccweb/backend/internal/history"
 	"ccweb/backend/internal/hub"
 	"ccweb/backend/internal/settings"
 	"ccweb/backend/internal/workspace"
@@ -49,6 +52,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 对话元数据：归档/删除/重命名/最近活跃。转录本身由 claude 写盘。
+	convStore, err := conversation.Open(cfg.ConversationsFile)
+	if err != nil {
+		logger.Printf("启动失败: %v", err)
+		os.Exit(1)
+	}
+
 	mgr, err := manager.New(cfg, exePath, store, func(sid string, ev session.Event) {
 		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data})
 	})
@@ -58,30 +68,55 @@ func main() {
 	}
 	defer mgr.CloseAll()
 
+	historyDir := filepath.Join(cfg.ClaudeHome, ".claude", "projects")
 	srv := gateway.New(gateway.Deps{
 		Cfg:           cfg,
 		Guard:         authz.New(cfg.AuthToken),
 		Hub:           h,
 		Manager:       mgr,
-		HistoryDir:    filepath.Join(cfg.ClaudeHome, ".claude", "projects"),
+		HistoryDir:    historyDir,
 		Settings:      store,
 		Workspaces:    wsStore,
+		Conversations: convStore,
 		ProjectsRoot:  cfg.ProjectsRoot,
 		ClaudeVersion: probeClaudeVersion(mgr.Binary()),
 		TerminalShell: cfg.TerminalShell,
 		StartedAt:     time.Now(),
 	}, logger)
 
-	// APP 启动即拉起 claude：异步执行，握手慢不能拖住 socket 监听。
-	// 前端如果先连上，会再调一次 /api/session/ensure，manager 内部串行化去重。
+	// APP 启动预热：恢复当前工作区最近的一条对话，而不是新建一条空对话。
+	// 前端仍会按自己保存的 active id 选择；这里只是让首屏更快，manager.Resume
+	// 对同一 id 会直接复用已存在的进程。
 	if cfg.AutoStart {
 		go func() {
 			cwd := wsStore.AutoStartPath()
 			if cwd == "" {
 				return
 			}
-			if _, err := mgr.Ensure(cwd, "", ""); err != nil {
-				logger.Printf("自动启动会话失败（%s）: %v", cwd, err)
+			id, resumeCwd := "", ""
+			if rec, ok := convStore.LastFor(cwd); ok {
+				id = rec.ID
+				resumeCwd = rec.Cwd
+			} else if latest, ok := latestTranscript(historyDir, cwd, func(id string) bool {
+				rec, exists := convStore.Get(id)
+				return exists && (rec.Deleted || rec.Archived)
+			}); ok {
+				// 首次升级：把 claude 已有的转录收养进对话列表。
+				if err := convStore.Ensure(conversation.Record{
+					ID: latest.ID, Cwd: latest.Cwd, Title: latest.Title,
+					CreatedAt: latest.UpdatedAt, LastActive: latest.UpdatedAt,
+				}); err != nil {
+					logger.Printf("收养历史对话失败（%s）: %v", latest.ID, err)
+					return
+				}
+				id = latest.ID
+				resumeCwd = latest.Cwd
+			}
+			if id == "" || resumeCwd == "" {
+				return
+			}
+			if _, err := mgr.Resume(id, resumeCwd, "", ""); err != nil {
+				logger.Printf("恢复对话失败（%s）: %v", id, err)
 				return
 			}
 			wsStore.Touch(cwd)
@@ -101,6 +136,25 @@ func main() {
 		logger.Printf("服务退出: %v", err)
 		os.Exit(1)
 	}
+}
+
+// latestTranscript 返回 cwd 下最近更新的 claude 转录；用于把旧版本留下的
+// 历史对话一次性收养进 conversation 元数据。
+func latestTranscript(projectsDir, cwd string, skip func(string) bool) (history.Session, bool) {
+	list, err := history.List(projectsDir)
+	if err != nil {
+		return history.Session{}, false
+	}
+	for _, h := range list {
+		if h.Cwd != cwd && !strings.HasPrefix(h.Cwd, strings.TrimRight(cwd, "/")+"/") {
+			continue
+		}
+		if skip != nil && skip(h.ID) {
+			continue
+		}
+		return h, true
+	}
+	return history.Session{}, false
 }
 
 // probeClaudeVersion 取一次 `claude --version` 用于 /api/info 展示；失败不阻塞启动。

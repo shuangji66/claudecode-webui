@@ -20,6 +20,19 @@ export function sessionTitle(cwd: string, items: Item[] | undefined, locale: Loc
   return baseName(cwd) || tr(locale, "新会话", "New session");
 }
 
+/** 对话标题：自定义标题 > 首条用户消息 > “新对话”。 */
+export function conversationTitle(
+  title: string | undefined,
+  items: Item[] | undefined,
+  locale: Locale = "zh",
+): string {
+  const custom = title?.trim();
+  if (custom) return custom;
+  const first = items?.find((i) => i.kind === "user" && i.text.trim());
+  if (first && first.kind === "user") return truncate(first.text, 48);
+  return tr(locale, "新对话", "New chat");
+}
+
 /** 相对时间；传 now 便于测试。 */
 export function relativeTime(iso: string | undefined, now = Date.now(), locale: Locale = "zh"): string {
   if (!iso) return "";

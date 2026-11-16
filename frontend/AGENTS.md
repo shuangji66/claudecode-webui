@@ -21,9 +21,11 @@ src/
   lib/providerForm.ts  提供商/模型元数据表单转换
   lib/attachments.ts   附件类型/大小/读取
   lib/workspace.ts     文件路径/porcelain 分组/unified diff 解析（纯函数）
+  lib/conversations.ts 对话归属/最近对话排序（纯函数）
   assets/claude-code.svg 左侧栏品牌图标
   store/useAppStore.ts zustand 全局状态（只做状态搬运）
   store/useSidebarStore.ts 右侧栏数据（文件树/Git/预览，所有 fetch 收敛在这里）
+  components/layout/Sidebar.tsx 工作区/对话列表、重命名/归档/删除菜单
   components/right/    RightSidebar / FilesPanel / GitPanel / TerminalPanel
   components/          layout / chat / tools / permission / settings / common
 ```
@@ -57,12 +59,25 @@ src/
     不要自己拼绝对路径。切换工作区由 `RightSidebar` 统一 `setCwd`，子面板不要重复调用。
 15. Git 的 `MM` 文件必须同时出现在暂存与更改两组，各自用本侧行数；不要把两侧相加。
     `lib/workspace.ts` 的 `groupChanges` 是唯一分组入口。
+16. **对话 id 是稳定 UUID**：新建由后端生成并同时用于 `--session-id`；打开旧对话必须
+    `POST /api/session {resume:id}`，不能用 ensure/create 顶替。localStorage 的
+    `ccweb-active-session` 存的就是这个 id。
+17. **打开对话先回放 transcript 再连 WS**：`--resume` 不会回放历史；`openConversation`
+    会读 `/api/history/transcript` 并用 `applyCLI(items,line,timestamp)` 折叠。切换对话时
+    如果 `items[id]` 已有内容就不要再回放，避免重复。
+18. **列表标题**走 `conversationTitle(自定义标题, items, locale)`：自定义 > 首条用户消息 >
+    “新对话”。不要用目录名当空对话标题。
+19. **归档/删除后**要刷新对话列表；删除是软删除，前端不要把转录当作可删除文件。
+    当前对话被归档/删除时，打开同工作区下一条非归档对话；没有就回到新对话空态。
 
 ## 3. 状态管理（zustand）
 
 - 每个会话的消息独立存 `items[sid]`，切换会话不重新拉取；
 - WebSocket 实例放在**模块级 `Map`**，不进 store（避免被当成可序列化数据）；
 - store 的 action 只做三件事：调 API、转发命令、把事件交给纯函数；
+- **对话列表**存 `conversations`（后端合并转录+元数据+live），`openConversation(id)` 负责
+  `--resume`、切换工作区、回放 transcript、连接 WS；组件不要自己调 `/api/session`。
+- 新建对话用 `createSession`；空对话等首条 prompt 才由后端落元数据，前端不要提前 touch。
 - 新增事件类型：先改 `transport/types.ts` → 再在 `applyEvent` 里分支 → 最后补测试。
 
 ## 4. 消息模型（Item）
@@ -119,6 +134,8 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
   `providerForm`（模型元数据/补丁/强度回落）、`theme`（system 解析/字号夹取）、`labels`（中英）、
   `attachments`（类型/大小/格式化）、`sessionExport`（Markdown 导出）。
 - 右侧栏纯函数（`workspace`）覆盖 statusOfXY、MM 双分组、unified diff 行号、预览类型。
+- 对话纯函数（`conversations`）覆盖工作区归属/最长匹配/归档跳过；`labels` 覆盖
+  `conversationTitle` 的三级回落；`normalize` 覆盖 transcript 时间戳保留。
 - **组件用 Testing Library**，断言用户可见的结果（文本、按钮），不要断言内部 state。
 - 改 `normalize` 时先写一个会失败的用例，再改实现。
 - 不要写依赖 `Date.now()` 精确值的断言。

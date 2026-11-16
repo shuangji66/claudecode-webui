@@ -1,11 +1,12 @@
-// 全局状态：会话列表、消息流、权限队列、连接状态、工作区与第三方模型配置。
+// 全局状态：对话列表、消息流、权限队列、连接状态、工作区与第三方模型配置。
 //
 // 设计取舍：
-//   - 每个会话的消息列表独立存在 items[sid] 里，切换会话不重新拉取；
+//   - 每个对话的消息列表独立存在 items[id] 里，切换对话不重新拉取；
 //   - WebSocket 实例放在模块级 Map 里（不进 state，避免被当成可序列化数据）；
 //   - 所有协议归一化逻辑放 lib/normalize.ts，这里只做状态搬运；
 //   - 「当前选中模型」是全局唯一值，它就是 claude CLI 的默认模型；
-//   - 工作区 = 已授权目录；切换工作区会 ensure 一个 claude 会话。
+//   - 对话 id 是稳定 UUID：新建用 --session-id，打开旧对话用 --resume + transcript 回放；
+//   - 工作区 = 已授权目录；切换工作区会打开该目录最近活跃的对话（没有才新建）。
 
 import { create } from "zustand";
 import { apiFetch } from "../lib/runtime";
@@ -13,6 +14,7 @@ import { appendError, appendUser, applyCLI } from "../lib/normalize";
 import type { Item } from "../lib/model";
 import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
 import type {
+  ConversationInfo,
   FsListing,
   GatewayModel,
   InitPayload,
@@ -22,12 +24,14 @@ import type {
   PublicSettings,
   Selection,
   SessionInfo,
+  TranscriptPayload,
   WireAttachment,
   WireEvent,
   WorkspaceEntry,
   WorkspacesPayload,
 } from "../transport/types";
 import { normalizeSettings, type ProviderForm } from "../lib/providerForm";
+import { belongs, latestConversation, workspaceFor } from "../lib/conversations";
 
 export type { SessionInfo } from "../transport/types";
 
@@ -42,6 +46,7 @@ export interface InfoResponse {
   claude_home: string;
   settings_file: string;
   workspaces_file: string;
+  conversations_file?: string;
   auto_start: boolean;
   current_workspace: string;
   auth_required: boolean;
@@ -54,15 +59,6 @@ export interface ProjectEntry {
   name: string;
   path: string;
   has_git: boolean;
-}
-
-export interface HistorySession {
-  id: string;
-  cwd: string;
-  title: string;
-  updated_at: string;
-  messages: number;
-  project: string;
 }
 
 export interface ConnInfo extends StatusDetail {
@@ -94,8 +90,8 @@ interface AppState {
   starting: boolean;
 
   projects: ProjectEntry[];
-  history: HistorySession[];
   sessions: SessionInfo[];
+  conversations: ConversationInfo[];
   activeId: string | null;
 
   items: Record<string, Item[]>;
@@ -126,14 +122,18 @@ interface AppState {
   applyProxy: (url: string) => Promise<{ ok: boolean; warning?: string }>;
 
   refreshSessions: () => Promise<void>;
-  refreshHistory: () => Promise<void>;
+  refreshConversations: () => Promise<void>;
   refreshWorkspaces: () => Promise<void>;
-  addWorkspace: (path: string) => Promise<boolean>;
+  addWorkspace: (path: string, open?: boolean) => Promise<boolean>;
   removeWorkspace: (path: string) => Promise<boolean>;
   switchWorkspace: (path: string) => Promise<void>;
   browseDirs: (path: string, hidden: boolean) => Promise<FsListing>;
   ensureSession: (cwd?: string) => Promise<SessionInfo | null>;
   createSession: (cwd?: string) => Promise<void>;
+  openConversation: (id: string, force?: boolean) => Promise<boolean>;
+  renameConversation: (id: string, title: string) => Promise<boolean>;
+  archiveConversation: (id: string, archived: boolean) => Promise<boolean>;
+  deleteConversation: (id: string) => Promise<boolean>;
   closeSession: (id: string) => Promise<void>;
   setActive: (id: string | null) => void;
   connect: (id: string) => void;
@@ -156,7 +156,9 @@ interface AppState {
 }
 
 const clients = new Map<string, ClaudeClient>();
-const ensurePromises = new Map<string, Promise<SessionInfo | null>>();
+const resumePromises = new Map<string, Promise<boolean>>();
+/** 正在创建的新对话；此时发送必须等它落定，不能发到上一个 active。 */
+let createTask: Promise<SessionInfo | null> | null = null;
 const recovering = new Set<string>();
 const ACTIVE_KEY = "ccweb-active-session";
 let bootstrapPromise: Promise<void> | null = null;
@@ -186,6 +188,19 @@ function writeActiveId(id: string | null): void {
   }
 }
 
+/** 等 WS 真正 open；新建会话后立刻发送消息时不能只看 HTTP 返回。 */
+function waitForOpen(id: string, timeoutMs = 8000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const tick = () => {
+      if (clients.get(id)?.ready) return resolve(true);
+      if (Date.now() - started > timeoutMs) return resolve(false);
+      window.setTimeout(tick, 60);
+    };
+    tick();
+  });
+}
+
 /** 把草稿提供商转成 /api/settings/models 需要的入参。 */
 function providerRef(form: ProviderForm) {
   return {
@@ -211,20 +226,31 @@ async function recoverSession(id: string, get: () => AppState): Promise<void> {
   recovering.add(id);
   try {
     const r = await apiFetch<{ sessions: SessionInfo[] }>("/api/sessions");
-    const sessions = r.sessions ?? [];
-    if (sessions.some((s) => s.id === id)) return;
+    if ((r.sessions ?? []).some((s) => s.id === id)) return;
 
-    const wasActive = get().activeId === id;
-    const cwd = get().sessions.find((s) => s.id === id)?.cwd || get().currentWorkspace;
+    const conv = get().conversations.find((c) => c.id === id);
+    const cwd = conv?.cwd || get().sessions.find((s) => s.id === id)?.cwd || get().currentWorkspace;
     get().disconnect(id);
-    useAppStore.setState({ sessions });
-    if (!wasActive) return;
+    useAppStore.setState({ sessions: r.sessions ?? [] });
+    if (get().activeId !== id) return;
+
+    // 后端重启后进程没了，但对话 id 是稳定的：先用同一个 id 恢复。
+    if (conv) {
+      const ok = await get().openConversation(id, true);
+      if (ok) return;
+    }
     get().setActive(null);
     writeActiveId(null);
-    if (cwd) {
-      const info = await get().ensureSession(cwd);
-      if (info && !get().activeId) get().setActive(info.id);
+    if (!cwd) return;
+    // 恢复失败（转录被删/目录不可用）：退到同工作区下一条，再不行新建。
+    const root = conv ? workspaceFor(conv.cwd, get().workspaces) || conv.cwd : cwd;
+    const next = get()
+      .conversations.filter((c) => c.id !== id && !c.archived && belongs(c.cwd, root))
+      .sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""))[0];
+    if (next) {
+      if (await get().openConversation(next.id, true)) return;
     }
+    await get().createSession(cwd);
   } catch {
     // 网络还没恢复：留给下一轮重试
   } finally {
@@ -242,8 +268,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   workspaceBusy: false,
   starting: false,
   projects: [],
-  history: [],
   sessions: [],
+  conversations: [],
   activeId: null,
   items: {},
   perms: {},
@@ -268,45 +294,40 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set({ loading: true, error: null });
       try {
         const info = await apiFetch<InfoResponse>("/api/info");
-        const [settings, ws, sessions, history] = await Promise.all([
+        const [settings, ws, sessions, conversations] = await Promise.all([
           apiFetch<PublicSettings>("/api/settings").catch(() => null),
           apiFetch<WorkspacesPayload>("/api/workspaces").catch(() => null),
           apiFetch<{ sessions: SessionInfo[] }>("/api/sessions").catch(() => ({ sessions: [] })),
-          apiFetch<{ history: HistorySession[] }>("/api/history").catch(() => ({ history: [] })),
+          apiFetch<{ conversations: ConversationInfo[] }>("/api/conversations").catch(() => ({ conversations: [] })),
         ]);
         const workspacePayload: WorkspacesPayload = ws ?? {
           workspaces: [],
           current: info.current_workspace ?? "",
           root: info.projects_root ?? "",
         };
-        const list = sessions.sessions ?? [];
+        const conversationList = conversations.conversations ?? [];
         set({
           info,
           settings: normalizeSettings(settings),
           workspaces: workspacePayload.workspaces ?? [],
           workspaceRoot: workspacePayload.root ?? info.projects_root ?? "",
           currentWorkspace: workspacePayload.current ?? "",
-          sessions: list,
-          history: history.history ?? [],
+          sessions: sessions.sessions ?? [],
+          conversations: conversationList,
           loading: false,
         });
 
-        // 优先恢复上次打开的会话；否则选当前工作区里最新的一条；再否则第一条。
+        // 优先恢复上次打开且未归档的对话；否则当前工作区最近的一条；
+        // 都没有（或已被归档/删除）才开一条新对话。
         const saved = readActiveId();
-        const pick =
-          list.find((s) => s.id === saved)?.id ??
-          list.find((s) => s.cwd === workspacePayload.current)?.id ??
-          list[0]?.id ??
-          null;
+        const savedConv = conversationList.find((c) => c.id === saved && !c.archived);
+        const pick = savedConv ?? latestConversation(workspacePayload.current, conversationList);
         if (pick) {
-          get().setActive(pick);
-          get().connect(pick);
+          await get().openConversation(pick.id);
           return;
         }
-
-        // APP 启动自动拉起 claude：后端通常已经开始拉；这里再 ensure 一次去重。
-        if (info.auto_start && workspacePayload.current) {
-          void get().ensureSession(workspacePayload.current);
+        if (workspacePayload.current) {
+          await get().createSession(workspacePayload.current);
         }
       } catch (e) {
         set({ loading: false, error: errText(e) });
@@ -417,7 +438,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
   applyProxy: async (url) => {
     set({ settingsSaving: true, error: null });
     const oldActive = get().activeId;
-    const oldCwd = get().sessions.find((s) => s.id === oldActive)?.cwd || get().currentWorkspace;
+    const oldCwd =
+      get().conversations.find((c) => c.id === oldActive)?.cwd ||
+      get().sessions.find((s) => s.id === oldActive)?.cwd ||
+      get().currentWorkspace;
     try {
       const res = await apiFetch<{ settings: PublicSettings; sessions: SessionInfo[]; warning?: string }>("/api/settings/proxy", {
         method: "POST",
@@ -433,12 +457,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
         clients.get(oldActive)?.close();
         clients.delete(oldActive);
       }
+      const list = res.sessions ?? [];
       const next =
-        (res.sessions ?? []).find((s) => s.cwd === oldCwd) ??
-        (res.sessions ?? [])[0] ??
+        list.find((s) => s.id === oldActive) ??
+        list.find((s) => s.cwd === oldCwd) ??
+        list[0] ??
         null;
       get().setActive(next?.id ?? null);
       if (next) get().connect(next.id);
+      await get().refreshConversations();
       return { ok: !res.warning, warning: res.warning };
     } catch (e) {
       set({ settingsSaving: false, error: errText(e) });
@@ -474,12 +501,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
   },
 
-  refreshHistory: async () => {
+  refreshConversations: async () => {
     try {
-      const r = await apiFetch<{ history: HistorySession[] }>("/api/history");
-      set({ history: r.history ?? [] });
-    } catch {
-      // 历史读取失败不影响主流程
+      const r = await apiFetch<{ conversations: ConversationInfo[] }>("/api/conversations");
+      set({ conversations: r.conversations ?? [] });
+    } catch (e) {
+      set({ error: errText(e) });
     }
   },
 
@@ -496,7 +523,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
   },
 
-  addWorkspace: async (path) => {
+  addWorkspace: async (path, open = true) => {
     set({ workspaceBusy: true, error: null });
     try {
       const r = await apiFetch<WorkspacesPayload>("/api/workspaces", {
@@ -508,7 +535,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         currentWorkspace: r.current ?? "",
         workspaceRoot: r.root ?? get().workspaceRoot,
       });
-      await get().ensureSession(r.current);
+      if (open) await get().ensureSession(r.current);
+      else await get().refreshConversations();
       return true;
     } catch (e) {
       set({ error: errText(e) });
@@ -532,7 +560,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
       });
       // 只有移除的正好是当前工作区时才自动拉起下一个；移除别的目录
       // 不应打断用户当前会话。
-      if (r.current && r.current !== previous) await get().ensureSession(r.current);
+      if (r.current && r.current !== previous) {
+        await get().ensureSession(r.current);
+      } else if (!r.current && previous) {
+        const active = get().activeId;
+        if (active) get().disconnect(active);
+        get().setActive(null);
+        writeActiveId(null);
+      }
       return true;
     } catch (e) {
       set({ error: errText(e) });
@@ -579,51 +614,223 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set({ error: "请先添加并选择一个授权目录" });
       return null;
     }
-    const pending = ensurePromises.get(dir);
-    if (pending) return pending;
-
-    set({ starting: true, error: null });
-    const promise = (async () => {
-      try {
-        const info = await apiFetch<SessionInfo>("/api/session/ensure", {
-          method: "POST",
-          body: JSON.stringify({ cwd: dir }),
-        });
-        await get().refreshSessions();
-        get().setActive(info.id);
-        get().connect(info.id);
-        return info;
-      } catch (e) {
-        set({ error: errText(e) });
-        return null;
-      } finally {
-        ensurePromises.delete(dir);
-        set({ starting: false });
-      }
-    })();
-    ensurePromises.set(dir, promise);
-    return promise;
+    let latest = latestConversation(dir, get().conversations);
+    if (!latest) {
+      // 新添加/切换到的目录可能已有历史对话，但本地列表还没拉过。
+      await get().refreshConversations();
+      latest = latestConversation(dir, get().conversations);
+    }
+    if (latest) {
+      const ok = await get().openConversation(latest.id);
+      if (!ok) return null;
+      const id = get().activeId;
+      if (!id) return null;
+      return get().sessions.find((s) => s.id === id) ?? { id, cwd: latest.cwd, state: "starting" };
+    }
+    await get().createSession(dir);
+    const id = get().activeId;
+    if (!id) return null;
+    return get().sessions.find((s) => s.id === id) ?? { id, cwd: dir, state: "starting" };
   },
 
   createSession: async (cwd) => {
+    // 连点「新对话」时复用同一个创建任务，避免一次点击起两个 claude。
+    if (createTask) {
+      await createTask;
+      return;
+    }
     const dir = cwd || get().currentWorkspace;
     if (!dir) {
       set({ error: "请先添加并选择一个授权目录" });
       return;
     }
+    const previousId = get().activeId;
+    const previous = previousId ? get().conversations.find((c) => c.id === previousId) : null;
     set({ starting: true, error: null });
+    const task = (async (): Promise<SessionInfo | null> => {
+      try {
+        const info = await apiFetch<SessionInfo>("/api/session", {
+          method: "POST",
+          body: JSON.stringify({ cwd: dir }),
+        });
+        await Promise.all([get().refreshSessions(), get().refreshConversations()]);
+        get().setActive(info.id);
+        get().connect(info.id);
+        // 上一个对话还是空白壳（没发过消息）时顺手结束它，避免点几次「新对话」
+        // 就堆出几条空的「新对话」。有内容的对话永远不自动关闭。
+        if (
+          previousId &&
+          previousId !== info.id &&
+          previous &&
+          previous.messages === 0 &&
+          !previous.title &&
+          (get().items[previousId] ?? []).length === 0
+        ) {
+          void get().closeSession(previousId);
+        }
+        return info;
+      } catch (e) {
+        set({ error: errText(e) });
+        return null;
+      } finally {
+        set({ starting: false });
+      }
+    })();
+    createTask = task;
+    await task;
+    if (createTask === task) createTask = null;
+  },
+
+  openConversation: async (id, force = false) => {
+    // 新对话还在创建时先等它落定，避免创建完成后的 setActive 覆盖用户新选的对话。
+    if (createTask) await createTask.catch(() => null);
+    const conv = get().conversations.find((c) => c.id === id);
+    if (!conv) {
+      set({ error: "对话不存在或已被删除" });
+      return false;
+    }
+
+    // 对话可能属于另一个授权工作区：先把「当前工作区」切过去。
+    const wsPath = workspaceFor(conv.cwd, get().workspaces);
+    if (wsPath && wsPath !== get().currentWorkspace) {
+      try {
+        const r = await apiFetch<WorkspacesPayload>("/api/workspaces/current", {
+          method: "POST",
+          body: JSON.stringify({ path: wsPath }),
+        });
+        set({
+          workspaces: r.workspaces ?? get().workspaces,
+          currentWorkspace: r.current ?? wsPath,
+          workspaceRoot: r.root ?? get().workspaceRoot,
+        });
+      } catch (e) {
+        set({ error: errText(e) });
+        return false;
+      }
+    }
+
+    get().setActive(id);
+    // 打开 = 一次最近活跃；空的新对话等首条消息再落元数据，避免重启后
+    // 出现「有列表项但没有转录、--resume 必然失败」的幽灵对话。
+    if (conv.messages > 0 || conv.title || (get().items[id] ?? []).length > 0) {
+      void apiFetch("/api/conversations", { method: "PATCH", body: JSON.stringify({ id, touch: true }) })
+        .then(() => get().refreshConversations())
+        .catch(() => undefined);
+    }
+
+    const loadTranscript = async () => {
+      if ((get().items[id] ?? []).length > 0) return;
+      // 全新空对话没有转录文件；直接跳过，避免制造一次预期的 404。
+      if (conv.messages === 0 && !conv.title) return;
+      try {
+        const tr = await apiFetch<TranscriptPayload>(`/api/history/transcript?id=${encodeURIComponent(id)}`);
+        if ((get().items[id] ?? []).length > 0) return;
+        let next: Item[] = [];
+        for (const line of tr.lines ?? []) {
+          const rec = line as { timestamp?: unknown };
+          const at = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : NaN;
+          next = applyCLI(next, line, Number.isFinite(at) ? at : Date.now());
+        }
+        if (next.length > 0) set((s) => ({ items: { ...s.items, [id]: next } }));
+      } catch {
+        // 新对话还没有转录；实时 WS 会补上后续消息。
+      }
+    };
+
+    if (!force && clients.get(id)?.ready) {
+      await loadTranscript();
+      get().connect(id);
+      return true;
+    }
+
+    const pending = resumePromises.get(id);
+    if (pending) return pending;
+    const promise = (async () => {
+      set({ starting: true, error: null });
+      try {
+        const info = await apiFetch<SessionInfo>("/api/session", {
+          method: "POST",
+          body: JSON.stringify({ cwd: conv.cwd, resume: id }),
+        });
+        await Promise.all([get().refreshSessions(), get().refreshConversations()]);
+        await loadTranscript();
+        get().setActive(info.id);
+        get().connect(info.id);
+        return true;
+      } catch (e) {
+        set({ error: errText(e) });
+        return false;
+      } finally {
+        resumePromises.delete(id);
+        set({ starting: false });
+      }
+    })();
+    resumePromises.set(id, promise);
+    return promise;
+  },
+
+  renameConversation: async (id, title) => {
     try {
-      const info = await apiFetch<SessionInfo>("/api/session", {
-        method: "POST",
-        body: JSON.stringify({ cwd: dir }),
+      await apiFetch("/api/conversations", {
+        method: "PATCH",
+        body: JSON.stringify({ id, title }),
       });
-      await get().refreshSessions();
-      get().setActive(info.id);
-      get().connect(info.id);
+      await get().refreshConversations();
+      return true;
     } catch (e) {
       set({ error: errText(e) });
-    } finally {
-      set({ starting: false });
+      return false;
+    }
+  },
+
+  archiveConversation: async (id, archived) => {
+    const conv = get().conversations.find((c) => c.id === id);
+    try {
+      await apiFetch("/api/conversations", {
+        method: "PATCH",
+        body: JSON.stringify({ id, archived }),
+      });
+      get().disconnect(id);
+      await get().refreshConversations();
+      if (archived && get().activeId === id) {
+        const root = conv ? workspaceFor(conv.cwd, get().workspaces) || conv.cwd : get().currentWorkspace;
+        const next = get()
+          .conversations.filter((c) => c.id !== id && !c.archived && belongs(c.cwd, root))
+          .sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""))[0];
+        if (next) await get().openConversation(next.id);
+        else {
+          get().setActive(null);
+          writeActiveId(null);
+        }
+      }
+      return true;
+    } catch (e) {
+      set({ error: errText(e) });
+      return false;
+    }
+  },
+
+  deleteConversation: async (id) => {
+    const conv = get().conversations.find((c) => c.id === id);
+    try {
+      await apiFetch(`/api/conversations?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      get().disconnect(id);
+      await get().refreshConversations();
+      if (get().activeId === id) {
+        const root = conv ? workspaceFor(conv.cwd, get().workspaces) || conv.cwd : get().currentWorkspace;
+        const next = get()
+          .conversations.filter((c) => c.id !== id && !c.archived && belongs(c.cwd, root))
+          .sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""))[0];
+        if (next) await get().openConversation(next.id);
+        else {
+          get().setActive(null);
+          writeActiveId(null);
+        }
+      }
+      return true;
+    } catch (e) {
+      set({ error: errText(e) });
+      return false;
     }
   },
 
@@ -634,20 +841,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set({ error: errText(e) });
     }
     get().disconnect(id);
-    const sessions = get().sessions.filter((s) => s.id !== id);
-    set({ sessions });
-    if (get().activeId === id) {
-      const next = sessions.find((s) => s.cwd === get().currentWorkspace)?.id ?? sessions[0]?.id ?? null;
-      get().setActive(next);
-      if (next) get().connect(next);
-    }
-    await get().refreshSessions();
+    await Promise.all([get().refreshSessions(), get().refreshConversations()]);
   },
 
   setActive: (id) => {
     set({ activeId: id });
     writeActiveId(id);
-    if (id && !clients.has(id)) get().connect(id);
   },
 
   connect: (id) => {
@@ -687,28 +886,53 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   retryConnection: (id) => {
-    clients.get(id)?.retryNow();
+    const client = clients.get(id);
+    if (client) {
+      client.retryNow();
+      return;
+    }
+    // 进程已被回收/关闭时没有 client，直接按对话 id 重新 resume。
+    if (get().conversations.some((c) => c.id === id)) void get().openConversation(id, true);
   },
 
   sendPrompt: async (text, attachments = [], attachmentLabel = "附件：") => {
     if (!text.trim() && attachments.length === 0) return;
+    // 刚点「新对话」时 active 还没切过去：等创建完成，避免把消息发给上一个对话。
+    if (createTask) {
+      const created = await createTask.catch(() => null);
+      if (!created) return;
+    }
     let id = get().activeId;
     if (!id) {
       const info = await get().ensureSession();
       id = info?.id ?? null;
     }
     if (!id) return;
-    const client = clients.get(id);
-    if (!client?.ready) {
-      set({ error: "连接尚未就绪，正在自动重连；稍后再发送即可" });
-      return;
+    if (!clients.get(id)) {
+      // 进程被空闲回收后 active 仍在：发送前先按对话 id 恢复。
+      const ok = await get().openConversation(id, true);
+      if (!ok) return;
     }
-    if (!client.send({ kind: "prompt", text, attachments: attachments.length > 0 ? attachments : undefined })) {
+    if (!clients.get(id)?.ready) {
+      // 刚 resume / 新建的会话，HTTP 已经返回但 WS 还在握手；等它真正 open 再发。
+      const ok = await waitForOpen(id);
+      if (!ok) {
+        set({ error: "连接尚未就绪，正在自动重连；稍后再发送即可" });
+        return;
+      }
+    }
+    const client = clients.get(id);
+    if (!client?.send({ kind: "prompt", text, attachments: attachments.length > 0 ? attachments : undefined })) {
       set({ error: "发送失败：连接已断开" });
       return;
     }
     const display = [text.trim(), ...attachments.map((a) => `${attachmentLabel}${a.name}`)].filter(Boolean).join("\n");
-    set((s) => ({ items: { ...s.items, [id!]: appendUser(s.items[id!] ?? [], display) } }));
+    const now = new Date().toISOString();
+    set((s) => ({
+      items: { ...s.items, [id!]: appendUser(s.items[id!] ?? [], display) },
+      conversations: s.conversations.map((c) => (c.id === id ? { ...c, last_active: now } : c)),
+    }));
+    window.setTimeout(() => void get().refreshConversations(), 600);
   },
 
   interrupt: () => {
@@ -744,18 +968,33 @@ export const useAppStore = create<AppState>()((set, get) => ({
       case "session.snapshot": {
         const data = ev.data as { init?: InitPayload; info?: { state?: string } } | undefined;
         if (data?.init) set((s) => ({ inits: { ...s.inits, [sid]: data.init! } }));
-        if (data?.info?.state) set((s) => ({ states: { ...s.states, [sid]: data.info!.state! } }));
+        if (data?.info?.state) {
+          const state = data.info.state;
+          set((s) => ({
+            states: { ...s.states, [sid]: state },
+            conversations: s.conversations.map((c) => (c.id === sid ? { ...c, live: true, state } : c)),
+          }));
+        }
         return;
       }
       case "session.ready": {
         const data = ev.data as { init?: InitPayload } | undefined;
         if (data?.init) set((s) => ({ inits: { ...s.inits, [sid]: data.init! } }));
-        set((s) => ({ states: { ...s.states, [sid]: "ready" } }));
+        set((s) => ({
+          states: { ...s.states, [sid]: "ready" },
+          conversations: s.conversations.map((c) => (c.id === sid ? { ...c, live: true, state: "ready" } : c)),
+        }));
         return;
       }
       case "session.state": {
         const data = ev.data as { state?: string } | undefined;
-        if (data?.state) set((s) => ({ states: { ...s.states, [sid]: data.state! } }));
+        if (data?.state) {
+          const state = data.state;
+          set((s) => ({
+            states: { ...s.states, [sid]: state },
+            conversations: s.conversations.map((c) => (c.id === sid ? { ...c, live: state !== "closed", state } : c)),
+          }));
+        }
         return;
       }
       case "permission": {
@@ -776,6 +1015,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         set((s) => ({
           states: { ...s.states, [sid]: "closed" },
           conns: { ...s.conns, [sid]: { state: "closed" } },
+          conversations: s.conversations.map((c) => (c.id === sid ? { ...c, live: false, state: "closed" } : c)),
         }));
         // 会话进程已退出，WS 再留着只会让界面显示「已连接」却发不出消息。
         clients.get(sid)?.close();

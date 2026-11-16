@@ -12,50 +12,48 @@ interface Props {
 /**
  * 历史记录：读 ~/.claude/projects 下各会话的 jsonl 摘要。
  *
- * 本应用暂不支持把历史转录回放进当前 claude 进程（CLI 的 --resume 需要
- * 另一套握手），所以点击条目 = 授权其目录并在那里开一个新会话；
- * 文案必须写清楚，避免用户以为能接着旧上下文聊。
+ * 点击条目会用 claude 的 --resume 恢复同一个对话 id，并回放转录；
+ * 不再像旧版本那样「切目录开新会话」。
  */
 export function HistoryDialog({ open, onClose }: Props) {
   const t = useT();
   const locale = useLocale();
-  const history = useAppStore((s) => s.history);
+  const conversations = useAppStore((s) => s.conversations);
   const workspaces = useAppStore((s) => s.workspaces);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
-  const switchWorkspace = useAppStore((s) => s.switchWorkspace);
-  const ensureSession = useAppStore((s) => s.ensureSession);
+  const refreshConversations = useAppStore((s) => s.refreshConversations);
+  const openConversation = useAppStore((s) => s.openConversation);
   const [query, setQuery] = useState("");
   const [busyCwd, setBusyCwd] = useState<string | null>(null);
 
   useEffect(() => {
-    if (open) setQuery("");
-  }, [open]);
+    if (!open) return;
+    setQuery("");
+    void refreshConversations();
+  }, [open, refreshConversations]);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return history.filter(
-      (h) => !q || h.title.toLowerCase().includes(q) || h.cwd.toLowerCase().includes(q),
-    );
-  }, [history, query]);
+    return conversations
+      .filter((c) => !q || (c.title || "").toLowerCase().includes(q) || c.cwd.toLowerCase().includes(q))
+      .sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""));
+  }, [conversations, query]);
 
   if (!open) return null;
 
-  const openInWorkspace = async (cwd: string) => {
+  const openHistory = async (id: string, cwd: string) => {
     if (busyCwd) return;
     setBusyCwd(cwd);
     try {
       const exact = workspaces.some((w) => w.path === cwd);
       const inside = workspaces.some((w) => cwd.startsWith(`${w.path}/`));
-      if (exact) {
-        await switchWorkspace(cwd);
-      } else if (inside) {
-        // 历史会话的 cwd 可能只是已授权目录的子目录，不能当成工作区切换。
-        await ensureSession(cwd);
-      } else {
-        const ok = await addWorkspace(cwd);
+      if (!exact && !inside) {
+        const ok = await addWorkspace(cwd, false);
         if (!ok) return;
       }
-      onClose();
+      await refreshConversations();
+      const ok = await openConversation(id);
+      if (ok) onClose();
     } finally {
       setBusyCwd(null);
     }
@@ -89,38 +87,38 @@ export function HistoryDialog({ open, onClose }: Props) {
             />
           </div>
           <p className="mt-1.5 text-[10px] leading-relaxed text-faint">
-            {t("点击条目会切换到该目录并打开会话（暂不支持回放旧上下文）。未授权的目录会自动添加授权。", "Clicking an entry switches to that directory and opens a session (replaying old context is not supported yet). Unauthorized directories are added automatically.")}
+            {t("点击条目会恢复该对话并回放转录内容；未授权的目录会自动添加授权。", "Clicking an entry resumes the conversation and replays its transcript. Unauthorized directories are added automatically.")}
           </p>
         </div>
 
         <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto px-2 py-2">
           {rows.length === 0 && <p className="px-3 py-8 text-center text-[12px] text-muted">{t("没有匹配的历史会话。", "No matching sessions.")}</p>}
-          {rows.map((h) => (
+          {rows.map((c) => (
             <button
-              key={`${h.project}/${h.id}`}
+              key={c.id}
               type="button"
               disabled={Boolean(busyCwd)}
-              onClick={() => void openInWorkspace(h.cwd)}
+              onClick={() => void openHistory(c.id, c.cwd)}
               className="side-row items-start text-left disabled:opacity-50"
-              title={h.cwd}
+              title={c.cwd}
             >
               <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-panel-strong text-muted">
                 <IconFolder size={14} />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12.5px] text-ink">{h.title}</span>
-                <span className="mt-0.5 block truncate font-mono text-[10px] text-faint">{h.cwd}</span>
+                <span className="block truncate text-[12.5px] text-ink">{c.title || t("新对话", "New chat")}</span>
+                <span className="mt-0.5 block truncate font-mono text-[10px] text-faint">{c.cwd}</span>
               </span>
               <span className="ml-2 shrink-0 text-right text-[10px] text-faint">
-                <span className="block">{relativeTime(h.updated_at, Date.now(), locale)}</span>
-                <span className="block">{t(`${h.messages} 条`, `${h.messages} msgs`)}</span>
+                <span className="block">{relativeTime(c.last_active, Date.now(), locale)}</span>
+                <span className="block">{c.archived ? t("已归档", "Archived") : t(`${c.messages} 条`, `${c.messages} msgs`)}</span>
               </span>
             </button>
           ))}
         </div>
 
         <div className="safe-bottom border-t border-line px-4 pt-2.5">
-          <p className="text-[10px] text-faint">{busyCwd ? t(`正在切换到 ${busyCwd}…`, `Switching to ${busyCwd}…`) : t(`共 ${history.length} 条历史会话`, `${history.length} sessions`)}</p>
+          <p className="text-[10px] text-faint">{busyCwd ? t(`正在切换到 ${busyCwd}…`, `Switching to ${busyCwd}…`) : t(`共 ${conversations.length} 条对话`, `${conversations.length} conversations`)}</p>
         </div>
       </div>
     </div>

@@ -6,7 +6,7 @@ import { OverviewPanel } from "./OverviewPanel";
 import { TopBar, type ChatTab } from "../layout/TopBar";
 import { PermissionPanel } from "../permission/PermissionPanel";
 import type { PermissionPayload } from "../../transport/types";
-import { sessionTitle } from "../../lib/labels";
+import { conversationTitle } from "../../lib/labels";
 import { effortFor, findOption, modelOptionsFromSettings } from "../../lib/providerForm";
 import { sessionToMarkdown } from "../../lib/sessionExport";
 import { copyText } from "../../lib/clipboard";
@@ -28,6 +28,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
   const info = useAppStore((s) => s.info);
   const activeId = useAppStore((s) => s.activeId);
   const sessions = useAppStore((s) => s.sessions);
+  const conversations = useAppStore((s) => s.conversations);
   const currentWorkspace = useAppStore((s) => s.currentWorkspace);
   const items = useAppStore((s) => s.items);
   const perms = useAppStore((s) => s.perms);
@@ -48,13 +49,29 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [mode, setModeState] = useState("");
 
-  const session = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [sessions, activeId]);
+  const conversation = useMemo(() => conversations.find((c) => c.id === activeId) ?? null, [conversations, activeId]);
+  const session = useMemo(() => {
+    const live = sessions.find((s) => s.id === activeId);
+    if (live) return live;
+    if (!conversation) return null;
+    return {
+      id: conversation.id,
+      cwd: conversation.cwd,
+      state: conversation.state ?? "idle",
+      provider: conversation.provider,
+      model: conversation.model,
+      effort: conversation.effort,
+      last_active: conversation.last_active,
+    };
+  }, [sessions, conversation, activeId]);
   const itemList = activeId ? (items[activeId] ?? []) : [];
   const init = activeId ? inits[activeId] : undefined;
   const conn = activeId ? (conns[activeId] ?? { state: "idle" as const }) : { state: "idle" as const };
   const state = activeId ? (states[activeId] ?? session?.state ?? "idle") : "idle";
   const busy = state === "busy";
-  const title = session ? sessionTitle(session.cwd, itemList, locale) : t("新对话", "New chat");
+  const title = session || conversation
+    ? conversationTitle(conversation?.title, itemList, locale)
+    : t("新对话", "New chat");
 
   useEffect(() => {
     setModeState(init?.current_permission_mode ?? settings?.permission_mode ?? "");

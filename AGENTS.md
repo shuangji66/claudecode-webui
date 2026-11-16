@@ -16,7 +16,8 @@
 - 主对话区**不做终端模拟**，全部结构化渲染：消息流、thinking、工具卡片、diff、审批面板；
 - 右侧栏（桌面停靠 / 移动端全屏）有工作区文件树与只读预览、Git 变更面板、以及真正跑在
   Linux PTY 上的 bash 终端（`xterm.js` 只做渲染）；
-- **授权目录 = 工作区**，持久化在 `workspaces.json`；APP 启动自动在当前工作区拉起 claude；
+- **授权目录 = 工作区**，持久化在 `workspaces.json`；对话列表来自 claude 转录 +
+  `conversations.json` 元数据，启动时恢复上次对话（`--resume`）而不是新建；
 - 设置页分「通用 / 模型 / 代理」：主题、语言、字号、默认权限、代理，以及每个模型的推理强度/图片能力；
 - 输入框 `+` 支持文件/图片附件（图片/PDF/文本），随 prompt 发送；
 - 左侧栏品牌图标使用 `frontend/src/assets/claude-code.svg`；前端不允许呼吸灯/无限 pulse 动画。
@@ -39,6 +40,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
 右侧栏：gateway ── fsapi（文件树/预览）
                  ── gitctl（系统 git CLI）
                  ── terminal（PTY + /ws/terminal）
+
+对话：gateway ── conversation（conversations.json）
+              ── history（claude jsonl 摘要 + transcript 回放）
+              ── manager.Resume（--resume <uuid>）
 ```
 
 分层职责（**不要跨层调用**）：
@@ -49,6 +54,7 @@ hub ── manager ── session ── process ── claude (NDJSON)
 | `fsapi` | 标准库 | HTTP / 鉴权（由 gateway 负责） |
 | `gitctl` | 标准库、系统 `git` | shell 拼接、HTTP |
 | `terminal` | 标准库、Linux PTY ioctl | HTTP / WS 帧（由 gateway 负责） |
+| `conversation` | 标准库 | claude 转录解析（由 history 负责） |
 | `agent/manager` | `agent/session`、`agent/process`、config、settings | 处理 HTTP / WS |
 | `agent/session` | `agent/protocol` | 知道文件系统布局、知道前端协议 |
 | `agent/process` | 标准库 | 启动会话、解析 NDJSON |
@@ -73,12 +79,16 @@ hub ── manager ── session ── process ── claude (NDJSON)
 10. **不提交构建产物**：`bin/`、`frontend/dist/`、`embed/assets/`、`.gocache/` 等见 `.gitignore`。
 11. **会话 cwd 必须在授权目录内**。`POST /api/session` / `/api/session/ensure` 都要过
     `workspace.Allows`；`CCWEB_PROJECTS_ROOT` 是默认授权目录，不是任意路径的通行证。
-12. **自动拉起用 `manager.Ensure`**，不要直接 `Create`：后端启动与前端同时触发时必须去重。
+12. **恢复对话用 `manager.Resume`**（同一 id 去重），不要用 `Ensure`/`Create` 造新会话；
+    `Ensure` 只保留给旧客户端按目录兜底。后端预热与前端同时恢复时必须靠 createMu 去重。
 13. **右侧栏的所有路径都必须过授权**。`/api/fs/*`、`/api/git/*`、`/ws/terminal` 都先校验
     `cwd` 在授权目录内；相对路径解析符号链接后仍要留在工作区内。原始字节预览只放行
     图片/PDF 白名单，并带 `CSP: sandbox`——不要让工作区的 HTML/SVG 以同源页面执行脚本。
 14. **Git 只调 CLI、不经 shell**。路径参数前加 `--literal-pathspecs`，rev/hash/分支前加
     `--end-of-options`；提交沿用用户全局身份，禁止设置 `user.name/email`。
+15. **对话 id 必须稳定**。新建会话用 UUID 作为 `--session-id`，恢复用同一个 UUID `--resume`；
+    `Info.ID`、转录文件名、`conversations.json`、前端 active id 必须是同一个值。
+    不要用「按 cwd ensure 一个新的」来恢复旧对话——那会造出新对话、丢掉上下文。
 
 ## 4. 踩过的坑（都已在代码里修好，别改回去）
 
@@ -107,7 +117,22 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - `go:embed all:embed` 要求目录存在；`embed/index.html` 是占位文件，构建会覆盖它，
   `make clean` 用 `git checkout` 还原。
 
-### 4.4 右侧栏 / 终端
+### 4.4 对话持久化
+
+- **`--resume` 不会回放历史**：claude 只把新回合写 stdout；界面历史必须靠
+  `/api/history/transcript` 读 jsonl，再用前端 `applyCLI` 回放。别指望连上 WS 就有旧消息。
+- **转录回放必须保留时间戳**：`applyCLI(items, msg, at)` 的第三参数用于历史行；
+  不传则用 `Date.now()`，会让所有旧消息显示成“刚刚”。
+- **空对话不要落元数据**：新建后还没首条消息时，后端只在 manager 列表里展示；
+  首条 prompt 成功才 `conversation.Touch`。否则后端重启后会出现无法 `--resume` 的幽灵条目。
+- **删除是软删除**：`conversation.Delete` 写 `deleted` 墓碑并保留 jsonl；列表/自动恢复都要
+  跳过 deleted/archived。不要把「删除」实现成直接 `os.Remove` 转录。
+- **自动预热不是新建**：`CCWEB_AUTO_START` 只恢复 `LastFor` 或最近转录；没有对话就什么都不做，
+  由前端创建第一条。改回 `mgr.Ensure` 会让每次重启多一条空对话。
+- **claude 转录会包含 sidechain / meta / queue-operation 行**：回放只取
+  user/assistant/system/result 且跳过 `isSidechain`/`isMeta`，否则子代理和系统提醒会混进主消息流。
+
+### 4.5 右侧栏 / 终端
 
 - **PTY 没有第三方依赖**：Linux 上直接开 `/dev/ptmx` + `TIOCSPTLCK/TIOCGPTN/TIOCSWINSZ`。
   在 agent 沙箱里跑测试会 `permission denied`（设备访问被拦），这是环境限制，不是代码错；
@@ -122,7 +147,7 @@ hub ── manager ── session ── process ── claude (NDJSON)
   （`normal` 只给目录，点开无法 diff）。解析按 NUL 字段走，不能按空格 split，
   否则带空格的路径会被截断。
 
-### 4.5 前端侧
+### 4.6 前端侧
 
 - `--include-partial-messages` 会**先给逐字增量、再给完整消息**。两套都追加会导致
   每句话显示两遍；`lib/normalize.ts` 的做法是「替换流式气泡」。
@@ -159,6 +184,8 @@ cd frontend && npx tsc --noEmit
 - [ ] 改动 `protocol` 后是否同步了 `session` 与前端 `transport/types.ts`？
 - [ ] 新增工具卡片是否注册进 `ToolCardHost`，且未删除兜底？
 - [ ] 流式路径是否仍满足「替换而非追加」？
+- [ ] 对话恢复是否用稳定 UUID `--resume`？空对话/归档/删除是否会被误恢复？
+- [ ] 转录回放是否过滤 sidechain/meta，并保留原始时间戳？
 - [ ] 新增右侧栏路由是否过了 `authorizedCwd` / 路径围栏？raw 预览是否仍在白名单？
 - [ ] 终端是否仍然常驻、PTY 输出走二进制帧、关侧栏才结束进程？
 - [ ] 是否补了测试（纯函数优先，组件用 Testing Library）？

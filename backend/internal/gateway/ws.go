@@ -197,6 +197,12 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 			return
 		}
 		err = sess.PromptWithAttachments(cmd.Text, atts)
+		if err == nil {
+			// 首条消息把对话落进持久化列表；后续消息刷新 last_active。
+			if info, ok := s.conversationInfo(id); ok {
+				s.touchConversation(info)
+			}
+		}
 	case "interrupt":
 		err = sess.Interrupt()
 	case "model":
