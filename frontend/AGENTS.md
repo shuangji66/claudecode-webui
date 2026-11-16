@@ -139,6 +139,9 @@ src/
 - 聊天页的模型与推理等级是 `components/chat/ModelMenu.tsx` 的两级菜单（参照 DSH）：
   一级「模型 / 推理等级」，模型页按提供商分组；菜单里不展示图片能力标记。
 - 右上角「更多」是下拉菜单（复制会话为 Markdown / 设置），不要直接打开设置。
+- **全局禁用浏览器自动填充**：`lib/autofill.ts` 在 `App` 挂载时给所有
+  `input/textarea` 补 `autocomplete=off`（密码框用 `new-password`）与主流密码管理器的
+  ignore 标记；新增输入框不用再逐个手写。
 - **不许用浏览器原生控件承载 UI**：
   - 模态统一 `components/common/Dialog.tsx`（遮罩、标题区、滚动体、底部栏、Esc/遮罩关闭、
     背景滚动锁、移动端底部安全区都在里面）。不要再手写 `fixed inset-0 … rounded-t-2xl`。

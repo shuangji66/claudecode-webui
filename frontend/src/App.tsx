@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useAppStore } from "./store/useAppStore";
 import { getToken } from "./lib/runtime";
 import { applyPreferences, watchSystemTheme } from "./lib/theme";
+import { installAutofillGuard } from "./lib/autofill";
 import { I18nProvider, useT } from "./lib/i18n";
 import { Sidebar } from "./components/layout/Sidebar";
 import { ChatPane } from "./components/chat/ChatPane";
@@ -52,6 +53,9 @@ export default function App() {
     applyPreferences(settings);
     return watchSystemTheme(settings, () => applyPreferences(settings));
   }, [settings]);
+
+  // 地址/密钥输入框不该被浏览器当成登录表单；只装一次，动态节点由 observer 处理。
+  useEffect(() => installAutofillGuard(), []);
 
   return (
     <I18nProvider locale={locale}>

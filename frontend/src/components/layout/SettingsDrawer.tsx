@@ -431,7 +431,7 @@ function ModelsSettings() {
         <div className="mx-auto flex max-w-2xl items-center gap-3">
           {saveError && <span className="text-[10.5px] text-danger">{saveError}</span>}
           <span className="text-[10.5px] text-faint">
-            {saving ? t("保存中…", "Saving…") : savedAt ? t("已保存", "Saved") : dirty ? t("有未保存的修改", "Unsaved changes") : t("模型配置会写入设置文件", "Model config is stored in the settings file")}
+            {saving ? t("保存中…", "Saving…") : savedAt ? t("已保存", "Saved") : dirty ? t("有未保存的修改", "Unsaved changes") : null}
           </span>
           <button
             type="button"
@@ -596,7 +596,22 @@ function ProviderCard({
   const applyPreset = (id: string) => {
     setPresetId(id);
     const chosen = findProviderPreset(id);
-    if (!chosen) return;
+    if (!chosen) {
+      // 从预置切回「自定义」：模板、模型和密钥都要清空，否则会残留上一家的配置。
+      onChange({
+        id: "",
+        name: "",
+        protocol: "anthropic-messages",
+        baseUrl: "",
+        apiKey: "",
+        authToken: "",
+        clearKey: false,
+        modelsPath: "",
+        models: [],
+        modelMeta: {},
+      });
+      return;
+    }
     onChange({
       ...presetFormFields(chosen, existingIds),
       // 换预置就换端点，旧的密钥不应继续挂在新提供商上。
