@@ -29,6 +29,7 @@ src/
   lib/workspace.ts     文件路径/porcelain 分组/unified diff 解析（纯函数）
   lib/conversations.ts 对话归属/最近对话排序（纯函数）
   lib/subagents.ts     从消息流收集子代理（页头计数 / 审批归属，纯函数）
+  lib/download.ts      带鉴权的文件下载（fetch → blob → <a download>，token 走头）
   lib/sidebarView.ts   左侧栏视图偏好：分组/排序/归档筛选 + 手动顺序（纯函数 + localStorage）
   lib/fnos.ts          飞牛宿主桥接：目录授权（authorizeUserFile）+ 回包归一化（纯函数部分可测）
   assets/claude-code.svg 左侧栏品牌图标
@@ -214,7 +215,7 @@ src/
   `context_length` / `max_output_tokens` 预填。
 - 聊天页的模型与推理等级是 `components/chat/ModelMenu.tsx` 的两级菜单（参照 DSH）：
   一级「模型 / 推理等级」，模型页按提供商分组；菜单里不展示图片能力标记。
-- 右上角「更多」是下拉菜单（复制会话为 Markdown / 设置），不要直接打开设置。
+- 右上角「更多」是下拉菜单（复制会话为 Markdown / 下载 Session 日志），不要直接打开设置。
 - **全局禁用浏览器自动填充**：`lib/autofill.ts` 在 `App` 挂载时给所有
   `input/textarea` 补 `autocomplete=off`（密码框用 `new-password`）与主流密码管理器的
   ignore 标记；新增输入框不用再逐个手写。
@@ -232,6 +233,9 @@ src/
   - 按钮统一 `components/common/Button.tsx`（primary/secondary/ghost/danger + sm/md），
     新代码不要再复制 `bg-brand px-4 py-2 …` 这类串。
 - `document.title` 默认 `Claude Code`，有活动会话时跟随会话名；结果条不显示费用。
+- **右上角「更多」只有「复制会话为 Markdown / 下载 Session 日志」**：设置入口只在侧栏底部，
+  不要再往这个菜单里加设置（曾经重复过一次）。下载走 `lib/download.ts`（token 放头里），
+  后端是 `GET /api/history/export`，返回的 zip 里是 claude 原始转录，不经二次加工。
 
 ## 7. 测试
 

@@ -12,6 +12,7 @@ import { isNewChat } from "../../lib/newChat";
 import { effortFor, findOption, modelOptionsFromSettings } from "../../lib/providerForm";
 import { sessionToMarkdown } from "../../lib/sessionExport";
 import { copyText } from "../../lib/clipboard";
+import { downloadFile, sessionLogName } from "../../lib/download";
 import { useLocale, useT } from "../../lib/i18n";
 import { BrandMark, IconAlert, IconRetry } from "../common/Icons";
 import { subagentEntries } from "../../lib/subagents";
@@ -19,13 +20,12 @@ import { subagentEntries } from "../../lib/subagents";
 interface Props {
   onToggleSidebar: () => void;
   onToggleCollapse: () => void;
-  onOpenSettings: () => void;
   onAddWorkspace: () => void;
   rightOpen: boolean;
   onToggleRight: () => void;
 }
 
-export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, onAddWorkspace, rightOpen, onToggleRight }: Props) {
+export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, rightOpen, onToggleRight }: Props) {
   const t = useT();
   const locale = useLocale();
   const activeId = useAppStore((s) => s.activeId);
@@ -166,6 +166,20 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
     </>
   );
 
+  /** 导出原始日志：zip 里是 claude 自己写的转录（含子代理），不经后端二次加工。 */
+  const downloadSession = async (): Promise<boolean> => {
+    if (!session) return false;
+    try {
+      await downloadFile(
+        `/api/history/export?id=${encodeURIComponent(session.id)}`,
+        sessionLogName(session.id),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const copySession = async (): Promise<boolean> => {
     if (!session) return false;
     const markdown = sessionToMarkdown({
@@ -187,7 +201,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
         busy={busy}
         onToggleSidebar={onToggleSidebar}
         onToggleCollapse={onToggleCollapse}
-        onOpenSettings={onOpenSettings}
+        onDownloadSession={downloadSession}
         onCopySession={copySession}
         rightOpen={rightOpen}
         onToggleRight={onToggleRight}

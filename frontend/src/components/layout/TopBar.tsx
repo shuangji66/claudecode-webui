@@ -3,7 +3,7 @@ import type { SessionInfo } from "../../transport/types";
 import { useT } from "../../lib/i18n";
 import { runningSubagents, type SubagentEntry } from "../../lib/subagents";
 import { Menu } from "../common/Menu";
-import { IconCheck, IconCopy, IconMore, IconPanel, IconSettings, IconSidebarRight, IconSpark } from "../common/Icons";
+import { IconCheck, IconCopy, IconDownload, IconMore, IconPanel, IconSidebarRight, IconSpark } from "../common/Icons";
 
 /** 子代理状态点配色（与侧栏对话状态点一致：进行中强调色、完成绿、失败红、停止琥珀）。 */
 const SUBAGENT_TONE = {
@@ -22,24 +22,33 @@ interface Props {
   busy: boolean;
   onToggleSidebar: () => void;
   onToggleCollapse: () => void;
-  onOpenSettings: () => void;
   onCopySession: () => Promise<boolean>;
+  /** 导出这次会话的原始日志（zip）；返回是否成功。 */
+  onDownloadSession: () => Promise<boolean>;
   rightOpen: boolean;
   onToggleRight: () => void;
 }
 
 
-export function TopBar({ session, title, busy, subagents, onOpenSubagent, onToggleSidebar, onToggleCollapse, onOpenSettings, onCopySession, rightOpen, onToggleRight }: Props) {
+export function TopBar({ session, title, busy, subagents, onOpenSubagent, onToggleSidebar, onToggleCollapse, onCopySession, onDownloadSession, rightOpen, onToggleRight }: Props) {
   const t = useT();
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [subAnchor, setSubAnchor] = useState<HTMLElement | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "ok" | "fail">("idle");
+  const [downloadState, setDownloadState] = useState<"idle" | "ok" | "fail">("idle");
 
   const copySession = async () => {
     if (!session) return;
     const ok = await onCopySession();
     setCopyState(ok ? "ok" : "fail");
     if (ok) window.setTimeout(() => setCopyState("idle"), 900);
+  };
+
+  const downloadSession = async () => {
+    if (!session) return;
+    const ok = await onDownloadSession();
+    setDownloadState(ok ? "ok" : "fail");
+    window.setTimeout(() => setDownloadState("idle"), ok ? 1200 : 2200);
   };
   return (
     <header className="safe-top shrink-0 border-b border-line bg-canvas md:pt-0">
@@ -144,10 +153,16 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, onTogg
               onSelect: () => void copySession(),
             },
             {
-              id: "settings",
-              icon: <IconSettings size={14} className="text-muted" />,
-              label: t("设置", "Settings"),
-              onSelect: onOpenSettings,
+              id: "download",
+              icon: <IconDownload size={14} className="text-muted" />,
+              label:
+                downloadState === "ok"
+                  ? t("已下载", "Downloaded")
+                  : downloadState === "fail"
+                    ? t("下载失败", "Download failed")
+                    : t("下载 Session 日志", "Download session log"),
+              disabled: !session,
+              onSelect: () => void downloadSession(),
             },
           ]}
         />

@@ -187,6 +187,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `GET /api/fs/list`。目录浏览是只读但能枚举宿主目录，必须保持鉴权。
 - 对话路由：`GET /api/conversations`、`PATCH /api/conversations`（重命名/归档/touch）、
   `DELETE /api/conversations?id=`（软删除）、`GET /api/history/transcript?id=`（回放）。
+- 导出路由：`GET /api/history/export?id=` 把会话原始日志打成 zip（主转录 + 会话目录下的
+  子代理转录 / meta），`archive/zip` 标准库实现。先判存在再写响应头，否则 404 会变成
+  「下载到一个坏 zip」；符号链接与超大文件不进包。
 - 子代理路由：`GET /api/history/subagent?id=&agent=`（读旁路转录）、
   `POST /api/session/task`（`stop_task` / `background_tasks`）。两者都要挂 `s.authed`；
   agent id 走 `[A-Za-z0-9_-]` 白名单，会话 id 走 `validSessionID`，不能拼路径。

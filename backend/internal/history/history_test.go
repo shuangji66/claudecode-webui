@@ -1,6 +1,8 @@
 package history
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -280,5 +282,62 @@ func TestLoadSubagentTranscriptMissingFile(t *testing.T) {
 	writeJSONL(t, filepath.Join(root, "p", id+".jsonl"), `{"type":"user","message":{"content":"x"}}`)
 	if _, err := LoadSubagentTranscript(root, id, "nope"); err != ErrTranscriptNotFound {
 		t.Fatalf("err = %v, want ErrTranscriptNotFound", err)
+	}
+}
+
+func TestWriteSessionZipIncludesSidecars(t *testing.T) {
+	root := t.TempDir()
+	id := "66666666-7777-4888-8999-aaaaaaaaaaaa"
+	writeJSONL(t, filepath.Join(root, "p", id+".jsonl"),
+		`{"type":"user","message":{"role":"user","content":"hi"}}`,
+	)
+	sub := filepath.Join(root, "p", id, "subagents")
+	writeJSONL(t, filepath.Join(sub, "agent-a1.jsonl"), `{"type":"assistant","isSidechain":true,"message":{"content":[]}}`)
+	if err := os.WriteFile(filepath.Join(sub, "agent-a1.meta.json"), []byte(`{"description":"子任务"}`), 0o644); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+	// 符号链接不应进包（可能指向工作区外）。
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("write outside: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(sub, "link.txt")); err != nil {
+		t.Skipf("symlink 不可用: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := WriteSessionZip(&buf, root, id); err != nil {
+		t.Fatalf("WriteSessionZip: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("zip: %v", err)
+	}
+	names := map[string]bool{}
+	for _, f := range zr.File {
+		names[f.Name] = true
+	}
+	for _, want := range []string{id + ".jsonl", id + "/subagents/agent-a1.jsonl", id + "/subagents/agent-a1.meta.json"} {
+		if !names[want] {
+			t.Fatalf("zip 缺少 %q，实际 %v", want, names)
+		}
+	}
+	if names[id+"/subagents/link.txt"] {
+		t.Fatal("符号链接不应进包")
+	}
+}
+
+func TestSessionLogExists(t *testing.T) {
+	root := t.TempDir()
+	id := "77777777-8888-4999-8aaa-bbbbbbbbbbbb"
+	writeJSONL(t, filepath.Join(root, "p", id+".jsonl"), `{"type":"user","message":{"content":"x"}}`)
+	if !SessionLogExists(root, id) {
+		t.Fatal("应判定存在")
+	}
+	if SessionLogExists(root, "88888888-9999-4aaa-8bbb-cccccccccccc") {
+		t.Fatal("不存在的会话应返回 false")
+	}
+	if SessionLogExists(root, "../etc/passwd") {
+		t.Fatal("非法 id 应返回 false")
 	}
 }

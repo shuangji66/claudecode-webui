@@ -41,7 +41,6 @@ function setup(activeId: string | null, conversations: ConversationInfo[], sessi
     <ChatPane
       onToggleSidebar={() => {}}
       onToggleCollapse={() => {}}
-      onOpenSettings={() => {}}
       onAddWorkspace={() => {}}
       rightOpen={false}
       onToggleRight={() => {}}

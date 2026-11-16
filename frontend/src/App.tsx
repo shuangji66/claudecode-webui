@@ -201,7 +201,6 @@ function AppShell() {
         <ChatPane
           onToggleSidebar={() => setSidebarOpen(true)}
           onToggleCollapse={toggleCollapse}
-          onOpenSettings={openSettings}
           onAddWorkspace={openWorkspace}
           rightOpen={rightOpen}
           onToggleRight={toggleRight}

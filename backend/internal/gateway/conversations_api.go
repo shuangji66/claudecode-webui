@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -289,6 +290,30 @@ func (s *Server) conversationInfo(id string) (manager.Info, bool) {
 		}
 	}
 	return manager.Info{}, false
+}
+
+// handleHistoryExport 把一次会话的原始日志打包成 zip 下载。
+//
+// 内容是 claude 自己写的文件（主转录 + 子代理转录 + meta），原样打包不解析：
+// 用户要的是「原始日志」，能拿去别处复盘。
+func (s *Server) handleHistoryExport(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		writeErr(w, "missing id", http.StatusBadRequest)
+		return
+	}
+	// 先判存在再写响应头：否则 404 会变成「下载了一个坏 zip」。
+	if !history.SessionLogExists(s.d.HistoryDir, id) {
+		writeErr(w, history.ErrTranscriptNotFound.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "claude-session-"+id+".zip"))
+	w.Header().Set("Cache-Control", "no-store")
+	if err := history.WriteSessionZip(w, s.d.HistoryDir, id); err != nil {
+		// 响应头已经发出去了，只能记日志；前端会拿到一个不完整的 zip。
+		s.log.Printf("history: 导出会话 %s 失败: %v", id, err)
+	}
 }
 
 // handleHistoryTranscript 返回一次对话的原始事件行，前端用与实时流相同的

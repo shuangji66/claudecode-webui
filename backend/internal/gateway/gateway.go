@@ -120,6 +120,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/history", s.authed(s.handleListHistory))
 	s.mux.HandleFunc("GET /api/history/transcript", s.authed(s.handleHistoryTranscript))
 	s.mux.HandleFunc("GET /api/history/subagent", s.authed(s.handleHistorySubagent))
+	s.mux.HandleFunc("GET /api/history/export", s.authed(s.handleHistoryExport))
 	s.mux.HandleFunc("POST /api/session/task", s.authed(s.handleSessionTask))
 	s.mux.HandleFunc("GET /api/conversations", s.authed(s.handleListConversations))
 	s.mux.HandleFunc("PATCH /api/conversations", s.authed(s.handlePatchConversation))
