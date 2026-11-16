@@ -34,14 +34,17 @@ describe("Sidebar 历史记录入口", () => {
     useAppStore.setState({ conversations: [], workspaces: [], currentWorkspace: "", activeId: null });
   });
 
-  // 历史记录放在「工作区」功能行，不再占底部一行。
-  it("历史记录在工作区标题行里，点击打开历史", () => {
+  // 参照 DSH：功能入口在「新对话」与工作区之间的功能区，一行一个。
+  it("历史记录在功能区（工作区上方），点击打开历史", () => {
     const onOpenHistory = vi.fn();
     renderSidebar({ onOpenHistory });
 
-    const button = screen.getByLabelText("历史记录");
-    expect(button.closest("button")).toBe(button);
+    const button = screen.getByRole("button", { name: "历史记录" });
     fireEvent.click(button);
     expect(onOpenHistory).toHaveBeenCalled();
+
+    // DOM 顺序：历史记录必须排在「工作区」标题之前。
+    const workspaces = screen.getByText("工作区");
+    expect(button.compareDocumentPosition(workspaces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

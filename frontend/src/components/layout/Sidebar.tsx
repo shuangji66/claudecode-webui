@@ -336,18 +336,17 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         </button>
       </div>
 
+      {/* 功能区：和 DSH 一样放在「新对话」与工作区之间，一行一个入口。 */}
+      <div className="mt-3 px-3">
+        <button type="button" onClick={onOpenHistory} className="side-row text-ink-2 hover:text-ink">
+          <IconHistory size={15} />
+          <span className="text-[12.5px]">{t("历史记录", "History")}</span>
+        </button>
+      </div>
+
       <div className="mt-4 flex items-center gap-1 px-3">
         <span className="text-[12px] font-medium text-muted">{t("工作区", "Workspaces")}</span>
         <div className="ml-auto flex items-center gap-0.5">
-          <button
-            type="button"
-            onClick={onOpenHistory}
-            className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
-            aria-label={t("历史记录", "History")}
-            title={t("历史记录", "History")}
-          >
-            <IconHistory size={15} />
-          </button>
           <button
             type="button"
             onClick={() => {
