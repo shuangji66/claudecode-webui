@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
+import { WorkspacePicker } from "./WorkspacePicker";
 import { TopBar } from "../layout/TopBar";
 import { PermissionPanel } from "../permission/PermissionPanel";
 import type { PermissionPayload } from "../../transport/types";
@@ -10,7 +11,7 @@ import { effortFor, findOption, modelOptionsFromSettings } from "../../lib/provi
 import { sessionToMarkdown } from "../../lib/sessionExport";
 import { copyText } from "../../lib/clipboard";
 import { useLocale, useT } from "../../lib/i18n";
-import { IconAlert, IconFolderPlus, IconRetry, IconSpark } from "../common/Icons";
+import { BrandMark, IconAlert, IconRetry } from "../common/Icons";
 
 interface Props {
   onToggleSidebar: () => void;
@@ -28,6 +29,8 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
   const sessions = useAppStore((s) => s.sessions);
   const conversations = useAppStore((s) => s.conversations);
   const currentWorkspace = useAppStore((s) => s.currentWorkspace);
+  const workspaces = useAppStore((s) => s.workspaces);
+  const startConversationIn = useAppStore((s) => s.startConversationIn);
   const items = useAppStore((s) => s.items);
   const perms = useAppStore((s) => s.perms);
   const inits = useAppStore((s) => s.inits);
@@ -190,42 +193,11 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-hidden">
-        {activeId ? (
+      {activeId && (
+        <div className="min-h-0 flex-1 overflow-hidden">
           <MessageList items={itemList} empty={t("开始新的对话", "Start a new conversation")} />
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-            <span className="flex h-14 w-14 items-center justify-center rounded-[20px] bg-brand-soft text-brand">
-              <IconSpark size={26} />
-            </span>
-            <h2 className="text-[18px] font-semibold tracking-tight text-ink">
-              {starting ? t("正在启动 Claude…", "Starting Claude…") : currentWorkspace ? t("开始新的对话", "Start a new conversation") : t("先添加授权目录", "Add an authorized directory first")}
-            </h2>
-            <p className="max-w-sm text-[12px] leading-relaxed text-muted">
-              {starting
-                ? t("后端正在拉起 claude 子进程，完成后即可发送消息。", "The backend is starting the claude process; you can send once it is ready.")
-                : currentWorkspace
-                  ? t("在下方输入消息即可自动启动会话；也可以从左侧切换工作区。", "Type below to start automatically, or switch workspaces from the sidebar.")
-                  : t("授权一个目录作为工作区，Claude 会在其中读写文件、执行命令。", "Authorize a directory as a workspace; Claude will read, write and run commands there.")}
-            </p>
-            {!currentWorkspace && (
-              <button
-                type="button"
-                onClick={onAddWorkspace}
-                className="mt-1 flex items-center gap-1.5 rounded-full bg-ink px-4 py-2 text-[12px] font-medium text-canvas hover:opacity-90"
-              >
-                <IconFolderPlus size={15} />
-                {t("添加授权目录", "Add authorized directory")}
-              </button>
-            )}
-            {currentWorkspace && (
-              <p className="max-w-full truncate rounded-full border border-line px-3 py-1 font-mono text-[10.5px] text-muted" title={currentWorkspace}>
-                {currentWorkspace}
-              </p>
-            )}
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {mismatch && (
         <div className="mx-auto flex w-full max-w-[820px] items-start gap-2 px-4 pb-1 text-[11px] text-warn md:px-6">
@@ -244,8 +216,47 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
         </div>
       )}
 
-      <div className="shrink-0 px-3 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] pt-2 md:px-6 md:pb-4">
-        <div className="mx-auto w-full max-w-[820px]">
+      {/* 空态：输入框居中（参照 DSH 的新对话页），上方是品牌与工作区选择器；
+          有对话时回到常规布局，输入框贴底。 */}
+      <div
+        className={
+          activeId
+            ? "shrink-0 px-3 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] pt-2 md:px-6 md:pb-4"
+            : "dsh-scroll flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-[calc(env(safe-area-inset-bottom,0px)+24px)] pt-6 md:px-6"
+        }
+      >
+        <div className="mx-auto my-auto w-full max-w-[820px]">
+          {!activeId && (
+            <div className="mb-6 flex flex-col items-center gap-2 text-center">
+              <div className="flex items-center gap-2.5">
+                <BrandMark size={30} />
+                {/* 顶栏在没有会话时已经写着产品名，这里再写一遍会重复，用「新对话」当标题。 */}
+                <span className="text-[21px] font-semibold tracking-tight text-ink">{t("新对话", "New chat")}</span>
+              </div>
+              <p className="max-w-md text-[11.5px] leading-relaxed text-muted">
+                {starting
+                  ? t("后端正在拉起 claude 子进程，完成后即可发送消息。", "The backend is starting the claude process; you can send once it is ready.")
+                  : currentWorkspace
+                    ? t("输入消息即可开始新的对话；也可以先选一个工作区。", "Type to start a new conversation, or pick a workspace first.")
+                    : t("授权一个目录作为工作区，Claude 会在其中读写文件、执行命令。", "Authorize a directory as a workspace; Claude will read, write and run commands there.")}
+              </p>
+            </div>
+          )}
+
+          {!activeId && (
+            <div className="mb-2 flex items-center gap-1.5">
+              {/* 换工作区 = 在该目录开一条新对话：只切当前工作区会让首条消息落到
+                  ensureSession 的「恢复最近对话」上，用户选了工作区却进了旧对话。 */}
+              <WorkspacePicker
+                workspaces={workspaces}
+                current={currentWorkspace}
+                disabled={starting}
+                onPick={(path) => void startConversationIn(path)}
+                onAdd={onAddWorkspace}
+              />
+            </div>
+          )}
+
           <Composer
             disabled={disabled}
             sendBlocked={sendBlocked}

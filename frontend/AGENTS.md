@@ -97,6 +97,11 @@ src/
   `ensureSession(dir, false)` 在没有对话时保持空态，不自动起 claude。
 - **已经在一个空的新对话里时，再点「新对话」是 no-op**：否则会新建进程再把旧空壳关掉，
   界面会闪一下。
+- **新建对话页居中**（参照 DSH）：没有 activeId 时 `ChatPane` 把品牌 / 工作区选择器 /
+  `Composer` 一起垂直居中（`flex-1` + `my-auto`，内容过高时回落成可滚动，不会裁掉顶部），
+  有对话时才回到贴底布局。上方 `WorkspacePicker` 选中工作区走既有的 `startConversationIn`
+  （切当前工作区 + 在该目录新建对话）：只切不建会让首条消息落到 `ensureSession` 的
+  「恢复最近对话」上，用户明明选了工作区却进了旧对话。
 - 新增事件类型：先改 `transport/types.ts` → 再在 `applyEvent` 里分支 → 最后补测试。
 
 ## 4. 消息模型（Item）
