@@ -1,7 +1,11 @@
 # frontend/AGENTS.md — 前端规范
 
-技术栈：**React 19 + TypeScript + Vite 7 + Tailwind CSS v4 + zustand + Vitest**。
+技术栈：**React 19 + TypeScript 7 + Vite 8 + Tailwind CSS v4 + zustand + Vitest 5（jsdom 31）**。
 不引 UI 组件库（消息外壳、气泡、折叠、Markdown 都是自研），保持包体小、便于内嵌。
+
+构建链要求 Node ≥ 22（Vite 8 的门槛）。升级依赖时按「`npx tsc --noEmit` → `npx vitest run` →
+`make dev`」三步验；Vite 8 换成了 rolldown，若 `vite.config.ts` 报插件类型不兼容，先确认
+vitest 没有再嵌一份旧 vite（`npm ls vite` 应该只有一个版本）。
 
 ## 1. 目录职责
 
