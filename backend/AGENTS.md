@@ -55,7 +55,7 @@ internal/webui       go:embed 前端产物
 4. `PermissionRequest` 的 `permission_suggestions` 必须原样保留（前端按钮的数据源）。
 5. `PermissionRequest` 的 `agent_id` 同样要保留：子代理里的工具审批只有它（没有
    `parent_tool_use_id`），丢了前端就无法标出「谁在申请权限」。
-5. **未知字段一律不丢**：转发给前端时用 `Envelope.Raw`。
+6. **未知字段一律不丢**：转发给前端时用 `Envelope.Raw`。
 
 ## 4. 会话状态机（`agent/session`）
 
