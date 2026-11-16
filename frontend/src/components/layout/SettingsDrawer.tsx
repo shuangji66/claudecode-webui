@@ -838,7 +838,7 @@ function ProviderCard({
               type="password"
               value={provider.apiKey}
               onChange={(e) => onChange({ apiKey: e.target.value })}
-              placeholder={saved?.api_key_set ? t(`已设置：${saved.api_key_masked}（留空不修改）`, `Set: ${saved.api_key_masked} (leave blank to keep)`) : t("未设置", "Not set")}
+              placeholder={saved?.api_key_set ? t("已设置（留空不修改）", "Set (leave blank to keep)") : t("未设置", "Not set")}
               className="min-w-0 flex-1 rounded-lg border border-line-strong bg-canvas px-2 py-1.5 font-mono text-[11.5px] outline-none focus:border-brand/60"
             />
             {saved?.api_key_set && (

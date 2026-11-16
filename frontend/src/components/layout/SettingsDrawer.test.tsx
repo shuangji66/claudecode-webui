@@ -52,6 +52,39 @@ describe("设置页凭证输入框的自动填充", () => {
     expect(["off", "new-password"]).toContain(key.getAttribute("autocomplete"));
   });
 
+  // 密钥只看「是否已设置」：脱敏串会在截图/录屏里流出密钥的尾巴，同样不该出现。
+  it("已保存的 API 密钥只提示「已设置」，不回显脱敏串", async () => {
+    useAppStore.setState({
+      settings: {
+        providers: [
+          {
+            id: "gw",
+            name: "网关",
+            protocol: "anthropic-messages",
+            base_url: "",
+            api_key_set: true,
+            api_key_masked: "sk-gw••••••1234",
+            models: [],
+            model_meta: {},
+          },
+        ],
+        selected: { provider: "gw", model: "", effort: "" },
+        permission_mode: "default",
+        locale: "zh",
+        font_size: 15,
+      } as never,
+      info: null,
+      settingsSaving: false,
+    });
+    await act(async () => {
+      render(<SettingsDrawer open initialTab="models" onClose={() => {}} />);
+    });
+    const key = screen.getByPlaceholderText("已设置（留空不修改）");
+    expect(key.getAttribute("placeholder")).not.toContain("sk-gw");
+    expect(screen.queryByText(/sk-gw/)).toBeNull();
+    expect(screen.queryByDisplayValue(/sk-gw/)).toBeNull();
+  });
+
   it("手动添加的模型默认勾上「支持图片输入」", async () => {
     await act(async () => {
       render(<SettingsDrawer open initialTab="models" onClose={() => {}} />);

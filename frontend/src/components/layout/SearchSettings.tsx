@@ -36,6 +36,8 @@ export function SearchSettings() {
 
   // 只在后端状态变化时回填（保存/注册后都会拿到新状态）；
   // 密钥框永远留空——它只用于「换一把新的」，回填明文既无必要也不安全。
+  // 标签旁也不显示脱敏串：截图、录屏、共享屏幕时那几个尾巴同样是泄漏，
+  // 「已保存，留空则不修改」这个 placeholder 已经说明了一切。
   useEffect(() => {
     if (!status) return;
     setBase(status.base_url);
@@ -104,12 +106,7 @@ export function SearchSettings() {
           />
         </label>
         <label className="block">
-          <span className="mb-1 block text-[11px] text-muted">
-            {t("搜索密钥", "Search API key")}
-            {status?.search_api_key_set && (
-              <span className="ml-1 font-mono text-[10px] text-faint">{status.search_api_key_masked}</span>
-            )}
-          </span>
+          <span className="mb-1 block text-[11px] text-muted">{t("搜索密钥", "Search API key")}</span>
           <input
             {...NO_AUTOFILL}
             className={`${inputClass} font-mono`}

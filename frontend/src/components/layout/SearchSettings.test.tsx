@@ -42,7 +42,9 @@ describe("SearchSettings 内置搜索", () => {
     mount();
     expect(await screen.findByDisplayValue("https://api.deepseek.com/v1/tools")).toBeInTheDocument();
     expect(screen.getByDisplayValue("10")).toBeInTheDocument();
-    expect(screen.getByText("****abcd")).toBeInTheDocument();
+    // 已保存的密钥只体现在 placeholder 上，连脱敏串都不显示。
+    expect(screen.queryByText("****abcd")).toBeNull();
+    expect(screen.getByPlaceholderText("已保存，留空则不修改").getAttribute("placeholder")).not.toContain("****");
     // 密钥输入框本身永远是空的：它只用来换新密钥。
     expect(screen.getByPlaceholderText("已保存，留空则不修改")).toHaveValue("");
   });
