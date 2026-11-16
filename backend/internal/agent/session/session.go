@@ -99,6 +99,13 @@ type Session struct {
 
 	initMu      sync.RWMutex
 	initPayload json.RawMessage
+
+	// permMu/perms 记录「已下发给前端、还没收到决定」的审批请求。
+	// WS 重连时要把它们重放出去：不重放的话刷新页面就再也点不到那个审批，
+	// 而 CLI 仍在 can_use_tool 上挂着（进程与内存一直占着）。
+	permMu    sync.Mutex
+	perms     map[string]json.RawMessage
+	permOrder []string
 }
 
 // New 构造一个尚未握手的会话。调用方随后必须调用 Handshake。
@@ -110,6 +117,7 @@ func New(id, cwd string, tr Transport, emit func(Event)) *Session {
 		tr:        tr,
 		emit:      emit,
 		pending:   make(map[string]*pendingCall),
+		perms:     make(map[string]json.RawMessage),
 		done:      make(chan struct{}),
 	}
 	s.state.Store(StateStarting)
@@ -263,7 +271,50 @@ func (s *Session) ReplyPermission(requestID string, r PermissionReply) error {
 	} else {
 		line = protocol.Deny(requestID, r.Message)
 	}
+	defer s.forgetPermission(requestID)
 	return s.writeLine(line)
+}
+
+// PendingPermissions 返回仍在等待用户决定的审批请求（原始载荷，按到达顺序）。
+func (s *Session) PendingPermissions() []json.RawMessage {
+	s.permMu.Lock()
+	defer s.permMu.Unlock()
+	if len(s.perms) == 0 {
+		return nil
+	}
+	out := make([]json.RawMessage, 0, len(s.permOrder))
+	for _, id := range s.permOrder {
+		if raw, ok := s.perms[id]; ok {
+			out = append(out, raw)
+		}
+	}
+	return out
+}
+
+func (s *Session) rememberPermission(requestID string, raw json.RawMessage) {
+	if requestID == "" {
+		return
+	}
+	s.permMu.Lock()
+	if _, dup := s.perms[requestID]; !dup {
+		s.permOrder = append(s.permOrder, requestID)
+	}
+	s.perms[requestID] = raw
+	s.permMu.Unlock()
+}
+
+func (s *Session) forgetPermission(requestID string) {
+	s.permMu.Lock()
+	if _, ok := s.perms[requestID]; ok {
+		delete(s.perms, requestID)
+		for i, id := range s.permOrder {
+			if id == requestID {
+				s.permOrder = append(s.permOrder[:i], s.permOrder[i+1:]...)
+				break
+			}
+		}
+	}
+	s.permMu.Unlock()
 }
 
 // Close 关闭会话（幂等）。
@@ -278,6 +329,10 @@ func (s *Session) Close() error {
 			delete(s.pending, k)
 		}
 		s.pmu.Unlock()
+		s.permMu.Lock()
+		s.perms = make(map[string]json.RawMessage)
+		s.permOrder = nil
+		s.permMu.Unlock()
 		s.emitData(KindClosed, map[string]any{"id": s.ID})
 	})
 	return nil
@@ -397,7 +452,11 @@ func (s *Session) handleLine(line []byte) {
 
 	case protocol.TypeControlRequest:
 		if perm, ok := protocol.ParsePermission(env); ok {
-			s.emitData(KindPermission, permPayload(perm))
+			payload := permPayload(perm)
+			if raw, err := json.Marshal(payload); err == nil {
+				s.rememberPermission(perm.RequestID, raw)
+			}
+			s.emitData(KindPermission, payload)
 			return
 		}
 		// 未实现的子类型必须显式回错，否则 CLI 会一直等。

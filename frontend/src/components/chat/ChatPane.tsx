@@ -50,7 +50,6 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
   const replyPermission = useAppStore((s) => s.replyPermission);
   const retryConnection = useAppStore((s) => s.retryConnection);
 
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [mode, setModeState] = useState("");
 
   const conversation = useMemo(() => conversations.find((c) => c.id === activeId) ?? null, [conversations, activeId]);
@@ -87,10 +86,9 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
     document.title = session ? title : "Claude Code";
   }, [session, title]);
 
-  const pending = useMemo(
-    () => (activeId ? (perms[activeId] ?? []).filter((p) => !dismissed.has(p.request_id)) : []),
-    [perms, activeId, dismissed],
-  );
+  // 只认 store 里的 perms：回复成功才会从那里删掉，失败时卡片保留。
+  // 组件里再存一份 dismissed 曾导致「跨会话共享 request_id 就永久吞掉新审批」。
+  const pending = activeId ? (perms[activeId] ?? []) : [];
 
   const handleReply = (
     perm: PermissionPayload,
@@ -104,7 +102,6 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
       }
     }
     replyPermission(perm, opts.allow, opts.updatedInput, opts.updatedPermissions, opts.message);
-    setDismissed((prev) => new Set(prev).add(perm.request_id));
   };
 
   const modelOptions = useMemo(() => modelOptionsFromSettings(settings), [settings]);

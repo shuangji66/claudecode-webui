@@ -179,6 +179,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			"state": sess.State(),
 		},
 		"init": sess.InitPayload(),
+		// 挂起审批要一起重放：刷新/重连后若拿不到它们，用户就再也点不到，
+		// 而 CLI 一直挂在 can_use_tool 上等回包。
+		"permissions": sess.PendingPermissions(),
 	})
 	if err := c.SendJSON(WireEvent{Kind: "session.snapshot", SID: id, Data: snapshot}); err != nil {
 		return

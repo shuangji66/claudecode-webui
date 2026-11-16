@@ -610,3 +610,45 @@ func TestStartFailsOnInitializeErrorSubtype(t *testing.T) {
 		t.Fatal("握手失败却抛出了 session.ready")
 	}
 }
+
+// 挂起的审批必须能被重放：WS 重连要把它带回前端。
+// 不重放的话刷新页面就再也点不到那个审批，而 CLI 一直挂在 can_use_tool 上。
+func TestPendingPermissionsSurviveUntilReplied(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	if got := sess.PendingPermissions(); len(got) != 0 {
+		t.Fatalf("初始不应有挂起审批: %v", got)
+	}
+	fc.send(map[string]any{
+		"type":       "control_request",
+		"request_id": "p1",
+		"request": map[string]any{
+			"subtype":   "can_use_tool",
+			"tool_name": "Bash",
+			"input":     map[string]any{"command": "rm -rf /tmp/x"},
+		},
+	})
+	if _, ok := rec.wait(KindPermission, 2*time.Second); !ok {
+		t.Fatal("未收到 permission 事件")
+	}
+
+	got := sess.PendingPermissions()
+	if len(got) != 1 {
+		t.Fatalf("挂起审批数 = %d, want 1", len(got))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got[0], &payload); err != nil {
+		t.Fatalf("重放载荷不是合法 JSON: %v", err)
+	}
+	if payload["request_id"] != "p1" || payload["tool_name"] != "Bash" {
+		t.Fatalf("重放载荷 = %+v", payload)
+	}
+
+	if err := sess.ReplyPermission("p1", PermissionReply{Allow: true}); err != nil {
+		t.Fatalf("ReplyPermission: %v", err)
+	}
+	if left := sess.PendingPermissions(); len(left) != 0 {
+		t.Fatalf("回复后仍残留审批: %v", left)
+	}
+}

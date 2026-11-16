@@ -1285,6 +1285,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const id = get().activeId;
     if (!id) return;
     clients.get(id)?.send({ kind: "interrupt" });
+    // 中断之后这轮的审批请求就作废了：不清掉的话卡片会一直挂在输入框上方，
+    // 点「允许」只会把一条 request_id 早已失效的 control_response 写进 CLI。
+    set((s) => ({ perms: { ...s.perms, [id]: [] } }));
   },
 
   setPermissionMode: (mode) => {
@@ -1328,7 +1331,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   replyPermission: (req, allow, updatedInput, updatedPermissions, message) => {
     const id = get().activeId;
     if (!id) return;
-    clients.get(id)?.send({
+    const sent = clients.get(id)?.send({
       kind: "permission",
       request_id: req.request_id,
       allow,
@@ -1336,6 +1339,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
       updated_permissions: updatedPermissions,
       message,
     });
+    if (!sent) {
+      // 连接已经断了（自动重连中）：帧根本没发出去。保留卡片，否则用户以为批准了，
+      // 而 CLI 仍挂在 can_use_tool 上，界面上再也点不到。
+      set({ error: "连接已断开，正在自动重连；稍后再批准一次" });
+      return;
+    }
     set((s) => ({
       perms: { ...s.perms, [id]: (s.perms[id] ?? []).filter((p) => p.request_id !== req.request_id) },
     }));
@@ -1344,8 +1353,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
   applyEvent: (sid, ev) => {
     switch (ev.kind) {
       case "session.snapshot": {
-        const data = ev.data as { init?: InitPayload; info?: { state?: string } } | undefined;
+        const data = ev.data as
+          | { init?: InitPayload; info?: { state?: string }; permissions?: PermissionPayload[] }
+          | undefined;
         if (data?.init) set((s) => ({ inits: { ...s.inits, [sid]: data.init! } }));
+        // 后端会把「还没决定」的审批一起发过来：重连/刷新后必须能继续点，
+        // 否则 CLI 一直挂着等回包，而界面上找不到入口。
+        if (data?.permissions) {
+          const pending = data.permissions.filter((p) => p?.request_id);
+          set((s) => ({ perms: { ...s.perms, [sid]: pending } }));
+        }
         if (data?.info?.state) {
           const state = data.info.state;
           set((s) => ({
@@ -1378,7 +1395,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
       case "permission": {
         const p = ev.data as PermissionPayload | undefined;
         if (p?.request_id) {
-          set((s) => ({ perms: { ...s.perms, [sid]: [...(s.perms[sid] ?? []), p] } }));
+          // 按 request_id 去重：重连快照与实时事件可能把同一条审批送两遍。
+          set((s) => ({
+            perms: {
+              ...s.perms,
+              [sid]: [...(s.perms[sid] ?? []).filter((x) => x.request_id !== p.request_id), p],
+            },
+          }));
         }
         return;
       }
@@ -1393,6 +1416,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         set((s) => ({
           states: { ...s.states, [sid]: "closed" },
           conns: { ...s.conns, [sid]: { state: "closed" } },
+          // 进程已退出，挂起的审批永远不可能被批准：留着只会让人点到一条失效回包。
+          perms: { ...s.perms, [sid]: [] },
           conversations: s.conversations.map((c) => (c.id === sid ? { ...c, live: false, state: "closed" } : c)),
         }));
         // 会话进程已退出，WS 再留着只会让界面显示「已连接」却发不出消息。
