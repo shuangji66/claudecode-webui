@@ -93,6 +93,23 @@ func Decode(line []byte) (Envelope, error) {
 	return env, nil
 }
 
+// ResponseError 取出 control_response 的 error 子类型里的错误文本。
+//
+// CLI 拒绝一个控制请求时回的是
+// `{"type":"control_response","response":{"subtype":"error","request_id":"r1","error":"..."}}`，
+// 此时 `response.response` 是空的；只看载荷会把失败当成成功。
+func (e Envelope) ResponseError() string {
+	var r struct {
+		Response *struct {
+			Error string `json:"error"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(e.Raw, &r); err != nil || r.Response == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.Response.Error)
+}
+
 // ResponsePayload 取出 control_response 里 `response.response` 的载荷。
 // 结构形如：
 //

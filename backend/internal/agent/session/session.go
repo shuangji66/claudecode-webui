@@ -66,8 +66,16 @@ const (
 // 两者交错会 panic（send on closed channel），panic 发生在读循环 goroutine 里
 // 没有 recover，整个 ccweb 进程会跟着退出。现在关闭方只关 done，发送方 select 它。
 type pendingCall struct {
-	ch   chan json.RawMessage
+	ch   chan controlResponse
 	done chan struct{}
+}
+
+// controlResponse 是一条控制回包。subtype 必须一起带上：
+// CLI 拒绝请求时回 subtype=error 且载荷为空，只看载荷会把失败当成功。
+type controlResponse struct {
+	payload json.RawMessage
+	subtype string
+	errText string
 }
 
 // Session 是一条会话。
@@ -118,16 +126,26 @@ func (s *Session) Start() error {
 		s.Close()
 		return fmt.Errorf("session: initialize 失败: %w", err)
 	}
+	// subtype=error 时载荷是空的。不认这个分支，握手失败会被当成成功：
+	// 会话进入假 ready，用户发消息后 CLI 一个字节都不回，也永远没有 result。
+	if resp.subtype == "error" || len(resp.payload) == 0 {
+		s.Close()
+		reason := resp.errText
+		if reason == "" {
+			reason = "CLI 没有返回 initialize 载荷"
+		}
+		return fmt.Errorf("session: initialize 被 claude 拒绝: %s", reason)
+	}
 	s.initMu.Lock()
-	s.initPayload = resp
+	s.initPayload = resp.payload
 	s.initMu.Unlock()
 
 	s.setState(StateReady)
 	s.emitData(KindSessionReady, map[string]any{
 		"id":      s.ID,
 		"cwd":     s.Cwd,
-		"init":    json.RawMessage(resp),
-		"version": protocolVersion(resp),
+		"init":    json.RawMessage(resp.payload),
+		"version": protocolVersion(resp.payload),
 	})
 	return nil
 }
@@ -280,19 +298,19 @@ func (s *Session) writeLine(b []byte) error {
 }
 
 // request 发送一条控制请求并等待其回包。
-func (s *Session) request(line []byte, requestID string, timeout time.Duration) (json.RawMessage, error) {
-	call := &pendingCall{ch: make(chan json.RawMessage, 1), done: make(chan struct{})}
+func (s *Session) request(line []byte, requestID string, timeout time.Duration) (controlResponse, error) {
+	call := &pendingCall{ch: make(chan controlResponse, 1), done: make(chan struct{})}
 	s.pmu.Lock()
 	if _, dup := s.pending[requestID]; dup {
 		s.pmu.Unlock()
-		return nil, fmt.Errorf("session: request_id %q 重复", requestID)
+		return controlResponse{}, fmt.Errorf("session: request_id %q 重复", requestID)
 	}
 	s.pending[requestID] = call
 	s.pmu.Unlock()
 
 	if err := s.writeLine(line); err != nil {
 		s.removePending(requestID)
-		return nil, err
+		return controlResponse{}, err
 	}
 
 	select {
@@ -300,9 +318,9 @@ func (s *Session) request(line []byte, requestID string, timeout time.Duration) 
 		return resp, nil
 	case <-time.After(timeout):
 		s.removePending(requestID)
-		return nil, fmt.Errorf("session: 等待 %q 回包超时（%s）", requestID, timeout)
+		return controlResponse{}, fmt.Errorf("session: 等待 %q 回包超时（%s）", requestID, timeout)
 	case <-s.done:
-		return nil, errors.New("session: 会话已关闭")
+		return controlResponse{}, errors.New("session: 会话已关闭")
 	}
 }
 
@@ -363,7 +381,11 @@ func (s *Session) handleLine(line []byte) {
 		s.pmu.Unlock()
 		if ok {
 			select {
-			case call.ch <- env.ResponsePayload():
+			case call.ch <- controlResponse{
+				payload: env.ResponsePayload(),
+				subtype: env.Subtype,
+				errText: env.ResponseError(),
+			}:
 			case <-call.done:
 				// 会话在回包到达前已关闭：丢弃这条回包即可。
 				// ch 从不被 close，这个 select 是「不会向已关闭 channel 发送」的唯一保证。

@@ -563,3 +563,50 @@ func TestCloseRacingInitializeResponseNoPanic(t *testing.T) {
 		_ = sess.Close()
 	}
 }
+
+// 回归：CLI 用 subtype=error 拒绝 initialize 时不能当成功。
+//
+// 旧实现只看「有没有回包」，而 error 子类型的 response.response 是空的 —— 于是
+// 会话进入假 ready，用户发消息后 CLI 一个字节都不回，也没有 result，只能等空闲回收。
+func TestStartFailsOnInitializeErrorSubtype(t *testing.T) {
+	old := InitTimeout
+	InitTimeout = 2 * time.Second
+	t.Cleanup(func() { InitTimeout = old })
+
+	sessSide, cliSide := newDuplex(t)
+	rec := &recorder{}
+	sess := New("s1", "/tmp/work", sessSide, rec.emit)
+	fc := newFakeCLI(t, cliSide)
+
+	done := make(chan error, 1)
+	go func() { done <- sess.Start() }()
+
+	msg := fc.next()
+	requestID := msg["request_id"].(string)
+	fc.send(map[string]any{
+		"type": "control_response",
+		"response": map[string]any{
+			"subtype":    "error",
+			"request_id": requestID,
+			"error":      "invalid api key",
+		},
+	})
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("initialize 回 subtype=error 时 Start 必须失败")
+		}
+		if !strings.Contains(err.Error(), "invalid api key") {
+			t.Fatalf("错误信息未带上 CLI 的原因: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Start 没有返回")
+	}
+	if sess.State() != StateClosed {
+		t.Fatalf("state = %q, want closed", sess.State())
+	}
+	if _, ok := rec.find(KindSessionReady); ok {
+		t.Fatal("握手失败却抛出了 session.ready")
+	}
+}

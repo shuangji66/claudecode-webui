@@ -161,8 +161,13 @@ func (s *Session) Close() error {
 			_ = s.master.Close()
 			select {
 			case <-s.done:
+				// shell 自己退了，但交互式 bash 的作业控制会为每个 job 建独立进程组：
+				// `npm run dev &` 这类后台作业既不在 shell 的 pgrp 里、也不是前台组，
+				// 上面那两次信号都碰不到它们。按会话回扫一遍收尾。
+				killSession(pid, syscall.SIGKILL)
 			case <-time.After(2 * time.Second):
 				_ = syscall.Kill(-pid, syscall.SIGKILL)
+				killSession(pid, syscall.SIGKILL)
 				<-s.done
 			}
 			return
@@ -218,4 +223,40 @@ func asExitError(err error, target **exec.ExitError) bool {
 		err = u.Unwrap()
 	}
 	return false
+}
+
+// killSession 向「会话 id 等于 sid」的所有进程发信号。
+//
+// Setsid 让 shell 成为会话首进程（sid == pid），它派生的一切都留在该会话里；
+// 只按进程组杀会漏掉 bash 作业控制给后台 job 另建的组。
+func killSession(sid int, sig syscall.Signal) {
+	if sid <= 0 {
+		return
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid == sid {
+			continue
+		}
+		b, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		// 格式：pid (comm) state ppid pgrp session ...；comm 可能含空格与括号。
+		idx := strings.LastIndexByte(string(b), ')')
+		if idx < 0 {
+			continue
+		}
+		fields := strings.Fields(string(b[idx+1:]))
+		if len(fields) < 4 {
+			continue
+		}
+		if got, err := strconv.Atoi(fields[3]); err == nil && got == sid {
+			_ = syscall.Kill(pid, sig)
+		}
+	}
 }

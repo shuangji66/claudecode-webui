@@ -47,14 +47,23 @@ type Manager struct {
 	store   *settings.Store
 	emit    func(sessionID string, ev session.Event)
 
-	// createMu 串行化「检查是否已有同目录会话 + 启动新进程」。
-	// 没有它时，后端自动拉起与前端同时到达的 ensure 会各起一个 claude。
+	// createMu 只保护 creating 这张「正在创建」表，不覆盖 spawn 与握手。
+	// 它保证同一个 key（会话 id 或目录）的并发创建共享一次结果：
+	// 没有它时后端自动拉起与前端同时到达的 ensure 会各起一个 claude；
+	// 而把整段 spawn+握手都放进来（旧行为）会让一个起不来的版本把所有人
+	// 排队等满 InitTimeout=30s。
 	createMu sync.Mutex
+	creating map[string]*pendingCreate
 
 	mu       sync.Mutex
 	sessions map[string]*session.Session
 	procs    map[string]*process.Proc
 	metas    map[string]meta
+	// closingSessions 记录正在关闭的会话：关闭要先把进程真的收掉再摘表，
+	// 否则并发 Resume 会在「已摘表、进程未死」的窗口里给同一个 id 起第二个进程。
+	closingSessions map[string]chan struct{}
+	// spawning 是正在 spawn/握手、尚未登记进 sessions 的数量，用于上限判定。
+	spawning int
 
 	// capMu/caps 缓存「某个 claude 二进制是否认识某个参数」：面板能切换版本，
 	// 给旧版本传未知参数会直接起不来，所以探测一次并缓存。
@@ -79,6 +88,8 @@ func New(cfg config.Config, resolve func() (string, error), store *settings.Stor
 		procs:    make(map[string]*process.Proc),
 		metas:    make(map[string]meta),
 		caps:     make(map[string]bool),
+		creating: make(map[string]*pendingCreate),
+		closingSessions: make(map[string]chan struct{}),
 		closing:  make(chan struct{}),
 	}
 	go m.reapLoop()
@@ -97,6 +108,34 @@ func (m *Manager) Binary() string {
 	return p
 }
 
+// pendingCreate 是一次正在进行的创建；同一 key 的并发调用共享它的结果。
+type pendingCreate struct {
+	done chan struct{}
+	info Info
+	err  error
+}
+
+// createOnce 让同一个 key（会话 id 或目录）的并发创建共享一次结果。
+func (m *Manager) createOnce(key string, fn func() (Info, error)) (Info, error) {
+	m.createMu.Lock()
+	if prev, ok := m.creating[key]; ok {
+		m.createMu.Unlock()
+		<-prev.done
+		return prev.info, prev.err
+	}
+	cur := &pendingCreate{done: make(chan struct{})}
+	m.creating[key] = cur
+	m.createMu.Unlock()
+
+	cur.info, cur.err = fn()
+
+	m.createMu.Lock()
+	delete(m.creating, key)
+	m.createMu.Unlock()
+	close(cur.done)
+	return cur.info, cur.err
+}
+
 // Create 新建一个会话并完成握手。
 //
 // 会话 id 同时作为 claude 的 --session-id：这样转录文件名、应用侧记录和
@@ -110,9 +149,9 @@ func (m *Manager) Create(cwd, model, permissionMode string) (Info, error) {
 	if err != nil {
 		return Info{}, fmt.Errorf("manager: 生成会话 id: %w", err)
 	}
-	m.createMu.Lock()
-	defer m.createMu.Unlock()
-	return m.create(abs, id, "", model, permissionMode)
+	return m.createOnce("id:"+id, func() (Info, error) {
+		return m.create(abs, id, "", model, permissionMode)
+	})
 }
 
 // Resume 用已有对话 id 恢复一个 claude 进程。
@@ -128,16 +167,18 @@ func (m *Manager) Resume(id, cwd, model, permissionMode string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	m.createMu.Lock()
-	defer m.createMu.Unlock()
-
-	if info, ok := m.infoByID(id); ok {
-		if filepath.Clean(info.Cwd) != abs {
-			return Info{}, errors.New("manager: 该对话属于其它工作目录")
+	return m.createOnce("id:"+id, func() (Info, error) {
+		// 正在关闭的旧进程必须先消失：否则 --resume 会与它同时往同一份
+		// 转录里追加，Info.ID 也会同时对应两个活进程。
+		m.waitClosed(id)
+		if info, ok := m.infoByID(id); ok {
+			if filepath.Clean(info.Cwd) != abs {
+				return Info{}, errors.New("manager: 该对话属于其它工作目录")
+			}
+			return info, nil
 		}
-		return info, nil
-	}
-	return m.create(abs, id, id, model, permissionMode)
+		return m.create(abs, id, id, model, permissionMode)
+	})
 }
 
 // Info 按 id 返回会话描述。
@@ -159,24 +200,23 @@ func (m *Manager) Info(id string) (Info, bool) {
 
 // Ensure 返回 cwd 下已存在的会话；没有则新建。
 //
-// 「APP 启动自动拉起」与「切换工作区」都走这里：并发调用会串行化，
-// 前端即便在自动启动完成前也发了一次 ensure，也不会多起 claude。
+// 「APP 启动自动拉起」与「切换工作区」都走这里：同一目录的并发调用会共享
+// 一次创建，前端即便在自动启动完成前也发了一次 ensure，也不会多起 claude。
 func (m *Manager) Ensure(cwd, model, permissionMode string) (Info, error) {
 	abs, err := normalizeCwd(cwd)
 	if err != nil {
 		return Info{}, err
 	}
-	m.createMu.Lock()
-	defer m.createMu.Unlock()
-
-	if info, ok := m.findByCwd(abs); ok {
-		return info, nil
-	}
-	id, err := newUUID()
-	if err != nil {
-		return Info{}, fmt.Errorf("manager: 生成会话 id: %w", err)
-	}
-	return m.create(abs, id, "", model, permissionMode)
+	return m.createOnce("cwd:"+abs, func() (Info, error) {
+		if info, ok := m.findByCwd(abs); ok {
+			return info, nil
+		}
+		id, err := newUUID()
+		if err != nil {
+			return Info{}, fmt.Errorf("manager: 生成会话 id: %w", err)
+		}
+		return m.create(abs, id, "", model, permissionMode)
+	})
 }
 
 // infoByID 返回某个 id 的存活会话描述；已退出的会话视为不存在，
@@ -240,18 +280,26 @@ func normalizeCwd(cwd string) (string, error) {
 	return abs, nil
 }
 
-// create 在 createMu 已持有的前提下启动会话。
-// sessionID 是应用侧 / CLI 共用的 id；resumeID 非空时走 --resume。
+// create 启动会话并完成握手。sessionID 是应用侧 / CLI 共用的 id；
+// resumeID 非空时走 --resume。调用方通过 createOnce 去重，这里不再持 createMu。
 func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string) (Info, error) {
 	m.reapIdle()
 	m.pruneClosed()
 
+	// 并发创建各自 spawn，上限必须把「正在 spawn、还没登记进 sessions」的算进来，
+	// 否则两个请求可以同时通过检查、各起一个进程。
 	m.mu.Lock()
-	if len(m.sessions) >= m.cfg.MaxSessions {
+	if len(m.sessions)+m.spawning >= m.cfg.MaxSessions {
 		m.mu.Unlock()
 		return Info{}, ErrTooMany
 	}
+	m.spawning++
 	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.spawning--
+		m.mu.Unlock()
+	}()
 
 	// 运行期设置优先：设置页选中的模型就是 CLI 的默认模型。
 	cfgSet := m.store.Get()
@@ -385,22 +433,56 @@ func (m *Manager) pruneClosed() {
 }
 
 // Close 关闭并移除一个会话。
+//
+// 顺序是「标记 closing → 收掉进程 → 摘表」：旧实现先摘表再 kill，中间那段窗口里
+// 并发的 Resume 会判定「不存在」，于是以同一个 uuid 再 spawn 一个进程，两个进程
+// 同时往同一份转录追加。
 func (m *Manager) Close(id string) error {
 	m.mu.Lock()
+	if ch, ok := m.closingSessions[id]; ok {
+		// 已经有人在关，等它收完即可（幂等）。
+		m.mu.Unlock()
+		<-ch
+		return nil
+	}
 	sess, ok := m.sessions[id]
 	proc := m.procs[id]
-	delete(m.sessions, id)
-	delete(m.procs, id)
-	delete(m.metas, id)
+	var done chan struct{}
+	if ok {
+		done = make(chan struct{})
+		m.closingSessions[id] = done
+	}
 	m.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("manager: 会话 %s 不存在", id)
 	}
+
 	err := sess.Close()
 	if proc != nil {
 		_ = proc.Close()
 	}
+
+	m.mu.Lock()
+	delete(m.sessions, id)
+	delete(m.procs, id)
+	delete(m.metas, id)
+	delete(m.closingSessions, id)
+	m.mu.Unlock()
+	close(done)
 	return err
+}
+
+// waitClosed 等待某个 id 的关闭流程结束（可能连续多轮）。
+func (m *Manager) waitClosed(id string) {
+	for {
+		m.mu.Lock()
+		ch, ok := m.closingSessions[id]
+		m.mu.Unlock()
+		if !ok {
+			return
+		}
+		<-ch
+	}
 }
 
 // CloseAll 关闭全部会话（进程退出时调用）。
