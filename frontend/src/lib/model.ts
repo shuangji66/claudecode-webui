@@ -3,6 +3,7 @@
 // CLI 的原始消息（assistant/user/system/result/stream_event）不直接进渲染层：
 // 先经 normalize.ts 归一成这里的 Item，组件只认 Item。
 // 这样做的好处是工具卡片、流式去重、tool_use↔tool_result 配对都收敛在纯函数里，可单测。
+import type { UsageSnapshot } from "./usage";
 
 export interface BaseItem {
   id: string;
@@ -52,6 +53,8 @@ export interface ResultItem extends BaseItem {
   durationMs?: number;
   isError?: boolean;
   denials?: unknown[];
+  /** 本回合的用量快照（转录回放时靠它还原上下文/tok/s，见 lib/usage）。 */
+  usage?: UsageSnapshot;
 }
 
 export interface ErrorItem extends BaseItem {

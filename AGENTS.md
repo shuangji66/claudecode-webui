@@ -214,6 +214,9 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 强调色固定为陶土色 `#D97757`，用 `bg-brand/text-brand` 等语义类，不要写死 slate/blue。
 - **唯一允许的循环动画**是侧栏对话「进行中」的进度环（`common/StateDot` 的 `ongoing`，
   1.5s 匀速旋转，对齐 DSH），且 `prefers-reduced-motion` 下必须静止；呼吸灯/pulse 仍然禁止。
+- **输入框下方的用量行**（轮数 / 工具数 / tok/s / 上下文%）全部来自 claude CLI 的
+  `usage` 与 `modelUsage.contextWindow`（见 `lib/usage.ts`）；CLI 没有「步骤数」与
+  「实时 tok/s」，对应显示的是换算值，不要把它说成官方指标，也不要为此去猜。
 - 移动端输入框下方必须保留 `env(safe-area-inset-bottom)`，否则 iPhone Home Indicator 会盖住输入区。
 - 界面文案走 `useT()`（中文 / English 两参数），默认中文；新增文案不要再硬编码单语。
 - **UI 原语入库，不要重复造**：模态 `common/Dialog`、确认/输入 `common/SystemDialogs`

@@ -11,6 +11,7 @@
 import { create } from "zustand";
 import { apiFetch } from "../lib/runtime";
 import { appendError, appendUser, applyCLI, isTurnResult } from "../lib/normalize";
+import { applyUsageMessage, type UsageSnapshot } from "../lib/usage";
 import { openFnosFileManager } from "../lib/fnos";
 import type { Item } from "../lib/model";
 import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
@@ -118,6 +119,11 @@ interface AppState {
    * 打开对话（setActive）即清除，否则绿点会一直挂着。
    */
   doneIds: Record<string, boolean>;
+  /**
+   * 每个会话的实时用量（上下文 / 缓存命中 / 输出速度）。
+   * 只从 CLI 真实给出的 usage 派生，见 lib/usage 的说明。
+   */
+  usage: Record<string, UsageSnapshot>;
 
   // 「获取可用模型」的临时结果（按提供商分别保存会太啰嗦，这里只留最近一次）
   modelsFor: string;
@@ -327,6 +333,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   states: {},
   conns: {},
   doneIds: {},
+  usage: {},
   modelsFor: "",
   gatewayModels: [],
   modelsError: null,
@@ -1312,9 +1319,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // 一轮结束时给「没在看的对话」打上完成标记：正在看的对话结果就在眼前，
         // 再挂一个绿点只会让人以为自己漏了什么。
         const finished = get().activeId !== sid && isTurnResult(ev.data);
+        // usage 只在 CLI 真的给出数字时更新（stream_event 的 message_start/delta、
+        // 以及 result）；不认识的形状保持原样。
+        const usage = applyUsageMessage(get().usage[sid], ev.data);
         set((s) => ({
           items: { ...s.items, [sid]: applyCLI(s.items[sid] ?? [], ev.data) },
           ...(finished ? { doneIds: { ...s.doneIds, [sid]: true } } : {}),
+          ...(usage ? { usage: { ...s.usage, [sid]: usage } } : {}),
         }));
         return;
       }

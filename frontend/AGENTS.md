@@ -21,6 +21,7 @@ src/
   lib/providerForm.ts  提供商/模型元数据表单转换
   lib/providerCatalog.ts 预置第三方提供商目录（对齐 DSH 的 pi-ai catalog）
   lib/attachments.ts   附件类型/大小/读取
+  lib/usage.ts         用量换算：上下文/缓存命中/tok/s（只从 CLI 的 usage 派生）
   lib/workspace.ts     文件路径/porcelain 分组/unified diff 解析（纯函数）
   lib/conversations.ts 对话归属/最近对话排序（纯函数）
   lib/fnos.ts          飞牛宿主桥接：目录授权（authorizeUserFile）+ 回包归一化（纯函数部分可测）
@@ -120,6 +121,12 @@ src/
   强调色圆点；进程 `busy`/`starting` → 进度环；完成但没看过 → 绿点；活跃但空闲 → 不画点；
   没有常驻进程 → 灰点。「完成未看」由 `applyEvent` 在 `result` 到达且该对话不是当前打开的
   那条时置位（`doneIds`），`setActive` 打开即清除——不清就会永远挂着绿点。
+- **用量统计只认 CLI 给的数字**（`lib/usage.ts` + `store.usage`）：`stream_event` 的
+  message_start/message_delta 提供上下文与输出，`result.usage` 是回合末值，
+  `result.modelUsage.<model>.contextWindow` 才是模型窗口（init 里没有）。CLI **不提供**
+  「步骤数」「实时 tok/s」「官方上下文百分比」——步数用工具调用次数、tok/s 用输出 ÷ API 耗时、
+  上下文用 (input+cache_read+cache_creation) ÷ contextWindow，都是同一套数据的换算，
+  不要在界面上编造。转录回放时 store 没有实时快照，回落到最后一条 result 上挂的 usage。
 - 新增事件类型：先改 `transport/types.ts` → 再在 `applyEvent` 里分支 → 最后补测试。
 
 ## 4. 消息模型（Item）

@@ -3,6 +3,7 @@ import { useAppStore } from "../../store/useAppStore";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
 import { WorkspacePicker } from "./WorkspacePicker";
+import { UsageStats } from "./UsageStats";
 import { TopBar } from "../layout/TopBar";
 import { PermissionPanel } from "../permission/PermissionPanel";
 import type { PermissionPayload } from "../../transport/types";
@@ -37,6 +38,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
   const states = useAppStore((s) => s.states);
   const conns = useAppStore((s) => s.conns);
   const settings = useAppStore((s) => s.settings);
+  const usage = useAppStore((s) => s.usage);
   const starting = useAppStore((s) => s.starting);
   const sendPrompt = useAppStore((s) => s.sendPrompt);
   const interrupt = useAppStore((s) => s.interrupt);
@@ -122,6 +124,14 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
 
   const tools = itemList.filter((i) => i.kind === "tool").length;
   const effortMismatch = Boolean(activeId && selectedEffort && session && session.effort !== selectedEffort);
+
+  // 用量只显示 CLI 真的给出的数字（换算与文案见 UsageStats / lib/usage）。
+  // 转录回放时 store 里没有实时快照，就退回最后一条 result 上挂的那份。
+  const liveUsage = activeId ? usage[activeId] : undefined;
+  const lastResultUsage = [...itemList].reverse().find((i) => i.kind === "result")?.usage;
+  const snap = liveUsage ?? lastResultUsage;
+  const turns = itemList.filter((i) => i.kind === "result").length;
+
   const footer = (
     <>
       <span className="truncate">
@@ -134,9 +144,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
             </>
           )}
       </span>
-      <span className="shrink-0">
-        {itemList.length > 0 ? t(`${itemList.length} 条事件 · ${tools} 次工具`, `${itemList.length} events · ${tools} tools`) : ""}
-      </span>
+      <UsageStats snap={snap} turns={turns} tools={tools} events={itemList.length} />
     </>
   );
 

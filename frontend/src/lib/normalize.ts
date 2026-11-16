@@ -7,6 +7,7 @@
 //   2. tool_use ↔ tool_result 配对：结果消息里的 tool_use_id 必须回填到对应工具卡片。
 //   3. 未知消息类型原样忽略，不抛错（协议会随 CLI 版本漂移）。
 
+import { applyUsageMessage } from "./usage";
 import type { Item } from "./model";
 
 let idCounter = 0;
@@ -263,6 +264,7 @@ function applyResult(items: Item[], m: Raw, at: number): Item[] {
       durationMs: typeof m.duration_ms === "number" ? m.duration_ms : undefined,
       isError: m.is_error === true,
       denials,
+      usage: applyUsageMessage(undefined, m),
     },
   ];
 }

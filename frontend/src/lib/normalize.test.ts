@@ -257,3 +257,22 @@ describe("本地命令回显", () => {
     }
   });
 });
+
+describe("result 的用量", () => {
+  it("把 result 的 usage / modelUsage 挂到 Item 上，供回放时显示", () => {
+    const items = applyCLI([], {
+      type: "result",
+      subtype: "success",
+      duration_ms: 341,
+      duration_api_ms: 22,
+      usage: { input_tokens: 12, cache_creation_input_tokens: 300, cache_read_input_tokens: 9000, output_tokens: 7 },
+      modelUsage: { "claude-sonnet-4-5": { contextWindow: 200000 } },
+    });
+    const last = items[items.length - 1];
+    expect(last.kind).toBe("result");
+    if (last.kind !== "result") return;
+    expect(last.usage?.contextTokens).toBe(9312);
+    expect(last.usage?.contextWindow).toBe(200000);
+    expect(last.usage?.apiMs).toBe(22);
+  });
+});
