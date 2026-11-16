@@ -9,6 +9,7 @@
 //   3. 探测只针对已保存的服务，命令写错了（PATH 里没有 npx 之类）会在这里报出来。
 
 import { useEffect, useState } from "react";
+import { NO_AUTOFILL } from "../../lib/autofill";
 import { useT } from "../../lib/i18n";
 import { useMcpStore } from "../../store/useMcpStore";
 import type { McpScope, McpServer, McpType } from "../../transport/types";
@@ -85,6 +86,12 @@ export function McpSettings({ cwd }: { cwd: string }) {
 
   const submit = async () => {
     if (!draft) return;
+    // 项目级配置写在 <工作区>/.mcp.json 里，没有工作区就没地方落盘：
+    // 与其让用户填完一整个表单再吃一个 400，不如现在说清楚。
+    if (draft.scope === "project" && !cwd) {
+      setError(t("先选一个工作区，才能添加项目级服务", "Pick a workspace first to add project-scope servers"));
+      return;
+    }
     const bad = validateDraft(draft);
     if (bad === "name") {
       setError(t("服务名只能用字母、数字、点、下划线与短横线，且不能以符号开头", "Names may only contain letters, digits, dot, underscore and dash, and cannot start with a symbol"));
@@ -331,6 +338,7 @@ export function McpSettings({ cwd }: { cwd: string }) {
                 <label className="block">
                   <span className="mb-1 block text-[11.5px] text-muted">{t("环境变量（KEY=VALUE，一行一个）", "Environment (KEY=VALUE, one per line)")}</span>
                   <textarea
+                    {...NO_AUTOFILL}
                     className={`${inputClass} h-16 resize-y font-mono`}
                     value={draft.env}
                     onChange={(e) => setDraft({ ...draft, env: e.target.value })}
@@ -352,6 +360,7 @@ export function McpSettings({ cwd }: { cwd: string }) {
                 <label className="block">
                   <span className="mb-1 block text-[11.5px] text-muted">{t("请求头（KEY=VALUE，一行一个）", "Headers (KEY=VALUE, one per line)")}</span>
                   <textarea
+                    {...NO_AUTOFILL}
                     className={`${inputClass} h-16 resize-y font-mono`}
                     value={draft.headers}
                     onChange={(e) => setDraft({ ...draft, headers: e.target.value })}

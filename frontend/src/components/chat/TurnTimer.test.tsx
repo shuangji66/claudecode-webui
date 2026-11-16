@@ -33,6 +33,14 @@ describe("TurnTimer", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  // 空闲时对话页一直挂在屏幕上：留一个每秒 setNow 的定时器等于白白重渲染。
+  it("空闲（起点 0）时不开定时器", () => {
+    const spy = vi.spyOn(globalThis, "setInterval");
+    render(<TurnTimer startedAt={0} />);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
   it("切到另一个回合（startedAt 变了）立刻按新起点算，不残留旧秒数", () => {
     const { rerender } = render(<TurnTimer startedAt={NOW - 90_000} />);
     expect(screen.getByText("1:30")).toBeInTheDocument();

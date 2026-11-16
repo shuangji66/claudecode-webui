@@ -605,9 +605,11 @@ export function turnsFromTranscript(lines: unknown[]): TranscriptTurn[] {
     }
     if (type === "assistant") {
       const totals = totalsFromUsage(asRecord(line.message)?.usage);
-      if (!totals) continue;
+      // 这次请求已经结束（有没有 usage 都一样）：不清掉的话，下一条 assistant
+      // 会拿上一个 api-request 算出一个跨了两次请求的「API 耗时」。
       const apiMs = at !== undefined && requestAt !== undefined && at >= requestAt ? at - requestAt : undefined;
       requestAt = undefined;
+      if (!totals) continue;
       last = {
         ts: at ?? last?.ts ?? 0,
         usage: {
@@ -665,10 +667,20 @@ export function attachTurnUsage(items: Item[], turns: TranscriptTurn[]): Item[] 
  * 答案那一行（复制按钮旁）就是最顺手的位置；result 条只在末尾，翻上去就看不见了。
  * 只认**最后一条已完成的 assistant**：中间的过渡正文（后面还跟着工具调用）不挂，
  * 免得同一个回合到处是重复的耗时。
+ *
+ * 只在「最后一条用户消息之后」找：纯工具回合（只有工具调用、没有正文）从列表末尾
+ * 一路往前扫，会把**上一回合**的答案挂上这一回合的耗时。
  */
 function stampTurnUsage(items: Item[], turn: { durationMs?: number; usage?: UsageSnapshot }): Item[] {
   if (turn.durationMs === undefined && turn.usage === undefined) return items;
+  let start = 0;
   for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (items[i].kind === "user") {
+      start = i + 1;
+      break;
+    }
+  }
+  for (let i = items.length - 1; i >= start; i -= 1) {
     const it = items[i];
     if (it.kind !== "assistant" || it.streaming) continue;
     const next = items.slice();

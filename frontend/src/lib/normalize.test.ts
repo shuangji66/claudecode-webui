@@ -182,6 +182,27 @@ describe("normalize", () => {
     expect(items[items.length - 1]).toMatchObject({ kind: "result", durationMs: 5000 });
   });
 
+  // 纯工具回合没有可挂的正文时，不能一路往前扫到**上一回合**的答案上：
+  // 否则第一个答案会显示成第二次提问的耗时。
+  it("纯工具回合不会改写上一回合的耗时", () => {
+    let items = applyCLI([], {
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "text", text: "第一回合的答案" }] },
+    });
+    items = applyCLI(items, { type: "result", subtype: "success", duration_ms: 1000 });
+    items = applyCLI(items, { type: "user", message: { role: "user", content: "再跑个工具" } });
+    items = applyCLI(items, {
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "tool_use", id: "tu9", name: "Bash", input: {} }] },
+    });
+    items = applyCLI(items, { type: "result", subtype: "success", duration_ms: 9000 });
+
+    const answers = items.filter((i) => i.kind === "assistant");
+    expect(answers).toHaveLength(1);
+    expect((answers[0] as { turn?: unknown }).turn).toMatchObject({ durationMs: 1000 });
+    expect(items[items.length - 1]).toMatchObject({ kind: "result", durationMs: 9000 });
+  });
+
   it("纯工具回合没有回答可挂时不影响 result", () => {
     let items = applyCLI([], {
       type: "assistant",
@@ -883,6 +904,33 @@ describe("转录回放的回合用量", () => {
     ]);
     expect(turns).toHaveLength(1);
     expect(turns[0].turn.durationMs).toBe(9000);
+  });
+
+  // 没有 usage 的 assistant 行同样是「这次请求结束了」：不清掉 api-request，
+  // 下一个回答的 API 耗时会把两次请求的时间都算进去。
+  it("assistant 行没有 usage 时也结束这次请求", () => {
+    const turns = turnsFromTranscript([
+      { type: "user", timestamp: "2026-01-02T00:00:00.000Z", message: { role: "user", content: "问" } },
+      { type: "api-request", timestamp: "2026-01-02T00:00:01.000Z" },
+      {
+        type: "assistant",
+        timestamp: "2026-01-02T00:00:02.000Z",
+        message: { role: "assistant", content: [{ type: "text", text: "半条" }] },
+      },
+      { type: "api-request", timestamp: "2026-01-02T00:00:05.000Z" },
+      {
+        type: "assistant",
+        timestamp: "2026-01-02T00:00:07.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "答案" }],
+          usage: { input_tokens: 1, output_tokens: 2 },
+        },
+      },
+    ]);
+    expect(turns).toHaveLength(1);
+    // 07 - 05，而不是 07 - 01。
+    expect(turns[0].turn.usage?.apiMs).toBe(2000);
   });
 
   it("转录被截断（首轮没有提问时间）时整轮跳过，不编耗时", () => {

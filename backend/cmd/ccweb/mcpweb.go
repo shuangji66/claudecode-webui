@@ -20,6 +20,7 @@ import (
 	"os"
 	"strings"
 
+	"ccweb/backend/internal/config"
 	"ccweb/backend/internal/search"
 	"ccweb/backend/internal/settings"
 )
@@ -65,32 +66,42 @@ type toolContent struct {
 
 // settingsFile 返回主进程那份 settings.json 的路径。
 //
-// 注册 MCP 时会传 CCWEB_DATA_DIR（数据目录），这里按同样的默认规则拼出来；
-// 显式给 CCWEB_SETTINGS_FILE 时优先（自建部署改过路径的情况）。
+// 直接复用 config.Load 的解析规则，不再手拼一份：注册时我们只传 CCWEB_DATA_DIR
+// （自建部署可能改过数据目录，也可能另给了 CCWEB_SETTINGS_FILE），两处各拼一次
+// 迟早会漂移。**尤其不能用相对路径兜底**：子进程的 cwd 是用户的工作区，
+// `data/settings.json` 会去读工作区里那个文件，读不到就报「未启用」，
+// 用户完全看不出是路径错了。
 func settingsFile() string {
-	if p := strings.TrimSpace(os.Getenv("CCWEB_SETTINGS_FILE")); p != "" {
-		return p
-	}
-	dir := strings.TrimSpace(os.Getenv("CCWEB_DATA_DIR"))
-	if dir == "" {
-		// 兜底：和 config.defaultDataDir 一样的相对位置（当前目录下的 data/）。
-		dir = "data"
-	}
-	return dir + string(os.PathSeparator) + "settings.json"
+	return config.Load(version).SettingsFile
 }
 
 // loadSearchSettings 每次调用现读，保证界面改完立即生效。
-func loadSearchSettings() (base, key string, count int, enabled bool, err error) {
+func loadSearchSettings() (settings.Settings, error) {
 	store, err := settings.Open(settingsFile())
 	if err != nil {
-		return "", "", 0, false, err
+		return settings.Settings{}, err
 	}
-	cur := store.Get()
-	return cur.SearchBaseURL, cur.SearchAPIKey, cur.SearchCount, cur.SearchEnabled, nil
+	return store.Get(), nil
+}
+
+// proxySource 返回「当前代理」的取值函数，逐次现读设置。
+//
+// 子命令是**独立进程**：主进程那套 SetProxySource（cmd/ccweb 里接 settings）不会
+// 继承过来，而 http.ProxyFromEnvironment 只读进程启动时的环境变量。不在这里接上，
+// 界面配了代理、设置页「测试连接」也通，模型真正调 web_search 时却连不出去。
+func proxySource() func() string {
+	return func() string {
+		cur, err := loadSearchSettings()
+		if err != nil {
+			return ""
+		}
+		return cur.ProxyURL
+	}
 }
 
 // runMCPWeb 是子命令入口：读 stdin 的 JSON-RPC 帧，往 stdout 写回包。
 func runMCPWeb() int {
+	search.SetProxySource(proxySource())
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 64<<10), 4<<20)
 	out := bufio.NewWriter(os.Stdout)
@@ -179,7 +190,7 @@ func toolDefs() []map[string]any {
 				"type": "object",
 				"properties": map[string]any{
 					"query":       map[string]any{"type": "string", "description": "搜索词"},
-					"max_results": map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "返回条数，默认用设置里的值"},
+					"max_results": map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "需要的条数；实际取它与设置里「结果条数」的较小值（设置是花费上限）"},
 				},
 				"required":             []string{"query"},
 				"additionalProperties": false,
@@ -214,16 +225,18 @@ func callTool(name string, rawArgs json.RawMessage) toolContent {
 		}
 	}
 
-	base, key, count, enabled, err := loadSearchSettings()
+	cur, err := loadSearchSettings()
 	if err != nil {
 		return errResult("读取设置失败: " + err.Error())
 	}
-	if !enabled {
+	if !cur.SearchEnabled {
 		return errResult("内置搜索未启用：请在「设置 → MCP → 内置搜索」里打开并填写密钥")
 	}
+	base, key, count := cur.SearchBaseURL, cur.SearchAPIKey, cur.SearchCount
 
 	switch name {
 	case toolWebSearch:
+		// 设置里的条数是**花费上限**：模型可以要得更少，但不能要到更多。
 		if args.MaxResults > 0 && args.MaxResults < count {
 			count = args.MaxResults
 		}

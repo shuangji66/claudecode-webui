@@ -112,6 +112,10 @@ type ProbeResult struct {
 type Manager struct {
 	userConfig string
 	disabled   string
+	// mu 串行化「读整份配置 → 改 → 写回」这一个动作。三个写入入口都是这个形状，
+	// 两个并发请求（两个标签页、连点两下）会各自读到同一份旧内容、后写的覆盖先写的，
+	// 表现为「删了一条，另一条还在」。读取不加锁：写是原子 rename，不会读到半份。
+	mu sync.Mutex
 }
 
 // New 构造管理器。userConfig 通常是 <CCWEB_CLAUDE_HOME>/.claude.json；
@@ -335,25 +339,32 @@ func ensureWritable(base, target string) error {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("%w: 目标不在受管目录内", ErrSymlink)
 	}
-	if err := os.MkdirAll(filepath.Dir(clean), 0o755); err != nil {
-		return fmt.Errorf("mcp: 建目录: %w", err)
-	}
 	if rel == "." {
 		return nil
 	}
+	// 顺序很重要：**先走软链检查、再建目录**。反过来的话，工作区里一个
+	// `sub -> /某处` 会在我们「检查并拒绝」之前就先被 MkdirAll 跟随，把目录
+	// 建到受管范围外面——写入虽然被拒，副作用已经发生了。
 	cur := filepath.Clean(base)
+	missing := false
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
 		cur = filepath.Join(cur, part)
 		fi, err := os.Lstat(cur)
 		if errors.Is(err, os.ErrNotExist) {
 			// 这一层还没建：后面的层必然也没有，MkdirAll 不会再跟随任何软链。
-			return nil
+			missing = true
+			break
 		}
 		if err != nil {
 			return fmt.Errorf("mcp: 检查路径: %w", err)
 		}
 		if fi.Mode()&os.ModeSymlink != 0 {
 			return ErrSymlink
+		}
+	}
+	if missing {
+		if err := os.MkdirAll(filepath.Dir(clean), 0o755); err != nil {
+			return fmt.Errorf("mcp: 建目录: %w", err)
 		}
 	}
 	return nil
@@ -470,10 +481,11 @@ func (m *Manager) List(cwd string) (Payload, error) {
 		return out, err
 	}
 	out.User = sortedServers(user)
+	project := map[string]Server{}
 	if cwd != "" {
 		out.ProjectRoot = cwd
 		out.ProjectPath = projectPath(cwd)
-		project, err := m.readScope(ScopeProject, cwd)
+		project, err = m.readScope(ScopeProject, cwd)
 		if err != nil {
 			return out, err
 		}
@@ -492,10 +504,18 @@ func (m *Manager) List(cwd string) (Payload, error) {
 		srv.Disabled = true
 		switch e.Scope {
 		case ScopeUser:
+			// 配置里已经有同名时以配置为准：唯一会同时存在两处的场景是「启用」
+			// 写配置成功、清暂存失败，那时列表里出现两条同名只会让人更糊涂。
+			if _, ok := user[e.Name]; ok {
+				continue
+			}
 			srv.ConfigPath = m.userConfig
 			out.User = append(out.User, srv)
 		case ScopeProject:
 			if cwd == "" {
+				continue
+			}
+			if _, ok := project[e.Name]; ok {
 				continue
 			}
 			srv.ConfigPath = projectPath(cwd)
@@ -542,6 +562,8 @@ func (m *Manager) Save(cwd string, in Server) (Server, error) {
 	default:
 		return Server{}, fmt.Errorf("%w: %q", ErrBadScope, srv.Scope)
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	spec, err := srv.marshalSpec()
 	if err != nil {
 		return Server{}, fmt.Errorf("mcp: 序列化配置: %w", err)
@@ -580,6 +602,8 @@ func (m *Manager) Delete(cwd, scope, name string) error {
 	if !ValidName(name) {
 		return ErrInvalidName
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	servers, err := m.readScope(scope, cwd)
 	if err != nil {
 		return err
@@ -620,6 +644,8 @@ func (m *Manager) SetEnabled(cwd, scope, name string, enabled bool) error {
 	if !ValidName(name) {
 		return ErrInvalidName
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	stash, err := m.readStash()
 	if err != nil {
 		return err
@@ -839,12 +865,15 @@ func probeStdio(ctx context.Context, srv Server) ProbeResult {
 	// 读循环：MCP server 可能在 initialize 之前先打日志，所以一直读到 JSON-RPC 回包。
 	type readResult struct {
 		line string
-		err  error
+		// noise 是最后一行的非协议输出：进程没回包时，它比「解析失败」有用得多。
+		noise string
+		err   error
 	}
 	ch := make(chan readResult, 1)
 	go func() {
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
+		noise := ""
 		for sc.Scan() {
 			text := sc.Text()
 			trimmed := strings.TrimSpace(text)
@@ -852,8 +881,11 @@ func probeStdio(ctx context.Context, srv Server) ProbeResult {
 				ch <- readResult{line: trimmed}
 				return
 			}
+			if trimmed != "" {
+				noise = trimmed
+			}
 		}
-		ch <- readResult{err: sc.Err()}
+		ch <- readResult{noise: noise, err: sc.Err()}
 	}()
 
 	select {
@@ -861,6 +893,22 @@ func probeStdio(ctx context.Context, srv Server) ProbeResult {
 		latency := time.Since(start).Milliseconds()
 		if res.err != nil {
 			return ProbeResult{Error: res.err.Error(), LatencyMs: latency}
+		}
+		if res.line == "" {
+			// 进程在 initialize 之前就退出了（命令不存在、缺依赖、参数写错…），
+			// 或者往 stdout 打了一堆非协议内容。真正的原因就在那些输出里，
+			// 别拿「JSON 解析失败」糊过去。
+			detail := clipTail(stderr.String(), 600)
+			if res.noise != "" {
+				detail = clipTail(res.noise, 300)
+				if errText := clipTail(stderr.String(), 300); errText != "" {
+					detail += "\n" + errText
+				}
+			}
+			if detail == "" {
+				detail = "服务在 initialize 之前就退出了，且没有任何输出"
+			}
+			return ProbeResult{Error: detail, LatencyMs: latency}
 		}
 		return parseProbeLine(res.line, latency, stderr.String())
 	case <-ctx.Done():
@@ -967,25 +1015,52 @@ func probeRemote(ctx context.Context, srv Server) ProbeResult {
 		return ProbeResult{OK: true, LatencyMs: latency}
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if len(bytes.TrimSpace(body)) == 0 {
+		// 有些实现在 initialize 上只回 202/空体：没有内容可判，按「连上了」处理。
+		return ProbeResult{OK: true, LatencyMs: latency}
+	}
+	if !bytes.Contains(body, []byte(`"jsonrpc"`)) {
+		// 200 但不是 JSON-RPC：多半是地址填成了普通网页或首页。
+		// 以前这里会返回 OK，用户以为配好了，直到会话里工具全不可用。
+		return ProbeResult{
+			Error:     "响应不是 MCP 的 JSON-RPC（可能地址填错）：" + clipTail(string(body), 200),
+			LatencyMs: latency,
+		}
+	}
 	return parseServerInfo(body, latency)
 }
 
 // parseServerInfo 从 JSON（或 SSE 的 data: 行）里尽力取出 serverInfo。
 func parseServerInfo(body []byte, latency int64) ProbeResult {
-	out := ProbeResult{OK: true, LatencyMs: latency}
 	for _, line := range strings.Split(string(body), "\n") {
 		line = strings.TrimSpace(line)
 		line = strings.TrimPrefix(line, "data:")
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "{") || !strings.Contains(line, "serverInfo") {
+		if !strings.HasPrefix(line, "{") || !strings.Contains(line, `"jsonrpc"`) {
+			continue
+		}
+		// 只有可能是 initialize 的回包 / 错误帧才值得解析，其余帧（notifications）
+		// 不该被当成「握手成功」。
+		if !strings.Contains(line, "serverInfo") && !strings.Contains(line, `"error"`) {
 			continue
 		}
 		parsed := parseProbeLine(line, latency, "")
-		if parsed.OK {
+		if parsed.OK || parsed.Error != "" {
 			return parsed
 		}
 	}
-	return out
+	return ProbeResult{OK: true, LatencyMs: latency}
+}
+
+// clipTail 取尾部最多 n 个 rune（stderr / 响应片段更适合从尾部看），
+// 并按 rune 截断，避免把 UTF-8 切坏。
+func clipTail(s string, n int) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return "…" + string(r[len(r)-n:])
 }
 
 // envPairs 把 map 展平成 KEY=VALUE。

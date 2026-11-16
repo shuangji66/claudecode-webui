@@ -19,6 +19,9 @@ export function TurnTimer({ startedAt, className = "" }: Props) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
+    // 空闲时（startedAt=0）组件不渲染，也不该留一个每秒 setNow 的定时器：
+    // 那会让打开着的对话页在什么都没发生时每秒重渲染一次。
+    if (!startedAt) return;
     // 先对齐一次再开定时器：从「暂停在别的对话」切回来时不会先显示旧秒数。
     setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 1000);

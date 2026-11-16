@@ -4,6 +4,7 @@
 // `ccweb mcp-web` 子命令，由它去调网关的 /search 与 /fetch。
 // 一次搜索是一次 HTTP 请求，不额外花模型回合；密钥与对话用的分开填。
 import { useEffect, useState } from "react";
+import { NO_AUTOFILL } from "../../lib/autofill";
 import { useT } from "../../lib/i18n";
 import { useSearchStore } from "../../store/useSearchStore";
 import { Button } from "../common/Button";
@@ -94,6 +95,7 @@ export function SearchSettings() {
         <label className="block md:col-span-2">
           <span className="mb-1 block text-[11px] text-muted">{t("网关基地址", "API base URL")}</span>
           <input
+            {...NO_AUTOFILL}
             className={`${inputClass} font-mono`}
             value={base}
             disabled={busy}
@@ -109,6 +111,7 @@ export function SearchSettings() {
             )}
           </span>
           <input
+            {...NO_AUTOFILL}
             className={`${inputClass} font-mono`}
             type="password"
             value={key}

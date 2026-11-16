@@ -3,24 +3,35 @@ package mcp
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
 // 假 MCP server：由测试二进制自己充当 stdio 子进程（TestMain 里拦下来），
 // 这样探测逻辑有真实的对端可读，又不依赖任何外部命令。
 func TestMain(m *testing.M) {
-	if os.Getenv("GO_WANT_MCP_HELPER") == "1" {
+	switch os.Getenv("GO_WANT_MCP_HELPER") {
+	case "1":
 		sc := bufio.NewScanner(os.Stdin)
 		if sc.Scan() {
 			fmt.Println(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","serverInfo":{"name":"fake","version":"9.9"}}}`)
 		}
 		os.Exit(0)
+	case "noise":
+		// 往 stdout 打日志（常见于 shell 包装脚本）：不是 JSON-RPC，也不能算握手。
+		fmt.Println("starting fake server ...")
+		os.Exit(0)
+	case "crash":
+		// 模拟「命令写错 / 缺依赖」：握手前就退出，原因只在 stderr 里。
+		fmt.Fprintln(os.Stderr, "boom: 找不到依赖 @modelcontextprotocol/server-x")
+		os.Exit(3)
 	}
 	os.Exit(m.Run())
 }
@@ -358,5 +369,159 @@ func TestProbeRemote(t *testing.T) {
 	}
 	if res, err = m.Probe(ws, ScopeProject, "s"); err != nil || !res.OK {
 		t.Fatalf("SSE 探测: %+v %v", res, err)
+	}
+}
+
+// 探测要让用户看到真原因：进程握手前退出时，stderr 里的报错比
+// 「JSON 解析失败: unexpected end of JSON input」有用得多。
+func TestProbeStdioReportsStderrWhenItExitsEarly(t *testing.T) {
+	m, ws, _ := newManager(t)
+	if _, err := m.Save(ws, Server{
+		Name:    "broken",
+		Scope:   ScopeProject,
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestHelperProcess"},
+		Env:     map[string]string{"GO_WANT_MCP_HELPER": "crash"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	res, err := m.Probe(ws, ScopeProject, "broken")
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if res.OK {
+		t.Fatalf("握手前退出不该算成功: %+v", res)
+	}
+	if !strings.Contains(res.Error, "找不到依赖") {
+		t.Fatalf("应把 stderr 报出来，实际 = %q", res.Error)
+	}
+}
+
+// 进程没回握手帧、但往 stdout 打了东西：把那行报出来，而不是「解析失败」。
+func TestProbeStdioReportsStdoutNoise(t *testing.T) {
+	m, ws, _ := newManager(t)
+	if _, err := m.Save(ws, Server{
+		Name:    "noisy",
+		Scope:   ScopeProject,
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestHelperProcess"},
+		Env:     map[string]string{"GO_WANT_MCP_HELPER": "noise"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	res, err := m.Probe(ws, ScopeProject, "noisy")
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if res.OK {
+		t.Fatalf("没有握手帧不该算成功: %+v", res)
+	}
+	if !strings.Contains(res.Error, "starting fake server") {
+		t.Fatalf("应把 stdout 上的那行报出来，实际 = %q", res.Error)
+	}
+}
+
+// 200 但不是 JSON-RPC（地址填成了普通网页）：不能报「连接正常」，
+// 否则用户要等到会话里工具全不可用才发现。
+func TestProbeRemoteRejectsNonJSONRPCBody(t *testing.T) {
+	m, ws, _ := newManager(t)
+	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><body>欢迎光临</body></html>"))
+	}))
+	defer page.Close()
+	if _, err := m.Save(ws, Server{Name: "page", Scope: ScopeProject, Type: TypeHTTP, URL: page.URL}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	res, err := m.Probe(ws, ScopeProject, "page")
+	if err != nil {
+		t.Fatalf("Probe: %v", err)
+	}
+	if res.OK {
+		t.Fatalf("HTML 页面不该被当成 MCP: %+v", res)
+	}
+	if !strings.Contains(res.Error, "JSON-RPC") || !strings.Contains(res.Error, "欢迎光临") {
+		t.Fatalf("错误信息应带上响应片段: %q", res.Error)
+	}
+}
+
+// 软链要在「建目录」之前就被拒：工作区里一个 sub -> /某处，
+// 先 MkdirAll 会把目录建到工作区外面去（写入虽然被拒，副作用已经发生）。
+func TestEnsureWritableRejectsBeforeCreatingDirs(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "ws")
+	outside := filepath.Join(dir, "outside")
+	for _, p := range []string{base, outside} {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatalf("建目录 %s: %v", p, err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(base, "sub")); err != nil {
+		t.Skipf("无法创建符号链接: %v", err)
+	}
+	err := ensureWritable(base, filepath.Join(base, "sub", "deep", ".mcp.json"))
+	if !errors.Is(err, ErrSymlink) {
+		t.Fatalf("错误 = %v，期望 ErrSymlink", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "deep")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("软链检查之前就在工作区外建了目录: %v", statErr)
+	}
+}
+
+// 「启用」写配置成功、清暂存失败时，配置与暂存会各有一份同名条目：
+// 列表以配置为准，不能显示成两条同名服务。
+func TestListSkipsStashEntryAlreadyInConfig(t *testing.T) {
+	m, _, _ := newManager(t)
+	if _, err := m.Save("", Server{Name: "dup", Scope: ScopeUser, Command: "node"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := m.writeStash(stashFile{Servers: []stashEntry{
+		{Scope: ScopeUser, Name: "dup", Spec: json.RawMessage(`{"command":"old"}`)},
+	}}); err != nil {
+		t.Fatalf("写暂存: %v", err)
+	}
+	payload, err := m.List("")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	names := make([]string, 0, len(payload.User))
+	for _, srv := range payload.User {
+		names = append(names, srv.Name)
+	}
+	if len(names) != 1 || names[0] != "dup" {
+		t.Fatalf("用户级列表 = %v，期望只有一条 dup", names)
+	}
+	if payload.User[0].Disabled {
+		t.Fatalf("配置里存在的条目不该标成停用: %+v", payload.User[0])
+	}
+}
+
+// 写入是「读整份配置 → 改 → 写回」：并发时不串行化就会丢条目
+// （两个标签页各删/加一条，结果只剩一条）。这里 16 个并发保存必须一个不丢。
+func TestConcurrentSavesDoNotLoseEntries(t *testing.T) {
+	m, _, _ := newManager(t)
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if _, err := m.Save("", Server{Name: fmt.Sprintf("s%02d", i), Scope: ScopeUser, Command: "node"}); err != nil {
+				errs <- err
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("并发保存失败: %v", err)
+	}
+	payload, err := m.List("")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(payload.User) != n {
+		t.Fatalf("用户级条目 = %d，期望 %d（有写入被覆盖了）", len(payload.User), n)
 	}
 }

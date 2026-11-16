@@ -82,6 +82,27 @@ describe("McpSettings", () => {
     await waitFor(() => expect(apiFetch).toHaveBeenCalledWith("/api/mcp?cwd=%2Fdata%2Fws", undefined));
   });
 
+  it("没有工作区时不允许提交项目级服务（否则会白填一遍再吃 400）", async () => {
+    useMcpStore.setState({ cwd: "", data: { user: [], project: [], project_root: "", user_path: "", project_path: "" }, probes: {}, error: null, busy: false, probing: null });
+    render(
+      <>
+        <SystemDialogs />
+        <McpSettings cwd="" />
+      </>,
+    );
+    await screen.findByText("还没有用户级服务。");
+    fireEvent.click(screen.getByRole("button", { name: /添加/ }));
+
+    fireEvent.change(screen.getByPlaceholderText("github"), { target: { value: "mydb" } });
+    fireEvent.click(screen.getByRole("button", { name: "作用域" }));
+    fireEvent.click(screen.getByRole("option", { name: /项目级/ }));
+    fireEvent.change(screen.getByPlaceholderText("npx"), { target: { value: "node" } });
+    fireEvent.click(within(screen.getByRole("dialog", { name: "MCP 服务" })).getByRole("button", { name: "保存" }));
+
+    expect(await screen.findByText(/先选一个工作区，才能添加项目级服务/)).toBeInTheDocument();
+    expect(apiFetch).not.toHaveBeenCalledWith("/api/mcp", expect.anything());
+  });
+
   it("表单校验：stdio 缺命令时给出人话提示，不发请求", async () => {
     setup();
     // 等列表加载完（加载期间「添加」是禁用的，点了不会开弹窗）。

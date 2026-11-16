@@ -341,6 +341,11 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **探测只认已保存的服务名**（scope+name），绝不接受请求里带命令进来——那等于给接口
   开了「免审批执行任意命令」。stdio 走一次 `initialize` JSON-RPC；http POST 一帧
   initialize；sse 只看握手。探测是面板自己的出站请求，必须接 `netproxy`（`SetProxySource`）。
+- **探测失败要说真原因**：stdio 服务在 `initialize` 之前就退出时（命令不存在、缺依赖），
+  原因只在 stderr 里——不要把它糊成「JSON 解析失败」；http 回 200 但不是 JSON-RPC
+  （地址填成了普通网页）也必须算失败，否则用户以为配好了，直到会话里工具全不可用。
+- **「读整份配置 → 改 → 写回」必须串行**（`Manager.mu`）：两个标签页同时增删会互相覆盖，
+  表现为「删了一条，另一条还在」。
 - **改完不会热加载**：MCP server 在会话启动时连接，界面与文档都要说「重开会话才生效」。
 - 服务名会成为工具前缀 `mcp__<名字>__<工具>`，所以名字只允许 `[A-Za-z0-9._-]`；工具卡片
   仍然靠 `GenericCard` 兜底渲染，不要为某个 server 写专用卡片。
@@ -365,7 +370,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 搜索输出必须限长（结果 6k 字符 / 抓取 40k 字符，按 rune 截断）：这是直接进主对话
   上下文的内容，塞满就毁了会话。
 - 内置搜索的 HTTP 请求同样要接 `netproxy`（`search.SetProxySource`），否则「配了代理但
-  搜索不通」。
+  搜索不通」。**`ccweb mcp-web` 这个子命令要自己接**：它是独立进程，主进程里那套
+  `SetProxySource` 不会继承过来（`http.ProxyFromEnvironment` 只读启动时的环境变量）。
+- **定位 `settings.json` 复用 `config.Load`**，不要手拼路径、更不要用相对路径兜底：
+  子进程的 cwd 是用户的工作区，`data/settings.json` 会去读工作区里那份文件。
 
 ## 5. 命令速查
 

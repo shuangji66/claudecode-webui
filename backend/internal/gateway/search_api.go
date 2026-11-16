@@ -54,11 +54,13 @@ func selfPath() string {
 func (s *Server) searchStatus() searchStatus {
 	cur := s.d.Settings.Get()
 	out := searchStatus{
-		BaseURL:    cur.SearchBaseURL,
-		Count:      cur.SearchCount,
-		Enabled:    cur.SearchEnabled,
-		KeySet:     cur.SearchAPIKey != "",
-		KeyMasked:  maskKey(cur.SearchAPIKey),
+		BaseURL: cur.SearchBaseURL,
+		Count:   cur.SearchCount,
+		Enabled: cur.SearchEnabled,
+		KeySet:  cur.SearchAPIKey != "",
+		// 与设置页其它密钥同一套脱敏（settings.Mask）：同一个密钥在两处显示成
+		// 两种样子，用户会以为存的是两把不同的钥匙。
+		KeyMasked:  settings.Mask(cur.SearchAPIKey),
 		ServerName: mcpSearchServer,
 		Command:    selfPath(),
 	}
@@ -76,18 +78,6 @@ func (s *Server) searchStatus() searchStatus {
 		}
 	}
 	return out
-}
-
-// maskKey 只回传尾部 4 位，让用户能认出是哪把密钥。
-func maskKey(k string) string {
-	if k == "" {
-		return ""
-	}
-	r := []rune(k)
-	if len(r) <= 4 {
-		return "****"
-	}
-	return "****" + string(r[len(r)-4:])
 }
 
 func (s *Server) handleGetSearch(w http.ResponseWriter, r *http.Request) {
