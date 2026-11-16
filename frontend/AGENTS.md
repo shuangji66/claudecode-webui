@@ -19,6 +19,7 @@ src/
   lib/i18n.tsx         极简双语（useT(中文, English)）
   lib/theme.ts         主题/字号/语言的 DOM 应用与缓存
   lib/providerForm.ts  提供商/模型元数据表单转换
+  lib/providerCatalog.ts 预置第三方提供商目录（对齐 DSH 的 pi-ai catalog）
   lib/attachments.ts   附件类型/大小/读取
   lib/workspace.ts     文件路径/porcelain 分组/unified diff 解析（纯函数）
   lib/conversations.ts 对话归属/最近对话排序（纯函数）
@@ -130,7 +131,9 @@ src/
 - 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 代理 / 部署」；通用设置即时保存，
   模型配置在底部「保存模型设置」统一提交，代理保存后重启所有 claude 会话。
   「部署」页管 claude 版本（下载源 / 安装进度 / 切换生效版本），切换只影响之后新建的会话。
-- 模型页提供商只有一个时默认展开，多个时默认折叠；新建提供商必须手填 ID，显示名留空跟随 ID。
+- 模型页提供商只有一个时默认展开，多个时默认折叠；新建提供商可以选预置（自动填
+  ID / 协议 / Base URL / 默认模型）或选「自定义」手填 ID；显示名留空跟随 ID。
+  预置里标「需兼容端点」的只适合拉模型列表，claude 对话需要 Anthropic 兼容端点。
   每个模型可填上下文窗口 / 最大输出（`128K` / `1M` 写法），从网关拉取时用
   `context_length` / `max_output_tokens` 预填。
 - 聊天页的模型与推理等级是 `components/chat/ModelMenu.tsx` 的两级菜单（参照 DSH）：

@@ -14,6 +14,7 @@ import {
   type ProviderForm,
 } from "../../lib/providerForm";
 import type { ModelSpec } from "../../transport/types";
+import { PROVIDER_PRESETS, findProviderPreset, presetFormFields } from "../../lib/providerCatalog";
 import { DeploySettings } from "./DeploySettings";
 import { Select } from "../common/Select";
 import { Dialog } from "../common/Dialog";
@@ -376,6 +377,7 @@ function ModelsSettings() {
           <ProviderCard
             key={p.uid}
             provider={p}
+            existingIds={forms.filter((x) => x.uid !== p.uid).map((x) => x.id.trim()).filter(Boolean)}
             expanded={expanded.has(p.uid)}
             onToggle={() =>
               setExpanded((prev) => {
@@ -524,12 +526,15 @@ function ProxySettings() {
 
 function ProviderCard({
   provider,
+  existingIds,
   expanded,
   onToggle,
   onChange,
   onRemove,
 }: {
   provider: ProviderForm;
+  /** 其他提供商的 ID，用于给预置生成不冲突的默认 ID。 */
+  existingIds: string[];
   expanded: boolean;
   onToggle: () => void;
   onChange: (patch: Partial<ProviderForm>) => void;
@@ -548,6 +553,7 @@ function ProviderCard({
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [manual, setManual] = useState("");
   const [advanced, setAdvanced] = useState(false);
+  const [presetId, setPresetId] = useState("");
 
   const saved = useAppStore((s) => s.settings?.providers.find((x) => x.id === provider.id));
   const probing = probe?.key === provider.id;
@@ -585,6 +591,24 @@ function ProviderCard({
     setManual("");
   };
 
+  const preset = findProviderPreset(presetId);
+
+  const applyPreset = (id: string) => {
+    setPresetId(id);
+    const chosen = findProviderPreset(id);
+    if (!chosen) return;
+    onChange({
+      ...presetFormFields(chosen, existingIds),
+      // 换预置就换端点，旧的密钥不应继续挂在新提供商上。
+      apiKey: "",
+      authToken: "",
+      clearKey: false,
+      modelsPath: "",
+    });
+    // Bearer 端点必须填到「高级设置」里的令牌字段，直接展开给用户看。
+    if (chosen.auth === "bearer") setAdvanced(true);
+  };
+
   return (
     <div className="overflow-hidden rounded-xl border border-line bg-canvas">
       <div className="flex items-center gap-2 border-b border-line bg-panel/50 px-3 py-2.5">
@@ -620,6 +644,29 @@ function ProviderCard({
       </div>
 
       {expanded && <div className="space-y-2.5 px-3 py-3">
+        {provider.isNew && (
+          <label className="block">
+            <span className="block text-[10.5px] text-faint">{t("预置提供商", "Provider preset")}</span>
+            <Select
+              className="mt-0.5"
+              ariaLabel={t("预置提供商", "Provider preset")}
+              value={presetId}
+              onChange={applyPreset}
+              options={[
+                { value: "", label: t("自定义（手动填写）", "Custom (fill manually)") },
+                ...PROVIDER_PRESETS.map((item) => ({
+                  value: item.id,
+                  label: item.chatCompatible ? item.name : `${item.name} · ${t("需兼容端点", "needs compatible endpoint")}`,
+                })),
+              ]}
+              menuWidth={280}
+            />
+            {preset?.note && (
+              <p className={`mt-1 text-[10px] leading-relaxed ${preset.chatCompatible ? "text-muted" : "text-warn"}`}>{preset.note}</p>
+            )}
+          </label>
+        )}
+
         <label className="block">
           <span className="block text-[10.5px] text-faint">{t("协议", "Protocol")}</span>
           <Select
@@ -636,7 +683,7 @@ function ProviderCard({
           <input
             value={provider.baseUrl}
             onChange={(e) => onChange({ baseUrl: e.target.value })}
-            placeholder="https://gateway.example/v1"
+            placeholder={preset?.needsBaseUrl ? t("填写完整 Base URL（账号 / 区域 / 网关路径）", "Full base URL (account / region / gateway path)") : "https://gateway.example/v1"}
             className="mt-0.5 w-full rounded-lg border border-line-strong bg-canvas px-2 py-1.5 font-mono text-[11.5px] outline-none focus:border-brand/60"
           />
         </label>
@@ -661,6 +708,11 @@ function ProviderCard({
               </button>
             )}
           </div>
+          {preset?.auth === "bearer" && (
+            <p className="mt-1 text-[10px] leading-relaxed text-warn">
+              {t("该端点使用 Bearer 认证：密钥请填到下方「Bearer 令牌」，不要填在这里。", "This endpoint uses Bearer auth: put the key in the Bearer token field below, not here.")}
+            </p>
+          )}
         </label>
 
         <button type="button" onClick={() => setAdvanced((v) => !v)} className="text-[10.5px] text-muted underline-offset-2 hover:text-ink hover:underline">
