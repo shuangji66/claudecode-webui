@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import type { FsPickListing } from "../../transport/types";
 import { baseName } from "../../lib/labels";
@@ -40,18 +40,24 @@ export function WorkspaceDialog({ open, onClose }: Props) {
   const [authorizing, setAuthorizing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // 目录浏览的请求序号：用户连点几个目录时，先发的请求可能后回来，
+  // 把列表覆盖成他已经离开的那个目录。
+  const loadSeq = useRef(0);
   const load = async (p: string, showHidden = hidden) => {
+    const seq = ++loadSeq.current;
     setLoading(true);
     setErr(null);
     setPath(p);
     try {
       const r = await browseDirs(p, showHidden);
+      if (seq !== loadSeq.current) return;
       setListing(r);
       setPath(r.path);
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   };
 

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import { relativeTime } from "../../lib/labels";
+import { authorizeFnosDir } from "../../lib/fnos";
 import { useLocale, useT } from "../../lib/i18n";
 import { Button } from "../common/Button";
 import { Dialog } from "../common/Dialog";
@@ -23,10 +24,12 @@ export function HistoryDialog({ open, onClose }: Props) {
   const conversations = useAppStore((s) => s.conversations);
   const workspaces = useAppStore((s) => s.workspaces);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
+  const probeDir = useAppStore((s) => s.probeDir);
   const refreshConversations = useAppStore((s) => s.refreshConversations);
   const openConversation = useAppStore((s) => s.openConversation);
   const [query, setQuery] = useState("");
   const [busyCwd, setBusyCwd] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -46,10 +49,33 @@ export function HistoryDialog({ open, onClose }: Props) {
   const openHistory = async (id: string, cwd: string) => {
     if (busyCwd) return;
     setBusyCwd(cwd);
+    setErr(null);
     try {
       const exact = workspaces.some((w) => w.path === cwd);
       const inside = workspaces.some((w) => cwd.startsWith(`${w.path}/`));
       if (!exact && !inside) {
+        // 不能直接登记：应用以独立用户运行，能浏览不等于能读写。与「添加授权目录」
+        // 同一条路——先探测应用用户能否直接写，写不进去才走飞牛授权；用户取消或
+        // 宿主报错就不登记（否则 claude 起来后每一步都被拒）。
+        let writable = false;
+        try {
+          writable = (await probeDir(cwd)).writable;
+        } catch {
+          writable = false;
+        }
+        if (!writable) {
+          // skipped = 拿不到宿主（直连端口 / make dev），与「添加授权目录」一样降级放行；
+          // denied = 用户取消或宿主报错，不能登记。
+          const res = await authorizeFnosDir(cwd);
+          if (res.state === "denied") {
+            setErr(
+              res.reason === "cancel"
+                ? t("已取消目录授权，无法打开该对话", "Authorization cancelled; cannot open this conversation")
+                : t(`目录授权失败：${res.reason === "message" ? res.message : "未知原因"}`, "Folder authorization failed"),
+            );
+            return;
+          }
+        }
         const ok = await addWorkspace(cwd, false);
         if (!ok) return;
       }
@@ -74,7 +100,11 @@ export function HistoryDialog({ open, onClose }: Props) {
       footer={
         <div className="flex items-center justify-between gap-2">
           <p className="text-[10px] text-faint">
-            {busyCwd ? t(`正在切换到 ${busyCwd}…`, `Switching to ${busyCwd}…`) : t(`共 ${conversations.length} 条对话`, `${conversations.length} conversations`)}
+            {err
+              ? <span className="text-danger">{err}</span>
+              : busyCwd
+                ? t(`正在切换到 ${busyCwd}…`, `Switching to ${busyCwd}…`)
+                : t(`共 ${conversations.length} 条对话`, `${conversations.length} conversations`)}
           </p>
           <Button variant="secondary" onClick={onClose}>
             {t("关闭", "Close")}

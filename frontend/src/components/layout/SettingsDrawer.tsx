@@ -448,6 +448,12 @@ function ModelsSettings() {
   };
 
   const onSave = async () => {
+    // settings 为 null 说明 /api/settings 没拉到（bootstrap 里是 .catch(()=>null)）。
+    // 此时 forms 是空数组，保存会以「整体替换」语义把服务端所有提供商抹掉。
+    if (!settings) {
+      setSaveError(t("配置还没加载到，先关掉重开设置页", "Settings have not loaded yet; reopen this panel"));
+      return;
+    }
     const ids = forms.map((f) => f.id.trim());
     if (ids.some((id) => !id)) {
       setSaveError(t("提供商 ID 不能为空；显示名留空时会自动跟随 ID。", "Provider ID is required; a blank display name follows the ID."));
@@ -549,7 +555,7 @@ function ModelsSettings() {
           <button
             type="button"
             onClick={() => void onSave()}
-            disabled={saving}
+            disabled={saving || !settings}
             className="ml-auto flex items-center gap-1.5 rounded-lg bg-brand px-4 py-2 text-[12px] font-medium text-white hover:bg-brand-hover disabled:opacity-40"
           >
             <IconCheck size={14} />

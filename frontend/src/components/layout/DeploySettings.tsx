@@ -108,10 +108,12 @@ export function DeploySettings() {
   const pct = job && job.total > 0 ? Math.min(100, Math.round((job.downloaded / job.total) * 100)) : 0;
   // 选中的版本已经装过时，安装按钮没有意义：直接显示「已安装」并禁用，
   // 免得点了只换来一条 409 错误。
-  const pickedInstalled = installed.some((v) => v.version === picked);
-
   // 可安装列表：优先用「检查更新」的结果；没查过就只给最新版与已装版本之外的兜底。
   const candidates = versions.length > 0 ? versions : latest ? [latest] : [];
+  // 下拉里显示的版本必须就是「安装」按钮会装的那个：picked 为空时下拉回落
+  // candidates[0]，而按钮却因为 !picked 一直禁用，看起来像是装不了。
+  const installVersion = picked || candidates[0] || "";
+  const pickedInstalled = installed.some((v) => v.version === installVersion);
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 pb-2">
@@ -187,7 +189,7 @@ export function DeploySettings() {
           </Button>
           {candidates.length > 0 && (
             <Select
-              value={picked || candidates[0]}
+              value={installVersion}
               ariaLabel={t("要安装的版本", "Version to install")}
               onChange={setPicked}
               className="min-w-[9rem]"
@@ -201,8 +203,8 @@ export function DeploySettings() {
             variant="primary"
             size="sm"
             icon={<IconDownload size={13} />}
-            disabled={busy || !picked || pickedInstalled}
-            onClick={() => void install(picked)}
+            disabled={busy || !installVersion || pickedInstalled}
+            onClick={() => void install(installVersion)}
           >
             {busy ? t("安装中…", "Installing…") : pickedInstalled ? t("已安装", "Installed") : t("安装", "Install")}
           </Button>
