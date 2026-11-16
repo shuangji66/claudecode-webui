@@ -99,7 +99,8 @@ location /app/ccweb/ {
   行数徽标各算各的，不重复相加；
 - 点文件看 unified diff；行内按钮 stage / unstage / 丢弃工作区改动（丢弃需确认）；
 - 提交框支持 `Ctrl/⌘ + Enter`；只提交已暂存内容，冲突未解决时禁用；
-- 底栏显示当前分支、上游与 ahead/behind，可切换本地分支，也可「同步」= `pull --ff-only` + `push`；
+- 底栏显示当前分支、上游与 ahead/behind，可切换本地分支，也可「拉取」= `pull --ff-only`
+  （**不推送**：推送请自己在终端里 `git push`）；
 - 「历史」页签读取最近 30 条提交，点开看该提交的补丁。
 
 **没有**移植 dsh-better-sidebar 的提交图泳道、多 worktree 切换、revert/cherry-pick 和

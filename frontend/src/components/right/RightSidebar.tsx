@@ -3,17 +3,22 @@ import { useT } from "../../lib/i18n";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { FilesPanel } from "./FilesPanel";
 import { GitPanel } from "./GitPanel";
-import { IconChevronLeft, IconClose, IconFolder, IconGitBranch, IconPanel, IconTerminal } from "../common/Icons";
+import { Menu, type MenuItem } from "../common/Menu";
+import { IconClose, IconFolder, IconGitBranch, IconPanel, IconPlus, IconTerminal } from "../common/Icons";
 
-const TerminalPanel = lazy(() => import("./TerminalPanel"));
+const TerminalView = lazy(() => import("./TerminalView"));
 
-export type RightTab = "files" | "git" | "terminal";
+/** 一个标签页；终端每个会话各占一个。 */
+type TabKind = "files" | "git" | "terminal";
+
+interface Tab {
+  id: string;
+  kind: TabKind;
+  label: string;
+}
 
 interface Props {
   cwd: string;
-  /** null = 停在启动页（三个入口卡片），不是常驻标签栏。 */
-  activeTab: RightTab | null;
-  onTab: (tab: RightTab | null) => void;
   onClose: () => void;
 }
 
@@ -21,6 +26,8 @@ const WIDTH_KEY = "ccweb-right-width";
 export const RIGHT_MIN_WIDTH = 300;
 const RIGHT_MAX_WIDTH = 680;
 const RIGHT_DEFAULT_WIDTH = 380;
+/** 与后端 maxTerminals 一致：一个进程最多 8 个终端。 */
+const MAX_TERMINALS = 8;
 
 function readWidth(): number {
   try {
@@ -37,31 +44,28 @@ function clampWidth(width: number): number {
   return Math.round(Math.min(Math.max(width, RIGHT_MIN_WIDTH), Math.min(RIGHT_MAX_WIDTH, viewportMax)));
 }
 
+const KIND_ICON = { files: IconFolder, git: IconGitBranch, terminal: IconTerminal } as const;
+
 /**
- * 右侧栏：启动页 + 按需打开的面板（文件树 / Git / 终端），桌面停靠、移动端全屏抽屉。
+ * 右侧栏：顶部一排标签页（文件 / Git / 每个终端各一个），桌面停靠、移动端全屏抽屉。
  *
- * 参照 DSH 的右侧栏：没有常驻标签栏，先进「开始」页，点卡片才打开对应面板，
- * 面板头部有关闭按钮回到开始页。
- *
- * **面板一旦打开过就不卸载**，只切 `hidden`：终端里挂着 PTY，卸载等于杀 shell；
- * 文件树与 Git 也借这一条避免每次切换都重拉。
+ * 参照 DSH：没有「启动页 + 返回」那种切换，标签本身就是入口与关闭按钮，`+` 打开新标签。
+ * **标签切走不卸载**：终端里挂着 PTY，卸载等于杀 shell；关掉标签才结束进程。
  */
-export function RightSidebar({ cwd, activeTab, onTab, onClose }: Props) {
+export function RightSidebar({ cwd, onClose }: Props) {
   const t = useT();
   const setCwd = useSidebarStore((s) => s.setCwd);
   const [width, setWidth] = useState(readWidth);
-  const [opened, setOpened] = useState<Set<RightTab>>(new Set());
+  const [tabs, setTabs] = useState<Tab[]>([{ id: "files", kind: "files", label: t("文件", "Files") }]);
+  const [active, setActive] = useState("files");
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const termSeq = useRef(0);
   const drag = useRef<{ startX: number; startWidth: number } | null>(null);
 
-  // 工作区切换/侧栏重开只在这里触发一次；三个面板都读同一份 store。
+  // 工作区切换/侧栏重开只在这里触发一次；所有面板都读同一份 store。
   useEffect(() => {
     void setCwd(cwd);
   }, [cwd, setCwd]);
-
-  useEffect(() => {
-    if (!activeTab) return;
-    setOpened((prev) => (prev.has(activeTab) ? prev : new Set(prev).add(activeTab)));
-  }, [activeTab]);
 
   const applyWidth = (next: number) => {
     const value = clampWidth(next);
@@ -107,35 +111,51 @@ export function RightSidebar({ cwd, activeTab, onTab, onClose }: Props) {
     }
   };
 
-  const tabs: { id: RightTab; label: string; title: string; desc: string; icon: typeof IconFolder; tone: string }[] = [
-    {
-      id: "files",
-      label: t("工作区文件", "Workspace files"),
-      title: t("文件", "Files"),
-      desc: t("浏览会话工作区的文件", "Browse files in the workspace"),
-      icon: IconFolder,
-      tone: "text-warn",
-    },
-    {
-      id: "git",
-      label: t("Git", "Git"),
-      title: t("Git", "Git"),
-      desc: t("查看变更、提交历史与分支", "Changes, commit history and branches"),
-      icon: IconGitBranch,
-      tone: "text-ok",
-    },
+  /** 打开标签：文件/Git 是单例（已开就切过去），终端每次都新建一个。 */
+  const openTab = (kind: TabKind) => {
+    if (kind !== "terminal") {
+      const existing = tabs.find((tab) => tab.kind === kind);
+      if (existing) {
+        setActive(existing.id);
+        return;
+      }
+      const label = kind === "files" ? t("文件", "Files") : t("Git", "Git");
+      setTabs((prev) => [...prev, { id: kind, kind, label }]);
+      setActive(kind);
+      return;
+    }
+    if (tabs.filter((tab) => tab.kind === "terminal").length >= MAX_TERMINALS) return;
+    termSeq.current += 1;
+    const n = termSeq.current;
+    const id = `term-${n}`;
+    // 第一个叫 bash，之后编号；序号单调递增，关掉中间那个也不会重排。
+    setTabs((prev) => [...prev, { id, kind: "terminal", label: n === 1 ? "bash" : `bash ${n}` }]);
+    setActive(id);
+  };
+
+  const closeTab = (id: string) => {
+    setTabs((prev) => {
+      const index = prev.findIndex((tab) => tab.id === id);
+      const next = prev.filter((tab) => tab.id !== id);
+      setActive((cur) => (cur === id ? (next[index]?.id ?? next[index - 1]?.id ?? "") : cur));
+      return next;
+    });
+  };
+
+  const terminals = tabs.filter((tab) => tab.kind === "terminal").length;
+  const openItems: MenuItem[] = [
+    { id: "files", group: t("打开", "Open"), label: t("文件", "Files"), icon: <IconFolder size={13} />, onSelect: () => openTab("files") },
+    { id: "git", label: t("Git", "Git"), icon: <IconGitBranch size={13} />, onSelect: () => openTab("git") },
     {
       id: "terminal",
-      label: t("新建终端", "New terminal"),
-      // 卡片是动作（新建），面板标题是名词。
-      title: t("终端", "Terminal"),
-      desc: t("在会话工作区运行命令，可多开", "Run commands in the workspace; open as many as you need"),
-      icon: IconTerminal,
-      tone: "text-brand",
+      label: t("终端", "Terminal"),
+      hint: "bash",
+      icon: <IconTerminal size={13} />,
+      disabled: terminals >= MAX_TERMINALS,
+      onSelect: () => openTab("terminal"),
     },
   ];
 
-  const current = tabs.find((tab) => tab.id === activeTab) ?? null;
   const style = { "--right-w": `${width}px` } as CSSProperties;
 
   return (
@@ -166,29 +186,60 @@ export function RightSidebar({ cwd, activeTab, onTab, onClose }: Props) {
           title={t("拖动调整宽度，双击复位", "Drag to resize, double-click to reset")}
         />
 
-        <div className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-2">
-          {current ? (
+        <div className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-1.5">
+          <div className="dsh-scroll flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+            {tabs.map((tab) => {
+              const Icon = KIND_ICON[tab.kind];
+              const on = tab.id === active;
+              return (
+                <span
+                  key={tab.id}
+                  className={`flex shrink-0 items-center rounded-lg text-[12px] ${
+                    on ? "bg-panel-strong font-medium text-ink" : "text-muted hover:bg-black/[0.03] hover:text-ink"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setActive(tab.id)}
+                    aria-pressed={on}
+                    className="flex max-w-[9rem] items-center gap-1.5 py-1.5 pl-2 pr-1"
+                    title={tab.label}
+                  >
+                    <Icon size={14} className={on ? "shrink-0 text-brand" : "shrink-0"} />
+                    <span className="truncate">{tab.label}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => closeTab(tab.id)}
+                    className="mr-1 rounded p-0.5 text-faint hover:bg-black/5 hover:text-danger"
+                    aria-label={t(`关闭 ${tab.label}`, `Close ${tab.label}`)}
+                    title={t("关闭该标签", "Close this tab")}
+                  >
+                    <IconClose size={11} />
+                  </button>
+                </span>
+              );
+            })}
             <button
               type="button"
-              onClick={() => onTab(null)}
-              className="flex min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-1.5 text-[12.5px] font-medium text-ink hover:bg-black/[0.04]"
-              aria-label={t("返回", "Back")}
-              title={t("返回开始页", "Back to start")}
+              onClick={(e) => {
+                const anchor = e.currentTarget;
+                setMenuAnchor((prev) => (prev ? null : anchor));
+              }}
+              className="ml-0.5 shrink-0 rounded-md p-1 text-muted hover:bg-black/5 hover:text-ink"
+              aria-label={t("新建标签", "New tab")}
+              aria-haspopup="menu"
+              aria-expanded={menuAnchor !== null}
+              title={t("新建标签", "New tab")}
             >
-              <IconChevronLeft size={15} className="shrink-0 text-muted" />
-              <current.icon size={14} className={`shrink-0 ${current.tone}`} />
-              <span className="truncate">{current.title}</span>
+              <IconPlus size={15} />
             </button>
-          ) : (
-            <span className="flex min-w-0 items-center gap-1.5 px-1.5 text-[12.5px] font-medium text-ink">
-              <IconPanel size={15} className="shrink-0 text-muted" />
-              {t("工作区", "Workspace")}
-            </span>
-          )}
+            <Menu open={menuAnchor !== null} anchor={menuAnchor} items={openItems} onClose={() => setMenuAnchor(null)} width={180} align="start" />
+          </div>
           <button
             type="button"
             onClick={onClose}
-            className="ml-auto rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+            className="shrink-0 rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
             aria-label={t("关闭右侧栏", "Close right sidebar")}
             title={t("关闭", "Close")}
           >
@@ -206,55 +257,36 @@ export function RightSidebar({ cwd, activeTab, onTab, onClose }: Props) {
               {t("先在左侧选择或添加一个授权目录，右侧栏会显示它的文件与 Git 状态。", "Choose or add an authorized directory first; this sidebar shows its files and Git state.")}
             </p>
           </div>
+        ) : tabs.length === 0 ? (
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-panel-strong text-muted">
+              <IconPlus size={20} />
+            </span>
+            <p className="text-[13px] font-medium text-ink">{t("没有打开的标签", "No tabs open")}</p>
+            <p className="text-[11.5px] leading-relaxed text-muted">
+              {t("点顶部的 + 打开文件、Git 或终端。", "Use + at the top to open files, Git or a terminal.")}
+            </p>
+          </div>
         ) : (
           <div className="relative min-h-0 flex-1">
-            {!activeTab && (
-              <div className="dsh-scroll h-full space-y-2 overflow-y-auto p-2.5">
-                {tabs.map((tab) => {
-                  const Icon = tab.icon;
-                  return (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => onTab(tab.id)}
-                      className="flex w-full items-start gap-3 rounded-2xl border border-line bg-canvas px-3.5 py-3 text-left transition hover:border-line-strong hover:bg-panel/60"
-                    >
-                      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-panel-strong">
-                        <Icon size={16} className={tab.tone} />
-                      </span>
-                      <span className="min-w-0">
-                        <span className="block text-[13px] font-medium text-ink">{tab.label}</span>
-                        <span className="mt-0.5 block text-[11px] leading-relaxed text-muted">{tab.desc}</span>
-                      </span>
-                    </button>
-                  );
-                })}
+            {/* 标签切走只隐藏：终端里挂着 PTY，卸载等于杀 shell。 */}
+            {tabs.map((tab) => (
+              <div key={tab.id} className={tab.id === active ? "absolute inset-0" : "hidden"}>
+                {tab.kind === "files" && <FilesPanel cwd={cwd} active={tab.id === active} />}
+                {tab.kind === "git" && <GitPanel cwd={cwd} active={tab.id === active} />}
+                {tab.kind === "terminal" && (
+                  <Suspense
+                    fallback={
+                      <div className="flex h-full items-center justify-center text-[12px] text-muted">
+                        {t("正在加载终端…", "Loading terminal…")}
+                      </div>
+                    }
+                  >
+                    <TerminalView cwd={cwd} active={tab.id === active} />
+                  </Suspense>
+                )}
               </div>
-            )}
-            {opened.has("files") && (
-              <div className={activeTab === "files" ? "absolute inset-0" : "hidden"}>
-                <FilesPanel cwd={cwd} active={activeTab === "files"} />
-              </div>
-            )}
-            {opened.has("git") && (
-              <div className={activeTab === "git" ? "absolute inset-0" : "hidden"}>
-                <GitPanel cwd={cwd} active={activeTab === "git"} />
-              </div>
-            )}
-            {/* 终端首次打开后才创建 PTY；之后切面板只隐藏，不杀进程。 */}
-            {opened.has("terminal") && (
-              <div className={activeTab === "terminal" ? "absolute inset-0" : "hidden"}>
-                <Suspense
-                  fallback={
-                    <div className="flex h-full items-center justify-center text-[12px] text-muted">
-                      {t("正在加载终端…", "Loading terminal…")}
-                    </div>
-                  }
-                >
-                  <TerminalPanel cwd={cwd} active={activeTab === "terminal"} />
-                </Suspense>
-              </div>
-            )}
+            ))}
           </div>
         )}
       </aside>

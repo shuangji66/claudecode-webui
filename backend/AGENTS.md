@@ -19,7 +19,7 @@ internal/project     工作目录枚举/校验、目录浏览器
 internal/workspace   授权目录 + 当前工作区（workspaces.json）
 internal/conversation 对话元数据（conversations.json：归档/删除/重命名/最近活跃）
 internal/fsapi       工作区内文件树/文本预览/原始字节（路径围栏 + 符号链接校验）
-internal/gitctl      Git 面板后端：status/diff/stage/commit/log/branch/sync
+internal/gitctl      Git 面板后端：repos/status/diff/stage/commit/log/branch/pull
 internal/terminal    Linux PTY 会话（/dev/ptmx + ioctl，零依赖）
 internal/authz       token 鉴权
 internal/settings    持久化配置（第三方端点/密钥/模型）+ 端点探测
@@ -171,7 +171,7 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `DELETE /api/conversations?id=`（软删除）、`GET /api/history/transcript?id=`（回放）。
   `POST /api/session` 带 `resume` 时走 `manager.Resume`，不带才新建。
 - 右侧栏路由：`GET /api/fs/tree|file|raw`、`GET /api/git/status|diff|show|log|branches`、
-  `POST /api/git/stage|unstage|discard|commit|checkout|sync`、`GET /ws/terminal`。
+  `POST /api/git/stage|unstage|discard|commit|checkout|pull`、`GET /ws/terminal`。
   全部先过 `authorizedCwd`（`project.Validate` + `workspace.Allows`），再做路径围栏；
   原始字节只放行图片/PDF 并带 `CSP: sandbox`，HTML/SVG 不得同源 inline。
 - `POST /api/settings/proxy` 是敏感路由；先 Apply 设置，再重启全部会话，并返回

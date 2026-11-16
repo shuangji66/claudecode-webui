@@ -79,7 +79,7 @@ export function GitPanel({ cwd, active }: Props) {
   const discard = useSidebarStore((s) => s.discard);
   const commit = useSidebarStore((s) => s.commit);
   const checkout = useSidebarStore((s) => s.checkout);
-  const sync = useSidebarStore((s) => s.sync);
+  const pull = useSidebarStore((s) => s.pull);
   const clearActionError = useSidebarStore((s) => s.clearActionError);
 
   const [mode, setMode] = useState<Mode>("changes");
@@ -209,14 +209,15 @@ export function GitPanel({ cwd, active }: Props) {
     if (ok) void run(() => checkout(branch));
   };
 
-  const askSync = async () => {
+  // 只拉不推：推送是对外动作，交给用户自己在终端里做（见 AGENTS 的 Git 约定）。
+  const askPull = async () => {
     if (!git?.upstream || git.detached) return;
     const ok = await askConfirm({
-      title: t("同步远端", "Sync remote"),
-      message: t(`先 pull --ff-only，再 push 到「${git.upstream}」。`, `Pull --ff-only, then push to "${git.upstream}".`),
-      confirmText: t("同步", "Sync"),
+      title: t("拉取远端", "Pull from remote"),
+      message: t(`从「${git.upstream}」执行 pull --ff-only；本地不会推送任何提交。`, `Run pull --ff-only from "${git.upstream}"; nothing is pushed.`),
+      confirmText: t("拉取", "Pull"),
     });
-    if (ok) void run(() => sync());
+    if (ok) void run(() => pull());
   };
 
   const submit = async () => {
@@ -500,33 +501,36 @@ export function GitPanel({ cwd, active }: Props) {
         <div className="shrink-0 border-t border-line px-2 py-1.5">
           <div className="flex items-center gap-1.5">
             <IconGitBranch size={13} className="shrink-0 text-muted" />
-            <Select
-              variant="ghost"
-              className="min-w-0 flex-1 justify-start text-[11.5px] text-ink"
-              ariaLabel={t("切换分支", "Switch branch")}
-              value={git?.branch ?? ""}
-              disabled={busy || !branches || branches.names.length === 0}
-              placeholder={git?.detached ? t("分离 HEAD", "detached HEAD") : t("选择分支", "Select branch")}
-              onChange={(next) => void askCheckout(next)}
-              options={(branches?.names ?? (git?.branch ? [git.branch] : [])).map((name) => ({ value: name, label: name }))}
-            />
+            {/* 分支胶囊按内容收窄：整行拉满会把下面一行挤成两截，也点不出「这是个下拉」。 */}
+            <span className="min-w-0 max-w-[10rem]">
+              <Select
+                variant="ghost"
+                className="max-w-full text-[11.5px] text-ink"
+                ariaLabel={t("切换分支", "Switch branch")}
+                value={git?.branch ?? ""}
+                disabled={busy || !branches || branches.names.length === 0}
+                placeholder={git?.detached ? t("分离 HEAD", "detached HEAD") : t("选择分支", "Select branch")}
+                onChange={(next) => void askCheckout(next)}
+                options={(branches?.names ?? (git?.branch ? [git.branch] : [])).map((name) => ({ value: name, label: name }))}
+              />
+            </span>
+            <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">
+              {git?.ahead ? `↑${git.ahead}` : ""} {git?.behind ? `↓${git.behind}` : ""}
+            </span>
             <button
               type="button"
-              onClick={askSync}
+              onClick={askPull}
               disabled={busy || !git?.upstream || git?.detached || groups.conflicts.length > 0}
               className="shrink-0 rounded p-0.5 text-muted hover:bg-black/5 hover:text-ink disabled:opacity-35"
-              aria-label={t("同步：先 pull 再 push", "Sync: pull then push")}
+              aria-label={t("拉取远端（不推送）", "Pull from remote (no push)")}
               title={
                 !git?.upstream
-                  ? t("没有上游分支，无法同步", "No upstream branch to sync")
-                  : t("同步：先 pull --ff-only 再 push", "Sync: pull --ff-only, then push")
+                  ? t("没有上游分支，无法拉取", "No upstream branch to pull")
+                  : t("从上游 pull --ff-only（不会 push）", "Pull --ff-only from upstream (never pushes)")
               }
             >
               <IconSync size={12} />
             </button>
-            <span className="shrink-0 font-mono text-[10px] text-faint">
-              {git?.ahead ? `↑${git.ahead}` : ""} {git?.behind ? `↓${git.behind}` : ""}
-            </span>
           </div>
           <div className="mt-0.5 flex items-center justify-between gap-2 text-[9.5px] text-faint">
             <span className="truncate" title={git?.upstream}>

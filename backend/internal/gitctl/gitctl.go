@@ -626,13 +626,3 @@ func Pull(ctx context.Context, cwd string) error {
 	_, err = run(ctx, root, "pull", "--ff-only")
 	return err
 }
-
-// Push 推送当前分支到它的上游。没有上游时 git 自己的报错就是最清楚的提示。
-func Push(ctx context.Context, cwd string) error {
-	root, err := repoRoot(ctx, cwd)
-	if err != nil {
-		return err
-	}
-	_, err = run(ctx, root, "push")
-	return err
-}

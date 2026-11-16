@@ -13,7 +13,7 @@ import { WorkspaceDialog } from "./components/layout/WorkspaceDialog";
 import { HistoryDialog } from "./components/layout/HistoryDialog";
 import { SystemDialogs } from "./components/common/SystemDialogs";
 import { BrandMark, IconClose, IconRetry } from "./components/common/Icons";
-import { RightSidebar, type RightTab } from "./components/right/RightSidebar";
+import { RightSidebar } from "./components/right/RightSidebar";
 
 const COLLAPSE_KEY = "ccweb-sidebar-collapsed";
 const RIGHT_OPEN_KEY = "ccweb-right-open";
@@ -74,8 +74,6 @@ function AppShell() {
   const [tokenEpoch, setTokenEpoch] = useState(0);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [rightOpen, setRightOpen] = useState(readRightOpen);
-  // null = 停在右侧栏的启动页；面板由用户点卡片按需打开（不再常驻三个标签）。
-  const [rightTab, setRightTab] = useState<RightTab | null>(null);
 
   useEffect(() => {
     void bootstrap();
@@ -204,14 +202,8 @@ function AppShell() {
         />
       </main>
 
-      {rightOpen && (
-        <RightSidebar
-          cwd={rightCwd}
-          activeTab={rightTab}
-          onTab={setRightTab}
-          onClose={() => setRightOpen(false)}
-        />
-      )}
+      {/* 标签页由右侧栏自己管：文件 / Git / 每个终端各一个标签，切走不卸载。 */}
+      {rightOpen && <RightSidebar cwd={rightCwd} onClose={() => setRightOpen(false)} />}
 
       <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsTab} cwd={rightCwd} />
       {/* 一个版本都没装：后端能起来，但开不了会话，首屏直接把人送到部署页 */}

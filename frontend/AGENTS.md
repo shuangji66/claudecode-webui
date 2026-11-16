@@ -29,7 +29,7 @@ src/
   store/useSidebarStore.ts 右侧栏数据（文件树/Git/预览，所有 fetch 收敛在这里）
   store/useSkillsStore.ts  设置页技能数据（/api/skills 的列表与正文）
   components/layout/Sidebar.tsx 工作区/对话列表、重命名/归档/删除菜单
-  components/right/    RightSidebar（启动页 + 按需面板）/ FilesPanel / GitPanel / TerminalPanel（多开）
+  components/right/    RightSidebar（标签页）/ FilesPanel / GitPanel / TerminalView（单个终端会话）
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
   components/          layout / chat / tools / permission / settings
 ```
@@ -62,10 +62,10 @@ src/
 12. 输入框 `+` 是**添加菜单**（`common/Menu`）：本地文件/图片、从飞牛选择、claude 指令；
     " / " 仍由用户键入触发补全。从飞牛挑中的图片/PDF 走 `readHostFile`（`POST /api/fs/host-file`，
     后端只放行这两类）转成附件，其余类型只把路径写进消息——不要在前端读任意宿主文件。
-13. **右侧栏是启动页 + 按需面板**：`activeTab` 为 `null` 时显示三张入口卡片，点开才挂面板，
-    面板头部的「返回」回到启动页。**打开过的面板必须继续挂载**（`opened` 集合 + `hidden`），
-    终端里挂着 PTY，卸载等于杀 shell；只有关标签或关整个侧栏才结束进程。
-    终端支持多开：标签栏切换、`+` 新建（上限 8），所有会话都挂在同一个 `TerminalPanel` 里。
+13. **右侧栏是标签页**：顶部一排标签（文件 / Git / 每个终端各一个），`+` 菜单开新标签，
+    标签自带 × 关闭；文件与 Git 是单例，终端每次都新建（上限 8，标签名 `bash`、`bash 2`…）。
+    **切标签只切 `hidden`、不卸载**：终端里挂着 PTY，卸载等于杀 shell；关标签才结束进程。
+    不要再加「启动页 + 返回」式的切换。Git 只拉不推（`/api/git/pull`，`pull --ff-only`）。
 14. 文件树/Git 面板的所有请求走 `useSidebarStore`；路径使用后端返回的 POSIX 相对路径，
     不要自己拼绝对路径。切换工作区由 `RightSidebar` 统一 `setCwd`，子面板不要重复调用。
 15. Git 的 `MM` 文件必须同时出现在暂存与更改两组，各自用本侧行数；不要把两侧相加。

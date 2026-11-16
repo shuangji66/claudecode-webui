@@ -116,7 +116,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/git/discard", s.authed(s.handleGitDiscard))
 	s.mux.HandleFunc("POST /api/git/commit", s.authed(s.handleGitCommit))
 	s.mux.HandleFunc("POST /api/git/checkout", s.authed(s.handleGitCheckout))
-	s.mux.HandleFunc("POST /api/git/sync", s.authed(s.handleGitSync))
+	s.mux.HandleFunc("POST /api/git/pull", s.authed(s.handleGitPull))
 	s.mux.HandleFunc("GET /api/history", s.authed(s.handleListHistory))
 	s.mux.HandleFunc("GET /api/history/transcript", s.authed(s.handleHistoryTranscript))
 	s.mux.HandleFunc("GET /api/conversations", s.authed(s.handleListConversations))

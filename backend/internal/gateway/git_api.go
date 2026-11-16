@@ -202,17 +202,16 @@ func (s *Server) handleGitCheckout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
-// handleGitSync 先 fast-forward pull，再 push。两步分开调用，失败信息原样返回。
-func (s *Server) handleGitSync(w http.ResponseWriter, r *http.Request) {
+// handleGitPull 只做 fast-forward pull。
+//
+// **不 push**：这是本机开发用的面板，把改动推上去属于明确的对外动作，不该由
+// 侧栏一个图标顺手完成。需要推送时用户自己开终端 `git push`。
+func (s *Server) handleGitPull(w http.ResponseWriter, r *http.Request) {
 	_, cwd, ok := s.decodeGitReq(w, r)
 	if !ok {
 		return
 	}
 	if err := gitctl.Pull(r.Context(), cwd); err != nil {
-		writeGitError(w, err)
-		return
-	}
-	if err := gitctl.Push(r.Context(), cwd); err != nil {
 		writeGitError(w, err)
 		return
 	}

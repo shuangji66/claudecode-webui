@@ -57,7 +57,7 @@ interface SidebarState {
   discard: (path: string) => Promise<boolean>;
   commit: (message: string) => Promise<boolean>;
   checkout: (branch: string) => Promise<boolean>;
-  sync: () => Promise<boolean>;
+  pull: () => Promise<boolean>;
   clearActionError: () => void;
 }
 
@@ -363,18 +363,18 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     }
   },
 
-  sync: async () => {
+  pull: async () => {
     const cwd = gitCwd(get());
     if (!cwd) return false;
     try {
-      await postGit("/api/git/sync", { cwd });
+      await postGit("/api/git/pull", { cwd });
       set({ actionError: "" });
       await get().refreshGit();
       await get().loadBranches();
       return true;
     } catch (reason) {
       set({ actionError: errorText(reason) });
-      // pull 可能已成功、push 才失败；刷新一次让面板反映真实状态。
+      // 冲突/分叉时 git 会停下；刷新一次让面板反映真实状态（不在这里制造 merge）。
       await get().refreshGit();
       return false;
     }

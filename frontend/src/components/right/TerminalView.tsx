@@ -1,23 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { useT } from "../../lib/i18n";
 import { getToken } from "../../lib/runtime";
 import { TerminalConnection, type TerminalPhase } from "../../transport/terminal";
-import { IconClose, IconPlus, IconRetry, IconTerminal } from "../common/Icons";
+import { IconRetry } from "../common/Icons";
 
 interface Props {
   cwd: string;
-  /** 面板是否可见。隐藏时只停 fit，不结束任何 shell。 */
+  /** 标签是否可见。隐藏时只停 fit，不结束 shell。 */
   active: boolean;
 }
 
 const FONT_SIZE = 12.5;
 const FONT_FAMILY = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace';
-/** 与后端 maxTerminals 一致：一个进程最多 8 个终端。 */
-const MAX_TERMINALS = 8;
-
 /** xterm 配色：从当前主题令牌读取，切主题时由 MutationObserver 重新应用。 */
 function currentTheme(): ITheme {
   const style = getComputedStyle(document.documentElement);
@@ -51,134 +48,14 @@ function currentTheme(): ITheme {
   };
 }
 
-interface TermItem {
-  id: string;
-  /** 标签名；序号在创建时定死，关闭中间那个也不会重排。 */
-  label: string;
-}
-
 /**
- * 终端面板：支持多开。
+ * 单个终端视图：一条 WS、一个 PTY。
  *
- * 每个终端是独立的 PTY（各自一条 WS），切标签只是隐藏，不结束进程；
- * 只有关闭标签或换工作区才真正结束。所有会话都挂在这一个面板里，
- * 面板本身在右侧栏里常驻（首次打开后不卸载），所以切到文件/Git 也不会丢 shell。
+ * 多开由右侧栏的标签负责——每个终端就是顶部一个独立标签，切标签只是隐藏，
+ * 不结束进程；关掉标签才真正关闭这个 shell。
  */
-export default function TerminalPanel({ cwd, active }: Props) {
-  const t = useT();
-  const [terms, setTerms] = useState<TermItem[]>([]);
-  const [current, setCurrent] = useState("");
-  const seq = useRef(0);
-  const autoCreated = useRef(false);
-
-  const create = useCallback((): string => {
-    seq.current += 1;
-    const id = `term-${seq.current}`;
-    setTerms((prev) => [...prev, { id, label: t(`终端 ${seq.current}`, `Terminal ${seq.current}`) }]);
-    setCurrent(id);
-    return id;
-  }, [t]);
-
-  const close = (id: string) => {
-    setTerms((prev) => {
-      const next = prev.filter((term) => term.id !== id);
-      setCurrent((cur) => (cur === id ? (next[next.length - 1]?.id ?? "") : cur));
-      return next;
-    });
-  };
-
-  // 换工作区：旧 shell 的 cwd 已经不成立，全部结束（与单终端时代的重连行为一致）。
-  useEffect(() => {
-    setTerms([]);
-    setCurrent("");
-    seq.current = 0;
-    autoCreated.current = false;
-  }, [cwd]);
-
-  // 面板第一次可见时自动开一个；之后用户关掉全部，才留空态让用户自己点。
-  useEffect(() => {
-    if (!active || autoCreated.current || terms.length > 0) return;
-    autoCreated.current = true;
-    create();
-  }, [active, terms.length, create]);
-
-  if (terms.length === 0) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 px-5 text-center">
-        <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-panel-strong text-muted">
-          <IconTerminal size={20} />
-        </span>
-        <p className="text-[12.5px] font-medium text-ink">{t("内置终端", "Built-in terminal")}</p>
-        <p className="text-[11px] leading-relaxed text-muted">
-          {t("在右侧栏打开 bash 会话，工作目录就是当前工作区；可以同时开多个。", "A bash session in the sidebar, rooted at the current workspace; open as many as you need.")}
-        </p>
-        <button
-          type="button"
-          onClick={() => create()}
-          className="mt-1 inline-flex items-center gap-1.5 rounded-full bg-ink px-3 py-1.5 text-[11.5px] font-medium text-canvas hover:opacity-90"
-        >
-          <IconPlus size={13} />
-          {t("新建终端", "New terminal")}
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="dsh-scroll flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-1.5 py-1">
-        {terms.map((term) => {
-          const on = term.id === current;
-          return (
-            <span
-              key={term.id}
-              className={`flex shrink-0 items-center gap-0.5 rounded-lg pr-0.5 text-[11px] ${
-                on ? "bg-panel-strong text-ink" : "text-muted hover:bg-black/[0.03]"
-              }`}
-            >
-              <button
-                type="button"
-                onClick={() => setCurrent(term.id)}
-                aria-pressed={on}
-                className="max-w-[9rem] truncate px-2 py-1"
-                title={term.label}
-              >
-                {term.label}
-              </button>
-              <button
-                type="button"
-                onClick={() => close(term.id)}
-                className="rounded p-0.5 text-faint hover:bg-black/5 hover:text-danger"
-                aria-label={t(`关闭 ${term.label}`, `Close ${term.label}`)}
-                title={t("关闭该终端", "Close this terminal")}
-              >
-                <IconClose size={11} />
-              </button>
-            </span>
-          );
-        })}
-        <button
-          type="button"
-          onClick={() => create()}
-          disabled={terms.length >= MAX_TERMINALS}
-          className="ml-0.5 shrink-0 rounded-md p-1 text-muted hover:bg-black/5 hover:text-ink disabled:opacity-40"
-          aria-label={t("新建终端", "New terminal")}
-          title={terms.length >= MAX_TERMINALS ? t(`最多 ${MAX_TERMINALS} 个终端`, `At most ${MAX_TERMINALS} terminals`) : t("新建终端", "New terminal")}
-        >
-          <IconPlus size={14} />
-        </button>
-      </div>
-
-      {/* 所有终端都保持挂载，只隐藏非当前项：卸载即关掉 PTY，切标签会把 shell 杀掉。 */}
-      <div className="relative min-h-0 flex-1">
-        {terms.map((term) => (
-          <div key={term.id} className={term.id === current ? "absolute inset-0" : "hidden"}>
-            <TerminalSession cwd={cwd} active={active && term.id === current} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+export default function TerminalView({ cwd, active }: Props) {
+  return <TerminalSession cwd={cwd} active={active} />;
 }
 
 function TerminalSession({ cwd, active }: { cwd: string; active: boolean }) {

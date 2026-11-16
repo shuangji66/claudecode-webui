@@ -14,8 +14,8 @@
 - 后端**常驻 claude 子进程**，通过 `--input-format stream-json --output-format stream-json`
   双向 NDJSON 通信；
 - 主对话区**不做终端模拟**，全部结构化渲染：消息流、thinking、工具卡片、diff、审批面板；
-- 右侧栏（桌面停靠 / 移动端全屏）先给一个启动页，按需打开工作区文件树与只读预览、
-  支持多仓库切换的 Git 面板、以及真正跑在 Linux PTY 上的 bash 终端（可多开，
+- 右侧栏（桌面停靠 / 移动端全屏）是标签页：文件、Git、以及每个终端各占一个标签，
+  `+` 打开新标签（Git 面板支持工作区内多仓库切换；终端是真正跑在 Linux PTY 上的 bash，
   `xterm.js` 只做渲染）；
 - **授权目录 = 工作区**，持久化在 `workspaces.json`；对话列表来自 claude 转录 +
   `conversations.json` 元数据，启动时恢复上次对话（`--resume`）而不是新建；
@@ -149,14 +149,17 @@ hub ── manager ── session ── process ── claude (NDJSON)
   否则会被替换字符破坏；上行命令才是 JSON 文本。
 - **服务端先发 `error`/`exit` 再关连接时，前端不能把状态覆盖成 `closed`**：`TerminalConnection`
   记住最后一次状态，保留真正的失败原因。
-- **右侧栏是「启动页 + 按需面板」**（对齐 DSH）：没有常驻标签栏，点卡片才打开
-  文件 / Git / 终端，面板头部返回启动页。**打开过的面板不卸载，只切 `hidden`**——终端里
-  挂着 PTY，卸载等于杀 shell。只有关掉该终端标签或关掉整个右侧栏才 SIGHUP。
-- **终端可多开**：每个终端一条 WS、一个 PTY，标签栏负责切换；后端上限 8
-  （`maxTerminals`），换工作区时全部结束（旧 shell 的 cwd 已经不成立）。
+- **右侧栏是标签页**（对齐 DSH）：顶部一排标签，文件 / Git 各是单例（已开就切过去），
+  终端**每个会话各占一个标签**（`bash`、`bash 2`…），`+` 菜单开新标签，标签自带 × 关闭。
+  **标签切走只隐藏、不卸载**——终端里挂着 PTY，卸载等于杀 shell；关掉标签或关掉整个
+  右侧栏才 SIGHUP。不要改回「启动页 + 返回按钮」那种切换。
+- **终端可多开**：每个终端一条 WS、一个 PTY；后端上限 8（`maxTerminals`），
+  换工作区时全部结束（旧 shell 的 cwd 已经不成立）。
 - **Git 支持工作区内的多个仓库**：`GET /api/git/repos` 扫描（深度 3、跳过隐藏目录与
   `node_modules`、命中仓库不再下钻），前端把选中的仓库绝对路径直接当 `/api/git/*` 的
   `cwd`（子目录本来就能过 `authorizedCwd`，不必为它加新参数）。
+- **Git 只拉不推**：`POST /api/git/pull` 只做 `pull --ff-only`（`gitctl.Push` 已删除）。
+  推送是对外动作，不该由侧栏一个图标顺手完成；需要时用户自己开终端 `git push`。
 - **Git 状态用 `--porcelain=v2 -z`**，并用 `--untracked-files=all` 列出未跟踪文件
   （`normal` 只给目录，点开无法 diff）。解析按 NUL 字段走，不能按空格 split，
   否则带空格的路径会被截断。
@@ -279,7 +282,7 @@ cd frontend && npx tsc --noEmit
 - [ ] 对话恢复是否用稳定 UUID `--resume`？空对话/归档/删除是否会被误恢复？
 - [ ] 转录回放是否过滤 sidechain/meta，并保留原始时间戳？
 - [ ] 新增右侧栏路由是否过了 `authorizedCwd` / 路径围栏？raw 预览是否仍在白名单？
-- [ ] 右侧栏面板是否仍按需打开、打开过的面板不卸载（终端 PTY 不能被切面板杀掉）？
+- [ ] 右侧栏标签切走是否只隐藏不卸载（终端 PTY 不能被切标签杀掉）？Git 是否仍只 pull？
 - [ ] 终端是否仍走二进制帧、多开时每个标签各自一条 WS？
 - [ ] 是否补了测试（纯函数优先，组件用 Testing Library）？
 - [ ] `make test` 与 `npx tsc --noEmit` 是否都通过？
