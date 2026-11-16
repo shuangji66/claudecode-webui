@@ -336,11 +336,25 @@ export function GitPanel({ cwd, active }: Props) {
         </button>
         <button
           type="button"
+          onClick={askPull}
+          disabled={busy || !git?.upstream || git?.detached || groups.conflicts.length > 0}
+          className="ml-auto rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink disabled:opacity-35"
+          aria-label={t("拉取远端（不推送）", "Pull from remote (no push)")}
+          title={
+            !git?.upstream
+              ? t("没有上游分支，无法拉取", "No upstream branch to pull")
+              : t("从上游 pull --ff-only（不会 push）", "Pull --ff-only from upstream (never pushes)")
+          }
+        >
+          <IconSync size={14} />
+        </button>
+        <button
+          type="button"
           onClick={() => {
             void refreshGit();
             if (mode === "history") void loadLog();
           }}
-          className="ml-auto rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+          className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
           aria-label={t("刷新 Git 状态", "Refresh git status")}
           title={t("刷新", "Refresh")}
         >
@@ -518,26 +532,6 @@ export function GitPanel({ cwd, active }: Props) {
             <span className="ml-auto shrink-0 font-mono text-[10px] text-faint">
               {git?.ahead ? `↑${git.ahead}` : ""} {git?.behind ? `↓${git.behind}` : ""}
             </span>
-            <button
-              type="button"
-              onClick={askPull}
-              disabled={busy || !git?.upstream || git?.detached || groups.conflicts.length > 0}
-              className="shrink-0 rounded p-0.5 text-muted hover:bg-black/5 hover:text-ink disabled:opacity-35"
-              aria-label={t("拉取远端（不推送）", "Pull from remote (no push)")}
-              title={
-                !git?.upstream
-                  ? t("没有上游分支，无法拉取", "No upstream branch to pull")
-                  : t("从上游 pull --ff-only（不会 push）", "Pull --ff-only from upstream (never pushes)")
-              }
-            >
-              <IconSync size={12} />
-            </button>
-          </div>
-          <div className="mt-0.5 flex items-center justify-between gap-2 text-[9.5px] text-faint">
-            <span className="truncate" title={git?.upstream}>
-              {git?.upstream ?? t("无上游分支", "no upstream")}
-            </span>
-            <span className="shrink-0">{git?.root ?? cwd}</span>
           </div>
         </div>
       )}
