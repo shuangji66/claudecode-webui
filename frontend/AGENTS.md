@@ -59,7 +59,9 @@ src/
     **唯一例外**是对话「进行中」的进度环（`common/StateDot` 的 `ongoing`：1.5s 匀速旋转 +
     弧长呼吸，对齐 DSH 的 StateDot），它表达的是「正在干活」而不是装饰；必须在
     `prefers-reduced-motion: reduce` 下停成静态弧。新增任何循环动画前先想清楚这一点。
-12. 输入框 `+` 是**添加菜单**（`common/Menu`）：本地文件/图片、从飞牛选择、claude 指令；
+12. 输入框 `+` 是**添加菜单**（`common/Menu`，宽 320、窄屏自适应）：本地文件/图片、
+    从飞牛选择、claude 指令（中文短说明见 `lib/labels.commandDescription`，未收录的回落
+    CLI 原文）；
     " / " 仍由用户键入触发补全。从飞牛挑中的图片/PDF 走 `readHostFile`（`POST /api/fs/host-file`，
     后端只放行这两类）转成附件，其余类型只把路径写进消息——不要在前端读任意宿主文件。
 13. **右侧栏是标签页**：顶部一排标签（文件 / Git / 每个终端各一个），`+` 菜单开新标签，
@@ -174,7 +176,9 @@ src/
   - 下拉统一 `components/common/Select.tsx`（自绘 listbox + 键盘 ↑↓/Enter/Esc），
     **禁止 `<select>`**——原生展开面板由系统绘制，深浅色/字号/圆角都不受主题控制。
   - 弹出菜单统一 `components/common/Menu.tsx`（Portal + 视口夹取 + 下方放不下时向上翻 +
-    点外部/Esc 关闭），不要在组件里各写一套 document 监听。
+    点外部/Esc 关闭），不要在组件里各写一套 document 监听。**向上翻要用 `bottom` 锚定
+    底边**（`anchoredPosition` 已这么做）：按估算高度算 `top` 会让高菜单飘到视口顶端、
+    和触发器脱节。菜单高度上限由定位层给出（`panelMaxHeight()`），内部滚动。
   - 确认 / 输入走 `askConfirm` / `askPrompt`（`SystemDialogs` 在 `App` 挂一次），
     **禁止 `window.confirm` / `window.prompt` / `window.alert`**。
   - 按钮统一 `components/common/Button.tsx`（primary/secondary/ghost/danger + sm/md），

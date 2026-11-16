@@ -94,3 +94,50 @@ export function stateLabel(state: string | undefined, locale: Locale = "zh"): st
       return tr(locale, "未连接", "Disconnected");
   }
 }
+
+/**
+ * 常见斜杠命令的简短中文说明。
+ *
+ * CLI 自带的 description 是英文长句（有些还带参数说明），塞进 264px 的菜单里只能
+ * 看到「Use this skill wheneve…」。这里给常用命令一句中文短说明，没收录的回落到
+ * CLI 原文（英文环境下本来就该用原文）。
+ */
+const COMMAND_LABELS: Record<string, string> = {
+  compact: "压缩对话上下文",
+  model: "切换本会话模型",
+  clear: "清空当前会话",
+  help: "查看帮助",
+  init: "生成项目说明文件",
+  review: "审查改动",
+  "pr-comments": "拉取 PR 评论",
+  cost: "查看用量与花费",
+  usage: "查看用量",
+  status: "查看会话状态",
+  doctor: "环境自检",
+  login: "登录账号",
+  logout: "退出登录",
+  memory: "编辑记忆文件",
+  config: "打开配置",
+  agents: "管理子代理",
+  hooks: "管理钩子",
+  mcp: "管理 MCP 服务",
+  permissions: "管理权限规则",
+  plan: "切换计划模式",
+  resume: "恢复历史对话",
+  export: "导出对话",
+  rewind: "回退到之前的状态",
+  todos: "查看待办",
+  vim: "切换 vim 编辑模式",
+  context: "查看上下文占用",
+  bug: "反馈问题",
+  "release-notes": "查看更新日志",
+};
+
+/** 命令在菜单里的一句说明：中文优先，没收录的用 CLI 自带描述（由 UI 截断）。 */
+export function commandDescription(name: string, description: string | undefined, locale: Locale = "zh"): string {
+  if (locale !== "en") {
+    const zh = COMMAND_LABELS[name];
+    if (zh) return zh;
+  }
+  return description ?? "";
+}

@@ -156,8 +156,8 @@ export function Select({
               {...{ [PORTAL_ATTR]: "" }}
               tabIndex={-1}
               onKeyDown={onListKeyDown}
-              style={{ left: pos.left, top: pos.top, width }}
-              className={`${POPUP_PANEL} max-h-[328px] overflow-y-auto dsh-scroll outline-none`}
+              style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxHeight }}
+              className={`${POPUP_PANEL} overflow-y-auto dsh-scroll outline-none`}
             >
               {options.length === 0 && (
                 <p className="px-2.5 py-2 text-[11.5px] text-faint">{placeholder ?? ""}</p>

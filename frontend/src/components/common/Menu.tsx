@@ -18,35 +18,54 @@ export const PORTAL_ATTR = "data-dsh-portal";
 /** 浮层与视口边缘的最小间距。 */
 const VIEWPORT_MARGIN = 8;
 
-export interface AnchoredPosition {
-  left: number;
-  top: number;
+/** 浮层高度上限：内容再多也只在这个高度内滚动（60vh 与 420px 取小）。 */
+export function panelMaxHeight(): number {
+  return Math.min(Math.round(window.innerHeight * 0.6), 420);
 }
 
-/** 按触发元素的位置算浮层坐标：默认贴右侧对齐（桌面下拉习惯），并夹在视口内。 */
+/** 向上/向下展开时都要留的最小高度，免得贴边时被压成一条缝。 */
+const MIN_PANEL_HEIGHT = 120;
+
+export interface AnchoredPosition {
+  left: number;
+  /** 实际使用的宽度（已按视口收窄）。 */
+  width: number;
+  /** 向下展开时的上边距。 */
+  top?: number;
+  /** 向上展开时的下边距：底边贴住触发器，而不是按估算高度往上顶。 */
+  bottom?: number;
+  maxHeight: number;
+}
+
+/**
+ * 按触发元素的位置算浮层坐标：默认贴右侧对齐（桌面下拉习惯），并夹在视口内。
+ *
+ * 向上展开用 `bottom` 锚定底边，而不是 `top = 触发器顶 - 估算高度`：估算值一旦
+ * 大于实际高度，面板就会飘到视口顶端、和按钮脱节（输入框 + 菜单踩过这个坑）。
+ */
 export function anchoredPosition(
   anchor: HTMLElement,
   width: number,
-  estimatedHeight: number,
+  preferredHeight: number,
   align: "start" | "end" = "end",
   offset = 4,
 ): AnchoredPosition {
   const rect = anchor.getBoundingClientRect();
-  const rawLeft = align === "end" ? rect.right - width : rect.left;
-  const maxLeft = Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN);
+  const w = Math.max(120, Math.min(width, window.innerWidth - VIEWPORT_MARGIN * 2));
+  const rawLeft = align === "end" ? rect.right - w : rect.left;
+  const maxLeft = Math.max(VIEWPORT_MARGIN, window.innerWidth - w - VIEWPORT_MARGIN);
+  const left = Math.min(Math.max(VIEWPORT_MARGIN, rawLeft), maxLeft);
 
-  // 下方放不下时翻到触发器上方：输入框工具条贴着视口底部，
-  // 不翻的话面板会盖住输入区（虽然夹在视口内，但观感很差）。
   const spaceBelow = window.innerHeight - rect.bottom - offset - VIEWPORT_MARGIN;
   const spaceAbove = rect.top - offset - VIEWPORT_MARGIN;
-  const below = rect.bottom + offset;
-  const above = rect.top - estimatedHeight - offset;
-  const top = spaceBelow >= estimatedHeight || spaceAbove < spaceBelow ? below : above;
+  const height = Math.min(preferredHeight, panelMaxHeight());
+  // 下方放得下（或上方更挤）就向下，否则贴着触发器向上长。
+  const below = spaceBelow >= height || spaceAbove < spaceBelow;
+  const maxHeight = Math.max(MIN_PANEL_HEIGHT, Math.min(height, below ? spaceBelow : spaceAbove));
 
-  return {
-    left: Math.min(Math.max(VIEWPORT_MARGIN, rawLeft), maxLeft),
-    top: Math.min(Math.max(VIEWPORT_MARGIN, top), Math.max(VIEWPORT_MARGIN, window.innerHeight - estimatedHeight - VIEWPORT_MARGIN)),
-  };
+  return below
+    ? { left, width: w, top: rect.bottom + offset, maxHeight }
+    : { left, width: w, bottom: window.innerHeight - rect.top + offset, maxHeight };
 }
 
 /** 浮层在打开期间跟随触发元素：滚动/缩放时重新定位，而不是让面板飘走。 */
@@ -228,9 +247,15 @@ export function Menu({ open, anchor, items, onClose, width = 176, align = "end" 
 
   if (!open || !pos) return null;
   return createPortal(
-    <div ref={ref} role="menu" {...{ [PORTAL_ATTR]: "" }} style={{ left: pos.left, top: pos.top, width }} className={POPUP_PANEL}>
-      {/* 命令列表可能几十条：限高 + 滚动，别让菜单冲出视口。 */}
-      <div className="dsh-scroll max-h-[min(60vh,420px)] overflow-y-auto">
+    <div
+      ref={ref}
+      role="menu"
+      {...{ [PORTAL_ATTR]: "" }}
+      style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxHeight }}
+      className={`${POPUP_PANEL} flex flex-col`}
+    >
+      {/* 命令列表可能几十条：高度由定位层给出上限，内部滚动。 */}
+      <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto">
         {items.map((item, index) => (
           <Fragment key={item.id}>
             {item.group && item.group !== items[index - 1]?.group && (
@@ -250,7 +275,12 @@ export function Menu({ open, anchor, items, onClose, width = 176, align = "end" 
             >
               {item.icon}
               <span className="min-w-0 flex-1 truncate">{item.label}</span>
-              {item.hint && <span className="shrink-0 pl-2 font-mono text-[10px] text-faint">{item.hint}</span>}
+              {/* 参数提示可能很长（[low|medium|high] [--fix]…）：限宽截断，别把标签挤没。 */}
+              {item.hint && (
+                <span className="max-w-[42%] shrink-0 truncate pl-2 font-mono text-[10px] text-faint" title={typeof item.hint === "string" ? item.hint : undefined}>
+                  {item.hint}
+                </span>
+              )}
             </button>
           </Fragment>
         ))}

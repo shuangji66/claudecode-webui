@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { baseName, conversationTitle, permissionLabel, relativeTime, sessionTitle, stateLabel } from "./labels";
+import {
+  baseName,
+  conversationTitle,
+  permissionLabel,
+  relativeTime,
+  sessionTitle,
+  stateLabel,
+  commandDescription,
+} from "./labels";
 import type { Item } from "./model";
 
 describe("labels", () => {
@@ -48,5 +56,17 @@ describe("labels (en)", () => {
     expect(permissionLabel("acceptEdits", "en")).toBe("Accept edits");
     expect(stateLabel("busy", "en")).toBe("Running");
     expect(sessionTitle("/data/proj", [], "en")).toBe("proj");
+  });
+});
+
+describe("commandDescription", () => {
+  it("常用命令给中文短说明", () => {
+    expect(commandDescription("compact", "Compact the conversation", "zh")).toBe("压缩对话上下文");
+    expect(commandDescription("model", undefined, "zh")).toBe("切换本会话模型");
+  });
+
+  it("没收录的命令回落 CLI 描述；英文环境直接用原文", () => {
+    expect(commandDescription("deep-research", "Deep research harness", "zh")).toBe("Deep research harness");
+    expect(commandDescription("compact", "Compact the conversation", "en")).toBe("Compact the conversation");
   });
 });

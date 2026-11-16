@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { CommandInfo, WireAttachment } from "../../transport/types";
 import { useAppStore } from "../../store/useAppStore";
-import { permissionLabel } from "../../lib/labels";
+import { commandDescription, permissionLabel } from "../../lib/labels";
 import { pickFnosFiles } from "../../lib/fnos";
 import { useLocale, useT } from "../../lib/i18n";
 import type { ModelOption } from "../../lib/providerForm";
@@ -196,18 +196,21 @@ export function Composer({
     },
   ];
 
-  const commandItems: MenuItem[] = commands.map((c) => ({
-    id: `cmd:${c.name}`,
-    group: t("指令", "Commands"),
-    label: (
-      <span className="flex min-w-0 items-baseline gap-1.5">
-        <span className="font-mono text-ink">/{c.name}</span>
-        {c.description && <span className="truncate text-[10.5px] text-faint">{c.description}</span>}
-      </span>
-    ),
-    hint: c.argumentHint,
-    onSelect: () => insertAtCaret(`/${c.name} `),
-  }));
+  const commandItems: MenuItem[] = commands.map((c) => {
+    const desc = commandDescription(c.name, c.description, locale);
+    return {
+      id: `cmd:${c.name}`,
+      group: t("指令", "Commands"),
+      label: (
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="shrink-0 font-mono text-ink">/{c.name}</span>
+          {desc && <span className="min-w-0 truncate text-[10.5px] text-faint">{desc}</span>}
+        </span>
+      ),
+      hint: c.argumentHint,
+      onSelect: () => insertAtCaret(`/${c.name} `),
+    };
+  });
 
   const hint = starting
     ? t("正在启动 Claude…", "Starting Claude…")
@@ -322,7 +325,7 @@ export function Composer({
             anchor={menuAnchor}
             items={[...addItems, ...commandItems]}
             onClose={() => setMenuAnchor(null)}
-            width={264}
+            width={320}
             align="start"
           />
 
