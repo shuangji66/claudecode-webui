@@ -65,6 +65,12 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - `Start` 内部先 `go readLoop()` 再发 `initialize`，**顺序不能反**。
 - `request()` 用 `pending[requestID] + chan` 做请求/响应关联，超时后清理。
 - `handleLine` 中遇到 `control_request` 且非 `can_use_tool` → 立刻回 `Unsupported`。
+- **读循环结束必须看 `sc.Err()`**：`bufio.Scanner` 返回 false 也可能是单行超过
+  `maxLineBytes`（8MB），不检查就会静默 close——前端只看到一条 `closed`，不知道原因。
+  现在会先抛一条 `error` 事件再关会话。
+- **stdout 上的非 JSON 行转成 `system/stdout` 文本**，不要原样塞进 `cli` 事件：
+  `json.RawMessage` 遇到非法 JSON 会让 `json.Marshal` 失败，最后变成一条
+  「json: error calling MarshalJSON」的错误提示，原文反而丢了。
 - 事件出口只有一个 `emit`，由 `manager` 接到 `hub`。**不要在 session 里直接写 WS**。
 - `PermissionReply` 支持 `UpdatedInput`（编辑后运行）与 `UpdatedPermissions`
   （始终允许 / 切模式），两者都要透传到 `control_response`。

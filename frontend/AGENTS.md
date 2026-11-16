@@ -151,10 +151,10 @@ src/
 | kind | 来源 | 渲染 |
 |---|---|---|
 | `user` | 本地插入 / CLI 回显去重 | 右对齐浅色气泡 |
-| `assistant` | `assistant.content[].text` 或 `stream_event` 增量 | 左对齐气泡 + Markdown，`streaming` 时显示光标 |
+| `assistant` | `assistant.content[].text`（一条消息可有多个 text 块，各自成段）或 `stream_event` 增量 | 左对齐气泡 + Markdown（标题/列表/表格/引用/链接/代码块），`streaming` 时显示光标 |
 | `thinking` | `assistant.content[].thinking` | 折叠块 |
 | `tool` | `assistant.content[].tool_use` + `user.content[].tool_result` | 按工具名分派卡片 |
-| `result` | `result` 消息 | 耗时/被拒数（不显示费用） |
+| `result` | `result` 消息 | 耗时/被拒数（不显示费用）；出错时显示 `result.result` 里的原因与 subtype |
 | `system` | `system`（非 init/status） | 等宽小字，需清洗 ANSI |
 | `error` | 后端 `error` 事件 / 连接关闭 | 红色提示 |
 

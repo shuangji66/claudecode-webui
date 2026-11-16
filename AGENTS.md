@@ -203,10 +203,18 @@ hub ── manager ── session ── process ── claude (NDJSON)
 ### 4.7 前端侧
 
 - `--include-partial-messages` 会**先给逐字增量、再给完整消息**。两套都追加会导致
-  每句话显示两遍；`lib/normalize.ts` 的做法是「替换流式气泡」。
+  每句话显示两遍；`lib/normalize.ts` 的做法是「摘掉流式气泡后按内容块顺序重建」——
+  一条消息里的多个 text 块各自成段，thinking 排在正文之前（曾经只取第一个 text 块，
+  还把 thinking 挤到答案下面）。
 - 工具集会随 CLI 版本漂移（实测 2.1.325 的 API 请求只带 12 个工具，且有
   `ToolSearch` / `DeferredToolPlaceholder`）。**必须保留 `GenericCard` 兜底**，
   禁止硬编码工具清单。
+- **`result` 的失败原因必须显示**：CLI 把「API Error: 400 …」「达到最大轮数」放在
+  `result.result` / `result.errors` 里。成功回合的 `result` 与最后一条 assistant 正文重复，
+  只在 `is_error` 时渲染，别整段照抄。
+- **tool_result 里的图片不能当文本渲染**：base64 塞进 `<pre>` 会糊满整屏。
+  `textOfContent` 只给 `[图片 image/png，约 12 KB]` 占位，图片本体进 `ToolItem.images`
+  由卡片画缩略图（只放行 png/jpeg/gif/webp，单张 ≤ 4MB）。
 - `Edit` 的 diff 优先取 `tool_use_result.structuredPatch`，没有才退回 `old_string/new_string`。
 - 浏览器无法给 WebSocket 设自定义头，鉴权只能走 `?token=`。
 - 主题用 `<html data-theme>` 切换，Tailwind 的 `dark:` 已绑定到该属性；不要再写
@@ -289,7 +297,7 @@ cd frontend && npx tsc --noEmit
 - [ ] 新增工具卡片是否注册进 `ToolCardHost`，且未删除兜底？
 - [ ] 流式路径是否仍满足「替换而非追加」？
 - [ ] 对话恢复是否用稳定 UUID `--resume`？空对话/归档/删除是否会被误恢复？
-- [ ] 转录回放是否过滤 sidechain/meta，并保留原始时间戳？
+- [ ] 转录回放是否过滤 sidechain/meta，并保留原始时间戳？被截断（20k 行 / 16MB）时有没有提示？
 - [ ] 新增右侧栏路由是否过了 `authorizedCwd` / 路径围栏？raw 预览是否仍在白名单？
 - [ ] 右侧栏标签切走是否只隐藏不卸载（终端 PTY 不能被切标签杀掉）？Git 是否仍只 pull？
 - [ ] 终端是否仍走二进制帧、多开时每个标签各自一条 WS？
