@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { applyCLI, appendUser, __resetIds, stripAnsi, textOfContent } from "./normalize";
+import { applyCLI, appendUser, __resetIds, isLocalCommandEcho, stripAnsi, textOfContent } from "./normalize";
 import type { Item } from "./model";
 
 function assistantText(text: string) {
@@ -206,5 +206,54 @@ describe("applyCLI timestamp", () => {
   it("回放转录时可保留原始时间", () => {
     const items = applyCLI([], { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } }, 123456);
     expect(items[0]?.ts).toBe(123456);
+  });
+});
+
+// CLI 把本地斜杠命令（/model、/clear）的输入与输出也当成 user 消息写进会话流。
+// 界面里它们会变成用户气泡，看起来像用户自己说了句 "Set model to ..."。
+describe("本地命令回显", () => {
+  beforeEach(() => __resetIds());
+
+  const userText = (text: string) => ({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
+
+  it("整条丢弃 /model 的 stdout", () => {
+    const items = applyCLI([], userText("<local-command-stdout>Set model to `cn:glm-5.3-flash`</local-command-stdout>"));
+    expect(items).toHaveLength(0);
+  });
+
+  it("整条丢弃斜杠命令包装（command-name / message / args）", () => {
+    const wrapped = "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>";
+    expect(isLocalCommandEcho(wrapped)).toBe(true);
+    expect(applyCLI([], userText(wrapped))).toHaveLength(0);
+  });
+
+  it("字符串形态的 content 同样过滤", () => {
+    const items = applyCLI([], { type: "user", message: { role: "user", content: "<local-command-stderr>boom</local-command-stderr>" } });
+    expect(items).toHaveLength(0);
+  });
+
+  it("用户正文里提到标签时不能误删", () => {
+    const text = "帮我看下 <local-command-stdout> 这个标签是谁写的";
+    expect(isLocalCommandEcho(text)).toBe(false);
+    const items = applyCLI([], userText(text));
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "user", text });
+  });
+
+  it("标签后面还有自己的话时保留", () => {
+    const text = "<command-name>/model</command-name>\n这条是我想问的";
+    expect(isLocalCommandEcho(text)).toBe(false);
+    expect(applyCLI([], userText(text))).toHaveLength(1);
+  });
+
+  it("system 通道的命令回显也丢弃", () => {
+    const items = applyCLI([], { type: "system", subtype: "local_command", content: "<local-command-stdout>Set model to `x`</local-command-stdout>" });
+    expect(items).toHaveLength(0);
+  });
+
+  it("普通文本不命中", () => {
+    for (const text of ["", "hello", "<div>hi</div>", "Set model to `x`"]) {
+      expect(isLocalCommandEcho(text)).toBe(false);
+    }
   });
 });

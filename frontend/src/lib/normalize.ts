@@ -83,6 +83,23 @@ export function applyCLI(items: Item[], msg: unknown, at = Date.now()): Item[] {
   }
 }
 
+// localCommandEchoRE 匹配「本地斜杠命令的回显」：claude CLI 把 /model、/clear 这类
+// 本地命令的输入与输出当作 user 消息写进会话流，界面里会把它们渲染成用户气泡
+// （例如 `<local-command-stdout>Set model to `x`</local-command-stdout>`）。
+// 这些不是用户说的话，切模型在设置页已经能表达，所以整条丢弃。
+//
+// 只认「整条消息就是这些标签」的形态：用户正文里恰好提到 `<command-name>` 时，
+// 前后还有自己的文字，不会命中。
+const localCommandEchoRE =
+  /^<(local-command-(?:stdout|stderr)|local-command-caveat|command-name|command-message|command-args)[\s\S]*<\/?(?:local-command-(?:stdout|stderr|caveat)|command-(?:name|message|args))>\s*$/;
+
+/** 判断一条文本是否是本地斜杠命令的回显（应整条忽略）。 */
+export function isLocalCommandEcho(text: string): boolean {
+  const t = text.trim();
+  if (!t.startsWith("<")) return false;
+  return localCommandEchoRE.test(t);
+}
+
 function applyStreamEvent(items: Item[], m: Raw, at: number): Item[] {
   const ev = asRecord(m.event);
   if (!ev || ev.type !== "content_block_delta") return items;
@@ -188,6 +205,10 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
     return out;
   }
 
+  // 本地命令回显（/model 之类的 stdout、斜杠命令包装）整条丢弃：
+  // 它不是用户说的话，也不是模型输出，渲染成气泡只会污染会话。
+  if (isLocalCommandEcho(textOfContent(content))) return items;
+
   // 附件消息会被 CLI 原样回显（图片/PDF 是 image/document block，文本文件是
   // 额外的 text block）。本地气泡只显示提示词与文件名，不能按文本内容精确
   // 去重，否则会出现两条用户消息。
@@ -244,6 +265,8 @@ function applyResult(items: Item[], m: Raw, at: number): Item[] {
 function applySystem(items: Item[], m: Raw, at: number): Item[] {
   // init 只用于填充顶栏元信息，不进消息流；status 同理。
   if (m.subtype === "init" || m.subtype === "status") return items;
+  // 本地命令回显也可能走 system 通道，同样整条丢弃。
+  if (typeof m.content === "string" && isLocalCommandEcho(m.content)) return items;
   // hooks 输出等以 system + content 字符串形式上送，需要展示（并清洗 ANSI）。
   if (typeof m.content === "string" && m.content) {
     return [

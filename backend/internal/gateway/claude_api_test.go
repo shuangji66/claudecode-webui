@@ -171,6 +171,34 @@ func TestClaudeDeployDisabledReturns503(t *testing.T) {
 	}
 }
 
+func TestClaudeStatusReportsExternalBinary(t *testing.T) {
+	srv := withDeploy(t, &fakeDeploy{status: claudebin.Status{Installed: []claudebin.Version{}}})
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, authedRequest(http.MethodGet, "/api/claude/status", ""))
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("解析: %v", err)
+	}
+	// fakeMgr.Binary() 返回 /opt/cc/claude，不在托管版本列表里 → 视为外部覆盖。
+	if body["external_bin"] != "/opt/cc/claude" {
+		t.Fatalf("external_bin = %v", body["external_bin"])
+	}
+}
+
+// 用 CCWEB_CLAUDE_BIN 的机器不该被要求装托管版本。
+func TestInfoTreatsExternalBinaryAsInstalled(t *testing.T) {
+	srv := withDeploy(t, &fakeDeploy{status: claudebin.Status{}})
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, authedRequest(http.MethodGet, "/api/info", ""))
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("解析: %v", err)
+	}
+	if body["claude_installed"] != true {
+		t.Fatalf("外部覆盖应视为已安装，实际 %v", body["claude_installed"])
+	}
+}
+
 func TestInfoOmitsClaudeFieldsWhenDeployDisabled(t *testing.T) {
 	srv, _ := newTestServer(t, "secret")
 	rec := httptest.NewRecorder()

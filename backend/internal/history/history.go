@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -110,6 +111,12 @@ func summarize(path, project string) Session {
 		}
 		switch l.Type {
 		case "user", "assistant":
+			// 本地斜杠命令的回显（/model 的 `<local-command-stdout>`、`<command-name>`
+			// 包装）也被写成 user 行。它们既不该计数，更不能当会话标题——否则列表里
+			// 会出现一条叫 "Set model to `x`" 的对话。
+			if l.Type == "user" && isLocalCommandEcho(extractText(l.Message.Content)) {
+				continue
+			}
 			s.Messages++
 			if l.Type == "user" && !titleDone {
 				if txt := extractText(l.Message.Content); txt != "" {
@@ -151,6 +158,19 @@ func extractText(raw json.RawMessage) string {
 		return strings.TrimSpace(sb.String())
 	}
 	return ""
+}
+
+// localCommandEchoRE 与前端 lib/normalize.ts 的规则保持一致：整条消息只由
+// `<local-command-*>` / `<command-*>` 标签组成时才算本地命令回显。
+var localCommandEchoRE = regexp.MustCompile(`(?s)^<(local-command-(?:stdout|stderr|caveat)|command-(?:name|message|args))[\s\S]*</(local-command-(?:stdout|stderr|caveat)|command-(?:name|message|args))>$`)
+
+// isLocalCommandEcho 判断一条 user 文本是否是本地斜杠命令的回显。
+func isLocalCommandEcho(text string) bool {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "<") {
+		return false
+	}
+	return localCommandEchoRE.MatchString(t)
 }
 
 func truncate(s string, n int) string {

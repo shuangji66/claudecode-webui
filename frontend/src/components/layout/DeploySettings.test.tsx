@@ -59,6 +59,15 @@ describe("DeploySettings", () => {
     await waitFor(() => expect(setClaudeActive).toHaveBeenCalledWith("2.1.311"));
   });
 
+  it("使用 CCWEB_CLAUDE_BIN 时提示外部二进制，且不再催安装", () => {
+    useAppStore.setState({
+      claude: { ...STATUS, installed: [], active: "", latest: "", external_bin: "/opt/cc/claude" },
+    });
+    render(<DeploySettings />);
+    expect(screen.getByText("/opt/cc/claude")).toBeTruthy();
+    expect(screen.queryByText(/尚未安装任何版本/)).toBeNull();
+  });
+
   it("未安装时给出醒目提示", () => {
     useAppStore.setState({ claude: { ...STATUS, installed: [], active: "", latest: "" } });
     render(<DeploySettings />);

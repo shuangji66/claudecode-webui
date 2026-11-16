@@ -347,6 +347,8 @@ export interface ClaudeStatus {
   latest: string;
   update_available: boolean;
   job: ClaudeJob | null;
+  /** 非空表示当前实际在用 CCWEB_CLAUDE_BIN 指定的外部二进制（不参与托管安装）。 */
+  external_bin?: string;
 }
 
 /** /api/claude/check 的返回。 */

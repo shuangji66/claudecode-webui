@@ -177,3 +177,51 @@ func TestLoadTranscriptKeepsTail(t *testing.T) {
 		t.Fatalf("应保留最后一行: %s", tr.Lines)
 	}
 }
+
+// /model 这类本地命令的回显会以 user 行落盘：不能当标题，也不该计入消息数。
+func TestListSkipsLocalCommandEcho(t *testing.T) {
+	root := t.TempDir()
+	writeJSONL(t, filepath.Join(root, "-tmp-work", "cmd.jsonl"),
+		`{"type":"user","cwd":"/tmp/work","sessionId":"cmd","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"<local-command-stdout>Set model to `+"`cn:glm-5.3-flash`"+`</local-command-stdout>"}]}}`,
+		`{"type":"user","cwd":"/tmp/work","sessionId":"cmd","timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":"帮我看看这个报错"}}`,
+		`{"type":"assistant","cwd":"/tmp/work","sessionId":"cmd","timestamp":"2026-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"好的"}]}}`,
+	)
+	got, err := List(root)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("应只有一条会话: %v", got)
+	}
+	if got[0].Title != "帮我看看这个报错" {
+		t.Fatalf("标题应跳过本地命令回显，实际 %q", got[0].Title)
+	}
+	if got[0].Messages != 2 {
+		t.Fatalf("消息数应为 2（命令回显不计），实际 %d", got[0].Messages)
+	}
+}
+
+func TestIsLocalCommandEcho(t *testing.T) {
+	yes := []string{
+		"<local-command-stdout>Set model to `x`</local-command-stdout>",
+		"<local-command-stderr>boom</local-command-stderr>",
+		"<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>",
+	}
+	no := []string{
+		"",
+		"hello",
+		"<div>hi</div>",
+		"帮我看下 <local-command-stdout> 这个标签",
+		"<command-name>/model</command-name>\n这条是我想问的",
+	}
+	for _, v := range yes {
+		if !isLocalCommandEcho(v) {
+			t.Fatalf("应判定为命令回显: %q", v)
+		}
+	}
+	for _, v := range no {
+		if isLocalCommandEcho(v) {
+			t.Fatalf("不应判定为命令回显: %q", v)
+		}
+	}
+}

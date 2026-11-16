@@ -32,12 +32,33 @@ func (s *Server) requireDeploy(w http.ResponseWriter) bool {
 	return true
 }
 
+// externalClaudeBin 返回「当前实际使用、但不属于托管版本」的 claude 路径。
+//
+// CCWEB_CLAUDE_BIN 是显式运维覆盖（优先级最高），这类部署不需要托管安装；
+// 前端要据此区分「确实没装」和「用外部二进制」，否则会误弹安装引导。
+func (s *Server) externalClaudeBin() string {
+	bin := s.d.Manager.Binary()
+	if bin == "" {
+		return ""
+	}
+	for _, v := range s.d.Claude.Status().Installed {
+		if v.Path == bin {
+			return ""
+		}
+	}
+	return bin
+}
+
 // handleClaudeStatus 返回本机平台、已安装版本、生效版本与安装进度。
 func (s *Server) handleClaudeStatus(w http.ResponseWriter, r *http.Request) {
 	if !s.requireDeploy(w) {
 		return
 	}
-	writeJSON(w, s.d.Claude.Status())
+	// 嵌入 Status 再补一个字段：托管状态本身不该知道外部覆盖的存在。
+	writeJSON(w, struct {
+		claudebin.Status
+		ExternalBin string `json:"external_bin"`
+	}{Status: s.d.Claude.Status(), ExternalBin: s.externalClaudeBin()})
 }
 
 // handleClaudeCheck 查询 registry 最新版本与近期版本列表。

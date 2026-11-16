@@ -48,7 +48,9 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.d.Claude != nil {
 		st := s.d.Claude.Status()
-		body["claude_installed"] = len(st.Installed) > 0
+		// 有外部覆盖（CCWEB_CLAUDE_BIN）时也算"可用"：否则界面会要求一个
+		// 并不需要的托管安装。
+		body["claude_installed"] = len(st.Installed) > 0 || s.externalClaudeBin() != ""
 		body["claude_active"] = st.Active
 	}
 	writeJSON(w, body)
