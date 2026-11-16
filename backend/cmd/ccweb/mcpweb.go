@@ -1,0 +1,286 @@
+// 内置 MCP 搜索服务：`ccweb mcp-web`。
+//
+// 为什么是 MCP 而不是 Claude Code 的 plugin：claude 的 plugin 要走 marketplace 与
+// `claude plugin` 安装，本项目没有那条链路；而 MCP 是本项目已经管起来的东西
+// （设置 → MCP），一个子命令 + 一条配置就能让会话多出 web_search / web_fetch。
+//
+// 为什么用本二进制当命令：不引入任何 Node 依赖，且配置（基地址/密钥）跟主进程
+// 读同一份 settings.json——每次调用现读，改了设置不用重开会话（进程还是同一个）。
+//
+// 协议：MCP over stdio，换行分隔的 JSON-RPC 2.0。**stdout 只能放协议帧**，
+// 任何日志都必须走 stderr，否则 claude 侧会解析失败。
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"ccweb/backend/internal/search"
+	"ccweb/backend/internal/settings"
+)
+
+// 工具名与 claude 侧的最终名字无关（会是 mcp__<server>__web_search），
+// 但保持和 DSH 一致，便于用户对照文档。
+const (
+	toolWebSearch = "web_search"
+	toolWebFetch  = "web_fetch"
+)
+
+// 输出上限：搜索结果进的是主对话上下文，塞满会把上下文吃掉。
+const (
+	maxSearchText = 6000
+	maxFetchText  = 40000
+	maxSnippet    = 400
+)
+
+type rpcRequest struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+type rpcError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type rpcResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Result  any             `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
+}
+
+// toolContent 是 tools/call 的返回体。
+type toolContent struct {
+	Content []map[string]any `json:"content"`
+	IsError bool             `json:"isError,omitempty"`
+}
+
+// settingsFile 返回主进程那份 settings.json 的路径。
+//
+// 注册 MCP 时会传 CCWEB_DATA_DIR（数据目录），这里按同样的默认规则拼出来；
+// 显式给 CCWEB_SETTINGS_FILE 时优先（自建部署改过路径的情况）。
+func settingsFile() string {
+	if p := strings.TrimSpace(os.Getenv("CCWEB_SETTINGS_FILE")); p != "" {
+		return p
+	}
+	dir := strings.TrimSpace(os.Getenv("CCWEB_DATA_DIR"))
+	if dir == "" {
+		// 兜底：和 config.defaultDataDir 一样的相对位置（当前目录下的 data/）。
+		dir = "data"
+	}
+	return dir + string(os.PathSeparator) + "settings.json"
+}
+
+// loadSearchSettings 每次调用现读，保证界面改完立即生效。
+func loadSearchSettings() (base, key string, count int, enabled bool, err error) {
+	store, err := settings.Open(settingsFile())
+	if err != nil {
+		return "", "", 0, false, err
+	}
+	cur := store.Get()
+	return cur.SearchBaseURL, cur.SearchAPIKey, cur.SearchCount, cur.SearchEnabled, nil
+}
+
+// runMCPWeb 是子命令入口：读 stdin 的 JSON-RPC 帧，往 stdout 写回包。
+func runMCPWeb() int {
+	in := bufio.NewScanner(os.Stdin)
+	in.Buffer(make([]byte, 0, 64<<10), 4<<20)
+	out := bufio.NewWriter(os.Stdout)
+	defer func() { _ = out.Flush() }()
+
+	for in.Scan() {
+		line := strings.TrimSpace(in.Text())
+		if line == "" {
+			continue
+		}
+		var req rpcRequest
+		if err := json.Unmarshal([]byte(line), &req); err != nil {
+			writeRPC(out, rpcResponse{JSONRPC: "2.0", Error: &rpcError{Code: -32700, Message: "解析失败: " + err.Error()}})
+			continue
+		}
+		resp, hasResp := handleRPC(req)
+		if hasResp {
+			writeRPC(out, resp)
+		}
+	}
+	if err := in.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "ccweb mcp-web: 读取 stdin: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func writeRPC(w io.Writer, resp rpcResponse) {
+	if resp.JSONRPC == "" {
+		resp.JSONRPC = "2.0"
+	}
+	b, err := json.Marshal(resp)
+	if err != nil {
+		return
+	}
+	_, _ = w.Write(append(b, '\n'))
+	if f, ok := w.(*bufio.Writer); ok {
+		_ = f.Flush()
+	}
+}
+
+// handleRPC 分发一条请求；hasResp=false 表示这是通知，不需要回包。
+func handleRPC(req rpcRequest) (rpcResponse, bool) {
+	// 通知：initialized / cancelled 之类，没有 id，也不允许回包。
+	isNotification := len(req.ID) == 0
+	id := req.ID
+
+	switch req.Method {
+	case "initialize":
+		return rpcResponse{ID: id, Result: map[string]any{
+			"protocolVersion": "2025-06-18",
+			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
+			"serverInfo":      map[string]any{"name": "ccweb-web", "version": version},
+		}}, true
+	case "notifications/initialized", "initialized", "notifications/cancelled":
+		return rpcResponse{}, false
+	case "ping":
+		if isNotification {
+			return rpcResponse{}, false
+		}
+		return rpcResponse{ID: id, Result: map[string]any{}}, true
+	case "tools/list":
+		return rpcResponse{ID: id, Result: map[string]any{"tools": toolDefs()}}, true
+	case "tools/call":
+		var params struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		_ = json.Unmarshal(req.Params, &params)
+		return rpcResponse{ID: id, Result: callTool(params.Name, params.Arguments)}, true
+	default:
+		if isNotification {
+			return rpcResponse{}, false
+		}
+		return rpcResponse{ID: id, Error: &rpcError{Code: -32601, Message: "未知方法: " + req.Method}}, true
+	}
+}
+
+func toolDefs() []map[string]any {
+	return []map[string]any{
+		{
+			"name": toolWebSearch,
+			"description": "搜索互联网并返回结构化结果（标题 + 链接 + 摘要），走 DeepSeek Search API。" +
+				"需要正文时再用 web_fetch 打开具体链接。",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query":       map[string]any{"type": "string", "description": "搜索词"},
+					"max_results": map[string]any{"type": "integer", "minimum": 1, "maximum": 50, "description": "返回条数，默认用设置里的值"},
+				},
+				"required":             []string{"query"},
+				"additionalProperties": false,
+			},
+		},
+		{
+			"name":        toolWebFetch,
+			"description": "抓取一个网页并返回 Markdown 正文（DeepSeek Fetch API），超长会被截断。",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"url": map[string]any{"type": "string", "description": "http(s) 地址"},
+				},
+				"required":             []string{"url"},
+				"additionalProperties": false,
+			},
+		},
+	}
+}
+
+// callTool 执行一次工具调用。错误一律**作为工具结果**返回（isError），
+// 而不是 JSON-RPC error：模型看得见原因，才能自己改参数或换思路。
+func callTool(name string, rawArgs json.RawMessage) toolContent {
+	var args struct {
+		Query      string `json:"query"`
+		MaxResults int    `json:"max_results"`
+		URL        string `json:"url"`
+	}
+	if len(rawArgs) > 0 {
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return errResult("参数解析失败: " + err.Error())
+		}
+	}
+
+	base, key, count, enabled, err := loadSearchSettings()
+	if err != nil {
+		return errResult("读取设置失败: " + err.Error())
+	}
+	if !enabled {
+		return errResult("内置搜索未启用：请在「设置 → MCP → 内置搜索」里打开并填写密钥")
+	}
+
+	switch name {
+	case toolWebSearch:
+		if args.MaxResults > 0 && args.MaxResults < count {
+			count = args.MaxResults
+		}
+		results, err := search.Search(context.Background(), base, key, args.Query, count)
+		if err != nil {
+			return errResult(err.Error())
+		}
+		return okResult(formatResults(args.Query, results))
+	case toolWebFetch:
+		md, err := search.Fetch(context.Background(), base, key, args.URL)
+		if err != nil {
+			return errResult(err.Error())
+		}
+		return okResult(truncate(md, maxFetchText, "\n\n…（已截断，原页面更长）"))
+	default:
+		return errResult("未知工具: " + name)
+	}
+}
+
+func okResult(text string) toolContent {
+	return toolContent{Content: []map[string]any{{"type": "text", "text": text}}}
+}
+
+func errResult(msg string) toolContent {
+	return toolContent{Content: []map[string]any{{"type": "text", "text": msg}}, IsError: true}
+}
+
+// formatResults 把结果排成模型好读的紧凑列表；空结果也要明说。
+func formatResults(query string, results []search.Result) string {
+	if len(results) == 0 {
+		return fmt.Sprintf("没有找到结果（查询：%s）。可以换个说法，或用 web_fetch 直接打开已知链接。", strings.TrimSpace(query))
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "查询：%s，共 %d 条结果\n", strings.TrimSpace(query), len(results))
+	for i, r := range results {
+		fmt.Fprintf(&b, "\n%d. %s\n   %s\n", i+1, strings.TrimSpace(r.Title), r.URL)
+		if d := strings.TrimSpace(r.Date); d != "" {
+			fmt.Fprintf(&b, "   日期：%s\n", d)
+		}
+		// summary 是模型向的摘录，snippet 是展示向；两个都有就都带上（各自截断）。
+		if s := strings.TrimSpace(r.Summary); s != "" {
+			fmt.Fprintf(&b, "   摘要：%s\n", truncate(s, maxSnippet, "…"))
+		} else if s := strings.TrimSpace(r.Snippet); s != "" {
+			fmt.Fprintf(&b, "   摘要：%s\n", truncate(s, maxSnippet, "…"))
+		}
+	}
+	return truncate(b.String(), maxSearchText, "\n…（结果过多，已截断）")
+}
+
+// truncate 按 rune 截断，避免把 UTF-8 切坏。
+func truncate(s string, limit int, suffix string) string {
+	if limit <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return string(r[:limit]) + suffix
+}

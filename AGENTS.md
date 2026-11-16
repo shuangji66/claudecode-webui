@@ -345,6 +345,28 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 服务名会成为工具前缀 `mcp__<名字>__<工具>`，所以名字只允许 `[A-Za-z0-9._-]`；工具卡片
   仍然靠 `GenericCard` 兜底渲染，不要为某个 server 写专用卡片。
 
+### 4.12 内置搜索（`internal/search` + `ccweb mcp-web`）
+
+- **走 DeepSeek 的 Search / Fetch API，一次 HTTP，不花模型回合**：`POST {base}/search`
+  `{query,count,need_content:false}` → `results[]`（title/url/snippet/summary/date）；
+  `POST {base}/fetch {url}` → 页面 Markdown。base 默认 `https://api.deepseek.com/v1/tools`，
+  可填自建网关的完整前缀（含 `/v1/tools`，不含 `/search`）。
+- **密钥与对话密钥分开**（`search_api_key`）：搜索按次计费，不能默认复用对话密钥。
+  与提供商密钥同样的语义：空串=沿用旧值，清空要 `clear_search_key`。
+- **注册形态是用户级 MCP 服务**：`mcpServers["ccweb-web"] = {command: <本二进制绝对路径>,
+  args: ["mcp-web"], env: {CCWEB_DATA_DIR, CCWEB_SETTINGS_FILE}}`。不要换成
+  Claude Code plugin：那要走 marketplace 与 `claude plugin`，本项目没有这条链。
+- **`ccweb mcp-web` 的 stdout 是协议通道**（换行分隔的 JSON-RPC 2.0）：任何日志只能写
+  stderr，往 stdout 打一行字就会让 claude 侧解析失败。
+- **工具错误作为工具结果返回**（`isError: true` + 可读原因），不要发 JSON-RPC error：
+  模型看不见 JSON-RPC 错误，只能干等；而 401 / 「未启用」这类信息它自己就能改。
+- **每次工具调用现读 settings.json**：界面上改基地址/密钥不用重开会话（子命令进程还在）。
+  但**注册与移除要重开会话**——MCP server 是会话启动时连接的。
+- 搜索输出必须限长（结果 6k 字符 / 抓取 40k 字符，按 rune 截断）：这是直接进主对话
+  上下文的内容，塞满就毁了会话。
+- 内置搜索的 HTTP 请求同样要接 `netproxy`（`search.SetProxySource`），否则「配了代理但
+  搜索不通」。
+
 ## 5. 命令速查
 
 ```bash

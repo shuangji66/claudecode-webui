@@ -45,6 +45,20 @@ const (
 	MaxFontSize     = 20
 )
 
+// 内置搜索（DeepSeek Search / Fetch API）的默认值与边界。
+//
+// 基地址默认指向官方；用户可改成自建网关的完整前缀（含 /v1/tools，不含 /search）。
+// 这里刻意不 import internal/search：settings 只管持久化与校验，不依赖 HTTP 客户端。
+const (
+	// DefaultSearchBaseURL 是 DeepSeek 官方 Search / Fetch API 的基地址。
+	DefaultSearchBaseURL = "https://api.deepseek.com/v1/tools"
+	// DefaultSearchCount 是默认返回条数。
+	DefaultSearchCount = 10
+	// SearchMinCount / SearchMaxCount 与 API 的限制一致（1..50）。
+	SearchMinCount = 1
+	SearchMaxCount = 50
+)
+
 // SupportedLocales / SupportedEfforts 是配置校验白名单。
 var (
 	SupportedLocales = []string{"zh", "en"}
@@ -132,6 +146,13 @@ type Settings struct {
 	// ProxyURL 是派给 claude 子进程的 HTTP/HTTPS/SOCKS5 代理；空表示直连。
 	ProxyURL string `json:"proxy_url"`
 
+	// 内置搜索（DeepSeek Search / Fetch API）。密钥与对话用的密钥分开：
+	// 搜索按次计费，不能指望用户愿意把对话密钥复用出去。
+	SearchBaseURL string `json:"search_base_url"`
+	SearchAPIKey  string `json:"search_api_key"`
+	SearchCount   int    `json:"search_count"`
+	SearchEnabled bool   `json:"search_enabled"`
+
 	// 以下字段已废弃，仅用于把旧配置迁移成 provider；迁移后会被清空。
 	LegacyBaseURL   string `json:"base_url,omitempty"`
 	LegacyAPIKey    string `json:"api_key,omitempty"`
@@ -158,6 +179,12 @@ type Public struct {
 	FontSize int    `json:"font_size"`
 
 	ProxyURL string `json:"proxy_url"`
+
+	SearchBaseURL    string `json:"search_base_url"`
+	SearchAPIKeySet  bool   `json:"search_api_key_set"`
+	SearchAPIKeyMask string `json:"search_api_key_masked"`
+	SearchCount      int    `json:"search_count"`
+	SearchEnabled    bool   `json:"search_enabled"`
 
 	// Path 是配置文件路径，方便在 NAS 上备份。
 	Path string `json:"path"`
@@ -201,6 +228,12 @@ type Patch struct {
 	Locale                    *string          `json:"locale"`
 	FontSize                  *int             `json:"font_size"`
 	ProxyURL                  *string          `json:"proxy_url"`
+
+	SearchBaseURL  *string `json:"search_base_url"`
+	SearchAPIKey   *string `json:"search_api_key"`
+	SearchClearKey *bool   `json:"search_clear_key"`
+	SearchCount    *int    `json:"search_count"`
+	SearchEnabled  *bool   `json:"search_enabled"`
 }
 
 // Store 是带锁的内存态 + 磁盘持久化。
@@ -240,6 +273,14 @@ func normalizePreferences(v *Settings) {
 	}
 	if v.FontSize < MinFontSize || v.FontSize > MaxFontSize {
 		v.FontSize = DefaultFontSize
+	}
+	// 搜索：老配置里没有这两个字段，补默认值而不是留空
+	// （空基地址会让「测试连接」直接报错，用户也看不出该填什么）。
+	if strings.TrimSpace(v.SearchBaseURL) == "" {
+		v.SearchBaseURL = DefaultSearchBaseURL
+	}
+	if v.SearchCount < SearchMinCount || v.SearchCount > SearchMaxCount {
+		v.SearchCount = DefaultSearchCount
 	}
 	if v.ProxyURL != "" {
 		proxy, err := NormalizeProxyURL(v.ProxyURL)
@@ -486,6 +527,11 @@ func (s *Store) Public() Public {
 		Locale:                    cur.Locale,
 		FontSize:                  cur.FontSize,
 		ProxyURL:                  cur.ProxyURL,
+		SearchBaseURL:             cur.SearchBaseURL,
+		SearchAPIKeySet:           cur.SearchAPIKey != "",
+		SearchAPIKeyMask:          Mask(cur.SearchAPIKey),
+		SearchCount:               cur.SearchCount,
+		SearchEnabled:             cur.SearchEnabled,
 		Path:                      s.path,
 	}
 	for _, p := range cur.Providers {
@@ -563,6 +609,38 @@ func (s *Store) Apply(p Patch) (Public, error) {
 			return Public{}, err
 		}
 		next.ProxyURL = proxy
+	}
+	if p.SearchBaseURL != nil {
+		base := strings.TrimSpace(*p.SearchBaseURL)
+		if base == "" {
+			base = DefaultSearchBaseURL
+		}
+		u, err := neturl.Parse(base)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			s.mu.Unlock()
+			return Public{}, fmt.Errorf("settings: 搜索基地址必须是 http(s)")
+		}
+		next.SearchBaseURL = strings.TrimRight(base, "/")
+	}
+	if p.SearchAPIKey != nil {
+		// 空串=沿用旧值（与提供商密钥一致），清空要用 search_clear_key。
+		if key := strings.TrimSpace(*p.SearchAPIKey); key != "" {
+			next.SearchAPIKey = key
+		}
+	}
+	if p.SearchClearKey != nil && *p.SearchClearKey {
+		next.SearchAPIKey = ""
+	}
+	if p.SearchCount != nil {
+		n := *p.SearchCount
+		if n < SearchMinCount || n > SearchMaxCount {
+			s.mu.Unlock()
+			return Public{}, fmt.Errorf("settings: 搜索结果数必须在 %d–%d 之间", SearchMinCount, SearchMaxCount)
+		}
+		next.SearchCount = n
+	}
+	if p.SearchEnabled != nil {
+		next.SearchEnabled = *p.SearchEnabled
 	}
 
 	// 选中的提供商被删掉时清空选择，避免悬空引用。

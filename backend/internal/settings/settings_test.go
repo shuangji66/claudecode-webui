@@ -568,3 +568,71 @@ func mustJSON(t *testing.T, v any) string {
 	}
 	return string(b)
 }
+
+func TestSearchSettingsDefaultsAndPatch(t *testing.T) {
+	s, path := openTemp(t)
+	// 老配置没有这几个字段：补默认值，而不是留空（空基地址会让「测试连接」直接报错）。
+	if got := s.Get().SearchBaseURL; got != DefaultSearchBaseURL {
+		t.Fatalf("默认基地址 = %q", got)
+	}
+	if got := s.Get().SearchCount; got != DefaultSearchCount {
+		t.Fatalf("默认条数 = %d", got)
+	}
+
+	base := "https://gw.example.com/api/v1/tools/"
+	key := "sk-test-1"
+	count := 20
+	enabled := true
+	pub, err := s.Apply(Patch{SearchBaseURL: &base, SearchAPIKey: &key, SearchCount: &count, SearchEnabled: &enabled})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	// 尾斜杠要去掉，否则客户端会拼出 //search。
+	if pub.SearchBaseURL != "https://gw.example.com/api/v1/tools" {
+		t.Fatalf("基地址 = %q", pub.SearchBaseURL)
+	}
+	if !pub.SearchAPIKeySet || pub.SearchAPIKeyMask != Mask(key) {
+		t.Fatalf("密钥脱敏 = %q / set=%v", pub.SearchAPIKeyMask, pub.SearchAPIKeySet)
+	}
+	if pub.SearchCount != 20 || !pub.SearchEnabled {
+		t.Fatalf("条数/开关 = %d/%v", pub.SearchCount, pub.SearchEnabled)
+	}
+	// 落盘后重新打开仍在。
+	re, err := Open(path)
+	if err != nil {
+		t.Fatalf("重新打开: %v", err)
+	}
+	if re.Get().SearchAPIKey != key {
+		t.Fatalf("密钥没落盘")
+	}
+
+	// 空串=沿用旧值，清空必须显式 clear。
+	empty := ""
+	if _, err := s.Apply(Patch{SearchAPIKey: &empty}); err != nil {
+		t.Fatalf("Apply 空密钥: %v", err)
+	}
+	if s.Get().SearchAPIKey != key {
+		t.Fatalf("空串不该清空密钥")
+	}
+	clearTrue := true
+	pub, err = s.Apply(Patch{SearchClearKey: &clearTrue})
+	if err != nil || pub.SearchAPIKeySet {
+		t.Fatalf("clear_search_key 没生效: %v %v", err, pub.SearchAPIKeySet)
+	}
+}
+
+func TestSearchSettingsValidation(t *testing.T) {
+	s, _ := openTemp(t)
+	bad := "ftp://x"
+	if _, err := s.Apply(Patch{SearchBaseURL: &bad}); err == nil {
+		t.Fatalf("非 http(s) 基地址应当报错")
+	}
+	tooMany := 51
+	if _, err := s.Apply(Patch{SearchCount: &tooMany}); err == nil {
+		t.Fatalf("条数 51 应当报错")
+	}
+	zero := 0
+	if _, err := s.Apply(Patch{SearchCount: &zero}); err == nil {
+		t.Fatalf("条数 0 应当报错")
+	}
+}

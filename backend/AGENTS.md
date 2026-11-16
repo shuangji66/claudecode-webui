@@ -26,6 +26,7 @@ internal/settings    持久化配置（第三方端点/密钥/模型）+ 端点�
 internal/claudebin   claude 版本管理：npm 平台包下载、sha512 校验、按版本目录隔离与切换
 internal/skills      技能管理：SKILL.md 的列出/读写/删除（个人 + 项目，synced 只读）
 internal/mcp         MCP 配置：用户级 .claude.json / 项目级 .mcp.json 的读写、停用暂存、连通性探测
+internal/search      DeepSeek Search / Fetch API 客户端（内置搜索用；一次 HTTP，不花模型回合）
 internal/webui       go:embed 前端产物
 ```
 
@@ -205,6 +206,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - MCP 路由：`GET /api/mcp`、`POST /api/mcp`、`DELETE /api/mcp`、`POST /api/mcp/enabled`、
   `POST /api/mcp/probe`。项目级操作先过 `authorizedCwd`；探测只接受已保存的服务名
   （不许把命令塞进请求体，否则等于免审批执行任意命令）。细节见根 AGENTS.md 4.11。
+- 内置搜索路由：`GET /api/search`、`POST /api/search/config|test|attach|detach`。配置走
+  `settings.Patch`（校验与密钥语义不重复实现）；`attach` 只写用户级 MCP 配置，命令用
+  `os.Executable()` 的绝对路径。细节见根 AGENTS.md 4.12。
 - 工作区路由：`GET/POST/DELETE /api/workspaces`、`POST /api/workspaces/current`、
   `POST /api/workspaces/rename`（只改显示名）、`GET /api/fs/list`、`POST /api/fs/mkdir`
   （只接受单层目录名）、`POST /api/fs/access`（写探测）、`POST /api/fs/host-file`（宿主文件

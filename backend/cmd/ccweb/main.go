@@ -27,6 +27,7 @@ import (
 	"ccweb/backend/internal/history"
 	"ccweb/backend/internal/hub"
 	"ccweb/backend/internal/mcp"
+	"ccweb/backend/internal/search"
 	"ccweb/backend/internal/settings"
 	"ccweb/backend/internal/skills"
 	"ccweb/backend/internal/workspace"
@@ -36,6 +37,13 @@ import (
 var version = "dev"
 
 func main() {
+	// 子命令：`ccweb mcp-web` 是内置 MCP 搜索服务（stdio JSON-RPC）。
+	// 必须在装配 HTTP 服务之前拦下——它只读 stdin/stdout，不需要 socket、配置或日志。
+	// 注意 stdout 是协议通道，这个分支里任何输出都必须走 stderr。
+	if len(os.Args) > 1 && os.Args[1] == "mcp-web" {
+		os.Exit(runMCPWeb())
+	}
+
 	logger := log.New(os.Stdout, "[ccweb] ", log.LstdFlags)
 
 	cfg := config.Load(version)
@@ -85,8 +93,9 @@ func main() {
 	settings.SetProxySource(proxyNow)
 	claudebin.SetProxySource(proxyNow)
 	gitctl.SetProxySource(proxyNow)
-	// MCP 探测是面板自己发的出站请求，不会自动继承设置里的代理。
+	// MCP 探测与内置搜索都是面板自己发的出站请求，不会自动继承设置里的代理。
 	mcp.SetProxySource(proxyNow)
+	search.SetProxySource(proxyNow)
 
 	mgr := manager.New(cfg, resolveClaude, store, func(sid string, ev session.Event) {
 		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data})
