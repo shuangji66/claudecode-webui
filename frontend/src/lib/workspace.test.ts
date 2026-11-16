@@ -6,6 +6,7 @@ import {
   groupChanges,
   lineCountLabel,
   parseUnifiedDiff,
+  pickRepo,
   previewKind,
   refsLabel,
   statusOfXY,
@@ -119,5 +120,25 @@ describe("preview/format helpers", () => {
 
   it("refs 去掉 HEAD 前缀", () => {
     expect(refsLabel("HEAD -> main, origin/main")).toBe("main, origin/main");
+  });
+});
+
+describe("pickRepo", () => {
+  const repos = [
+    { path: "alpha", root: "/w/alpha" },
+    { path: "beta", root: "/w/beta" },
+  ];
+
+  it("保持当前选中，只要它还在列表里", () => {
+    expect(pickRepo(repos, "/w/beta")).toBe("/w/beta");
+  });
+
+  it("当前选中已消失时退回工作区根仓库，再否则第一个", () => {
+    expect(pickRepo([...repos, { path: "", root: "/w" }], "/w/gone")).toBe("/w");
+    expect(pickRepo(repos, "/w/gone")).toBe("/w/alpha");
+  });
+
+  it("一个仓库都没有时返回空串", () => {
+    expect(pickRepo([], "/w")).toBe("");
   });
 });

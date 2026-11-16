@@ -44,6 +44,23 @@ func writeGitError(w http.ResponseWriter, err error) {
 	writeErr(w, err.Error(), http.StatusBadRequest)
 }
 
+// handleGitRepos 列出工作区内的 Git 仓库，供 Git 面板的仓库切换用。
+//
+// 返回的 root 是绝对路径，前端直接把它当后续 /api/git/* 的 cwd —— 子目录同样能
+// 过 authorizedCwd 的工作区校验，所以不需要为「选中的仓库」再加一套鉴权参数。
+func (s *Server) handleGitRepos(w http.ResponseWriter, r *http.Request) {
+	cwd, ok := s.gitCwd(w, r)
+	if !ok {
+		return
+	}
+	repos, err := gitctl.FindRepos(cwd, 0)
+	if err != nil {
+		writeGitError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"repos": repos})
+}
+
 // handleGitStatus 返回 Git 面板快照；不是仓库时返回 is_repo=false。
 func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 	cwd, ok := s.gitCwd(w, r)

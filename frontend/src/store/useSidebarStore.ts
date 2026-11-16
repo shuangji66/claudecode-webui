@@ -5,12 +5,14 @@
 
 import { create } from "zustand";
 import { apiFetch } from "../lib/runtime";
+import { pickRepo } from "../lib/workspace";
 import type {
   FsEntry,
   FsFile,
   FsListing,
   GitBranches,
   GitLogEntry,
+  GitRepo,
   GitStatus,
 } from "../transport/types";
 
@@ -24,6 +26,10 @@ interface SidebarState {
   errors: Record<string, string>;
   hidden: boolean;
 
+  /** 工作区里扫到的 Git 仓库（含工作区根本身）。 */
+  repos: GitRepo[];
+  /** 当前选中的仓库绝对路径；空串表示还没选定（面板显示「不是 Git 仓库」）。 */
+  repo: string;
   git: GitStatus | null;
   gitLoading: boolean;
   gitError: string;
@@ -39,6 +45,8 @@ interface SidebarState {
   reloadTree: () => Promise<void>;
   readFile: (path: string) => Promise<FsFile>;
 
+  loadRepos: () => Promise<void>;
+  selectRepo: (root: string) => Promise<void>;
   refreshGit: () => Promise<void>;
   loadBranches: () => Promise<void>;
   loadLog: () => Promise<void>;
@@ -69,6 +77,11 @@ async function postGit(path: string, body: Record<string, unknown>): Promise<voi
   await apiFetch(path, { method: "POST", body: JSON.stringify(body) });
 }
 
+/** Git 请求的 cwd：选中的仓库优先，没有仓库时退回工作区根。 */
+function gitCwd(state: SidebarState): string {
+  return state.repo || state.cwd;
+}
+
 export const useSidebarStore = create<SidebarState>((set, get) => ({
   cwd: "",
   levels: {},
@@ -77,6 +90,8 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   errors: {},
   hidden: false,
 
+  repos: [],
+  repo: "",
   git: null,
   gitLoading: false,
   gitError: "",
@@ -90,12 +105,13 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     if (!cwd) {
       epoch += 1;
       treeEpoch += 1;
-      set({ cwd: "", levels: {}, loading: {}, truncated: {}, errors: {}, git: null, branches: null, log: [] });
+      set({ cwd: "", levels: {}, loading: {}, truncated: {}, errors: {}, repos: [], repo: "", git: null, branches: null, log: [] });
       return;
     }
     if (cwd === get().cwd) {
       // 重新打开侧栏时刷新，而不是把上次的旧树一直挂在那里。
       await get().reloadTree();
+      await get().loadRepos();
       await get().refreshGit();
       return;
     }
@@ -107,6 +123,8 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
       loading: {},
       truncated: {},
       errors: {},
+      repos: [],
+      repo: "",
       git: null,
       gitLoading: true,
       gitError: "",
@@ -116,7 +134,34 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
       logError: "",
       actionError: "",
     });
-    await Promise.all([get().loadDir(""), get().refreshGit(), get().loadBranches()]);
+    // 先扫仓库再拉状态：状态要打在选中的那个仓库上，顺序反了会先请求工作区根。
+    await get().loadDir("");
+    await get().loadRepos();
+    await Promise.all([get().refreshGit(), get().loadBranches()]);
+  },
+
+  loadRepos: async () => {
+    const cwd = get().cwd;
+    if (!cwd) return;
+    const at = epoch;
+    try {
+      const query = new URLSearchParams({ cwd });
+      const payload = await apiFetch<{ repos: GitRepo[] }>(`/api/git/repos?${query.toString()}`);
+      if (at !== epoch || get().cwd !== cwd) return;
+      const repos = payload.repos ?? [];
+      set({ repos, repo: pickRepo(repos, get().repo) });
+    } catch (reason) {
+      if (at !== epoch || get().cwd !== cwd) return;
+      // 扫仓库失败不该让整块面板报错：退回「工作区根」视角，状态接口会给出真实原因。
+      set({ repos: [], repo: "", gitError: errorText(reason) });
+    }
+  },
+
+  selectRepo: async (root) => {
+    if (root === get().repo) return;
+    set({ repo: root, git: null, branches: null, log: [], gitError: "", actionError: "" });
+    await Promise.all([get().refreshGit(), get().loadBranches()]);
+    if (get().log.length === 0) await get().loadLog();
   },
 
   setHidden: async (hidden) => {
@@ -170,7 +215,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   },
 
   refreshGit: async () => {
-    const cwd = get().cwd;
+    const cwd = gitCwd(get());
     if (!cwd) return;
     const at = epoch;
     const key = `${at}:${cwd}`;
@@ -181,10 +226,10 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
       try {
         const query = new URLSearchParams({ cwd });
         const status = await apiFetch<GitStatus>(`/api/git/status?${query.toString()}`);
-        if (at !== epoch || get().cwd !== cwd) return;
+        if (at !== epoch || gitCwd(get()) !== cwd) return;
         set({ git: status, gitLoading: false });
       } catch (reason) {
-        if (at !== epoch || get().cwd !== cwd) return;
+        if (at !== epoch || gitCwd(get()) !== cwd) return;
         set({ gitLoading: false, gitError: errorText(reason) });
       } finally {
         if (gitInFlight === slot) gitInFlight = null;
@@ -196,13 +241,13 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   },
 
   loadBranches: async () => {
-    const cwd = get().cwd;
+    const cwd = gitCwd(get());
     if (!cwd) return;
     const at = epoch;
     try {
       const query = new URLSearchParams({ cwd });
       const branches = await apiFetch<GitBranches>(`/api/git/branches?${query.toString()}`);
-      if (at !== epoch || get().cwd !== cwd) return;
+      if (at !== epoch || gitCwd(get()) !== cwd) return;
       set({ branches });
     } catch {
       // 分支下拉是辅助信息；失败时不覆盖 Git 面板的主错误。
@@ -210,44 +255,44 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   },
 
   loadLog: async () => {
-    const cwd = get().cwd;
+    const cwd = gitCwd(get());
     if (!cwd) return;
     const at = epoch;
     set({ logLoading: true, logError: "" });
     try {
       const query = new URLSearchParams({ cwd, count: "30" });
       const payload = await apiFetch<{ entries: GitLogEntry[] }>(`/api/git/log?${query.toString()}`);
-      if (at !== epoch || get().cwd !== cwd) return;
+      if (at !== epoch || gitCwd(get()) !== cwd) return;
       set({ log: payload.entries ?? [], logLoading: false, logError: "" });
     } catch (reason) {
-      if (at !== epoch || get().cwd !== cwd) return;
+      if (at !== epoch || gitCwd(get()) !== cwd) return;
       const message = errorText(reason);
       set({ logLoading: false, logError: message, actionError: message });
     }
   },
 
   loadDiff: async (path, staged) => {
-    const cwd = get().cwd;
+    const cwd = gitCwd(get());
     if (!cwd) throw new Error("未选择工作区");
     const at = epoch;
     const query = new URLSearchParams({ cwd, path, staged: staged ? "1" : "0" });
     const payload = await apiFetch<{ diff: string }>(`/api/git/diff?${query.toString()}`);
-    if (at !== epoch || get().cwd !== cwd) throw new Error("工作区已切换");
+    if (at !== epoch || gitCwd(get()) !== cwd) throw new Error("工作区已切换");
     return payload.diff ?? "";
   },
 
   showCommit: async (hash) => {
-    const cwd = get().cwd;
+    const cwd = gitCwd(get());
     if (!cwd) throw new Error("未选择工作区");
     const at = epoch;
     const query = new URLSearchParams({ cwd, hash });
     const payload = await apiFetch<{ diff: string }>(`/api/git/show?${query.toString()}`);
-    if (at !== epoch || get().cwd !== cwd) throw new Error("工作区已切换");
+    if (at !== epoch || gitCwd(get()) !== cwd) throw new Error("工作区已切换");
     return payload.diff ?? "";
   },
 
   stage: async (path) => {
-    const cwd = get().cwd;
+    const cwd = gitCwd(get());
     if (!cwd) return false;
     try {
       await postGit("/api/git/stage", { cwd, ...(path !== undefined ? { path } : {}) });
@@ -261,7 +306,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   },
 
   unstage: async (path) => {
-    const cwd = get().cwd;
+    const cwd = gitCwd(get());
     if (!cwd) return false;
     try {
       await postGit("/api/git/unstage", { cwd, ...(path !== undefined ? { path } : {}) });
@@ -275,7 +320,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   },
 
   discard: async (path) => {
-    const cwd = get().cwd;
+    const cwd = gitCwd(get());
     if (!cwd) return false;
     try {
       await postGit("/api/git/discard", { cwd, path });
@@ -289,7 +334,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   },
 
   commit: async (message) => {
-    const cwd = get().cwd;
+    const cwd = gitCwd(get());
     if (!cwd) return false;
     try {
       await postGit("/api/git/commit", { cwd, message });
@@ -304,7 +349,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   },
 
   checkout: async (branch) => {
-    const cwd = get().cwd;
+    const cwd = gitCwd(get());
     if (!cwd) return false;
     try {
       await postGit("/api/git/checkout", { cwd, branch });
@@ -319,7 +364,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   },
 
   sync: async () => {
-    const cwd = get().cwd;
+    const cwd = gitCwd(get());
     if (!cwd) return false;
     try {
       await postGit("/api/git/sync", { cwd });

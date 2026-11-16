@@ -278,6 +278,14 @@ export interface GitStatusEntry {
   unstaged?: GitLineCounts;
 }
 
+/** 工作区里的一个 Git 仓库；path 相对工作区根，根仓库为 ""。 */
+export interface GitRepo {
+  path: string;
+  name: string;
+  /** 绝对路径，直接当后续 /api/git/* 的 cwd 用。 */
+  root: string;
+}
+
 export interface GitStatus {
   is_repo: boolean;
   branch?: string;

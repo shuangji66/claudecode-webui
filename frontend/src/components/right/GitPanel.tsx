@@ -58,6 +58,9 @@ const MAX_DIFF_LINES = 4000;
 /** 右侧栏 Git 面板：变更分组 + diff 预览 + 提交框 + 最近提交 + 分支底栏。 */
 export function GitPanel({ cwd, active }: Props) {
   const t = useT();
+  const repos = useSidebarStore((s) => s.repos);
+  const repoRoot = useSidebarStore((s) => s.repo);
+  const selectRepo = useSidebarStore((s) => s.selectRepo);
   const git = useSidebarStore((s) => s.git);
   const gitLoading = useSidebarStore((s) => s.gitLoading);
   const gitError = useSidebarStore((s) => s.gitError);
@@ -271,6 +274,32 @@ export function GitPanel({ cwd, active }: Props) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {/* 工作区里并排放着好几个仓库时给一排切换 chip；只有一个仓库就不用占这行。 */}
+      {repos.length > 1 && (
+        <div className="dsh-scroll flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-2 py-1.5">
+          {repos.map((r) => (
+            <button
+              key={r.root}
+              type="button"
+              aria-pressed={r.root === repoRoot}
+              onClick={() => {
+                diffSeq.current += 1;
+                setDiff(null);
+                setSelected(null);
+                setMode("changes");
+                void selectRepo(r.root);
+              }}
+              title={r.path || t("工作区根", "Workspace root")}
+              className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${
+                r.root === repoRoot ? "bg-panel-strong font-medium text-ink" : "text-muted hover:bg-black/[0.03] hover:text-ink"
+              }`}
+            >
+              {r.name}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="flex h-[42px] shrink-0 items-center gap-1 border-b border-line px-2">
         <button
           type="button"

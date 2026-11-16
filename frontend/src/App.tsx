@@ -17,7 +17,6 @@ import { RightSidebar, type RightTab } from "./components/right/RightSidebar";
 
 const COLLAPSE_KEY = "ccweb-sidebar-collapsed";
 const RIGHT_OPEN_KEY = "ccweb-right-open";
-const RIGHT_TAB_KEY = "ccweb-right-tab";
 
 function readCollapsed(): boolean {
   try {
@@ -33,16 +32,6 @@ function readRightOpen(): boolean {
   } catch {
     return false;
   }
-}
-
-function readRightTab(): RightTab {
-  try {
-    const raw = localStorage.getItem(RIGHT_TAB_KEY);
-    if (raw === "files" || raw === "git" || raw === "terminal") return raw;
-  } catch {
-    /* 隐私模式 */
-  }
-  return "files";
 }
 
 export default function App() {
@@ -85,7 +74,8 @@ function AppShell() {
   const [tokenEpoch, setTokenEpoch] = useState(0);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [rightOpen, setRightOpen] = useState(readRightOpen);
-  const [rightTab, setRightTab] = useState<RightTab>(readRightTab);
+  // null = 停在右侧栏的启动页；面板由用户点卡片按需打开（不再常驻三个标签）。
+  const [rightTab, setRightTab] = useState<RightTab | null>(null);
 
   useEffect(() => {
     void bootstrap();
@@ -94,11 +84,10 @@ function AppShell() {
   useEffect(() => {
     try {
       localStorage.setItem(RIGHT_OPEN_KEY, rightOpen ? "1" : "0");
-      localStorage.setItem(RIGHT_TAB_KEY, rightTab);
     } catch {
       /* 隐私模式 */
     }
-  }, [rightOpen, rightTab]);
+  }, [rightOpen]);
 
   const toggleCollapse = () => {
     setCollapsed((v) => {

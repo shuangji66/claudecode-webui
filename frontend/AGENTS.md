@@ -29,7 +29,7 @@ src/
   store/useSidebarStore.ts 右侧栏数据（文件树/Git/预览，所有 fetch 收敛在这里）
   store/useSkillsStore.ts  设置页技能数据（/api/skills 的列表与正文）
   components/layout/Sidebar.tsx 工作区/对话列表、重命名/归档/删除菜单
-  components/right/    RightSidebar / FilesPanel / GitPanel / TerminalPanel
+  components/right/    RightSidebar（启动页 + 按需面板）/ FilesPanel / GitPanel / TerminalPanel（多开）
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
   components/          layout / chat / tools / permission / settings
 ```
@@ -60,8 +60,10 @@ src/
     弧长呼吸，对齐 DSH 的 StateDot），它表达的是「正在干活」而不是装饰；必须在
     `prefers-reduced-motion: reduce` 下停成静态弧。新增任何循环动画前先想清楚这一点。
 12. 输入框 `+` 是附件入口（文件/图片），不要再改回插入 `/`；" / " 命令仍由用户键入触发补全。
-13. **右侧栏三个面板必须常驻**，只切 `hidden`；终端只在首次激活后创建 PTY，切页签不能卸载
-    `TerminalPanel`，否则 shell 会被杀。关闭侧栏才允许结束终端。
+13. **右侧栏是启动页 + 按需面板**：`activeTab` 为 `null` 时显示三张入口卡片，点开才挂面板，
+    面板头部的「返回」回到启动页。**打开过的面板必须继续挂载**（`opened` 集合 + `hidden`），
+    终端里挂着 PTY，卸载等于杀 shell；只有关标签或关整个侧栏才结束进程。
+    终端支持多开：标签栏切换、`+` 新建（上限 8），所有会话都挂在同一个 `TerminalPanel` 里。
 14. 文件树/Git 面板的所有请求走 `useSidebarStore`；路径使用后端返回的 POSIX 相对路径，
     不要自己拼绝对路径。切换工作区由 `RightSidebar` 统一 `setCwd`，子面板不要重复调用。
 15. Git 的 `MM` 文件必须同时出现在暂存与更改两组，各自用本侧行数；不要把两侧相加。
@@ -105,6 +107,9 @@ src/
   有对话时才回到贴底布局。上方 `WorkspacePicker` 选中工作区走既有的 `startConversationIn`
   （切当前工作区 + 在该目录新建对话）：只切不建会让首条消息落到 `ensureSession` 的
   「恢复最近对话」上，用户明明选了工作区却进了旧对话。
+- **Git 多仓库**：`loadRepos()` 拉 `/api/git/repos`，`pickRepo()`（纯函数，`lib/workspace.ts`）
+  决定默认选中（保持当前 > 工作区根 > 第一个）；之后所有 git 请求的 cwd 都用
+  `repo || cwd`（`gitCwd()`），文件树仍用工作区 `cwd`。
 - **侧栏状态标记**（`lib/conversations.conversationStatus`，优先级从高到低）：待审批 →
   强调色圆点；进程 `busy`/`starting` → 进度环；完成但没看过 → 绿点；活跃但空闲 → 不画点；
   没有常驻进程 → 灰点。「完成未看」由 `applyEvent` 在 `result` 到达且该对话不是当前打开的

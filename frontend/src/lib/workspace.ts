@@ -255,3 +255,19 @@ export function refsLabel(refs: string): string {
     .filter(Boolean)
     .join(", ");
 }
+
+/** 工作区里的仓库项（与 transport/types 的 GitRepo 同形，这里只依赖最小字段）。 */
+export interface RepoRef {
+  path: string;
+  root: string;
+}
+
+/**
+ * 选哪个仓库：保持当前选中（只要它还在列表里），否则工作区根（path 为 ""），
+ * 再否则第一个。扫描结果可能因为新建/删除仓库而变化，不能直接取第一个。
+ */
+export function pickRepo(repos: RepoRef[], current: string): string {
+  if (current && repos.some((r) => r.root === current)) return current;
+  const root = repos.find((r) => r.path === "");
+  return (root ?? repos[0])?.root ?? "";
+}

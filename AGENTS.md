@@ -14,8 +14,9 @@
 - 后端**常驻 claude 子进程**，通过 `--input-format stream-json --output-format stream-json`
   双向 NDJSON 通信；
 - 主对话区**不做终端模拟**，全部结构化渲染：消息流、thinking、工具卡片、diff、审批面板；
-- 右侧栏（桌面停靠 / 移动端全屏）有工作区文件树与只读预览、Git 变更面板、以及真正跑在
-  Linux PTY 上的 bash 终端（`xterm.js` 只做渲染）；
+- 右侧栏（桌面停靠 / 移动端全屏）先给一个启动页，按需打开工作区文件树与只读预览、
+  支持多仓库切换的 Git 面板、以及真正跑在 Linux PTY 上的 bash 终端（可多开，
+  `xterm.js` 只做渲染）；
 - **授权目录 = 工作区**，持久化在 `workspaces.json`；对话列表来自 claude 转录 +
   `conversations.json` 元数据，启动时恢复上次对话（`--resume`）而不是新建；
 - 设置页分「通用 / 模型 / 技能 / 代理 / 部署」：默认权限（置顶）、主题、语言、字号、技能、代理、
@@ -148,8 +149,14 @@ hub ── manager ── session ── process ── claude (NDJSON)
   否则会被替换字符破坏；上行命令才是 JSON 文本。
 - **服务端先发 `error`/`exit` 再关连接时，前端不能把状态覆盖成 `closed`**：`TerminalConnection`
   记住最后一次状态，保留真正的失败原因。
-- **切页签不能卸载终端**：`RightSidebar` 三个面板常驻、只切 `hidden`；终端首次激活才创建 PTY。
-  关侧栏才 SIGHUP。改布局时不要把终端放回 `activeTab === "terminal" && ...` 条件里。
+- **右侧栏是「启动页 + 按需面板」**（对齐 DSH）：没有常驻标签栏，点卡片才打开
+  文件 / Git / 终端，面板头部返回启动页。**打开过的面板不卸载，只切 `hidden`**——终端里
+  挂着 PTY，卸载等于杀 shell。只有关掉该终端标签或关掉整个右侧栏才 SIGHUP。
+- **终端可多开**：每个终端一条 WS、一个 PTY，标签栏负责切换；后端上限 8
+  （`maxTerminals`），换工作区时全部结束（旧 shell 的 cwd 已经不成立）。
+- **Git 支持工作区内的多个仓库**：`GET /api/git/repos` 扫描（深度 3、跳过隐藏目录与
+  `node_modules`、命中仓库不再下钻），前端把选中的仓库绝对路径直接当 `/api/git/*` 的
+  `cwd`（子目录本来就能过 `authorizedCwd`，不必为它加新参数）。
 - **Git 状态用 `--porcelain=v2 -z`**，并用 `--untracked-files=all` 列出未跟踪文件
   （`normal` 只给目录，点开无法 diff）。解析按 NUL 字段走，不能按空格 split，
   否则带空格的路径会被截断。
@@ -262,7 +269,8 @@ cd frontend && npx tsc --noEmit
 - [ ] 对话恢复是否用稳定 UUID `--resume`？空对话/归档/删除是否会被误恢复？
 - [ ] 转录回放是否过滤 sidechain/meta，并保留原始时间戳？
 - [ ] 新增右侧栏路由是否过了 `authorizedCwd` / 路径围栏？raw 预览是否仍在白名单？
-- [ ] 终端是否仍然常驻、PTY 输出走二进制帧、关侧栏才结束进程？
+- [ ] 右侧栏面板是否仍按需打开、打开过的面板不卸载（终端 PTY 不能被切面板杀掉）？
+- [ ] 终端是否仍走二进制帧、多开时每个标签各自一条 WS？
 - [ ] 是否补了测试（纯函数优先，组件用 Testing Library）？
 - [ ] `make test` 与 `npx tsc --noEmit` 是否都通过？
 

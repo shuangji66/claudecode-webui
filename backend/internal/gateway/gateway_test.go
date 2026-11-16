@@ -771,3 +771,37 @@ func TestFsAccess(t *testing.T) {
 		t.Fatalf("不可写目录应带原因: %+v", bad)
 	}
 }
+
+func TestGitRepos(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	repo := filepath.Join(srv.d.ProjectsRoot, "inner")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/git/repos?cwd="+srv.d.ProjectsRoot, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("repos code = %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Repos []struct {
+			Path string `json:"path"`
+			Root string `json:"root"`
+		} `json:"repos"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Repos) != 1 || out.Repos[0].Path != "inner" || out.Repos[0].Root != repo {
+		t.Fatalf("repos = %+v", out.Repos)
+	}
+
+	// 未授权的 cwd 一律 403，和其余 git 路由一致（用一个真实存在但在工作区外的目录）。
+	outside := t.TempDir()
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/git/repos?cwd="+outside, nil))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("未授权 cwd code = %d: %s", rec.Code, rec.Body.String())
+	}
+}
