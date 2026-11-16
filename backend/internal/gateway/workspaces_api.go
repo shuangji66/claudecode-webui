@@ -137,6 +137,33 @@ func (s *Server) handleRenameWorkspace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.currentWorkspaces())
 }
 
+// fsAccessPayload 是「这个目录还要不要申请授权」的探测结果。
+type fsAccessPayload struct {
+	Path string `json:"path"`
+	// Writable 为 true 表示应用用户已经能直接读写，登记工作区时不必再申请 ACL。
+	Writable bool   `json:"writable"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// handleFsAccess 报告应用用户能否直接在目标目录里读写。
+//
+// 「添加授权目录」用它决定要不要弹飞牛授权框：应用自己的数据目录、用户已经授权过的
+// 共享本来就能写，再让用户去飞牛确认页点一次是纯噪音；只有真的写不进去（ACL 还没授予）
+// 才需要 authorizeUserFile。探测失败也是 200（writable=false），让前端走授权兜底。
+func (s *Server) handleFsAccess(w http.ResponseWriter, r *http.Request) {
+	var req workspaceReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeErr(w, "请求体解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	abs := filepath.Clean(strings.TrimSpace(req.Path))
+	if err := project.CheckWritable(req.Path); err != nil {
+		writeJSON(w, fsAccessPayload{Path: abs, Writable: false, Reason: err.Error()})
+		return
+	}
+	writeJSON(w, fsAccessPayload{Path: abs, Writable: true})
+}
+
 // handleMkdir 在指定目录下新建一层子目录，供「添加授权目录」弹窗的「新建文件夹」使用。
 //
 // 与浏览接口一样属于敏感能力（能在宿主机上创建目录），因此同样挂在 authed 后面；

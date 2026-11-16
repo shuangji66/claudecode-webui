@@ -138,3 +138,40 @@ func TestMkdirRejectsBadNames(t *testing.T) {
 		t.Fatal("同名目录应报错")
 	}
 }
+
+func TestCheckWritable(t *testing.T) {
+	dir := t.TempDir()
+	if err := CheckWritable(dir); err != nil {
+		t.Fatalf("可写目录应返回 nil: %v", err)
+	}
+	// 探测是「真写一次」，必须自己收尾，不能在用户目录里留垃圾。
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("探测文件未清理: %v", entries)
+	}
+
+	// root 无视权限位，只读断言在那种环境下没有意义。
+	if os.Geteuid() != 0 {
+		ro := filepath.Join(dir, "ro")
+		if err := os.Mkdir(ro, 0o555); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := CheckWritable(ro); err == nil {
+			t.Fatal("只读目录应报不可写")
+		}
+	}
+
+	if err := CheckWritable(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("不存在的目录应报错")
+	}
+	file := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := CheckWritable(file); err == nil {
+		t.Fatal("普通文件应报错")
+	}
+}

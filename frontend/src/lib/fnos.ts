@@ -180,7 +180,9 @@ export async function authorizeFnosDir(path: string): Promise<FnosAuthOutcome> {
  * 打开飞牛的目录选择器并让用户当场授权（pickUserFile + directory）。
  *
  * 与「在输入框里手输路径 + 授权确认」相比，这条路是用户自己挑的目录，
- * 挑选即授权，返回后可以直接登记为工作区（不必再弹一次确认框）。
+ * 挑选即授权。返回后调用方把选择器落到该目录上（`WorkspaceDialog` 里是进目录浏览），
+ * 真正登记工作区由用户自己点「添加」——那时 `POST /api/fs/access` 探测已经通过，
+ * 不会再弹第二次确认框。
  */
 export async function pickFnosDir(params: FnosPickParams = {}): Promise<FnosPickOutcome> {
   if (!inHostFrame()) return { state: "skipped", reason: "standalone" };

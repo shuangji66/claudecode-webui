@@ -729,3 +729,45 @@ func TestMkdirDir(t *testing.T) {
 		t.Fatalf("非法名字 code = %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestFsAccess(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	post := func(body string) (int, string) {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/fs/access", strings.NewReader(body)))
+		return rec.Code, rec.Body.String()
+	}
+	type payload struct {
+		Path     string `json:"path"`
+		Writable bool   `json:"writable"`
+		Reason   string `json:"reason"`
+	}
+
+	code, body := post(`{"path":"` + srv.d.ProjectsRoot + `"}`)
+	if code != http.StatusOK {
+		t.Fatalf("access code = %d: %s", code, body)
+	}
+	var ok payload
+	if err := json.Unmarshal([]byte(body), &ok); err != nil {
+		t.Fatal(err)
+	}
+	if !ok.Writable || ok.Reason != "" {
+		t.Fatalf("可写目录应 writable=true: %+v", ok)
+	}
+	if ok.Path != filepath.Clean(srv.d.ProjectsRoot) {
+		t.Fatalf("path = %q", ok.Path)
+	}
+
+	// 不存在的目录：仍是 200 + writable=false，前端据此改走飞牛授权。
+	code, body = post(`{"path":"/definitely/not/here"}`)
+	if code != http.StatusOK {
+		t.Fatalf("未知目录 code = %d: %s", code, body)
+	}
+	var bad payload
+	if err := json.Unmarshal([]byte(body), &bad); err != nil {
+		t.Fatal(err)
+	}
+	if bad.Writable || bad.Reason == "" {
+		t.Fatalf("不可写目录应带原因: %+v", bad)
+	}
+}

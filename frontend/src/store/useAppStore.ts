@@ -18,6 +18,7 @@ import type {
   ClaudeCheck,
   ClaudeStatus,
   ConversationInfo,
+  FsAccess,
   FsListing,
   GatewayModel,
   InitPayload,
@@ -157,6 +158,11 @@ interface AppState {
   /** 在飞牛文件管理器里显示目录；失败走全局错误条。 */
   openWorkspaceInFiles: (path: string) => Promise<void>;
   browseDirs: (path: string, hidden: boolean) => Promise<FsListing>;
+  /**
+   * 探测应用用户能否直接读写该目录。能读写就不必再申请飞牛授权，
+   * 只有 writable=false（ACL 还没授予）时才走 authorizeUserFile。
+   */
+  probeDir: (path: string) => Promise<FsAccess>;
   /** 在目录选择器里新建一层文件夹，返回新目录绝对路径；失败直接抛错给弹窗展示。 */
   mkdirDir: (parent: string, name: string) => Promise<string>;
   /** 打开目录下最近一条对话；createIfEmpty=false 时没有对话就保持空态，不新建。 */
@@ -806,6 +812,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
         r.reason === "standalone" || r.reason === "bridge"
           ? "当前不在飞牛宿主中，无法打开文件管理器"
           : `打开目录失败：${r.reason ?? "未知错误"}`,
+    });
+  },
+
+  probeDir: async (path) => {
+    return apiFetch<FsAccess>("/api/fs/access", {
+      method: "POST",
+      body: JSON.stringify({ path }),
     });
   },
 

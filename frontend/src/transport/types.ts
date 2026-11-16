@@ -229,6 +229,16 @@ export interface FsListing {
   roots: string[];
 }
 
+/**
+ * POST /api/fs/access 的响应：应用用户能否直接读写该目录。
+ * writable=false 时才需要走飞牛授权（authorizeUserFile）补 ACL。
+ */
+export interface FsAccess {
+  path: string;
+  writable: boolean;
+  reason?: string;
+}
+
 /** 文件树的一行。path 相对工作区根，使用 POSIX 斜杠。 */
 export interface FsEntry {
   name: string;

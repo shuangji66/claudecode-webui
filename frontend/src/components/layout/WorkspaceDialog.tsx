@@ -31,6 +31,7 @@ export function WorkspaceDialog({ open, onClose }: Props) {
   const addWorkspace = useAppStore((s) => s.addWorkspace);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const mkdirDir = useAppStore((s) => s.mkdirDir);
+  const probeDir = useAppStore((s) => s.probeDir);
 
   const [path, setPath] = useState("");
   const [listing, setListing] = useState<FsListing | null>(null);
@@ -69,12 +70,29 @@ export function WorkspaceDialog({ open, onClose }: Props) {
   // 把当前列表目录当成目标授权出去。
   const target = (path.trim() || listing?.path || "").trim();
   const busy = authorizing || workspaceBusy;
+
+  // 应用用户已经能读写的目录（应用自己的数据目录、用户授权过的共享、刚建的空文件夹）
+  // 不必再申请一次 ACL：能进能选却还要去飞牛确认页点一下，是纯噪音。
+  // 探测本身失败时按「未授权」处理，交给飞牛授权兜底，不要因为探测挂了就加不了目录。
+  const dirReady = async (p: string) => {
+    try {
+      return (await probeDir(p)).writable;
+    } catch (e) {
+      console.warn("[fnos] 目录权限探测失败，按未授权处理", e);
+      return false;
+    }
+  };
+
   const submit = async () => {
     if (!target) return;
     setErr(null);
     setAuthorizing(true);
     try {
-      // 先请飞牛把该目录的 ACL 授予应用用户，再登记工作区：ACL 没写进去，
+      if (await dirReady(target)) {
+        if (await addWorkspace(target)) onClose();
+        return;
+      }
+      // 写不进去才请飞牛把该目录的 ACL 授予应用用户：ACL 没写进去，
       // claude 起来后读写真目录会被 trim_acl 拒掉（表现为一切都没权限）。
       const verdict = await authorizeFnosDir(target);
       if (verdict.state === "denied") {
@@ -96,13 +114,16 @@ export function WorkspaceDialog({ open, onClose }: Props) {
   };
 
   // 「选择飞牛目录」：用户自己挑，挑完即授权（飞牛选择器本身就是授权入口）。
+  // 挑完只在弹窗里进入该目录，登记工作区交给用户再点「添加」——那时探测已经能写，
+  // 不会再弹第二次确认；用户也可以挑完先看看里面有什么再决定。
   const pickFnos = async () => {
     setErr(null);
     setAuthorizing(true);
     try {
       const picked = await pickFnosDir({
         title: t("选择工作区目录", "Choose a workspace directory"),
-        okText: t("添加", "Add"),
+        // 挑完只是进到这个目录，真正登记要回到弹窗点「添加」，按钮文案别误导。
+        okText: t("选择", "Choose"),
       });
       if (picked.state === "skipped") {
         setErr(t("当前不在飞牛宿主中，无法打开飞牛目录选择器；可在上方浏览目录后点「添加」。", "Not running inside fnOS, so the fnOS picker is unavailable; browse above and use Add instead."));
@@ -112,7 +133,7 @@ export function WorkspaceDialog({ open, onClose }: Props) {
         if (picked.reason === "message") setErr(t(`飞牛目录选择失败：${picked.message}`, `fnOS directory pick failed: ${picked.message}`));
         return;
       }
-      if (await addWorkspace(picked.path)) onClose();
+      await load(picked.path);
     } finally {
       setAuthorizing(false);
     }
@@ -165,7 +186,6 @@ export function WorkspaceDialog({ open, onClose }: Props) {
       onClose={onClose}
       label={t("添加授权目录", "Add authorized directory")}
       title={t("添加授权目录", "Add authorized directory")}
-      description={t("选中后飞牛会弹窗确认目录授权；确认后该目录成为工作区，Claude 在其中读写文件并立即启动会话。", "fnOS asks you to confirm the directory authorization; once confirmed it becomes a workspace where Claude reads and writes, and a session starts immediately.")}
       size="lg"
       sheet
       bodyScroll={false}

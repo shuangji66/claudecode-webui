@@ -14,6 +14,7 @@ vi.mock("../../lib/fnos", () => ({
 const addWorkspace = vi.fn();
 const browseDirs = vi.fn();
 const mkdirDir = vi.fn();
+const probeDir = vi.fn();
 
 const LISTING = {
   path: "/vol1/1000/demo",
@@ -30,6 +31,8 @@ beforeEach(() => {
   addWorkspace.mockReset().mockResolvedValue(true);
   browseDirs.mockReset().mockResolvedValue(LISTING);
   mkdirDir.mockReset();
+  // 默认「应用用户写不进去」：授权链路的老用例仍然走 authorizeUserFile。
+  probeDir.mockReset().mockResolvedValue({ path: "/vol1/1000/demo", writable: false, reason: "permission denied" });
   useAppStore.setState({
     workspaces: [],
     currentWorkspace: "",
@@ -38,6 +41,7 @@ beforeEach(() => {
     addWorkspace,
     browseDirs,
     mkdirDir,
+    probeDir,
   });
 });
 
@@ -73,6 +77,29 @@ describe("WorkspaceDialog", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
+  it("应用用户已经能读写的目录直接登记，不再申请飞牛授权", async () => {
+    probeDir.mockResolvedValue({ path: "/vol1/1000/demo", writable: true });
+    const onClose = await openDialog();
+
+    await submit();
+
+    await waitFor(() => expect(addWorkspace).toHaveBeenCalledWith("/vol1/1000/demo"));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(probeDir).toHaveBeenCalledWith("/vol1/1000/demo");
+    expect(authorizeFnosDir).not.toHaveBeenCalled();
+  });
+
+  it("权限探测本身失败时退回飞牛授权，不阻塞添加", async () => {
+    probeDir.mockRejectedValue(new Error("HTTP 502"));
+    authorizeFnosDir.mockResolvedValue({ state: "ok" });
+    await openDialog();
+
+    await submit();
+
+    await waitFor(() => expect(authorizeFnosDir).toHaveBeenCalledWith("/vol1/1000/demo"));
+    await waitFor(() => expect(addWorkspace).toHaveBeenCalledWith("/vol1/1000/demo"));
+  });
+
   it("用户取消飞牛授权时不登记工作区，并留在弹窗里提示", async () => {
     authorizeFnosDir.mockResolvedValue({ state: "denied", reason: "cancel" });
     const onClose = await openDialog();
@@ -103,17 +130,26 @@ describe("WorkspaceDialog", () => {
     await waitFor(() => expect(addWorkspace).toHaveBeenCalledWith("/vol1/1000/demo"));
   });
 
-  it("「选择飞牛目录」挑完即登记（飞牛选择器本身就是授权）", async () => {
+  it("「选择飞牛目录」挑完只进入该目录，不自动登记也不关闭弹窗", async () => {
     pickFnosDir.mockResolvedValue({ state: "ok", path: "/vol1/1000/picked" });
+    browseDirs.mockResolvedValueOnce(LISTING).mockResolvedValue({ ...LISTING, path: "/vol1/1000/picked" });
     const onClose = await openDialog();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /选择飞牛目录/ }));
     });
 
+    await waitFor(() => expect(browseDirs).toHaveBeenLastCalledWith("/vol1/1000/picked", false));
+    // 挑完就授权了，但登记工作区要用户自己点「添加」
+    expect(addWorkspace).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(authorizeFnosDir).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "目录路径" })).toHaveValue("/vol1/1000/picked");
+
+    // 再点「添加」：目录已在 ACL 里，探测通过后直接登记，不再二次确认
+    probeDir.mockResolvedValue({ path: "/vol1/1000/picked", writable: true });
+    await submit();
     await waitFor(() => expect(addWorkspace).toHaveBeenCalledWith("/vol1/1000/picked"));
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
-    // 已经授权过，不再走 authorizeUserFile 二次确认
     expect(authorizeFnosDir).not.toHaveBeenCalled();
   });
 

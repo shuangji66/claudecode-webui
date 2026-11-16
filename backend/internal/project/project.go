@@ -5,6 +5,7 @@ package project
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -117,6 +118,33 @@ func Browse(path string, hidden bool, limit int) (BrowseResult, error) {
 	}
 	sort.Slice(out.Entries, func(i, j int) bool { return out.Entries[i].Name < out.Entries[j].Name })
 	return out, nil
+}
+
+// CheckWritable 报告当前进程（与 claude 子进程是同一个应用用户）能否在 dir 里
+// 创建并删除文件。返回 nil 表示能直接读写，否则返回带原因的错误。
+//
+// 为什么真的落一个文件而不是看 mode 位：飞牛用 trim_acl 把授权写进 ACL，目录的
+// mode 位和实际权限常年对不上（/vol1/@appshare 这类祖先目录甚至是 000）。只有真写
+// 一次才能同时覆盖 ACL、只读挂载与不可变标志——那正是 claude 在目录里读写文件时
+// 会遇到的那套检查。探测文件以点开头，写完立刻删除。
+func CheckWritable(dir string) error {
+	abs, err := Validate(dir)
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(abs, ".ccweb-probe-*")
+	if err != nil {
+		return fmt.Errorf("project: 目录不可写: %w", err)
+	}
+	name := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return fmt.Errorf("project: 关闭探测文件: %w", err)
+	}
+	if err := os.Remove(name); err != nil {
+		return fmt.Errorf("project: 清理探测文件: %w", err)
+	}
+	return nil
 }
 
 // Mkdir 在 parent 下新建一个子目录，返回子目录的绝对路径。
