@@ -183,6 +183,10 @@ func (s *Store) Paths() []string {
 }
 
 // Allows 报告 abs 是否落在某个授权目录内（目录本身或子目录）。
+//
+// abs 与授权项都按「解析符号链接后的真实路径」比对：网关会把 cwd 解析成真实路径
+// 再进来，而授权项本身可能是一个软链（/data/ws -> /vol1/ws）。只比字符串会让
+// 前一种情况被误判为越界，只比原始路径则会让「工作区里的软链指向外部」蒙混过关。
 func (s *Store) Allows(abs string) bool {
 	abs = filepath.Clean(abs)
 	if !filepath.IsAbs(abs) {
@@ -191,12 +195,20 @@ func (s *Store) Allows(abs string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, e := range s.cur.Workspaces {
-		root := filepath.Clean(e.Path)
-		if abs == root || strings.HasPrefix(abs, root+string(filepath.Separator)) {
+		if withinDir(abs, e.Path) {
+			return true
+		}
+		if real, err := filepath.EvalSymlinks(e.Path); err == nil && withinDir(abs, real) {
 			return true
 		}
 	}
 	return false
+}
+
+// withinDir 报告 abs 是否等于 root 或落在 root 之下（纯词法）。
+func withinDir(abs, root string) bool {
+	root = filepath.Clean(root)
+	return abs == root || strings.HasPrefix(abs, root+string(filepath.Separator))
 }
 
 // Add 授权一个目录并把它设为当前工作区；已存在时仅刷新 last_used。

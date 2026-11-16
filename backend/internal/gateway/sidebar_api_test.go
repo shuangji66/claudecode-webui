@@ -105,11 +105,11 @@ func TestFsFileAndRawPreview(t *testing.T) {
 		t.Fatalf("png raw: code=%d type=%q", rec.Code, rec.Header().Get("Content-Type"))
 	}
 
-	// 纯文本允许 inline（nosniff + CSP sandbox），方便「新窗口打开」。
+	// 纯文本不走 raw：白名单只有图片/PDF，文本预览走 /api/fs/file 的 JSON。
 	rec = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/fs/raw?cwd="+root+"&path=a.txt", nil))
-	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "text/plain; charset=utf-8" {
-		t.Fatalf("txt raw: code=%d type=%q", rec.Code, rec.Header().Get("Content-Type"))
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("txt raw 应 415，实际 %d", rec.Code)
 	}
 }
 
@@ -188,5 +188,58 @@ func runGit(t *testing.T, dir string, args ...string) {
 	cmd.Env = append(os.Environ(), "LC_ALL=C", "GIT_TERMINAL_PROMPT=0")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+// 回归：工作区里的软链不能把右侧栏带出工作区。
+//
+// 授权判定曾经只做词法前缀比较，而 fsapi 又把 EvalSymlinks(cwd) 当围栏根，
+// 于是 `<ws>/link -> 外部目录` 能过授权、围栏也认它，fs/git/terminal/skills
+// 全部落到工作区外。现在 cwd 先解析真实路径再判授权。
+func TestSidebarRejectsSymlinkEscape(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	root := srv.d.ProjectsRoot
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("无法创建符号链接: %v", err)
+	}
+
+	cases := []string{
+		"/api/fs/tree?cwd=" + link,
+		"/api/fs/file?cwd=" + link + "&path=secret.txt",
+		"/api/fs/raw?cwd=" + link + "&path=secret.txt",
+		"/api/git/status?cwd=" + link,
+	}
+	for _, u := range cases {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, u, nil))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s: code = %d, want 403: %s", u, rec.Code, rec.Body.String())
+		}
+	}
+
+	// 会话创建同理：软链 cwd 必须 403，而不是把 claude 拉起来。
+	body := strings.NewReader(`{"cwd":"` + link + `"}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/session", body)
+	req.Header.Set("Content-Type", "application/json")
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("软链 cwd 建会话: code = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+
+	// 工作区里的普通子目录仍然可用（别把围栏收得过紧）。
+	sub := filepath.Join(root, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/fs/tree?cwd="+sub, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("子目录: code = %d: %s", rec.Code, rec.Body.String())
 	}
 }

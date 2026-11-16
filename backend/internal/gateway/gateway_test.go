@@ -30,6 +30,15 @@ type fakeMgr struct {
 	closed  []string
 	failOn  string
 	inUse   map[string]bool
+	// subdirCwd 非空时 List/Get 用它在根目录下再套一层，模拟「子目录里的会话」。
+	subdirCwd string
+}
+
+func (f *fakeMgr) cwd() string {
+	if f.subdirCwd != "" {
+		return f.subdirCwd
+	}
+	return "/tmp"
 }
 
 func (f *fakeMgr) Binary() string { return "/opt/cc/claude" }
@@ -55,13 +64,13 @@ func (f *fakeMgr) Ensure(cwd, model, mode string) (manager.Info, error) {
 
 func (f *fakeMgr) Get(id string) (*session.Session, bool) {
 	if id == "sess-1" {
-		return &session.Session{ID: "sess-1", Cwd: "/tmp"}, true
+		return &session.Session{ID: "sess-1", Cwd: f.cwd()}, true
 	}
 	return nil, false
 }
 
 func (f *fakeMgr) List() []manager.Info {
-	return []manager.Info{{ID: "sess-1", Cwd: "/tmp", State: "ready"}}
+	return []manager.Info{{ID: "sess-1", Cwd: f.cwd(), State: "ready"}}
 }
 
 func (f *fakeMgr) Close(id string) error {
@@ -895,5 +904,28 @@ func TestFsHostFile(t *testing.T) {
 	}
 	if code, body := post("relative.png"); code != http.StatusBadRequest {
 		t.Fatalf("相对路径 code = %d: %s", code, body)
+	}
+}
+
+// 回归：工作区子目录里跑着的会话也要拦住「移除工作区」。
+//
+// 旧实现只做 `info.Cwd == abs` 的精确比较，于是「移除父目录、子目录会话还在跑」
+// 会直接放行：授权随即被撤销（右侧栏 403），而 claude 进程仍在那个目录里读写。
+func TestWorkspaceCannotRemoveWithSessionInSubdir(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	root := srv.d.ProjectsRoot
+	sub := filepath.Join(root, "nested")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 让 fake 的会话落在子目录里。
+	base := srv.d.Manager.(*fakeMgr)
+	base.subdirCwd = sub
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/workspaces?path="+root, nil))
+	base.subdirCwd = ""
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("子目录会话存在时移除父工作区: code = %d, want 409: %s", rec.Code, rec.Body.String())
 	}
 }

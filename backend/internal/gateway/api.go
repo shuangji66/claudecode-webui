@@ -77,7 +77,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.ensureCwdAuthorized(abs); err != nil {
+	if err := s.ensureCwdAuthorizedReal(abs); err != nil {
 		writeErr(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -124,7 +124,7 @@ func (s *Server) handleEnsureSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.ensureCwdAuthorized(abs); err != nil {
+	if err := s.ensureCwdAuthorizedReal(abs); err != nil {
 		writeErr(w, err.Error(), http.StatusForbidden)
 		return
 	}

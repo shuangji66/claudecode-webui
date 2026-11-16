@@ -393,6 +393,8 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
   const dir = dirName(path);
   const kind = previewKind(name);
   const rawUrl = rawFileUrl(cwd, path);
+  // 原始字节预览只放行图片/PDF（后端白名单），其它类型点开会拿到 415，不如不摆这个入口。
+  const rawAllowed = kind === "image" || kind === "pdf";
   const lines = file && !file.binary && kind === "text" ? file.content.split("\n") : [];
   const shown = lines.slice(0, MAX_PREVIEW_LINES);
 
@@ -426,16 +428,18 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
         >
           <IconCopy size={14} className={copied ? "text-ok" : undefined} />
         </button>
-        <a
-          href={rawUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
-          aria-label={t("新窗口打开", "Open in new tab")}
-          title={t("新窗口打开", "Open in new tab")}
-        >
-          <IconExternal size={14} />
-        </a>
+        {rawAllowed && (
+          <a
+            href={rawUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+            aria-label={t("新窗口打开", "Open in new tab")}
+            title={t("新窗口打开", "Open in new tab")}
+          >
+            <IconExternal size={14} />
+          </a>
+        )}
       </div>
 
       <div className="dsh-scroll min-h-0 flex-1 overflow-auto">
@@ -454,9 +458,6 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
                 <p className="text-[11px] text-muted">
                   {t(`大小 ${formatBytes(file.size)}，不支持文本预览。`, `${formatBytes(file.size)}, no text preview.`)}
                 </p>
-                <a href={rawUrl} target="_blank" rel="noreferrer" className="text-[11.5px] font-medium text-brand hover:underline">
-                  {t("新窗口打开", "Open in new tab")}
-                </a>
               </div>
             ) : kind === "image" ? (
               <div className="flex min-h-full items-center justify-center p-3">

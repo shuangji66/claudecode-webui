@@ -286,3 +286,27 @@ func TestRenameOnlyChangesDisplayName(t *testing.T) {
 		t.Fatal("不在列表里的目录应返回 ErrNotFound")
 	}
 }
+
+// 授权项本身可能是软链（/data/ws -> /vol1/ws），而网关传进来的是解析后的真实路径。
+// 只比字符串会把这种合法情形判成越界，所以两边都要按真实路径比。
+func TestAllowsResolvesSymlinkedWorkspace(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(filepath.Join(real, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("无法创建符号链接: %v", err)
+	}
+	s, err := Open(filepath.Join(base, "ws.json"), link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Allows(filepath.Join(real, "sub")) {
+		t.Fatal("软链工作区的真实路径子目录应被允许")
+	}
+	if s.Allows(filepath.Join(base, "other")) {
+		t.Fatal("工作区外目录不应被允许")
+	}
+}

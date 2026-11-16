@@ -19,15 +19,24 @@ import (
 var errCwdForbidden = errors.New("目录未授权")
 
 // authorizedCwd 校验请求里的 cwd：先确认是真实目录，再确认落在授权工作区内。
+//
+// 返回的是**解析符号链接后的真实路径**：围栏必须以真实路径为锚点。原先只做词法
+// 校验，而下游 fsapi.OpenRoot 又把 EvalSymlinks(cwd) 当围栏根，于是工作区里一个
+// `<ws>/link -> /etc` 就能让 /api/fs、/api/git、/ws/terminal、/api/skills 全部
+// 落到工作区外（授权判的是软链路径，围栏判的是链接目标，两边各说各话）。
 func (s *Server) authorizedCwd(raw string) (string, error) {
 	abs, err := project.Validate(raw)
 	if err != nil {
 		return "", err
 	}
-	if err := s.ensureCwdAuthorized(abs); err != nil {
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	if err := s.ensureCwdAuthorized(real); err != nil {
 		return "", errCwdForbidden
 	}
-	return abs, nil
+	return real, nil
 }
 
 func (s *Server) writeCwdError(w http.ResponseWriter, err error) {
@@ -111,6 +120,8 @@ func (s *Server) handleFsFile(w http.ResponseWriter, r *http.Request) {
 // 绝不能把 HTML / SVG 当同源资源直接返回：工作区里的文件可能带脚本，
 // 一旦以同源 inline 打开就能读到 localStorage 里的 token 并调用 API。
 // 文本走 /api/fs/file 的 JSON（React 转义），SVG 只显示源码。
+// 白名单只保留图片与 PDF：`text/plain` 曾经被放进来「让源码也能新窗口打开」，
+// 但那是把任意文本文件变成一个同源 URL（token 还在 query 上），收益不抵边界成本。
 var allowedRawTypes = map[string]bool{
 	"image/png":       true,
 	"image/jpeg":      true,
@@ -119,8 +130,6 @@ var allowedRawTypes = map[string]bool{
 	"image/bmp":       true,
 	"image/x-icon":    true,
 	"application/pdf": true,
-	// 纯文本安全（nosniff + sandbox），让「新窗口打开」对源码/日志也有意义。
-	"text/plain": true,
 }
 
 // handleFsRaw 返回图片 / PDF 原始字节，供 <img>/<iframe> 预览。

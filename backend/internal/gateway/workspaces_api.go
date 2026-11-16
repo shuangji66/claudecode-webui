@@ -56,6 +56,11 @@ func (s *Server) handleAddWorkspace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.currentWorkspaces())
 }
 
+// insideDir 报告 p 是否等于 dir 或落在 dir 之下（纯词法）。
+func insideDir(p, dir string) bool {
+	return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
+}
+
 // handleRemoveWorkspace 移除授权目录；仍有会话在用的目录不允许直接移除。
 func (s *Server) handleRemoveWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.d.Workspaces == nil {
@@ -68,9 +73,11 @@ func (s *Server) handleRemoveWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	abs := filepath.Clean(path)
+	// 工作区的子目录也是合法会话 cwd，所以不能只比精确相等：否则「父目录被移除、
+	// 子目录里还有活会话」会直接放行，出现「授权已撤销但 claude 还在往里写」的中间态。
 	for _, info := range s.d.Manager.List() {
-		if filepath.Clean(info.Cwd) == abs {
-			writeErr(w, "该目录还有运行中的会话，请先关闭会话再移除", http.StatusConflict)
+		if insideDir(filepath.Clean(info.Cwd), abs) {
+			writeErr(w, "该目录下还有运行中的会话，请先关闭会话再移除", http.StatusConflict)
 			return
 		}
 	}
@@ -242,6 +249,18 @@ func (s *Server) browseRoots() []string {
 		}
 	}
 	return out
+}
+
+// ensureCwdAuthorizedReal 用解析符号链接后的真实路径做授权判定。
+//
+// 会话 cwd 仍保留用户传入的写法（对话元数据与前端都按它匹配），但「能不能进来」
+// 必须按真实路径判：工作区里一个指向外部的软链不应该把 claude 的 cwd 带出围栏。
+func (s *Server) ensureCwdAuthorizedReal(abs string) error {
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return errors.New("目录未授权：无法解析目录的真实路径")
+	}
+	return s.ensureCwdAuthorized(real)
 }
 
 // ensureCwdAuthorized 校验 cwd 是否在授权目录内。
