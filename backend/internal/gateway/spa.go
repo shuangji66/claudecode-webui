@@ -9,13 +9,17 @@ import (
 	"ccweb/backend/internal/webui"
 )
 
+// spaFS 返回内嵌的前端产物。抽成变量是为了让网关单测能用内存文件系统
+// 覆盖 SPA 回退逻辑，而不依赖构建时是否拷过 frontend/dist。
+var spaFS = webui.FS
+
 // handleSPA 提供内嵌的前端产物，并为 index.html 注入运行时 <base href>。
 //
 // 为什么要注入 base：前端资源用相对路径（vite base:'./'），SPA 路由一旦是
 // `/app/ccweb/session/xx` 这种多级路径，`./assets/x.js` 就会解析到
 // `/app/ccweb/session/assets/x.js`。注入 <base> 后所有相对路径都以 baseurl 为基准。
 func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
-	root, err := webui.FS()
+	root, err := spaFS()
 	if err != nil {
 		http.Error(w, "前端产物缺失", http.StatusInternalServerError)
 		return

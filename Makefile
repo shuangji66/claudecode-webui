@@ -41,7 +41,9 @@ frontend:
 
 build: frontend
 	@echo "==> 拷贝前端产物到 embed"
-	rm -rf "$(EMBED)"
+	# 保留 .gitkeep：embed/ 目录必须存在，go:embed 才能编译。
+	rm -rf "$(EMBED)/assets"
+	rm -f "$(EMBED)/index.html"
 	mkdir -p "$(EMBED)"
 	cp -r "$(FRONTEND)"/dist/. "$(EMBED)"/
 	@echo "==> 编译后端"
@@ -68,4 +70,4 @@ clean:
 	# 只删构建产物 ccweb；bin/ 里还可能有部署时放进来的 claude，不能整目录删。
 	rm -f "$(OUT)"
 	rm -rf "$(EMBED)/assets"
-	git -C "$(ROOT)" checkout -- "$(EMBED)" 2>/dev/null || true
+	rm -f "$(EMBED)/index.html"

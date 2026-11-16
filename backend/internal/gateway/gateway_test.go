@@ -3,12 +3,14 @@ package gateway
 import (
 	"encoding/base64"
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"ccweb/backend/internal/agent/manager"
@@ -301,7 +303,21 @@ func TestCacheControlFor(t *testing.T) {
 
 // 缺失的静态资源必须 404，不能回退成 index.html —— 否则浏览器拿到
 // text/html 的"JS"，模块加载失败，整页白屏。
+// useSPAFS 用内存文件系统替换内嵌前端产物，避免测试依赖 frontend/dist 是否构建过。
+func useSPAFS(t *testing.T, index string) {
+	t.Helper()
+	prev := spaFS
+	spaFS = func() (fs.FS, error) {
+		return fstest.MapFS{
+			"index.html":    &fstest.MapFile{Data: []byte(index)},
+			"assets/app.js": &fstest.MapFile{Data: []byte("console.log(1)")},
+		}, nil
+	}
+	t.Cleanup(func() { spaFS = prev })
+}
+
 func TestMissingAssetReturns404(t *testing.T) {
+	useSPAFS(t, "<html><head></head><body>app</body></html>")
 	srv, _ := newTestServer(t, "")
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/index-oldhash.js", nil))
@@ -318,9 +334,10 @@ func min(a, b int) int {
 }
 
 func TestUnknownRoute(t *testing.T) {
+	useSPAFS(t, "<html><head></head><body>app</body></html>")
 	srv, _ := newTestServer(t, "")
 	rec := httptest.NewRecorder()
-	// /api/xxx 未注册 → 落到 SPA；由于内嵌占位 index.html 存在，应返回 200 HTML。
+	// /api/xxx 未注册 → 落到 SPA；前端路由应回退到 index.html。
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/xxx", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d", rec.Code)

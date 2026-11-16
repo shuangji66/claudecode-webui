@@ -121,8 +121,8 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 环境变量重复时**后者生效**：`process.CleanEnv` 先剔除 `HOME`/`PWD` 再追加。
 - **不能剔除 `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY`**：自定义中继是本项目的基础能力。
 - `GOCACHE`/`GOMODCACHE` 用项目内目录（宿主缓存常不可写），Makefile 已设置。
-- `go:embed all:embed` 要求目录存在；`embed/index.html` 是占位文件，构建会覆盖它，
-  `make clean` 用 `git checkout` 还原。
+- `go:embed all:embed` 要求目录存在；`embed/.gitkeep` 负责保留目录，
+  `embed/index.html` 是构建产物、已在 `.gitignore` 里，`make clean` 直接删除。
 
 ### 4.4 对话持久化
 
