@@ -45,10 +45,11 @@ src/
   store/useSidebarStore.ts 右侧栏数据（文件树/Git/预览，所有 fetch 收敛在这里）
   store/useSkillsStore.ts  设置页技能数据（/api/skills 的列表与正文）
   store/useMcpStore.ts     设置页 MCP 数据（/api/mcp 的列表、探测结果、停用开关）
+  store/useSearchStore.ts  内置搜索数据（/api/search 的配置、测试结果、注册状态）
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
                        / Collapsible（折叠块）/ FileIcon（按扩展名给颜色的文件图标 + 文件夹图标）
   components/layout/   Sidebar（工作区/对话列表）/ ConversationPreview（会话悬浮预览）/ TopBar / TokenGate / SettingsDrawer
-                       / WorkspaceDialog / SkillsSettings / McpSettings / DeploySettings / HistoryDialog
+                       / WorkspaceDialog / SkillsSettings / McpSettings / SearchSettings / DeploySettings / HistoryDialog
                        / ClaudeInstallPrompt
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
                        / UsageStats / ResultBar / WorkspacePicker
@@ -257,6 +258,8 @@ src/
   与项目级 `.mcp.json`，可增删改、停用/启用、探测连通性。**必须提示「重开会话才生效」**
   （MCP server 在会话启动时连接），停用项要标出来并说明「配置已摘到本应用暂存」。
   表单转换在 `lib/mcpForm.ts`（参数一行一个、环境变量 KEY=VALUE），不要塞进组件。
+  「MCP」页顶部还有**内置搜索**（`SearchSettings` + `useSearchStore`）：基地址/密钥/条数、
+  测试连接、注册到用户级 MCP。密钥框永远留空回填，只显示脱敏值；空输入=不改。
 - 模型页提供商只有一个时默认展开，多个时默认折叠；新建提供商可以选预置（自动填
   ID / 协议 / Base URL / 默认模型）或选「自定义」手填 ID；显示名留空跟随 ID。
   预置里标「需兼容端点」的只适合拉模型列表，claude 对话需要 Anthropic 兼容端点。

@@ -18,6 +18,7 @@ import { Dialog } from "../common/Dialog";
 import { Select } from "../common/Select";
 import { askConfirm } from "../common/SystemDialogs";
 import { IconAlert, IconPlus, IconRefresh, IconTrash } from "../common/Icons";
+import { SearchSettings } from "./SearchSettings";
 
 /** 编辑中的表单。name + scope 是标识，编辑已有项时不允许改。 */
 interface Draft {
@@ -218,6 +219,8 @@ export function McpSettings({ cwd }: { cwd: string }) {
           <span className="min-w-0 break-words">{error}</span>
         </div>
       )}
+
+      <SearchSettings />
 
       <section className="mb-4">
         <div className="mb-1.5 flex items-baseline justify-between gap-2">

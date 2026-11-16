@@ -76,6 +76,29 @@ export interface McpPayload {
   project_path: string;
 }
 
+/** 内置搜索（DeepSeek Search / Fetch API）的状态。密钥只回脱敏值。 */
+export interface SearchStatus {
+  base_url: string;
+  search_count: number;
+  search_enabled: boolean;
+  search_api_key_set: boolean;
+  search_api_key_masked: string;
+  /** 用户级 MCP 配置里是否已经有这条内置服务。 */
+  attached: boolean;
+  server_name: string;
+  command: string;
+  /** false 表示这套部署没装 MCP 管理（后端 Deps.Mcp 为 nil）。 */
+  mcp_supported: boolean;
+}
+
+export interface SearchTestResult {
+  ok: boolean;
+  latency_ms: number;
+  error?: string;
+  count?: number;
+  results?: { title: string; url: string }[];
+}
+
 export interface McpProbe {
   ok: boolean;
   latency_ms: number;

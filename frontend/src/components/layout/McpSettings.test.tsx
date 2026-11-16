@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { McpSettings } from "./McpSettings";
 import { SystemDialogs } from "../common/SystemDialogs";
 import { useMcpStore } from "../../store/useMcpStore";
@@ -48,7 +48,22 @@ function setup() {
 
 beforeEach(() => {
   apiFetch.mockReset();
-  apiFetch.mockResolvedValue(PAYLOAD);
+  apiFetch.mockImplementation((path: string) => {
+    if (path.startsWith("/api/search")) {
+      return Promise.resolve({
+        base_url: "https://api.deepseek.com/v1/tools",
+        search_count: 10,
+        search_enabled: false,
+        search_api_key_set: false,
+        search_api_key_masked: "",
+        attached: false,
+        server_name: "ccweb-web",
+        command: "/bin/ccweb",
+        mcp_supported: true,
+      });
+    }
+    return Promise.resolve(PAYLOAD);
+  });
 });
 
 describe("McpSettings", () => {
@@ -75,10 +90,11 @@ describe("McpSettings", () => {
 
     const name = screen.getByPlaceholderText("github");
     fireEvent.change(name, { target: { value: "mydb" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    // 页面顶部「内置搜索」也有一个「保存」，这里限定在 MCP 编辑弹窗内。
+    fireEvent.click(within(screen.getByRole("dialog", { name: "MCP 服务" })).getByRole("button", { name: "保存" }));
 
     expect(await screen.findByText(/stdio 类型必须填命令/)).toBeInTheDocument();
     expect(apiFetch).not.toHaveBeenCalledWith("/api/mcp", expect.anything());
-    expect(screen.getByRole("button", { name: "保存" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "MCP 服务" })).toBeInTheDocument();
   });
 });
