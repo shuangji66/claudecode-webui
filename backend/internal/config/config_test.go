@@ -9,7 +9,7 @@ import (
 func TestLoadDefaults(t *testing.T) {
 	// 清掉所有可能干扰的环境变量
 	for _, k := range []string{
-		"ADMIN_SOCK", "BASEURL", "CLAUDE_BIN", "AUTH_TOKEN", "PROJECTS_ROOT",
+		"ADMIN_SOCK", "BASEURL", "AUTH_TOKEN", "PROJECTS_ROOT",
 		"DATA_DIR", "HOME", "MAX_SESSIONS", "IDLE_TIMEOUT", "PERMISSION_MODE", "MODEL",
 		"WORKSPACES_FILE", "AUTO_START",
 	} {
@@ -58,7 +58,6 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(EnvPrefix+"AUTH_TOKEN", "tok")
 	t.Setenv(EnvPrefix+"MAX_SESSIONS", "3")
 	t.Setenv(EnvPrefix+"IDLE_TIMEOUT", "5m")
-	t.Setenv(EnvPrefix+"CLAUDE_BIN", "/opt/claude")
 	t.Setenv(EnvPrefix+"PERMISSION_MODE", "acceptEdits")
 	t.Setenv(EnvPrefix+"MODEL", "sonnet")
 	t.Setenv(EnvPrefix+"DATA_DIR", "/var/lib/ccweb")
@@ -78,7 +77,7 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.IdleTimeout.String() != "5m0s" {
 		t.Fatalf("IdleTimeout = %s", cfg.IdleTimeout)
 	}
-	if cfg.ClaudeBin != "/opt/claude" || cfg.PermissionMode != "acceptEdits" || cfg.Model != "sonnet" {
+	if cfg.PermissionMode != "acceptEdits" || cfg.Model != "sonnet" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 	// 未显式指定时，claude 的家目录与配置文件都跟着数据目录走

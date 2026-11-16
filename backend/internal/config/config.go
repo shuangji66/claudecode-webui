@@ -21,8 +21,6 @@ type Config struct {
 	AdminSock string
 	// BaseURL 是网关暴露给前端的路径前缀，空表示挂在根路径（CCWEB_BASEURL）。
 	BaseURL string
-	// ClaudeBin 是 claude 可执行文件路径，空则由 Discover 自行查找（CCWEB_CLAUDE_BIN）。
-	ClaudeBin string
 	// AuthToken 非空时要求 Bearer token 鉴权（CCWEB_AUTH_TOKEN）。
 	AuthToken string
 	// ProjectsRoot 是「新建会话时可选工作目录」的根（CCWEB_PROJECTS_ROOT）。
@@ -121,7 +119,6 @@ func Load(version string) Config {
 	return Config{
 		AdminSock:         EnvOr("ADMIN_SOCK", filepath.Join(dataDir, "ccweb.sock")),
 		BaseURL:           baseURL,
-		ClaudeBin:         EnvOr("CLAUDE_BIN", ""),
 		AuthToken:         EnvOr("AUTH_TOKEN", ""),
 		ProjectsRoot:      EnvOr("PROJECTS_ROOT", home),
 		DataDir:           dataDir,

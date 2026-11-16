@@ -1,12 +1,10 @@
-// Package process 负责定位 claude 可执行文件、拼装命令行参数、净化子进程环境。
+// Package process 负责拼装命令行参数、净化子进程环境。
 //
-// 该包不启动进程，只产出「要启动什么、带什么参数、给什么环境」，便于单测。
+// 该包不定位可执行文件、也不启动进程：路径只来自 internal/claudebin 的托管版本，
+// 这里只产出「带什么参数、给什么环境」，便于单测。
 package process
 
 import (
-	"errors"
-	"fmt"
-	"os"
 	"strings"
 )
 
@@ -26,30 +24,6 @@ type Options struct {
 	AddDirs []string
 	// IncludePartialMessages 打开逐 token 流式（stream_event）。
 	IncludePartialMessages bool
-}
-
-// Discover 校验显式给出的 claude 路径。
-//
-// 这里**不再**回退 PATH 或程序同目录：claude 由 internal/claudebin 按版本下载到
-// 数据目录并显式选择，回退 PATH 会让"到底跑的是哪个版本"不可控（NAS 上经常同时
-// 存在 npm 全局装的、镜像装的、手工放的几份）。explicit 为空说明调用方没有走这条
-// 兜底路径——调用方应当先解析托管版本，再来这里。
-func Discover(explicit string) (string, error) {
-	if explicit == "" {
-		return "", errors.New("process: 没有指定 claude 路径")
-	}
-	return check(explicit)
-}
-
-func check(p string) (string, error) {
-	st, err := os.Stat(p)
-	if err != nil {
-		return "", fmt.Errorf("process: %s: %w", p, err)
-	}
-	if st.IsDir() {
-		return "", fmt.Errorf("process: %s 是目录", p)
-	}
-	return p, nil
 }
 
 // Args 返回传给 claude 的参数列表（不含程序名）。

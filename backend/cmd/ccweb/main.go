@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"ccweb/backend/internal/agent/manager"
-	"ccweb/backend/internal/agent/process"
 	"ccweb/backend/internal/agent/session"
 	"ccweb/backend/internal/authz"
 	"ccweb/backend/internal/claudebin"
@@ -61,19 +60,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// claude 二进制改为按版本下载到数据目录，由设置页选择生效版本。
-	// CCWEB_CLAUDE_BIN 仍然优先：它是显式的运维覆盖，不属于"PATH 回退"。
+	// claude 二进制只来自按版本下载到数据目录的托管版本，由设置页选择生效版本。
 	claudeMgr, err := claudebin.Open(cfg.ClaudeVersions)
 	if err != nil {
 		logger.Printf("启动失败: %v", err)
 		os.Exit(1)
 	}
-	resolveClaude := func() (string, error) {
-		if cfg.ClaudeBin != "" {
-			return process.Discover(cfg.ClaudeBin)
-		}
-		return claudeMgr.BinPath()
-	}
+	resolveClaude := claudeMgr.BinPath
 
 	mgr := manager.New(cfg, resolveClaude, store, func(sid string, ev session.Event) {
 		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data})

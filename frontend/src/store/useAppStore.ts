@@ -523,9 +523,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // /api/info 里的安装状态是启动时算的：装完/切版本后要同步，
       // 否则「未安装」弹窗和侧栏更新标记会一直停在旧值。
       const cur = get().info;
-      // 外部二进制（CCWEB_CLAUDE_BIN）也算可用：否则轮询一次就会把
-      // info.claude_installed 打回 false，首屏又弹出安装引导。
-      const usable = st.installed.length > 0 || Boolean(st.external_bin);
+      const usable = st.installed.length > 0;
       if (cur && (cur.claude_installed !== usable || cur.claude_active !== st.active)) {
         set({
           info: {

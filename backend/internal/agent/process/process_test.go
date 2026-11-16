@@ -112,24 +112,6 @@ func countPrefix(list []string, prefix string) int {
 	return n
 }
 
-func TestDiscoverExplicitMissing(t *testing.T) {
-	if _, err := Discover("/nonexistent/definitely-not-claude"); err == nil {
-		t.Fatal("显式路径不存在时应报错")
-	}
-}
-
-func TestDiscoverRequiresExplicitPath(t *testing.T) {
-	if _, err := Discover(""); err == nil {
-		t.Fatal("空路径应报错：PATH 回退已移除，托管版本由 claudebin 提供")
-	}
-}
-
-func TestDiscoverRejectsDirectory(t *testing.T) {
-	if _, err := Discover(t.TempDir()); err == nil {
-		t.Fatal("传入目录时应报错")
-	}
-}
-
 func TestArgsEffort(t *testing.T) {
 	args := strings.Join(Args(Options{Effort: "high"}), " ")
 	if !strings.Contains(args, "--effort high") {

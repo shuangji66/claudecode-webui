@@ -117,18 +117,7 @@ export function DeploySettings() {
     <div className="mx-auto max-w-2xl space-y-6 pb-2">
       <h3 className="text-[15px] font-semibold text-ink">{t("部署", "Deployment")}</h3>
 
-      {claude?.external_bin ? (
-        <div className="flex items-start gap-2 rounded-xl border border-line bg-panel/60 px-3 py-2.5 text-[11.5px] leading-relaxed text-ink-2">
-          <IconCheck size={14} className="mt-0.5 shrink-0 text-ok" />
-          <span>
-            {t("当前使用外部 claude（CCWEB_CLAUDE_BIN）：", "Using an external claude (CCWEB_CLAUDE_BIN): ")}
-            <code className="break-all font-mono text-[11px]">{claude.external_bin}</code>
-            {t("。装了托管版本并切换后才会改用它；要回到外部二进制，去掉这个环境变量并重启。", ". Managed versions take over once installed and selected; remove the variable and restart to go back.")}
-          </span>
-        </div>
-      ) : null}
-
-      {installed.length === 0 && !busy && !claude?.external_bin && (
+      {installed.length === 0 && !busy && (
         <div className="flex items-start gap-2 rounded-xl border border-warn/40 bg-warn/10 px-3 py-2.5 text-[11.5px] leading-relaxed text-ink">
           <IconAlert size={14} className="mt-0.5 shrink-0 text-warn" />
           <span>{t("尚未安装任何版本，claude 会话无法启动。先选一个源并安装最新版。", "No version installed yet — conversations cannot start. Pick a source and install the latest version.")}</span>

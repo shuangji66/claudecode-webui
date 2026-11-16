@@ -91,8 +91,8 @@ hub ── manager ── session ── process ── claude (NDJSON)
     图片/PDF 白名单，并带 `CSP: sandbox`——不要让工作区的 HTML/SVG 以同源页面执行脚本。
 14. **Git 只调 CLI、不经 shell**。路径参数前加 `--literal-pathspecs`，rev/hash/分支前加
     `--end-of-options`；提交沿用用户全局身份，禁止设置 `user.name/email`。
-15. **claude 二进制只能来自托管版本或显式 `CCWEB_CLAUDE_BIN`**。不要再加 PATH / 程序同目录
-    回退：NAS 上经常同时存在几份 claude，"跑的是哪个版本"必须能在界面上看到。
+15. **claude 二进制只能来自托管版本**。不要加 PATH / 程序同目录 / 环境变量回退：
+    NAS 上经常同时存在几份 claude，"跑的是哪个版本"必须能在界面上看到、且只能由面板切换。
 16. **对话 id 必须稳定**。新建会话用 UUID 作为 `--session-id`，恢复用同一个 UUID `--resume`；
     `Info.ID`、转录文件名、`conversations.json`、前端 active id 必须是同一个值。
     不要用「按 cwd ensure 一个新的」来恢复旧对话——那会造出新对话、丢掉上下文。
