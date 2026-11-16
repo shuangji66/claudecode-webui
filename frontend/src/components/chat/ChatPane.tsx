@@ -2,8 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
-import { OverviewPanel } from "./OverviewPanel";
-import { TopBar, type ChatTab } from "../layout/TopBar";
+import { TopBar } from "../layout/TopBar";
 import { PermissionPanel } from "../permission/PermissionPanel";
 import type { PermissionPayload } from "../../transport/types";
 import { conversationTitle } from "../../lib/labels";
@@ -25,7 +24,6 @@ interface Props {
 export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, onAddWorkspace, rightOpen, onToggleRight }: Props) {
   const t = useT();
   const locale = useLocale();
-  const info = useAppStore((s) => s.info);
   const activeId = useAppStore((s) => s.activeId);
   const sessions = useAppStore((s) => s.sessions);
   const conversations = useAppStore((s) => s.conversations);
@@ -43,9 +41,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
   const setPermissionMode = useAppStore((s) => s.setPermissionMode);
   const replyPermission = useAppStore((s) => s.replyPermission);
   const retryConnection = useAppStore((s) => s.retryConnection);
-  const createSession = useAppStore((s) => s.createSession);
 
-  const [tab, setTab] = useState<ChatTab>("chat");
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [mode, setModeState] = useState("");
 
@@ -76,10 +72,6 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
   useEffect(() => {
     setModeState(init?.current_permission_mode ?? settings?.permission_mode ?? "");
   }, [init?.current_permission_mode, settings?.permission_mode, activeId]);
-
-  useEffect(() => {
-    if (!activeId) setTab("chat");
-  }, [activeId]);
 
   useEffect(() => {
     document.title = session ? title : "Claude Code";
@@ -156,20 +148,12 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
     return copyText(markdown);
   };
 
-  const newChat = () => {
-    if (currentWorkspace) void createSession(currentWorkspace);
-    else onAddWorkspace();
-  };
-
   return (
     <div className="flex h-full min-h-0 flex-col bg-canvas">
       <TopBar
         session={session}
         title={title}
         busy={busy}
-        tab={tab}
-        mode={mode}
-        onTab={setTab}
         onToggleSidebar={onToggleSidebar}
         onToggleCollapse={onToggleCollapse}
         onOpenSettings={onOpenSettings}
@@ -207,21 +191,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
       )}
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        {tab === "overview" ? (
-          <OverviewPanel
-            session={session}
-            init={init}
-            settings={settings}
-            info={info}
-            conn={conn}
-            mode={mode}
-            state={state}
-            items={itemList}
-            currentWorkspace={currentWorkspace}
-            onNewChat={newChat}
-            onOpenSettings={onOpenSettings}
-          />
-        ) : activeId ? (
+        {activeId ? (
           <MessageList items={itemList} empty={t("开始新的对话", "Start a new conversation")} />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
@@ -257,57 +227,53 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onOpenSettings, on
         )}
       </div>
 
-      {tab === "chat" && (
-        <>
-          {mismatch && (
-            <div className="mx-auto flex w-full max-w-[820px] items-start gap-2 px-4 pb-1 text-[11px] text-warn md:px-6">
-              <IconAlert size={13} className="mt-0.5 shrink-0" />
-              {t(`当前会话使用的是「${session?.provider}」，与所选模型的提供商不同。切换提供商的模型需要新建会话。`, `This session uses "${session?.provider}", which differs from the selected model's provider. Start a new session to switch providers.`)}
-            </div>
-          )}
-
-          {pending.length > 0 && (
-            <div className="dsh-scroll mx-auto max-h-[38vh] w-full max-w-[820px] shrink-0 overflow-y-auto px-3 pt-2 md:px-6">
-              <div className="space-y-2">
-                {pending.map((p) => (
-                  <PermissionPanel key={p.request_id} perm={p} onReply={(opts) => handleReply(p, opts)} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="shrink-0 px-3 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] pt-2 md:px-6 md:pb-4">
-            <div className="mx-auto w-full max-w-[820px]">
-              <Composer
-                disabled={disabled}
-                sendBlocked={sendBlocked}
-                starting={starting}
-                commands={init?.commands ?? []}
-                busy={busy}
-                placeholder={placeholder}
-                modelOptions={modelOptions}
-                selectedKey={selectedKey}
-                selectedEffort={selectedEffort}
-                permissionMode={mode}
-                onSelectModel={(provider, model) => {
-                  const opt = findOption(modelOptions, provider, model);
-                  void selectModel(provider, model, effortFor(opt?.spec, undefined));
-                }}
-                onSelectEffort={(effort) => {
-                  if (selected?.provider && selected.model) void selectModel(selected.provider, selected.model, effort);
-                }}
-                onPermissionMode={(m) => {
-                  setModeState(m);
-                  setPermissionMode(m);
-                }}
-                onSend={(text, attachments) => void sendPrompt(text, attachments, t("附件：", "File: "))}
-                onInterrupt={interrupt}
-                footer={footer}
-              />
-            </div>
-          </div>
-        </>
+      {mismatch && (
+        <div className="mx-auto flex w-full max-w-[820px] items-start gap-2 px-4 pb-1 text-[11px] text-warn md:px-6">
+          <IconAlert size={13} className="mt-0.5 shrink-0" />
+          {t(`当前会话使用的是「${session?.provider}」，与所选模型的提供商不同。切换提供商的模型需要新建会话。`, `This session uses "${session?.provider}", which differs from the selected model's provider. Start a new session to switch providers.`)}
+        </div>
       )}
+
+      {pending.length > 0 && (
+        <div className="dsh-scroll mx-auto max-h-[38vh] w-full max-w-[820px] shrink-0 overflow-y-auto px-3 pt-2 md:px-6">
+          <div className="space-y-2">
+            {pending.map((p) => (
+              <PermissionPanel key={p.request_id} perm={p} onReply={(opts) => handleReply(p, opts)} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="shrink-0 px-3 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] pt-2 md:px-6 md:pb-4">
+        <div className="mx-auto w-full max-w-[820px]">
+          <Composer
+            disabled={disabled}
+            sendBlocked={sendBlocked}
+            starting={starting}
+            commands={init?.commands ?? []}
+            busy={busy}
+            placeholder={placeholder}
+            modelOptions={modelOptions}
+            selectedKey={selectedKey}
+            selectedEffort={selectedEffort}
+            permissionMode={mode}
+            onSelectModel={(provider, model) => {
+              const opt = findOption(modelOptions, provider, model);
+              void selectModel(provider, model, effortFor(opt?.spec, undefined));
+            }}
+            onSelectEffort={(effort) => {
+              if (selected?.provider && selected.model) void selectModel(selected.provider, selected.model, effort);
+            }}
+            onPermissionMode={(m) => {
+              setModeState(m);
+              setPermissionMode(m);
+            }}
+            onSend={(text, attachments) => void sendPrompt(text, attachments, t("附件：", "File: "))}
+            onInterrupt={interrupt}
+            footer={footer}
+          />
+        </div>
+      </div>
     </div>
   );
 }

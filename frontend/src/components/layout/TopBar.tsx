@@ -1,19 +1,13 @@
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import type { SessionInfo } from "../../transport/types";
-import { permissionLabel } from "../../lib/labels";
-import { useLocale, useT } from "../../lib/i18n";
+import { useT } from "../../lib/i18n";
 import { Menu } from "../common/Menu";
 import { IconCheck, IconCopy, IconMore, IconPanel, IconSettings, IconSidebarRight } from "../common/Icons";
-
-export type ChatTab = "chat" | "overview";
 
 interface Props {
   session: SessionInfo | null;
   title: string;
   busy: boolean;
-  tab: ChatTab;
-  mode: string;
-  onTab: (tab: ChatTab) => void;
   onToggleSidebar: () => void;
   onToggleCollapse: () => void;
   onOpenSettings: () => void;
@@ -23,9 +17,8 @@ interface Props {
 }
 
 
-export function TopBar({ session, title, busy, tab, mode, onTab, onToggleSidebar, onToggleCollapse, onOpenSettings, onCopySession, rightOpen, onToggleRight }: Props) {
+export function TopBar({ session, title, busy, onToggleSidebar, onToggleCollapse, onOpenSettings, onCopySession, rightOpen, onToggleRight }: Props) {
   const t = useT();
-  const locale = useLocale();
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "ok" | "fail">("idle");
 
@@ -59,11 +52,7 @@ export function TopBar({ session, title, busy, tab, mode, onTab, onToggleSidebar
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <h1 className="truncate text-[14px] font-semibold text-ink">{session ? title : "Claude Code"}</h1>
-            <span className="hidden shrink-0 items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[10px] text-muted sm:inline-flex">
-              <span className="h-1.5 w-1.5 rounded-full bg-brand" />
-              {permissionLabel(mode, locale)}
-            </span>
-            {busy && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand sm:hidden" />}
+            {busy && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand" />}
           </div>
         </div>
 
@@ -120,30 +109,6 @@ export function TopBar({ session, title, busy, tab, mode, onTab, onToggleSidebar
           ]}
         />
       </div>
-
-      <div className="flex h-[38px] items-end gap-1 px-3 md:px-4">
-        <TabButton active={tab === "chat"} onClick={() => onTab("chat")}>
-          {t("对话", "Chat")}
-        </TabButton>
-        <TabButton active={tab === "overview"} onClick={() => onTab("overview")}>
-          {t("概览", "Overview")}
-        </TabButton>
-      </div>
     </header>
-  );
-}
-
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`relative px-1.5 pb-2 text-[12.5px] transition ${
-        active ? "font-medium text-ink" : "text-muted hover:text-ink"
-      }`}
-    >
-      {children}
-      {active && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-brand" />}
-    </button>
   );
 }
