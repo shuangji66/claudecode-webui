@@ -166,20 +166,22 @@ export function AboutSettings() {
     <div className="mx-auto max-w-2xl space-y-7">
       <div className="flex items-start gap-3">
         <BrandMark size={40} className="shrink-0 text-ink" />
-        <div className="min-w-0 flex-1">
-          <h3 className="text-[15px] font-semibold text-ink">Claude Code WebUI</h3>
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <h3 className="text-[15px] font-semibold text-ink">Claude Code WebUI</h3>
+            <a
+              href="https://github.com/shuangji66/claudecode-webui"
+              target="_blank"
+              rel="noreferrer noopener"
+              aria-label={t("GitHub 仓库", "GitHub repository")}
+              title="github.com/shuangji66/claudecode-webui"
+              className="-my-0.5 rounded-md p-1 text-muted transition hover:bg-panel-strong hover:text-ink"
+            >
+              <IconGitHub size={15} />
+            </a>
+          </div>
           {version && <p className="text-[11.5px] text-muted">{version}</p>}
         </div>
-        <a
-          href="https://github.com/shuangji66/claudecode-webui"
-          target="_blank"
-          rel="noreferrer noopener"
-          aria-label={t("GitHub 仓库", "GitHub repository")}
-          title="github.com/shuangji66/claudecode-webui"
-          className="rounded-lg p-1.5 text-muted transition hover:bg-panel-strong hover:text-ink"
-        >
-          <IconGitHub size={18} />
-        </a>
       </div>
 
       <p className="text-[12.5px] leading-relaxed text-ink-2">
