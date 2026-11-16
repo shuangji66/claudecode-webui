@@ -68,8 +68,18 @@ describe("commandDescription", () => {
     expect(commandDescription("model", undefined, "zh")).toBe("切换本会话模型");
   });
 
+  it("CLI 自带的 skill 也有中文说明", () => {
+    const en = "Skill — Review the changed code for cleanup opportunities and apply the fixes.";
+    expect(commandDescription("simplify", en, "zh")).toBe("精简改动过的代码");
+    expect(commandDescription("fewer-permission-prompts", en, "zh")).toBe("生成权限白名单，少弹审批");
+    expect(commandDescription("verify", en, "zh")).toBe("跑起来确认改动生效");
+  });
+
   it("没收录的命令回落 CLI 描述；英文环境直接用原文", () => {
-    expect(commandDescription("deep-research", "Deep research harness", "zh")).toBe("Deep research harness");
+    // 用户自己写的 skill / MCP 命令不可能有中文，只能回落原文。
+    expect(commandDescription("my-own-skill", "Does my thing", "zh")).toBe("Does my thing");
+    expect(commandDescription("my-own-skill", undefined, "zh")).toBe("");
     expect(commandDescription("compact", "Compact the conversation", "en")).toBe("Compact the conversation");
+    expect(commandDescription("simplify", "Skill — tidy up", "en")).toBe("Skill — tidy up");
   });
 });

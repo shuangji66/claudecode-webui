@@ -115,6 +115,23 @@ describe("Composer 添加菜单", () => {
   });
 });
 
+describe("Composer 指令补全", () => {
+  it("补全列表用中文说明，而不是 CLI 的英文长句", () => {
+    setup({
+      commands: [
+        {
+          name: "simplify",
+          description: "Skill — Review the changed code for cleanup opportunities and apply the fixes.",
+        },
+      ],
+    });
+    fireEvent.change(screen.getByLabelText("消息输入框"), { target: { value: "/si" } });
+
+    expect(screen.getByText("精简改动过的代码")).toBeInTheDocument();
+    expect(screen.queryByText(/Skill — Review/)).toBeNull();
+  });
+});
+
 describe("Composer 权限模式", () => {
   function setupMode() {
     const onPermissionMode = vi.fn();

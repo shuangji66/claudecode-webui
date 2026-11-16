@@ -88,6 +88,12 @@ export function Composer({
     return commands.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8);
   }, [text, commands]);
 
+  // 补全列表和「+ → 指令」共用同一份中文说明，别一个中文一个英文。
+  const suggestionRows = useMemo(
+    () => suggestions.map((c) => ({ ...c, desc: commandDescription(c.name, c.description, locale) })),
+    [suggestions, locale],
+  );
+
   const submit = async () => {
     const value = text.trim();
     // sendBlocked = 会话还没就绪 / WS 未打开。按钮的 disabled 里本来就有它，
@@ -254,9 +260,9 @@ export function Composer({
 
   return (
     <div className="w-full">
-      {suggestions.length > 0 && (
+      {suggestionRows.length > 0 && (
         <div className="mb-2 max-h-56 overflow-y-auto rounded-xl border border-line bg-canvas p-1 shadow-soft">
-          {suggestions.map((c) => (
+          {suggestionRows.map((c) => (
             <button
               key={c.name}
               type="button"
@@ -268,7 +274,7 @@ export function Composer({
             >
               <span className="font-mono font-medium text-ink">/{c.name}</span>
               {c.argumentHint && <span className="text-faint">{c.argumentHint}</span>}
-              {c.description && <span className="ml-auto max-w-[55%] truncate text-[11px] text-muted">{c.description}</span>}
+              {c.desc && <span className="ml-auto max-w-[55%] truncate text-[11px] text-muted">{c.desc}</span>}
             </button>
           ))}
         </div>

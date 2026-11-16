@@ -96,41 +96,128 @@ export function stateLabel(state: string | undefined, locale: Locale = "zh"): st
 }
 
 /**
- * 常见斜杠命令的简短中文说明。
+ * 内置斜杠命令（含 Claude Code 自带的 skill）的简短中文说明。
  *
- * CLI 自带的 description 是英文长句（有些还带参数说明），塞进 264px 的菜单里只能
- * 看到「Use this skill wheneve…」。这里给常用命令一句中文短说明，没收录的回落到
- * CLI 原文（英文环境下本来就该用原文）。
+ * CLI 自带的 description 是英文长句（有些还带参数说明），塞进菜单里只能看到
+ * 「Use this skill wheneve…」。这里给一句中文短说明，**没收录的回落到 CLI 原文**
+ * （用户自己写的 skill / 插件 / MCP 命令本来就没有中文，英文环境下也该用原文）。
+ *
+ * 名字清单随 claude 版本漂移（会新增、也会下线），所以这张表只是「尽力覆盖」，
+ * 不要为了补全去猜某个命令的语义——不确定就留空，让它回落原文。
  */
 const COMMAND_LABELS: Record<string, string> = {
-  compact: "压缩对话上下文",
-  model: "切换本会话模型",
+  // 会话与上下文
   clear: "清空当前会话",
+  new: "清空当前会话",
+  reset: "清空当前会话",
+  compact: "压缩对话上下文",
+  autocompact: "配置自动压缩上下文",
+  context: "查看上下文占用",
+  rename: "重命名当前会话",
+  branch: "从当前对话分出新分支",
+  fork: "复制到后台新会话继续",
+  btw: "旁路提问，不进主对话",
+  recap: "一句话回顾当前会话",
+  resume: "恢复历史对话",
+  continue: "恢复历史对话",
+  rewind: "回退到之前的状态",
+  undo: "回退到之前的状态",
+  export: "导出对话",
+  copy: "复制上一条回复",
+  exit: "退出会话",
   help: "查看帮助",
-  init: "生成项目说明文件",
-  review: "审查改动",
-  "pr-comments": "拉取 PR 评论",
-  cost: "查看用量与花费",
-  usage: "查看用量",
   status: "查看会话状态",
-  doctor: "环境自检",
-  login: "登录账号",
-  logout: "退出登录",
-  memory: "编辑记忆文件",
+  usage: "查看用量",
+  cost: "查看用量与花费",
+  stats: "查看用量统计",
+  "release-notes": "查看更新日志",
+  bug: "反馈问题",
+  feedback: "发送产品反馈",
+  insights: "生成使用报告",
+  "team-onboarding": "生成团队上手指南",
+
+  // 模型与渲染
+  model: "切换本会话模型",
+  effort: "设置推理强度",
+  fast: "切换快速模式",
+  plan: "切换计划模式",
+  "output-style": "切换输出风格",
+  statusline: "配置状态栏",
+  keybindings: "配置快捷键",
+  vim: "切换 vim 编辑模式",
+
+  // 配置与扩展
   config: "打开配置",
-  agents: "管理子代理",
+  settings: "打开设置",
+  init: "生成项目说明文件",
+  memory: "编辑记忆文件",
+  permissions: "管理权限规则",
   hooks: "管理钩子",
   mcp: "管理 MCP 服务",
-  permissions: "管理权限规则",
-  plan: "切换计划模式",
-  resume: "恢复历史对话",
-  export: "导出对话",
-  rewind: "回退到之前的状态",
+  plugin: "管理插件",
+  skills: "管理技能",
+  "reload-plugins": "重新加载插件",
+  "reload-skills": "重新加载技能",
+  "add-dir": "添加可访问目录",
+  cd: "切换会话工作目录",
+  sandbox: "配置沙箱",
+  import: "导入其他工具的配置",
+  "privacy-settings": "隐私设置",
+  upgrade: "升级 Claude Code",
+  "setup-bedrock": "配置 Bedrock 接入",
+  "setup-vertex": "配置 Vertex 接入",
+
+  // 账号、宿主与设备
+  login: "登录账号",
+  logout: "退出登录",
+  ide: "管理 IDE 集成",
+  chrome: "配置浏览器集成",
+  "claude-in-chrome": "在浏览器里执行任务",
+  desktop: "在桌面端继续会话",
+  mobile: "在手机端继续会话",
+  "install-github-app": "安装 GitHub App",
+  "install-slack-app": "安装 Slack App",
+
+  // 子代理与后台
+  agents: "管理子代理",
+  "list-agents": "列出子代理",
+  subtask: "派一个子任务给子代理",
+  tasks: "查看后台任务",
+  goal: "设置持续目标",
+  doctor: "环境自检",
+  checkup: "环境自检",
+
+  // 代码改动
+  review: "审查改动",
+  "code-review": "审查改动，找真 bug",
+  "security-review": "审查改动的安全问题",
+  simplify: "精简改动过的代码",
+  verify: "跑起来确认改动生效",
+  run: "启动项目实际跑一遍",
+  "run-skill-generator": "生成项目启动/验证技能",
+  diff: "查看工作区改动",
+  // 2.1.91 已下线，老版本还会列出来
+  "pr-comments": "拉取 PR 评论",
+  batch: "拆成多份并行改造",
+  loop: "按间隔重复跑同一指令",
+  proactive: "按间隔重复跑同一指令",
+  "fewer-permission-prompts": "生成权限白名单，少弹审批",
+  debug: "打开调试日志排查问题",
+  "skill-doctor": "查看技能上下文开销",
   todos: "查看待办",
-  vim: "切换 vim 编辑模式",
-  context: "查看上下文占用",
-  bug: "反馈问题",
-  "release-notes": "查看更新日志",
+
+  // 自带 skill 与工作流
+  "deep-research": "多路检索并出带引用的报告",
+  dataviz: "图表与看板设计指导",
+  design: "出界面草图和流程图",
+  "design-login": "授权设计系统访问",
+  "design-sync": "把设计系统同步给 Claude Design",
+  slides: "生成演示文稿",
+  "claude-api": "Claude API 参考资料",
+  "plugin-authoring": "插件开发参考",
+  "workflow-authoring": "动态工作流编写参考",
+  "artifact-capabilities": "成果页可用能力参考",
+  "artifact-diagramming": "成果页画图指导",
 };
 
 /** 命令在菜单里的一句说明：中文优先，没收录的用 CLI 自带描述（由 UI 截断）。 */
