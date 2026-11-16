@@ -57,7 +57,7 @@ hub ── manager ── session ── process ── claude (NDJSON)
 |---|---|---|
 | `gateway` | manager 接口、history、project、workspace、authz、hub、fsapi、gitctl、terminal | 直接操作 `exec.Cmd`、直接读 claude 输出 |
 | `fsapi` | 标准库 | HTTP / 鉴权（由 gateway 负责） |
-| `gitctl` | 标准库、系统 `git` | shell 拼接、HTTP |
+| `gitctl` | 标准库、系统 `git`、`netproxy`（只拿代理环境变量） | shell 拼接、HTTP |
 | `terminal` | 标准库、Linux PTY ioctl | HTTP / WS 帧（由 gateway 负责） |
 | `conversation` | 标准库 | claude 转录解析（由 history 负责） |
 | `agent/manager` | `agent/session`、`agent/process`、config、settings | 处理 HTTP / WS |

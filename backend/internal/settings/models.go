@@ -110,7 +110,7 @@ func FetchModels(ctx context.Context, p Provider) ModelsResult {
 	}
 	res.Tried = []string{display}
 
-	client := &http.Client{Timeout: ProbeTimeout}
+	client := proxyClient()
 	status, body, truncated, err := doAuth(ctx, client, http.MethodGet, url, p, nil, authKind(protocol))
 	res.Status = status
 	attempt := Attempt{Path: display, Status: status}

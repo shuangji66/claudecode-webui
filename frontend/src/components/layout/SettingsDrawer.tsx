@@ -596,7 +596,7 @@ function ProxySettings() {
       <div>
         <h3 className="text-[15px] font-semibold text-ink">{t("代理", "Proxy")}</h3>
         <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
-          {t("为 claude 子进程设置 HTTP / HTTPS / SOCKS5 代理；留空表示直连。保存后会重启所有正在运行的 claude 会话，对话会用 --resume 恢复。", "Set an HTTP / HTTPS / SOCKS5 proxy for the claude subprocess. Leave blank for direct access. Saving restarts all running claude sessions and resumes them with --resume.")}
+          {t("为 claude 子进程、右侧栏的 git 拉取，以及面板自己的请求（拉模型列表、探测端点、下载 claude）设置 HTTP / HTTPS / SOCKS5 代理；留空表示直连。保存后会重启所有正在运行的 claude 会话，对话会用 --resume 恢复。", "Set an HTTP / HTTPS / SOCKS5 proxy for the claude subprocess, the sidebar's git pull, and the panel's own requests (model list, endpoint probe, claude download). Leave blank for direct access. Saving restarts all running claude sessions and resumes them with --resume.")}
         </p>
       </div>
 

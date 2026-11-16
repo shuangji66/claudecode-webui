@@ -27,11 +27,15 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
+
+	"ccweb/backend/internal/netproxy"
+	"strings"
 )
 
 // 支持的 npm 源标识。字符串直接落盘，改名会让老配置失效。
@@ -151,7 +155,7 @@ func Open(dir string) (*Manager, error) {
 		statePath: filepath.Join(dir, "state.json"),
 		platform:  Platform(),
 		client: &http.Client{Transport: &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
+			Proxy:                 proxyForRequest,
 			DialContext:           (&net.Dialer{Timeout: 15 * time.Second}).DialContext,
 			TLSHandshakeTimeout:   15 * time.Second,
 			ResponseHeaderTimeout: 30 * time.Second,
@@ -522,4 +526,25 @@ func trimVersion(v string) string {
 		return v[1:]
 	}
 	return v
+}
+
+// proxySource 返回面板设置里的代理地址（空 = 沿用进程环境）。
+//
+// 下载 npm 平台包是最需要代理的一步（官方 CDN 在国内常常不通），
+// 而 ProxyFromEnvironment 只认进程启动时的变量，所以面板里填的代理必须显式接进来。
+var proxySource func() string
+
+// SetProxySource 注册代理来源；装配层启动时调用一次。
+func SetProxySource(fn func() string) {
+	proxySource = fn
+}
+
+// proxyForRequest 优先用面板设置，其次退回进程环境（部署时可以只配环境变量）。
+func proxyForRequest(req *http.Request) (*url.URL, error) {
+	if proxySource != nil {
+		if p := strings.TrimSpace(proxySource()); p != "" {
+			return netproxy.Func(p)(req)
+		}
+	}
+	return http.ProxyFromEnvironment(req)
 }

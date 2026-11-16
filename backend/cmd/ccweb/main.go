@@ -27,6 +27,7 @@ import (
 	"ccweb/backend/internal/settings"
 	"ccweb/backend/internal/skills"
 	"ccweb/backend/internal/workspace"
+	"ccweb/backend/internal/gitctl"
 )
 
 // version 由 -ldflags "-X main.version=..." 注入。
@@ -67,6 +68,14 @@ func main() {
 		os.Exit(1)
 	}
 	resolveClaude := claudeMgr.BinPath
+
+	// 代理设置要能覆盖三类出站：claude 子进程（manager 注入环境变量）、
+	// 面板自己的 HTTP（拉模型/探测/下载 claude）、以及 spawn 出来的 git。
+	// 后两者不会自动读设置，必须在装配层把取值函数接进去。
+	proxyNow := func() string { return store.Get().ProxyURL }
+	settings.SetProxySource(proxyNow)
+	claudebin.SetProxySource(proxyNow)
+	gitctl.SetProxySource(proxyNow)
 
 	mgr := manager.New(cfg, resolveClaude, store, func(sid string, ev session.Event) {
 		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data})

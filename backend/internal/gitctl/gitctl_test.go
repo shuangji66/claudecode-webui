@@ -207,3 +207,35 @@ func TestStageCommitUnstageAndDiscard(t *testing.T) {
 		t.Log("pull 在无 upstream 的仓库上意外成功（git 版本差异？）")
 	}
 }
+
+func TestGitEnvProxy(t *testing.T) {
+	// 继承的代理变量必须被剔除，避免和面板设置打架。
+	t.Setenv("HTTPS_PROXY", "http://inherited:3128")
+	t.Setenv("http_proxy", "http://inherited:3128")
+
+	SetProxySource(nil)
+	env := gitEnv()
+	for _, kv := range env {
+		if strings.HasPrefix(strings.ToLower(kv), "https_proxy=") || strings.HasPrefix(strings.ToLower(kv), "http_proxy=") {
+			t.Fatalf("没配代理时不应带代理变量：%s", kv)
+		}
+	}
+
+	SetProxySource(func() string { return "socks5h://127.0.0.1:1080" })
+	env = gitEnv()
+	joined := strings.Join(env, "\n")
+	for _, want := range []string{
+		"https_proxy=socks5h://127.0.0.1:1080",
+		"HTTPS_PROXY=socks5h://127.0.0.1:1080",
+		"no_proxy=localhost,127.0.0.1,::1",
+		"LC_ALL=C",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("缺少 %q：\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "inherited") {
+		t.Fatalf("继承的代理变量应被剔除：\n%s", joined)
+	}
+	SetProxySource(nil)
+}

@@ -23,6 +23,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"ccweb/backend/internal/netproxy"
 )
 
 // 输出与行数上限：一个病态仓库不能把网关内存打爆。
@@ -372,9 +374,20 @@ func runAt(ctx context.Context, cwd string, args ...string) (string, error) {
 
 // gitEnv 继承操作者环境，但剔除会把 -C 重定向到别处的仓库变量。
 // 否则部署环境里一个 GIT_DIR 就能让面板读写另一个仓库。
+// proxySource 返回面板设置里的代理地址（空 = 直连）。
+//
+// 为什么要显式传：git 自己只看环境变量，而「设置里的代理」不在进程环境里；
+// 不注入的话 `git pull` 永远是直连——用户在代理里看不到任何流量。
+var proxySource func() string
+
+// SetProxySource 注册代理来源（装配层在启动时注入）。
+func SetProxySource(fn func() string) {
+	proxySource = fn
+}
+
 func gitEnv() []string {
 	src := os.Environ()
-	out := make([]string, 0, len(src)+4)
+	out := make([]string, 0, len(src)+10)
 	for _, kv := range src {
 		skip := false
 		for _, key := range []string{"GIT_DIR=", "GIT_WORK_TREE=", "GIT_INDEX_FILE=", "GIT_OBJECT_DIRECTORY=", "GIT_ALTERNATE_OBJECT_DIRECTORIES="} {
@@ -386,6 +399,12 @@ func gitEnv() []string {
 		if !skip {
 			out = append(out, kv)
 		}
+	}
+	// 继承的代理变量先剔除，再按设置注入：否则宿主机环境会和面板设置打架，
+	// 出现「面板里填了代理却按宿主机变量直连」这种难查的状态。
+	out = netproxy.StripEnv(out)
+	if proxySource != nil {
+		out = append(out, netproxy.Env(proxySource())...)
 	}
 	return append(out, "LC_ALL=C", "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1")
 }

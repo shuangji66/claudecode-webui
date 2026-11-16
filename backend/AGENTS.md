@@ -128,6 +128,13 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `Settings.Env()` 因此两套都注入，`process.CleanEnv` 两套都先剔除继承值。
   `socks5://` 的 URL 它也不做 SOCKS 握手，而是当成 HTTP 代理发 `CONNECT`——配 socks 时
   代理端看到的是普通 CONNECT，不是 SOCKS5 greeting。
+- **代理要覆盖三类出站**：① claude 子进程（`Settings.Env()` → `process.CleanEnv` 后追加）；
+  ② 面板自己的 HTTP（拉模型列表 / 探测端点 / 验证模型 / 下载 claude）；③ 右侧栏的 git 子进程。
+  后两者**不会**自动读设置：Go 的 `http.ProxyFromEnvironment` 只读进程启动时的环境变量，
+  git 只看自己的环境。所以 `internal/netproxy` 把「当前代理」翻译成 `Transport.Proxy`
+  与子进程环境两套形式，装配层（`cmd/ccweb`）用 `SetProxySource` 把
+  `settings` / `claudebin` / `gitctl` 的取值函数接上。**新增任何出站请求都要接这一层**，
+  否则用户会看到「配了代理但没流量」。
 - 代理只在进程启动时生效：`POST /api/settings/proxy` 保存后关闭全部会话，再按原 id
   `Resume`（空对话没有转录时才退回 `Ensure`）；`Settings.Env()` 注入大小写两套 proxy 变量和 localhost `NO_PROXY`，
   `process.CleanEnv` 必须剔除继承的代理变量，保证空值=直连。

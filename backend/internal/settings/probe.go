@@ -86,7 +86,7 @@ func Probe(ctx context.Context, p Provider) ProbeResult {
 	}
 
 	start := time.Now()
-	client := &http.Client{Timeout: ProbeTimeout}
+	client := proxyClient()
 	protocol := p.ProtocolOrDefault()
 
 	if listableProtocols[protocol] {
