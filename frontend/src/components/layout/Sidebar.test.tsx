@@ -1,15 +1,16 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { Sidebar } from "./Sidebar";
 import { useAppStore } from "../../store/useAppStore";
 
-function renderSidebar() {
+function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
   render(
     <Sidebar
       onToggleCollapse={() => {}}
       onOpenSettings={() => {}}
       onAddWorkspace={() => {}}
       onOpenHistory={() => {}}
+      {...over}
     />,
   );
 }
@@ -25,5 +26,22 @@ describe("Sidebar 品牌区", () => {
     const brand = screen.getByText("Claude Code");
     expect(brand.closest("button")).toBeNull();
     expect(screen.getByText("CONSOLE").closest("button")).toBeNull();
+  });
+});
+
+describe("Sidebar 历史记录入口", () => {
+  beforeEach(() => {
+    useAppStore.setState({ conversations: [], workspaces: [], currentWorkspace: "", activeId: null });
+  });
+
+  // 历史记录放在「工作区」功能行，不再占底部一行。
+  it("历史记录在工作区标题行里，点击打开历史", () => {
+    const onOpenHistory = vi.fn();
+    renderSidebar({ onOpenHistory });
+
+    const button = screen.getByLabelText("历史记录");
+    expect(button.closest("button")).toBe(button);
+    fireEvent.click(button);
+    expect(onOpenHistory).toHaveBeenCalled();
   });
 });

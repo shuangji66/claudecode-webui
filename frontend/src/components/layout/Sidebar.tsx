@@ -12,7 +12,6 @@ import {
   IconArchive,
   IconChevronDown,
   IconChevronRight,
-  IconClock,
   IconClose,
   IconDownload,
   IconFolder,
@@ -342,6 +341,15 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         <div className="ml-auto flex items-center gap-0.5">
           <button
             type="button"
+            onClick={onOpenHistory}
+            className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+            aria-label={t("历史记录", "History")}
+            title={t("历史记录", "History")}
+          >
+            <IconHistory size={15} />
+          </button>
+          <button
+            type="button"
             onClick={() => {
               setSearchOpen((v) => !v);
               if (searchOpen) setQuery("");
@@ -517,10 +525,6 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             <span className="ml-auto text-[10px] text-brand/80">{t("去安装", "Install")}</span>
           </button>
         )}
-        <button type="button" onClick={onOpenHistory} className="side-row text-muted hover:text-ink">
-          <IconClock size={15} />
-          <span className="text-[12px]">{t("历史记录", "History")}</span>
-        </button>
         <button type="button" onClick={onOpenSettings} className="side-row text-muted hover:text-ink">
           <IconSettings size={15} />
           <span className="text-[12px]">{t("设置", "Settings")}</span>

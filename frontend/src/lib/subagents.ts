@@ -13,7 +13,18 @@ export interface SubagentEntry {
   usage?: SubagentInfo["usage"];
 }
 
-/** 按出现顺序（= 启动顺序）列出本会话的子代理，同一个 agent 只保留一条。 */
+function text(v: unknown): string {
+  return typeof v === "string" ? v : "";
+}
+
+/**
+ * 按出现顺序（= 启动顺序）列出本会话的子代理，同一个 agent 只保留一条。
+ *
+ * 标题的兜底顺序很重要：`subagent.description` 只在实时 task_started 里才有，
+ * 重启后回放主转录时拿不到（转录里没有 task_* 行）。但 Agent 的 tool_use 入参
+ * 一直带着 `description` / `subagent_type`，所以必须回落到那里，
+ * 否则菜单里只剩一串 agent id。
+ */
 export function subagentEntries(items: Item[]): SubagentEntry[] {
   const out: SubagentEntry[] = [];
   for (const it of items) {
@@ -21,11 +32,14 @@ export function subagentEntries(items: Item[]): SubagentEntry[] {
     const sub = it.subagent;
     const agentId = sub.agentId ?? sub.taskId;
     if (!agentId || out.some((e) => e.agentId === agentId)) continue;
+    const input = (it.input ?? {}) as Record<string, unknown>;
+    const description = sub.description || text(input.description);
+    const type = sub.type || text(input.subagent_type);
     out.push({
       agentId,
       taskId: sub.taskId,
-      label: sub.description || sub.type || agentId,
-      type: sub.type,
+      label: description || type || agentId,
+      type,
       status: sub.status,
       usage: sub.usage,
     });

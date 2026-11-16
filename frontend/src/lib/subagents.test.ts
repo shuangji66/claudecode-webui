@@ -56,3 +56,41 @@ describe("subagentEntries", () => {
     expect(runningSubagents(subagentEntries(items))).toBe(1);
   });
 });
+
+describe("subagentEntries 回放兜底", () => {
+  // 重启后回放主转录：没有 task_started，description 只能从 Agent 的入参里取。
+  it("subagent 没有描述时回落 tool_use 入参的 description / subagent_type", () => {
+    const replayed: Item[] = [
+      {
+        id: "r1",
+        seq: 0,
+        ts: 0,
+        kind: "tool",
+        toolUseId: "tu9",
+        name: "Agent",
+        input: { description: "加权随机待办生成器", prompt: "p", subagent_type: "general-purpose" },
+        result: "agentId: a9 (use SendMessage)",
+        subagent: { taskId: "a9", agentId: "a9", status: "completed" },
+      },
+    ];
+    const [entry] = subagentEntries(replayed);
+    expect(entry.label).toBe("加权随机待办生成器");
+    expect(entry.type).toBe("general-purpose");
+  });
+
+  it("入参也没有描述时才回落到 agent id", () => {
+    const bare: Item[] = [
+      {
+        id: "r2",
+        seq: 0,
+        ts: 0,
+        kind: "tool",
+        toolUseId: "tu10",
+        name: "Agent",
+        input: {},
+        subagent: { taskId: "a10", agentId: "a10", status: "completed" },
+      },
+    ];
+    expect(subagentEntries(bare)[0].label).toBe("a10");
+  });
+});

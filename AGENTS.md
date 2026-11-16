@@ -259,6 +259,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
   审批面板据此标「来自子代理 X」并能跳过去。丢掉它，用户就分不清是谁在申请权限。
 - **页头的「子智能体 N」从消息流现算**（`lib/subagents.ts` 的 `subagentEntries`），
   不额外存一份状态；点开列表用 `showSubagent` 打开右侧栏标签。
+- **重启后标题会「变成一串 agent id」是踩过的坑**：主转录里没有 `task_started`，
+  `subagent.description` 拿不到；但 Agent 的 `tool_use` 入参一直带着 `description` /
+  `subagent_type`，`subagentEntries` 必须回落到入参。状态/用量/agentId 则靠 tool_result
+  里的 `<usage>` 与 `agentId:` 复原。
 - **停止/转后台走控制请求**：`stop_task{task_id}`、`background_tasks{tool_use_id?}`；
   会话进程已被回收时网关返回 409，让前端提示重连，而不是假装停成功。
 
