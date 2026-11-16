@@ -83,6 +83,13 @@ describe("MessageList 轮次刻度", () => {
     expect(screen.getByRole("button", { name: /跳到第 1 轮/ })).toHaveAttribute("aria-current", "true");
   });
 
+  // 刻度是从正文右侧硬挤出来的 20px，3px 高的刻度在手机上也不好点；
+  // 手机上整条隐藏，并保留原生滚动条当「还能滚」的提示。
+  it("刻度栏只在 md 以上渲染", () => {
+    render(<MessageList items={conversation(3)} />);
+    expect(screen.getByTestId("turn-rail")).toHaveClass("hidden", "md:flex");
+  });
+
   it("点被窗口截掉的刻度会先展开再跳", () => {
     render(<MessageList items={conversation(100)} />);
     // 默认只渲染最近 80 条，第一条问题早被截掉

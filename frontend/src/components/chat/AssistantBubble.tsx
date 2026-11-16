@@ -19,12 +19,20 @@ export function AssistantBubble({ text, streaming }: { text: string; streaming: 
         <Markdown text={text} />
         {streaming && <span className="ml-0.5 inline-block h-3.5 w-1.5 translate-y-0.5 rounded-sm bg-brand opacity-80" />}
       </div>
+      {/* 复制**常驻可见**，不再只靠 group-hover：触屏没有 hover，手机上等于没有入口。
+          这行始终占高度（h-4），出现与否不会让消息上下跳。 */}
       {!streaming && text.trim() && (
-        <div className="mt-1 flex h-4 items-center gap-1 text-[10px] text-faint opacity-0 transition group-hover:opacity-100">
-          <button type="button" onClick={() => void copy()} className="rounded p-0.5 hover:text-ink" aria-label={t("复制回复", "Copy reply")}>
+        <div className="mt-1 flex h-4 items-center gap-1 text-[10px] text-faint">
+          <button
+            type="button"
+            onClick={() => void copy()}
+            aria-label={t("复制回复", "Copy reply")}
+            title={t("复制回复", "Copy reply")}
+            className="-m-1 rounded p-1 hover:text-ink active:text-brand"
+          >
             <IconCopy size={12} />
           </button>
-          {copied && <span>{t("已复制", "Copied")}</span>}
+          {copied && <span className="text-brand">{t("已复制", "Copied")}</span>}
         </div>
       )}
     </div>

@@ -320,10 +320,10 @@ export function MessageList({
       <div
         ref={scroller}
         data-testid="message-scroller"
-        className={`dsh-scroll h-full overflow-y-auto ${turns.length >= 2 ? "dsh-scroll-none" : ""}`}
+        className={`dsh-scroll h-full overflow-y-auto ${turns.length >= 2 ? "dsh-scroll-none-md" : ""}`}
         onScroll={onScroll}
       >
-        <div className={`mx-auto w-full max-w-[820px] px-4 py-6 md:px-6 md:py-8 ${turns.length >= 2 ? "pr-9 md:pr-10" : ""}`}>
+        <div className={`mx-auto w-full max-w-[820px] px-4 py-6 md:px-6 md:py-8 ${turns.length >= 2 ? "md:pr-10" : ""}`}>
           <div className="space-y-5">
             {hidden > 0 && (
               <div className="flex justify-center">
@@ -346,8 +346,13 @@ export function MessageList({
         </div>
       </div>
 
+      {/* 刻度栏只在 md 以上出现：手机上那 20px 是从正文里硬挤出来的，3px 高的
+          刻度也不好点，横向滑动还容易误触。手机上保留原生滚动条作为「还能滚」的提示。 */}
       {turns.length >= 2 && (
-        <div className="pointer-events-none absolute bottom-16 right-1 top-6 flex w-5 items-center justify-center">
+        <div
+          data-testid="turn-rail"
+          className="pointer-events-none absolute bottom-16 right-1 top-6 hidden w-5 items-center justify-center md:flex"
+        >
           <div className="dsh-scroll-none pointer-events-auto flex max-h-full flex-col items-end gap-[3px] overflow-y-auto py-1 pr-0.5">
             {turns.map((turn, index) => (
               <button

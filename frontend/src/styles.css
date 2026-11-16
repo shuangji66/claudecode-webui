@@ -269,6 +269,15 @@ pre {
   .dsh-scroll-none::-webkit-scrollbar {
     display: none;
   }
+  /* 同上，但只在桌面生效：刻度在手机上不渲染，那边要留着原生滚动条。 */
+  @media (min-width: 768px) {
+    .dsh-scroll-none-md {
+      scrollbar-width: none;
+    }
+    .dsh-scroll-none-md::-webkit-scrollbar {
+      display: none;
+    }
+  }
 
   .chat-text {
     font-size: var(--chat-font-size);
