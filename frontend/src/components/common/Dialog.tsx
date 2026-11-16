@@ -7,6 +7,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { useT } from "../../lib/i18n";
 import { IconClose } from "./Icons";
+import { PORTAL_ATTR } from "./Menu";
 
 export type DialogSize = "sm" | "md" | "lg" | "xl";
 
@@ -96,6 +97,10 @@ export function Dialog({
       onMouseDown={(e) => {
         if (!closeOnBackdrop) return;
         if (panelRef.current?.contains(e.target as Node)) return;
+        // Select / Menu 的弹层是挂在 body 上的 Portal，但 React 事件仍沿组件树冒泡到这里。
+        // 不认这个标记的话，点一下下拉项就会把整个弹窗关掉。
+        const el = e.target as Element | null;
+        if (el && typeof el.closest === "function" && el.closest(`[${PORTAL_ATTR}]`)) return;
         onClose();
       }}
     >

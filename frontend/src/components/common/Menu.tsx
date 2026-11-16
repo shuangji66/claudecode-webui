@@ -10,6 +10,11 @@ import { createPortal } from "react-dom";
 /** 所有浮层共用的面板外观（菜单、下拉选择）。 */
 export const POPUP_PANEL = "fixed z-[80] rounded-xl border border-line bg-canvas p-1 shadow-soft";
 
+// Portal 弹层必须带这个标记：React 的事件按组件树冒泡，弹层虽然挂在 body 上，
+// mousedown 仍会冒到 Dialog 的遮罩层，而遮罩层用 DOM 包含关系判断「点在外面」，
+// 于是点一下下拉项就把整个弹窗关掉。Dialog 见到该标记就放行。
+export const PORTAL_ATTR = "data-dsh-portal";
+
 /** 浮层与视口边缘的最小间距。 */
 const VIEWPORT_MARGIN = 8;
 
@@ -144,7 +149,7 @@ export function Menu({ open, anchor, items, onClose, width = 176, align = "end" 
 
   if (!open || !pos) return null;
   return createPortal(
-    <div ref={ref} role="menu" style={{ left: pos.left, top: pos.top, width }} className={POPUP_PANEL}>
+    <div ref={ref} role="menu" {...{ [PORTAL_ATTR]: "" }} style={{ left: pos.left, top: pos.top, width }} className={POPUP_PANEL}>
       {items.map((item) => (
         <button
           key={item.id}

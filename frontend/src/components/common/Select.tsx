@@ -6,7 +6,7 @@
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { POPUP_PANEL, useAnchoredPosition, useDismiss } from "./Menu";
+import { POPUP_PANEL, PORTAL_ATTR, useAnchoredPosition, useDismiss } from "./Menu";
 import { IconCheck, IconChevronDown } from "./Icons";
 
 export interface SelectOption {
@@ -153,6 +153,7 @@ export function Select({
               id={listId}
               role="listbox"
               aria-label={ariaLabel}
+              {...{ [PORTAL_ATTR]: "" }}
               tabIndex={-1}
               onKeyDown={onListKeyDown}
               style={{ left: pos.left, top: pos.top, width }}
