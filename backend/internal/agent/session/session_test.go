@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -404,4 +405,65 @@ func waitState(t *testing.T, s *Session, want string) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("等待状态 %q 超时，当前 %q", want, s.State())
+}
+
+// CLI 偶尔在 stdout 上混进非 JSON 行（警告、调试输出）。原样塞进 cli 事件会让
+// json.Marshal 校验失败，变成一条「json: error calling MarshalJSON」的 error；
+// 现在转成 system 文本，前端按普通输出显示。
+func TestNonJSONStdoutBecomesSystemText(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	if _, err := fc.conn.Write([]byte("warning: something odd\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	ev, ok := rec.wait(KindCLI, 2*time.Second)
+	if !ok {
+		t.Fatal("未收到 cli 事件")
+	}
+	var payload struct {
+		Type    string `json:"type"`
+		Subtype string `json:"subtype"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(ev.Data, &payload); err != nil {
+		t.Fatalf("解析事件失败: %v (%s)", err, ev.Data)
+	}
+	if payload.Type != "system" || payload.Subtype != "stdout" {
+		t.Fatalf("payload = %+v, want system/stdout", payload)
+	}
+	if payload.Content != "warning: something odd" {
+		t.Fatalf("content = %q", payload.Content)
+	}
+}
+
+// 单行超过上限时 bufio.Scanner 会返回 ErrTooLong；以前 readLoop 不看 Err，
+// 会话会静默 close，前端只看到「已关闭」，完全不知道发生了什么。
+func TestOversizedLineReportsError(t *testing.T) {
+	// Scanner 的初始缓冲就是 64KB，上限必须不小于它才会真正触发 ErrTooLong。
+	old := maxLineBytes
+	maxLineBytes = 64 << 10
+	t.Cleanup(func() { maxLineBytes = old })
+
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	// 写端会在读端关闭后拿到 EPIPE，放到 goroutine 里避免测试阻塞。
+	go func() { _, _ = fc.conn.Write([]byte(strings.Repeat("a", 256<<10) + "\n")) }()
+	ev, ok := rec.wait(KindError, 2*time.Second)
+	if !ok {
+		t.Fatal("超长行没有产生 error 事件")
+	}
+	var payload struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(ev.Data, &payload); err != nil {
+		t.Fatalf("解析事件失败: %v", err)
+	}
+	if !strings.Contains(payload.Message, "读取 claude 输出中断") {
+		t.Fatalf("message = %q", payload.Message)
+	}
+	if _, ok := rec.wait(KindClosed, 2*time.Second); !ok {
+		t.Fatal("超长行之后会话应当关闭")
+	}
 }

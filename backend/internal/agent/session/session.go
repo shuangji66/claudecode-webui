@@ -32,7 +32,8 @@ const (
 var InitTimeout = 30 * time.Second
 
 // maxLineBytes 是单行 NDJSON 的上限（工具结果可能很长）。
-const maxLineBytes = 8 << 20
+// 变量而非常量：测试要把它调小来验证超长行的行为。
+var maxLineBytes = 8 << 20
 
 // Transport 是与会话后端通信的双工通道。
 // 真实实现是子进程管道，测试用 net.Pipe 即可，无需真的拉起 claude。
@@ -304,12 +305,26 @@ func (s *Session) readLoop() {
 		s.idle.Store(time.Now().UnixNano())
 		s.handleLine(line)
 	}
+	// Scan 返回 false 也可能是「行太长」而不是 EOF。不检查 Err 的话会话会
+	// 无声无息地 close，前端只看到一条 closed，根本不知道发生了什么。
+	if err := sc.Err(); err != nil {
+		s.emitData(KindError, map[string]any{
+			"message": fmt.Sprintf("读取 claude 输出中断：%v（单行上限 %d 字节）", err, maxLineBytes),
+		})
+	}
 }
 
 func (s *Session) handleLine(line []byte) {
 	env, err := protocol.Decode(line)
 	if err != nil {
-		s.emitData(KindCLI, json.RawMessage(line))
+		// CLI 偶尔会在 stdout 上混进非 JSON 行（警告、调试输出）。原样塞进 cli 事件
+		// 会因为 json.Marshal 校验失败变成一条「json: error calling MarshalJSON」的
+		// 错误提示，用户既看不懂也丢掉了原文。转成 system 文本，前端会当普通输出显示。
+		s.emitData(KindCLI, map[string]any{
+			"type":    "system",
+			"subtype": "stdout",
+			"content": string(line),
+		})
 		return
 	}
 
