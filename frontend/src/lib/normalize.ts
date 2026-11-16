@@ -7,7 +7,7 @@
 //   2. tool_use ↔ tool_result 配对：结果消息里的 tool_use_id 必须回填到对应工具卡片。
 //   3. 未知消息类型原样忽略，不抛错（协议会随 CLI 版本漂移）。
 
-import { applyUsageMessage, formatTokens } from "./usage";
+import { applyUsageMessage, formatTokens, type UsageSnapshot } from "./usage";
 import type { Item, SubagentInfo, ToolImage } from "./model";
 
 let idCounter = 0;
@@ -545,6 +545,26 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
   return [...items, { id: nextId(), seq: seqOf(items), ts: at, kind: "user", text }];
 }
 
+/**
+ * 把本回合的用量回填到该回合最后一条回答上。
+ *
+ * 为什么挂在回答上而不是只在 result 条里：「本轮花了多少」是看答案时的自然问题，
+ * 答案那一行（复制按钮旁）就是最顺手的位置；result 条只在末尾，翻上去就看不见了。
+ * 只认**最后一条已完成的 assistant**：中间的过渡正文（后面还跟着工具调用）不挂，
+ * 免得同一个回合到处是重复的耗时。
+ */
+function stampTurnUsage(items: Item[], turn: { durationMs?: number; usage?: UsageSnapshot }): Item[] {
+  if (turn.durationMs === undefined && turn.usage === undefined) return items;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const it = items[i];
+    if (it.kind !== "assistant" || it.streaming) continue;
+    const next = items.slice();
+    next[i] = { ...it, turn };
+    return next;
+  }
+  return items;
+}
+
 function applyResult(items: Item[], m: Raw, at: number): Item[] {
   const denials = Array.isArray(m.permission_denials) ? (m.permission_denials as unknown[]) : [];
   const isError = m.is_error === true;
@@ -555,11 +575,16 @@ function applyResult(items: Item[], m: Raw, at: number): Item[] {
   // 失败原因就在 result / errors 里（API 报错、超出最大轮数…）。成功回合的 result
   // 与最后一条 assistant 正文是同一段话，只在出错时展示，免得同一段出现两遍。
   const text = isError ? stripAnsi(raw || errors.join("\n")) : "";
+  const usage = applyUsageMessage(undefined, m);
+  const out = stampTurnUsage(items, {
+    durationMs: typeof m.duration_ms === "number" ? m.duration_ms : undefined,
+    usage,
+  });
   return [
-    ...items,
+    ...out,
     {
       id: nextId(),
-      seq: seqOf(items),
+      seq: seqOf(out),
       ts: at,
       kind: "result",
       costUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : undefined,
@@ -568,7 +593,7 @@ function applyResult(items: Item[], m: Raw, at: number): Item[] {
       subtype: typeof m.subtype === "string" ? m.subtype : undefined,
       text: text || undefined,
       denials,
-      usage: applyUsageMessage(undefined, m),
+      usage,
     },
   ];
 }

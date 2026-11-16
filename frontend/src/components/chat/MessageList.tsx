@@ -20,8 +20,16 @@ const VISIBLE_STEP = 80;
 /** 离屏行不参与布局/绘制；估算高度给滚动条一个稳定长度。 */
 const OFFSCREEN = { contentVisibility: "auto", containIntrinsicSize: "auto 120px" } as const;
 
+/**
+ * 上一轮结束的 result 条要不要省掉时长：normalize 已经把 duration_ms 回填到
+ * 该回合最后一条回答上（复制按钮那一行），这里不再重复一遍。
+ */
+function durationShownOnAnswer(prev: Item | undefined): boolean {
+  return prev?.kind === "assistant" && prev.turn?.durationMs !== undefined;
+}
+
 /** 单条消息。memo 化：流式追加时只有最后一个气泡需要重渲染。 */
-const MessageRow = memo(function MessageRow({ item }: { item: Item }) {
+const MessageRow = memo(function MessageRow({ item, hideDuration = false }: { item: Item; hideDuration?: boolean }) {
   switch (item.kind) {
     case "user":
       return (
@@ -32,7 +40,7 @@ const MessageRow = memo(function MessageRow({ item }: { item: Item }) {
     case "assistant":
       return (
         <div className="animate-rise" style={OFFSCREEN}>
-          <AssistantBubble text={item.text} streaming={item.streaming} ts={item.ts} />
+          <AssistantBubble text={item.text} streaming={item.streaming} ts={item.ts} turn={item.turn} />
         </div>
       );
     case "thinking":
@@ -48,7 +56,7 @@ const MessageRow = memo(function MessageRow({ item }: { item: Item }) {
         </div>
       );
     case "result":
-      return <ResultBar item={item} />;
+      return <ResultBar item={item} hideDuration={hideDuration} />;
     case "system":
       return (
         <pre
@@ -336,9 +344,9 @@ export function MessageList({
                 </button>
               </div>
             )}
-            {shown.map((item) => (
+            {shown.map((item, index) => (
               <div key={item.id} data-item-id={item.id}>
-                <MessageRow item={item} />
+                <MessageRow item={item} hideDuration={durationShownOnAnswer(shown[index - 1])} />
               </div>
             ))}
           </div>

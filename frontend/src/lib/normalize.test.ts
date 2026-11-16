@@ -147,6 +147,49 @@ describe("normalize", () => {
     expect(items.map((i) => i.kind)).toEqual(["assistant", "assistant", "tool", "assistant"]);
   });
 
+  // 「本轮花了多少」挂在回答那一行最顺手：result 来时把用量回填到该回合
+  // **最后一条**已完成的 assistant 上，中间过渡正文不挂，免得同一个回合到处是耗时。
+  it("result 把本轮用量回填到最后一条回答上", () => {
+    let items = applyCLI([], {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "先看代码" },
+          { type: "tool_use", id: "tu1", name: "Read", input: {} },
+          { type: "text", text: "结论如下" },
+        ],
+      },
+    });
+    items = applyCLI(items, {
+      type: "result",
+      subtype: "success",
+      duration_ms: 5000,
+      duration_api_ms: 4900,
+      usage: { input_tokens: 10, output_tokens: 900, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    });
+
+    const answers = items.filter((i) => i.kind === "assistant");
+    expect(answers[0]).toMatchObject({ text: "先看代码" });
+    expect((answers[0] as { turn?: unknown }).turn).toBeUndefined();
+    expect((answers[1] as { turn?: unknown }).turn).toMatchObject({
+      durationMs: 5000,
+      usage: { outputTokens: 900, apiMs: 4900 },
+    });
+    // result 条自身仍保留 duration_ms：转录回放与底部统计都靠它。
+    expect(items[items.length - 1]).toMatchObject({ kind: "result", durationMs: 5000 });
+  });
+
+  it("纯工具回合没有回答可挂时不影响 result", () => {
+    let items = applyCLI([], {
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "tool_use", id: "tu1", name: "Bash", input: {} }] },
+    });
+    items = applyCLI(items, { type: "result", subtype: "success", duration_ms: 800 });
+    expect(items.map((i) => i.kind)).toEqual(["tool", "result"]);
+    expect(items[1]).toMatchObject({ kind: "result", durationMs: 800 });
+  });
+
   it("result 记录成本、耗时与被拒工具数", () => {
     const items = applyCLI([], {
       type: "result",

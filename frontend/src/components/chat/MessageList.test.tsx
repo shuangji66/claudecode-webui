@@ -133,3 +133,15 @@ describe("MessageList 滚动性能", () => {
     querySpy.mockRestore();
   });
 });
+
+describe("MessageList 本轮用量", () => {
+  it("时长只出现一次：回填到回答那一行后，result 条不再重复", () => {
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "问题" },
+      { id: "a1", seq: 1, ts: 0, kind: "assistant", text: "答案", streaming: false, turn: { durationMs: 5000 } },
+      { id: "r1", seq: 2, ts: 0, kind: "result", durationMs: 5000, denials: [], isError: false },
+    ];
+    render(<MessageList items={items} />);
+    expect(screen.getAllByText("5.0s")).toHaveLength(1);
+  });
+});

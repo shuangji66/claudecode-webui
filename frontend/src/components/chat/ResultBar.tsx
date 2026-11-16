@@ -8,14 +8,15 @@ const errorSubtypes: Record<string, [string, string]> = {
   error_max_budget_usd: ["超出预算上限", "Budget limit reached"],
 };
 
-export function ResultBar({ item }: { item: ResultItem }) {
+/** hideDuration：时长已经写在回答那一行（复制按钮旁）时不再重复一次。 */
+export function ResultBar({ item, hideDuration = false }: { item: ResultItem; hideDuration?: boolean }) {
   const t = useT();
   const denials = item.denials ?? [];
   const known = item.subtype ? errorSubtypes[item.subtype] : undefined;
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-1.5 text-[10.5px] text-muted">
-        {typeof item.durationMs === "number" && (
+        {!hideDuration && typeof item.durationMs === "number" && (
           <span className="rounded-full bg-panel-strong px-2 py-0.5">{(item.durationMs / 1000).toFixed(1)}s</span>
         )}
         {item.isError && (

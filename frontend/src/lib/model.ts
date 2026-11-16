@@ -17,11 +17,24 @@ export interface UserItem extends BaseItem {
   text: string;
 }
 
+/** 回合结束时回填到该回合最后一条回答上的用量（只放 CLI 真给过的数）。 */
+export interface TurnUsage {
+  /** 整个回合的墙钟耗时（result.duration_ms）。 */
+  durationMs?: number;
+  /** 最后一次请求的用量快照：输出 token、API 耗时、上下文占用。 */
+  usage?: UsageSnapshot;
+}
+
 export interface AssistantItem extends BaseItem {
   kind: "assistant";
   text: string;
   /** true 表示还在流式输出（收到完整 assistant 消息后转 false）。 */
   streaming: boolean;
+  /**
+   * 本回合结束时由 normalize 从 result 回填：只挂在**该回合最后一条回答**上，
+   * 复制按钮那一行据此显示「耗时 · 输出 tok · tok/s」。中间的过渡正文不带。
+   */
+  turn?: TurnUsage;
 }
 
 export interface ThinkingItem extends BaseItem {
