@@ -35,6 +35,13 @@ var InitTimeout = 30 * time.Second
 // 给小一点的值没坏处；超时不能让界面一直停在「已切换」的错觉里。
 var ModeTimeout = 10 * time.Second
 
+// TurnHandoffWindow 是「result 之后多久之内再来 init 算同一批投递」的窗口。
+//
+// 回合进行中写进 stdin 的用户消息（插话）如果这轮已经收尾，CLI 会先发 result、
+// 紧接着再发一条 system/init 把那条消息当成新的一轮跑。窗口取得足够大（正常是几十
+// 毫秒），又不至于把「空闲很久之后模型自己起的一轮」也算进来。
+var TurnHandoffWindow = 15 * time.Second
+
 // maxLineBytes 是单行 NDJSON 的上限（工具结果可能很长）。
 // 变量而非常量：测试要把它调小来验证超长行的行为。
 var maxLineBytes = 8 << 20
@@ -134,6 +141,10 @@ type Session struct {
 	permMu    sync.Mutex
 	perms     map[string]json.RawMessage
 	permOrder []string
+
+	// resultAt 是最近一条 result 的到达时间（unix nano，0 表示还没有）。
+	// 只用来判断「result 之后紧跟着的 init 是不是同一批投递」，见 TurnHandoffWindow。
+	resultAt atomic.Int64
 }
 
 // New 构造一个尚未握手的会话。调用方随后必须调用 Handshake。
@@ -232,6 +243,15 @@ func (s *Session) Mode() string {
 	s.modeMu.RLock()
 	defer s.modeMu.RUnlock()
 	return s.mode
+}
+
+// justFinishedTurn 表示最近一条 result 还在 TurnHandoffWindow 之内。
+func (s *Session) justFinishedTurn() bool {
+	at := s.resultAt.Load()
+	if at == 0 {
+		return false
+	}
+	return time.Since(time.Unix(0, at)) <= TurnHandoffWindow
 }
 
 func (s *Session) setState(st string) {
@@ -616,6 +636,7 @@ func (s *Session) handleLine(line []byte) {
 		s.writeAsync(protocol.Unsupported(env.RequestID))
 
 	case protocol.TypeResult:
+		s.resultAt.Store(time.Now().UnixNano())
 		s.setState(StateReady)
 		s.emitData(KindCLI, env.Raw)
 
@@ -626,6 +647,12 @@ func (s *Session) handleLine(line []byte) {
 		if mode, ok := protocol.PermissionModeOf(env.Raw); ok {
 			s.setMode(mode)
 			s.emitData(KindSessionState, map[string]any{"mode": mode})
+		}
+		// 刚结束一轮又来了一条 init：这是我们写进去的插话没赶上本轮，CLI 把它
+		// 当成新的一轮在跑。不认这个信号，界面会在整轮里显示「空闲」（发送按钮
+		// 而不是中断按钮），待发送队列也会被提前放出去。
+		if protocol.IsTurnInit(env.Raw) && s.State() == StateReady && s.justFinishedTurn() {
+			s.setState(StateBusy)
 		}
 		s.emitData(KindCLI, env.Raw)
 

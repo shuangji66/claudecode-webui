@@ -230,6 +230,25 @@ func TestPermissionModeOf(t *testing.T) {
 	}
 }
 
+// TestIsTurnInit 只认 system/init：它是「一轮开始」的唯一信号（进程启动一次，
+// 插话没赶上本轮时 CLI 会再发一次，会话据此把状态标回 busy）。
+func TestIsTurnInit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		line string
+		want bool
+	}{
+		{"init", `{"type":"system","subtype":"init","permissionMode":"default"}`, true},
+		{"status", `{"type":"system","subtype":"status"}`, false},
+		{"assistant", `{"type":"assistant","subtype":"init"}`, false},
+		{"broken", `{`, false},
+	} {
+		if got := IsTurnInit([]byte(tc.line)); got != tc.want {
+			t.Fatalf("%s: IsTurnInit = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestInitPermissionMode(t *testing.T) {
 	if got := InitPermissionMode([]byte(`{"claude_code_version":"2.1.325","current_permission_mode":"default"}`)); got != "default" {
 		t.Fatalf("InitPermissionMode = %q", got)

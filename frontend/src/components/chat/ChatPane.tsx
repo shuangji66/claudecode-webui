@@ -45,7 +45,13 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
   const settings = useAppStore((s) => s.settings);
   const usage = useAppStore((s) => s.usage);
   const starting = useAppStore((s) => s.starting);
+  const queuedMap = useAppStore((s) => s.queued);
   const sendPrompt = useAppStore((s) => s.sendPrompt);
+  const enqueuePrompt = useAppStore((s) => s.enqueuePrompt);
+  const dropQueued = useAppStore((s) => s.dropQueued);
+  const editQueued = useAppStore((s) => s.editQueued);
+  const setEditingQueued = useAppStore((s) => s.setEditingQueued);
+  const steerQueued = useAppStore((s) => s.steerQueued);
   const interrupt = useAppStore((s) => s.interrupt);
   const selectModel = useAppStore((s) => s.selectModel);
   const setPermissionMode = useAppStore((s) => s.setPermissionMode);
@@ -69,6 +75,8 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
     };
   }, [liveSession, conversation]);
   const itemList = activeId ? (items[activeId] ?? []) : [];
+  // 待发送队列跟着对话走：换对话就换一批（后端在回合结束时自动发队首）。
+  const queued = activeId ? (queuedMap[activeId] ?? []) : [];
   // 页头「子智能体 N」：从消息流里现算，不额外存一份状态。
   const subs = useMemo(() => subagentEntries(itemList), [itemList]);
   const init = activeId ? inits[activeId] : undefined;
@@ -168,7 +176,27 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
           : effortPending
             ? t("本轮结束后按新的推理等级重开（上下文保留）", "Reopening with the new reasoning level after this turn")
             : effortMismatch ? t("推理等级将在重开会话后生效", "Reasoning level applies after the session reopens")
-            : busy ? t("Claude 正在工作，可随时中断", "Claude is working; interrupt anytime") : (
+            : busy ? (
+              <>
+                <span className="hidden sm:inline">
+                  {t(
+                    queued.length > 0
+                      ? `Claude 正在工作 · ${queued.length} 条待发送`
+                      : "Claude 正在工作 · Enter 排队 · Ctrl+Enter 立即插话",
+                    queued.length > 0
+                      ? `Claude is working · ${queued.length} queued`
+                      : "Claude is working · Enter queues · Ctrl+Enter interjects",
+                  )}
+                </span>
+                {/* 手机键盘的回车是换行，只能点按钮：提示写清楚按钮的作用。 */}
+                <span className="sm:hidden">
+                  {t(
+                    queued.length > 0 ? `Claude 正在工作 · ${queued.length} 条待发送` : "Claude 正在工作 · 发送＝排队等本轮结束",
+                    queued.length > 0 ? `Claude is working · ${queued.length} queued` : "Claude is working · send queues for this turn",
+                  )}
+                </span>
+              </>
+            ) : (
               <>
                 <span className="hidden sm:inline">{t("Enter 发送 · Shift+Enter 换行", "Enter to send · Shift+Enter for newline")}</span>
                 <span className="sm:hidden">{t("点右下角发送 · / 唤起命令", "Tap send · / commands")}</span>
@@ -320,6 +348,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
             starting={starting}
             commands={init?.commands ?? []}
             busy={busy}
+            queued={queued}
             placeholder={placeholder}
             modelOptions={modelOptions}
             selectedKey={selectedKey}
@@ -335,6 +364,11 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
             }}
             onPermissionMode={(m) => setPermissionMode(m)}
             onSend={(text, attachments) => sendPrompt(text, attachments, t("附件：", "File: "))}
+            onQueue={(text, attachments) => enqueuePrompt(text, attachments, t("附件：", "File: "))}
+            onDropQueued={dropQueued}
+            onEditQueued={editQueued}
+            onEditingQueued={setEditingQueued}
+            onSteerQueued={(qid) => void steerQueued(qid)}
             onInterrupt={interrupt}
             footer={footer}
           />

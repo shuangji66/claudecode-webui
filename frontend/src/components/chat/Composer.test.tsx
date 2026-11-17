@@ -25,6 +25,7 @@ function setup(overrides: Partial<React.ComponentProps<typeof Composer>> = {}) {
       starting={false}
       commands={COMMANDS}
       busy={false}
+      queued={[]}
       modelOptions={[]}
       selectedKey=""
       selectedEffort=""
@@ -33,6 +34,11 @@ function setup(overrides: Partial<React.ComponentProps<typeof Composer>> = {}) {
       onSelectEffort={vi.fn()}
       onPermissionMode={vi.fn()}
       onSend={onSend}
+      onQueue={vi.fn(() => true)}
+      onDropQueued={vi.fn()}
+      onEditQueued={vi.fn()}
+      onEditingQueued={vi.fn()}
+      onSteerQueued={vi.fn()}
       onInterrupt={vi.fn()}
       {...overrides}
     />,
@@ -144,6 +150,7 @@ describe("Composer 权限模式", () => {
           starting={false}
           commands={COMMANDS}
           busy={false}
+          queued={[]}
           modelOptions={[]}
           selectedKey=""
           selectedEffort=""
@@ -152,6 +159,11 @@ describe("Composer 权限模式", () => {
           onSelectEffort={vi.fn()}
           onPermissionMode={onPermissionMode}
           onSend={vi.fn()}
+          onQueue={vi.fn(() => true)}
+          onDropQueued={vi.fn()}
+          onEditQueued={vi.fn()}
+          onEditingQueued={vi.fn()}
+          onSteerQueued={vi.fn()}
           onInterrupt={vi.fn()}
         />
       </>,
@@ -221,5 +233,166 @@ describe("Composer 发送结果", () => {
 
     expect(onSend).not.toHaveBeenCalled();
     expect(textarea().value).toBe("在线吗");
+  });
+});
+
+describe("Composer 待发送队列", () => {
+  const textarea = () => screen.getByLabelText("消息输入框") as HTMLTextAreaElement;
+  const queuedItem = { id: "q1", text: "改成不用 lodash", attachments: [], label: "附件：", ts: 1 };
+
+  it("回合进行中 Enter 只入队：不写 stdin，也不清空成没提交", () => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    const onQueue = vi.fn(() => true);
+    setup({ onSend, onQueue, busy: true });
+
+    fireEvent.change(textarea(), { target: { value: "改成不用 lodash" } });
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+
+    expect(onQueue).toHaveBeenCalledWith("改成不用 lodash", []);
+    expect(onSend).not.toHaveBeenCalled();
+    // 已交给队列，草稿清空（内容在输入框上方的待发送里）。
+    expect(textarea().value).toBe("");
+  });
+
+  it("Ctrl+Enter 才是立刻插话", () => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    const onQueue = vi.fn(() => true);
+    setup({ onSend, onQueue, busy: true });
+
+    fireEvent.change(textarea(), { target: { value: "先别改测试" } });
+    fireEvent.keyDown(textarea(), { key: "Enter", ctrlKey: true });
+
+    expect(onSend).toHaveBeenCalledWith("先别改测试", []);
+    expect(onQueue).not.toHaveBeenCalled();
+  });
+
+  it("待发送显示在输入框上方，带条数与投递时机", () => {
+    setup({ busy: true, queued: [queuedItem, { ...queuedItem, id: "q2", text: "顺便跑一下 lint" }] });
+
+    expect(screen.getByText(/待发送 2 条/)).toBeInTheDocument();
+    expect(screen.getByText("改成不用 lodash")).toBeInTheDocument();
+    expect(screen.getByText(/本轮结束后自动发送/)).toBeInTheDocument();
+  });
+
+  it("点正文就地展开编辑框，保存后按原位置更新这一条", () => {
+    const onEditQueued = vi.fn();
+    const onEditingQueued = vi.fn();
+    setup({ busy: true, queued: [queuedItem], onEditQueued, onEditingQueued });
+
+    fireEvent.click(screen.getByText("改成不用 lodash"));
+    const editor = screen.getByLabelText("编辑待发送消息") as HTMLTextAreaElement;
+    expect(editor.value).toBe("改成不用 lodash");
+    // 编辑期间要让后端按住自动发送，别把改到一半的旧文本发出去。
+    expect(onEditingQueued).toHaveBeenCalledWith("q1");
+
+    fireEvent.change(editor, { target: { value: "改成不用 lodash，另外跑一下 lint" } });
+    fireEvent.keyDown(editor, { key: "Enter" });
+
+    expect(onEditQueued).toHaveBeenCalledWith("q1", "改成不用 lodash，另外跑一下 lint", []);
+    expect(screen.queryByLabelText("编辑待发送消息")).toBeNull();
+    expect(onEditingQueued).toHaveBeenLastCalledWith(null);
+    // 正文编辑不影响主输入框的草稿。
+    expect(textarea().value).toBe("");
+  });
+
+  it("Shift+Enter 换行、Esc 取消不保存", () => {
+    const onEditQueued = vi.fn();
+    setup({ busy: true, queued: [queuedItem], onEditQueued });
+
+    fireEvent.click(screen.getByText("改成不用 lodash"));
+    const editor = screen.getByLabelText("编辑待发送消息") as HTMLTextAreaElement;
+
+    fireEvent.keyDown(editor, { key: "Enter", shiftKey: true });
+    expect(onEditQueued).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("编辑待发送消息")).toBeInTheDocument();
+
+    fireEvent.change(editor, { target: { value: "改到一半" } });
+    fireEvent.keyDown(editor, { key: "Escape" });
+    expect(onEditQueued).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("编辑待发送消息")).toBeNull();
+  });
+
+  it("编辑时能移除附件，保存时一并提交", () => {
+    const onEditQueued = vi.fn();
+    const withFile = { ...queuedItem, attachments: [{ name: "a.png", media_type: "image/png", data: "aGk=" }] };
+    setup({ busy: true, queued: [withFile], onEditQueued });
+
+    fireEvent.click(screen.getByText("改成不用 lodash"));
+    fireEvent.click(screen.getByLabelText("移除附件 a.png"));
+    fireEvent.click(screen.getByText("保存"));
+
+    expect(onEditQueued).toHaveBeenCalledWith("q1", "改成不用 lodash", []);
+  });
+
+  it("垃圾桶直接删掉整条（不用先进编辑）", () => {
+    const onDropQueued = vi.fn();
+    setup({ busy: true, queued: [queuedItem], onDropQueued });
+
+    fireEvent.click(screen.getByLabelText("删除这条待发送"));
+    expect(onDropQueued).toHaveBeenCalledWith("q1");
+  });
+
+  it("编辑态里也能一步删除这条", () => {
+    const onDropQueued = vi.fn();
+    const onEditingQueued = vi.fn();
+    setup({ busy: true, queued: [queuedItem], onDropQueued, onEditingQueued });
+
+    fireEvent.click(screen.getByText("改成不用 lodash"));
+    fireEvent.click(screen.getByRole("button", { name: /删除/ }));
+
+    expect(onDropQueued).toHaveBeenCalledWith("q1");
+    expect(screen.queryByLabelText("编辑待发送消息")).toBeNull();
+    // 删掉之后必须放开按住，否则这个会话的自动发送会被永久卡住。
+    expect(onEditingQueued).toHaveBeenLastCalledWith(null);
+  });
+
+  it("「立即插话」把这一条现在就发出去", () => {
+    const onSteerQueued = vi.fn();
+    setup({ busy: true, queued: [queuedItem], onSteerQueued });
+
+    fireEvent.click(screen.getByLabelText("立即插话"));
+    expect(onSteerQueued).toHaveBeenCalledWith("q1");
+  });
+
+  it("进行中且有草稿：主按钮换成发送（排队），中断缩成旁边的小圆钮", async () => {
+    const onQueue = vi.fn(() => true);
+    const onSend = vi.fn().mockResolvedValue(true);
+    setup({ busy: true, onQueue, onSend });
+
+    // 没内容时只有中断。
+    expect(screen.queryByRole("button", { name: "发送并排队" })).toBeNull();
+    expect(screen.getByRole("button", { name: "中断本轮" })).toBeInTheDocument();
+
+    fireEvent.change(textarea(), { target: { value: "哈喽" } });
+    const send = screen.getByRole("button", { name: "发送并排队" });
+    expect(screen.getByRole("button", { name: "中断本轮" })).toBeInTheDocument();
+
+    fireEvent.click(send);
+    // 点发送 = 排队（不是立刻写 stdin），点完草稿清空、本轮继续跑。
+    expect(onQueue).toHaveBeenCalledWith("哈喽", []);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textarea().value).toBe("");
+    expect(screen.getByRole("button", { name: "中断本轮" })).toBeInTheDocument();
+  });
+
+  it("进行中草稿清空后，发送按钮收起、只剩中断", () => {
+    setup({ busy: true });
+    fireEvent.change(textarea(), { target: { value: "写点什么" } });
+    expect(screen.getByRole("button", { name: "发送并排队" })).toBeInTheDocument();
+
+    fireEvent.change(textarea(), { target: { value: "   " } });
+    expect(screen.queryByRole("button", { name: "发送并排队" })).toBeNull();
+    expect(screen.getByRole("button", { name: "中断本轮" })).toBeInTheDocument();
+  });
+
+  it("不忙时这一条仍然可以手动发（被中断后暂停的队列）", () => {
+    const onSteerQueued = vi.fn();
+    setup({ busy: false, queued: [queuedItem], onSteerQueued });
+
+    expect(screen.queryByLabelText("立即插话")).toBeNull();
+    // 空闲时不会自动发（被中断的回合不替用户继续），所以文案不能写「即将发送」。
+    expect(screen.getByText(/空闲中，点右侧箭头逐条发送/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("发送这条"));
+    expect(onSteerQueued).toHaveBeenCalledWith("q1");
   });
 });

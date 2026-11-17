@@ -459,6 +459,36 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `plugin list --json` 并按二进制路径缓存：**CLI 给得出 JSON 就算支持**（报错也属支持，
   把原因显示出来），连 JSON 都给不出（unknown command）才整页置灰——否则用户永远看不到真实错误。
 
+### 4.14 插话 / 待发送队列（`lib/queue.ts` + `store.queued`）
+
+- **协议事实**：回合进行中往 stdin 再写一条 user 帧是被接受的，不会报错、不会丢，pipe 也不关。
+  落点二选一：本轮还有工具边界 → 在下一个 tool_result 处**并入本轮**（CLI 内部的说法是
+  「用户在干活时发了新消息」）；本轮已经收尾 → CLI 先发 `result`，再发一条 `system/init`，
+  把这条消息当成**新的一轮**跑。CLI 自己的 TUI 就是这个语义（Enter 排队、Ctrl+Enter 立即发送）。
+- **CLI 不回显被并入的消息**（没开 `--replay-user-messages`）：所以用户气泡只能本地乐观插入，
+  转录里的位置可能和界面上略有出入——别为了「对得上」去开 replay，那会让同一条消息显示两遍。
+- **交互**：回合进行中按 Enter = 入队（草稿清空，消息进输入框上方的「待发送」面板）；点正文
+  **就地展开编辑框**（Enter 保存、Shift+Enter 换行、Esc 取消，位置不变；正文与附件都清空等于删掉
+  这条，附件在编辑态里可逐个移除）；右侧垃圾桶一键删（编辑态里也有「删除」，不必先保存空文本）；
+  右侧箭头立即发。Ctrl/⌘+Enter = 立刻插话（直接写 stdin）；空闲时 Enter 仍然是直接发送。队列里还
+  压着消息时，新消息一律排队尾：否则会插到先提交的那条之前。
+- **进行中且有草稿时，右下角主按钮从「中断」换成「发送（排队）」**（`hasDraft`）：手机键盘的回车
+  是换行，没有这个按钮就等于没法插话；中断退成旁边的 28px 深色小圆钮（`.send-button.is-compact`），
+  打着字也照样能停。草稿清空后按钮自动换回单一的中断。
+- **正在编辑的那条要按住自动发送**（`store.setEditingQueued` + `editingQueuedId`）：这一轮结束时
+  如果队首正在被编辑，跳过这次自动发送并记进 `flushPending`，编辑结束（保存或取消）再补发。
+  少了这一步，用户改到一半就会被发出去——发的是**旧文本**，改动一起丢。
+- **投递规则**：一次只发队首（并发会打乱上下文顺序）。**只有「本轮正常结束的 `result`」触发
+  自动发送**（`lib/queue.shouldFlushAfter`：`is_error` 或 subtype 带 interrupt/abort/cancel 时不发）。
+  被中断 / 出错时队列留着，面板上的箭头按钮可以手动逐条发。**不要用 `session.state ready` 或
+  切对话去触发**：状态事件在 `result` 之前到达，分不清是正常结束还是中断，会把用户按 Esc 时
+  暂停的队列偷偷放出去。
+- **队列跟着对话走**：`queued[sid]`，`activeId` 不是它时不发（切回来再看）。上限 8 条、只在内存里
+  （刷新页面会丢，和草稿一致）。删对话时 `purgeSession` 一并清掉。
+- **后端要认「result 之后的 init」**：那条 init 意味着 CLI 自己在跑新一轮，`session` 里
+  `protocol.IsTurnInit` + `resultAt`（`TurnHandoffWindow`）把它标回 busy。不认的话界面会在整轮里
+  显示空闲（发送按钮而不是中断按钮），待发送队列也会被提前放出去。
+
 ## 5. 命令速查
 
 ```bash
@@ -486,6 +516,7 @@ cd frontend && npx tsc --noEmit
 - [ ] 新增右侧栏路由是否过了 `authorizedCwd` / 路径围栏？raw 预览是否仍在白名单？
 - [ ] 右侧栏标签切走是否只隐藏不卸载（终端 PTY 不能被切标签杀掉）？Git 是否仍只 pull？
 - [ ] 终端是否仍走二进制帧、多开时每个标签各自一条 WS？
+- [ ] 改动了待发送队列的投递时机？确认仍然只有「正常结束的 result」触发自动发送（中断/报错不发）。
 - [ ] 是否补了测试（纯函数优先，组件用 Testing Library）？
 - [ ] `make test` 与 `npx tsc --noEmit` 是否都通过？
 

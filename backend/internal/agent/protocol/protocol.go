@@ -255,6 +255,22 @@ func PermissionModeOf(raw []byte) (string, bool) {
 	return msg.PermissionMode, true
 }
 
+// IsTurnInit 判断一条 system 消息是不是「一轮开始」的 init。
+//
+// 它不只在进程启动时出现：回合进行中写进 stdin 的用户消息（插话）如果没赶上本轮，
+// CLI 会在 result 之后再发一条 init，把那条消息当成新的一轮跑。会话据此把状态重新
+// 标成 busy，否则界面会在那一整轮里显示「空闲」。
+func IsTurnInit(raw []byte) bool {
+	var msg struct {
+		Type    string `json:"type"`
+		Subtype string `json:"subtype"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return false
+	}
+	return msg.Type == TypeSystem && msg.Subtype == "init"
+}
+
 // SetPermissionMode 构造切换权限模式的控制请求。
 func SetPermissionMode(requestID, mode string) []byte {
 	return mustMarshal(map[string]any{

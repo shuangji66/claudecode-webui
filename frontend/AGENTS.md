@@ -25,6 +25,7 @@ src/
   lib/providerForm.ts  提供商/模型元数据表单转换
   lib/providerCatalog.ts 预置第三方提供商目录（对齐 DSH 的 pi-ai catalog）
   lib/attachments.ts   附件类型/大小/读取
+  lib/queue.ts         待发送（插话）队列：入队/删除/编辑/队首、何时能自动发
   lib/autofill.ts      全局禁用浏览器/密码管理器自动填充（App 挂载时补属性）
   lib/clipboard.ts     复制文本（Clipboard API → execCommand 回退）
   lib/download.ts      带鉴权的文件下载（fetch → blob → <a download>，token 走头）
@@ -152,6 +153,19 @@ src/
     localStorage（`ccweb-sidebar-view`），手动顺序存在 `ccweb-session-order`
     （按工作区路径分键，单列表用 `__flat__`）。手动排序的入口有两个：桌面拖拽 +
     会话「更多」菜单里的上移/下移（触屏没有拖拽）。视图偏好是**每台设备**的，不进后端。
+24. **回合进行中的消息走「待发送」队列，不许直接写 stdin 之外的地方**（`lib/queue.ts` +
+    `store.queued`）：`Composer` 在 `busy` 时按 Enter 只调 `onQueue`（草稿清空，消息进输入框
+    **上方**的待发送面板），`Ctrl/⌘+Enter` 才是 `onSend`（立刻插话）。面板每条**点正文就地展开
+    编辑框**（Enter 保存 / Shift+Enter 换行 / Esc 取消，`lib/queue.updatePrompt` 保持位置；正文与
+    附件都清空等于删掉，附件可逐个移除）、右侧垃圾桶直接删（编辑态里也有「删除」）、可用右侧箭头立即发。编辑态要调
+    `onEditingQueued(qid|null)`：store 会**按住自动发送**（`editingQueuedId`），编辑结束后补发——
+    不按住的话这一轮结束时会把改到一半的旧文本发出去。
+    **进行中且有草稿（`hasDraft` = 正文或附件非空）时，右下角主按钮必须是「发送（排队）」，中断缩成
+    旁边的 28px 小圆钮**：手机键盘的回车是换行，只给中断就等于没法插话；草稿清空后再换回单一中断。
+    投递时机由 store 决定：**只有「本轮正常结束的 `result`」发队首**（判定在
+    `lib/queue.shouldFlushAfter`），被中断/出错时留在队列里；`session.state ready`、切对话、
+    重连都**不**触发——那会在用户按 Esc 之后偷偷把消息发出去。队列跟着对话走（`queued[sid]`），
+    上限 `MAX_QUEUED`（8 条，附件是 base64 常驻内存），只在内存里、刷新即丢（与草稿一致）。
 
 ## 3. 状态管理（zustand）
 
@@ -358,6 +372,7 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
   `providerForm`（模型元数据/补丁/强度回落）、`theme`（system 解析/字号夹取）、`labels`（中英）、
   `attachments`（类型/大小/格式化）、`sessionExport`（Markdown 导出）、`newChat`（按元数据判定）、
   `permissionModes`（危险模式标记）、`sidebarView`（偏好合并/手动顺序）、`clipboard`（回退路径）、
+  `queue`（入队/上限/删除/编辑保序/中断或出错不自动发）、
   `autofill`、`providerCatalog`、`subagents`、`usage`、`fnos`（宿主判定三条件/回包归一化）。
 - 右侧栏纯函数（`workspace`）覆盖 statusOfXY、MM 双分组、unified diff 行号、预览类型、
   `pickRepo` 默认选中。

@@ -395,6 +395,81 @@ func TestPermPayloadKeepsSuggestions(t *testing.T) {
 	}
 }
 
+// TestPromptDuringTurnIsAccepted 覆盖「插话」依赖的协议事实：回合进行中 stdin 照样可写。
+//
+// 实测（claude 2.1.x）：第二条 user 帧不会报错、也不会丢；本轮还有工具边界时它被并进
+// 本轮，本轮已经收尾时 CLI 会先发 result、再发一条 system/init 把它当新的一轮跑。
+// 前端据此在「本轮结束后自动发下一条」，这里只保证会话层不拦、不报错。
+func TestPromptDuringTurnIsAccepted(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.Prompt("先跑这条"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	fc.next() // 第一条 user 帧
+	if sess.State() != StateBusy {
+		t.Fatalf("state = %q, want busy", sess.State())
+	}
+
+	// 回合进行中再写一条：必须照常写出，且状态仍是 busy（不许退回 ready）。
+	if err := sess.Prompt("等一下，换个方向"); err != nil {
+		t.Fatalf("进行中 Prompt: %v", err)
+	}
+	msg := fc.next()
+	if msg["type"] != "user" {
+		t.Fatalf("第二条消息 type = %v, want user", msg["type"])
+	}
+	content := msg["message"].(map[string]any)["content"].([]any)
+	if text := content[0].(map[string]any)["text"]; text != "等一下，换个方向" {
+		t.Fatalf("第二条消息正文 = %v", text)
+	}
+	if sess.State() != StateBusy {
+		t.Fatalf("state = %q, want busy", sess.State())
+	}
+}
+
+// TestTurnInitAfterResultMarksBusy 覆盖「插话延后成新的一轮」：CLI 会在 result 之后
+// 立刻再发一条 init。不认这条信号，界面会在整轮里显示空闲（发送按钮而不是中断按钮）。
+func TestTurnInitAfterResultMarksBusy(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.Prompt("你好"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	fc.next()
+	fc.send(map[string]any{"type": "result", "subtype": "success"})
+	waitState(t, sess, StateReady)
+
+	fc.send(map[string]any{"type": "system", "subtype": "init", "permissionMode": "default"})
+	waitState(t, sess, StateBusy)
+}
+
+// 空闲很久之后冒出来的 init 不能把会话标成忙碌，否则界面会一直显示「正在工作」。
+func TestStaleInitAfterLongIdleKeepsReady(t *testing.T) {
+	old := TurnHandoffWindow
+	TurnHandoffWindow = 20 * time.Millisecond
+	t.Cleanup(func() { TurnHandoffWindow = old })
+
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.Prompt("你好"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	fc.next()
+	fc.send(map[string]any{"type": "result", "subtype": "success"})
+	waitState(t, sess, StateReady)
+	time.Sleep(60 * time.Millisecond)
+
+	fc.send(map[string]any{"type": "system", "subtype": "init"})
+	time.Sleep(100 * time.Millisecond)
+	if sess.State() != StateReady {
+		t.Fatalf("state = %q, want ready", sess.State())
+	}
+}
+
 func waitState(t *testing.T, s *Session, want string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

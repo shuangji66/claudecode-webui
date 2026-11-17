@@ -59,6 +59,8 @@ internal/webui       go:embed 前端产物
 5. `PermissionRequest` 的 `agent_id` 同样要保留：子代理里的工具审批只有它（没有
    `parent_tool_use_id`），丢了前端就无法标出「谁在申请权限」。
 6. **未知字段一律不丢**：转发给前端时用 `Envelope.Raw`。
+7. `IsTurnInit` 只认 `type=system & subtype=init`：它是「一轮开始」的唯一信号
+   （进程启动一次，回合进行中写入的插话没赶上本轮时 CLI 会再发一次）。
 
 ## 4. 会话状态机（`agent/session`）
 
@@ -79,6 +81,11 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 事件出口只有一个 `emit`，由 `manager` 接到 `hub`。**不要在 session 里直接写 WS**。
 - `PermissionReply` 支持 `UpdatedInput`（编辑后运行）与 `UpdatedPermissions`
   （始终允许 / 切模式），两者都要透传到 `control_response`。
+- **`result` 之后紧跟的 `system/init` 要把状态标回 busy**：回合进行中写进 stdin 的用户消息
+  （插话）如果这轮已收尾，CLI 会先发 `result` 再发一条 init，把它当新的一轮跑。判定是
+  `protocol.IsTurnInit` + `state==ready` + `justFinishedTurn()`（`TurnHandoffWindow`，15s）。
+  不认这条信号，界面会在整轮里显示空闲（发送按钮而不是中断按钮），前端的待发送队列也会
+  被提前放出去。`TurnHandoffWindow` 是变量，测试会调小它。
 - **权限模式可以会话内热切换**（`SetPermissionMode` → 控制请求 `set_permission_mode`，
   实测 2.1.325 在接受请求后立刻回 success；进行中的回合不受影响，之后按新模式判定）。
   回包**必须等**：非法取值时 CLI 只在回包里给原因（`must be one of …`），不等就等于

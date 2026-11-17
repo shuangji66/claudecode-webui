@@ -50,6 +50,15 @@ import type {
 } from "../transport/types";
 import { normalizeSettings, type ProviderForm } from "../lib/providerForm";
 import { belongs, latestConversation, workspaceFor } from "../lib/conversations";
+import {
+  MAX_QUEUED,
+  enqueuePrompt as pushQueued,
+  headPrompt,
+  removePrompt,
+  shouldFlushAfter,
+  updatePrompt,
+  type QueuedPrompt,
+} from "../lib/queue";
 
 export type { SessionInfo } from "../transport/types";
 
@@ -136,6 +145,12 @@ interface AppState {
   perms: Record<string, PermissionPayload[]>;
   inits: Record<string, InitPayload>;
   states: Record<string, string>;
+  /**
+   * 「待发送」队列：`queued[sid]`。回合进行中按 Enter 只入队（可编辑、可删），
+   * 本轮结束后自动发队首；`Ctrl+Enter` 才立刻写进 stdin 并进本轮。
+   * 见 lib/queue.ts 与 store.flushQueued。
+   */
+  queued: Record<string, QueuedPrompt[]>;
   conns: Record<string, ConnInfo>;
   /**
    * 一轮跑完、但用户还没打开看过的对话。侧栏用它显示绿点；
@@ -226,6 +241,27 @@ interface AppState {
   retryConnection: (id: string) => void;
 
   sendPrompt: (text: string, attachments?: WireAttachment[], attachmentLabel?: string) => Promise<boolean>;
+  /**
+   * 只入队，不立刻写给 claude。回合进行中按 Enter 走这里；空闲时 Enter 语义不变
+   * （入队后立刻发队首）。返回 false 表示没入队（满了 / 没有活动对话）。
+   */
+  enqueuePrompt: (text: string, attachments?: WireAttachment[], attachmentLabel?: string) => boolean;
+  /** 从待发送里删掉一条。 */
+  dropQueued: (id: string) => void;
+  /** 改一条待发送的正文/附件（位置不变）；正文与附件都空等于删掉它。 */
+  editQueued: (id: string, text: string, attachments?: WireAttachment[]) => void;
+  /**
+   * 标记「正在编辑哪一条待发送」。命中的那条在队首时按住自动发送——
+   * 否则用户改到一半，这一轮结束就会把**旧文本**发出去、改动一起丢了。
+   */
+  setEditingQueued: (id: string | null) => void;
+  /** 立刻把一条待发送消息写进 stdin（回合进行中就是插话）。失败放回队首。 */
+  steerQueued: (id: string) => Promise<boolean>;
+  /**
+   * 把队首发出去。**只由「这一轮结束」的 result 事件触发**（见 applyEvent）：
+   * 切对话、重连、状态变 ready 都不自动发——那会把「被中断后暂停的队列」偷偷放出去。
+   */
+  flushQueued: (sid: string) => Promise<boolean>;
   interrupt: () => void;
   setPermissionMode: (mode: string) => void;
   /** 在右侧栏打开某个子代理的对话。 */
@@ -259,6 +295,12 @@ const previewCache = new Map<string, HistoryPreview | null>();
 const resumePromises = new Map<string, Promise<boolean>>();
 /** 等这一轮结束后要按新档位重开的会话（`--effort` 只在进程启动时固定）。 */
 const effortRestarts = new Set<string>();
+/** 正在发待发送队首的会话：结果事件与 ready 事件可能挨着到，不加锁会连发两条。 */
+const flushing = new Set<string>();
+/** 正在编辑的那条待发送（只可能有一条：输入框上方的面板同一时刻只展开一个编辑框）。 */
+let editingQueuedId: string | null = null;
+/** 因为「正在编辑」被跳过的那次自动发送，编辑结束后补上。 */
+const flushPending = new Set<string>();
 // openSeq 记录「用户最近一次想打开/切换对话」的序号。openConversation 里有多段 await，
 // 迟到的旧请求不能在结束时把 activeId 改回它自己 —— 用户看到的是他最后点的那条。
 let openSeq = 0;
@@ -275,6 +317,7 @@ function purgeSession(state: {
   usage: Record<string, unknown>;
   doneIds: Record<string, boolean>;
   modes: Record<string, string>;
+  queued: Record<string, unknown>;
 }, id: string) {
   delete state.items[id];
   delete state.subagentItems[id];
@@ -285,6 +328,7 @@ function purgeSession(state: {
   delete state.usage[id];
   delete state.doneIds[id];
   delete state.modes[id];
+  delete state.queued[id];
 }
 /** 正在创建的新对话；此时发送必须等它落定，不能发到上一个 active。 */
 let createTask: Promise<SessionInfo | null> | null = null;
@@ -452,6 +496,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   inits: {},
   states: {},
   conns: {},
+  queued: {},
   doneIds: {},
   modes: {},
   usage: {},
@@ -1260,6 +1305,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
           usage: { ...s.usage },
           doneIds: { ...s.doneIds },
           modes: { ...s.modes },
+          queued: { ...s.queued },
         };
         purgeSession(buckets, id);
         return buckets;
@@ -1460,6 +1506,78 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }));
     window.setTimeout(() => void get().refreshConversations(), 600);
     return true;
+  },
+
+  enqueuePrompt: (text, attachments = [], attachmentLabel = "附件：") => {
+    const id = get().activeId;
+    if (!id) return false;
+    const next = pushQueued(get().queued[id] ?? [], text, attachments, attachmentLabel);
+    if (!next) {
+      set({ error: `待发送最多 ${MAX_QUEUED} 条，先发掉或删掉一条` });
+      return false;
+    }
+    set((s) => ({ queued: { ...s.queued, [id]: next } }));
+    // 空闲时 Enter 本来就是「发送」：入队后立刻发队首，语义与原来一致。
+    // 回合进行中 flushQueued 会自己按掉，留给回合结束事件触发。
+    if ((get().states[id] ?? "") !== "busy") void get().flushQueued(id);
+    return true;
+  },
+
+  dropQueued: (qid) => {
+    const id = get().activeId;
+    if (!id) return;
+    set((s) => ({ queued: { ...s.queued, [id]: removePrompt(s.queued[id] ?? [], qid) } }));
+  },
+
+  editQueued: (qid, text, attachments) => {
+    const id = get().activeId;
+    if (!id) return;
+    set((s) => ({ queued: { ...s.queued, [id]: updatePrompt(s.queued[id] ?? [], qid, text, attachments) } }));
+  },
+
+  setEditingQueued: (qid) => {
+    editingQueuedId = qid;
+    if (qid) return;
+    // 编辑结束：把刚才因为编辑而跳过的那一次自动发送补上。
+    const sid = get().activeId;
+    if (sid && flushPending.delete(sid)) void get().flushQueued(sid);
+  },
+
+  steerQueued: async (qid) => {
+    const id = get().activeId;
+    if (!id) return false;
+    const item = (get().queued[id] ?? []).find((q) => q.id === qid);
+    if (!item) return false;
+    // 先摘出队列再发：发送期间又点一次「立即插话」不该把同一条发两遍。
+    set((s) => ({ queued: { ...s.queued, [id]: removePrompt(s.queued[id] ?? [], qid) } }));
+    const ok = await get().sendPrompt(item.text, item.attachments, item.label);
+    if (!ok) set((s) => ({ queued: { ...s.queued, [id]: [item, ...(s.queued[id] ?? [])] } }));
+    return ok;
+  },
+
+  flushQueued: async (sid) => {
+    if (!sid || flushing.has(sid)) return false;
+    // 队列跟着对话走：用户切到别的对话时不替他发，切回来再说（面板上仍然可以手动发）。
+    if (get().activeId !== sid) return false;
+    const state = get().states[sid] ?? "";
+    if (state === "busy" || state === "starting") return false;
+    const head = headPrompt(get().queued[sid] ?? []);
+    if (!head) return false;
+    // 队首正在被编辑：先按住，等编辑结束再发，别把改到一半的旧文本发出去。
+    if (head.id === editingQueuedId) {
+      flushPending.add(sid);
+      return false;
+    }
+    flushing.add(sid);
+    set((s) => ({ queued: { ...s.queued, [sid]: removePrompt(s.queued[sid] ?? [], head.id) } }));
+    try {
+      const ok = await get().sendPrompt(head.text, head.attachments, head.label);
+      // 发失败（连接断开等）：放回队首，消息不能凭空消失。
+      if (!ok) set((s) => ({ queued: { ...s.queued, [sid]: [head, ...(s.queued[sid] ?? [])] } }));
+      return ok;
+    } finally {
+      flushing.delete(sid);
+    }
   },
 
   interrupt: () => {
@@ -1687,6 +1805,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
         }
         // 新回合的回复变了，悬浮预览要重新读。
         if (isTurnResult(ev.data)) previewCache.delete(sid);
+        // 这一轮正常结束：把待发送的队首发出去。被中断 / 出错时留在队列里
+        // （shouldFlushAfter 的判定与理由见 lib/queue.ts）。
+        if (shouldFlushAfter(ev.data)) void get().flushQueued(sid);
         return;
       }
       default:

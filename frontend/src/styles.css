@@ -241,6 +241,14 @@ pre {
   color: var(--c-canvas);
 }
 
+/* 窄一圈的变体：回合进行中且有草稿时，中断要让位给「发送（排队）」，
+   两个 34px 圆钮并排会把模型菜单挤没，所以中断缩成 28px 的次要按钮。 */
+.send-button.is-compact {
+  width: 28px;
+  height: 28px;
+  opacity: 0.85;
+}
+
 /* 侧栏工作区/会话行。放进 components 层，页面上的 items-start 等工具类才能覆盖。 */
 @layer components {
   .side-row {
