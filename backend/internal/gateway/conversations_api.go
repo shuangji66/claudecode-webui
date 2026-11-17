@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -237,12 +239,21 @@ type forkConversationReq struct {
 // forkTranscriptWait 是 fork 之后等转录落盘的上限。测试会调小/置零。
 var forkTranscriptWait = 1500 * time.Millisecond
 
-// waitTranscript 短暂等 fork 出来的转录出现：前端拿到 id 后立刻会回放它，
+// waitForkTranscript 短暂等 fork 出来的转录出现：前端拿到 id 后立刻会回放它，
 // 早于文件出现会先闪一下空对话。等不到也照常返回——CLI 稍后自己会写完。
-func (s *Server) waitTranscript(id string) {
+//
+// 只盯旧转录旁边那一个文件名：fork 的 cwd 与原会话相同，claude 把它们写在同一个
+// project 目录下；以前每 50ms 重扫整个 projects 树（每个 project 一次 stat），
+// 在这台 NAS 上等于给一个 HTTP 请求陪跑几十次目录遍历。
+func (s *Server) waitForkTranscript(oldID, newID string) {
+	old, err := history.TranscriptPath(s.d.HistoryDir, oldID)
+	if err != nil {
+		return
+	}
+	dest := filepath.Join(filepath.Dir(old), newID+".jsonl")
 	deadline := time.Now().Add(forkTranscriptWait)
 	for {
-		if history.TranscriptExists(s.d.HistoryDir, id) {
+		if st, err := os.Stat(dest); err == nil && !st.IsDir() {
 			return
 		}
 		if !time.Now().Before(deadline) {
@@ -328,7 +339,7 @@ func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request) 
 	if title != "" {
 		_ = s.d.Conversations.Rename(info.ID, title)
 	}
-	s.waitTranscript(info.ID)
+	s.waitForkTranscript(req.ID, info.ID)
 	writeJSON(w, map[string]any{"ok": true, "id": info.ID, "cwd": rec.Cwd})
 }
 

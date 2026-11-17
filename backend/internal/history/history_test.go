@@ -4,10 +4,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeJSONL(t *testing.T, path string, lines ...string) {
@@ -511,5 +513,32 @@ func TestExportSkipsOversizedSidecar(t *testing.T) {
 	}
 	if names[id+"/subagents/agent-2.jsonl"] {
 		t.Fatal("超大旁路文件不应进包")
+	}
+}
+
+// fork 之后要等新转录落盘：网关靠 TranscriptPath 找到旧文件所在的 project 目录，
+// 再只盯旁边那一个文件名。同 id 多份时必须给出最新的那份。
+func TestTranscriptPathPrefersNewest(t *testing.T) {
+	root := t.TempDir()
+	id := "77777777-8888-4999-8aaa-bbbbbbbbbbbb"
+	older := filepath.Join(root, "p-old", id+".jsonl")
+	newer := filepath.Join(root, "p-new", id+".jsonl")
+	writeJSONL(t, older, `{"type":"user","message":{"content":"x"}}`)
+	writeJSONL(t, newer, `{"type":"user","message":{"content":"y"}}`)
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(older, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := TranscriptPath(root, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != newer {
+		t.Fatalf("TranscriptPath = %q, want %q", got, newer)
+	}
+	// 非法 id 不能拼路径（和 SessionLogExists 同一条白名单）。
+	if _, err := TranscriptPath(root, "../etc/passwd"); !errors.Is(err, ErrTranscriptNotFound) {
+		t.Fatalf("非法 id 应返回 ErrTranscriptNotFound，实际 %v", err)
 	}
 }

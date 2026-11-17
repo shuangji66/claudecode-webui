@@ -354,15 +354,21 @@ func findTranscript(projectsDir, id string) (string, error) {
 	return best, nil
 }
 
-// TranscriptExists 报告某个会话的转录文件是否已经落盘。
+// TranscriptPath 返回某个会话转录文件的绝对路径（同 id 有多份时取最新）。
 //
-// fork 之后 CLI 会把历史写进新文件，但落盘时刻在进程启动之后；网关用它短暂等一下，
-// 免得前端紧接着回放时读到一个「还不存在」的转录、闪一下空对话。
-func TranscriptExists(projectsDir, id string) bool {
+// 网关 fork 之后要等新转录落盘：新文件与旧会话写在**同一个 project 目录**下
+// （cwd 相同 → 目录名相同），拿到旧文件的路径就能只盯旁边那一个候选，
+// 不必每 50ms 重扫整个 projects 树。
+func TranscriptPath(projectsDir, id string) (string, error) {
 	if !validSessionID(id) {
-		return false
+		return "", ErrTranscriptNotFound
 	}
-	_, err := findTranscript(projectsDir, id)
+	return findTranscript(projectsDir, id)
+}
+
+// TranscriptExists 报告某个会话的转录文件是否已经落盘。
+func TranscriptExists(projectsDir, id string) bool {
+	_, err := TranscriptPath(projectsDir, id)
 	return err == nil
 }
 

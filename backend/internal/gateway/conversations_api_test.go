@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ccweb/backend/internal/conversation"
 )
@@ -418,5 +419,36 @@ func TestNormalizeTitle(t *testing.T) {
 				t.Fatalf("normalizeTitle = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// fork 之后只等旧转录所在目录里的新文件：出现就立刻返回，不等满超时。
+func TestWaitForkTranscript(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	oldID := "88888888-9999-4aaa-8bbb-cccccccccccc"
+	newID := "99999999-aaaa-4bbb-8ccc-dddddddddddd"
+	writeTranscript(t, srv.d.HistoryDir, oldID, srv.d.ProjectsRoot)
+
+	// 旧转录都找不到时不必等：fork 读不到历史，也就没什么可等的。
+	started := time.Now()
+	srv.waitForkTranscript("aaaaaaaa-1111-4222-8333-444444444444", newID)
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("没有旧转录时不该干等: %v", elapsed)
+	}
+
+	writeTranscript(t, srv.d.HistoryDir, newID, srv.d.ProjectsRoot)
+	started = time.Now()
+	srv.waitForkTranscript(oldID, newID)
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("转录已存在时应立刻返回: %v", elapsed)
+	}
+
+	// 超时上限被调成 0 时只探一次就放弃（测试与降级路径都靠这个开关）。
+	defer func(d time.Duration) { forkTranscriptWait = d }(forkTranscriptWait)
+	forkTranscriptWait = 0
+	started = time.Now()
+	srv.waitForkTranscript(oldID, "bbbbbbbb-2222-4333-8444-555555555555")
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("上限为 0 时不该继续轮询: %v", elapsed)
 	}
 }
