@@ -115,8 +115,8 @@ export function HistoryDialog({ open, onClose }: Props) {
       <div className="border-b border-line px-4 py-2.5">
           <div className="flex items-center gap-2 rounded-[10px] border border-line-strong px-2.5 py-1.5 focus-within:border-brand/60">
             <IconSearch size={14} className="text-muted" />
+            {/* 不要 autoFocus：手机上打开历史记录会直接弹出键盘，把大半个列表顶走。 */}
             <input
-              autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={t("搜索历史会话", "Search history")}
