@@ -7,7 +7,11 @@ const SNAP = {
   contextTokens: 9312,
   contextWindow: 200000,
   cacheHitRate: 9000 / 9312,
+  inputTokens: 12,
+  cacheReadTokens: 9000,
+  cacheCreationTokens: 300,
   outputTokens: 7,
+  thinkingTokens: 4,
   apiMs: 22,
 };
 
@@ -37,8 +41,13 @@ describe("UsageStats", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(panel).toHaveTextContent("上下文占用");
     expect(panel).toHaveTextContent("9.1K / 195.3K");
+    // 输入侧摊开创：新输入 / 缓存读取 / 缓存写入，加起来就是「已用」。
+    expect(panel).toHaveTextContent("新输入12");
+    expect(panel).toHaveTextContent("缓存读取8.8K");
+    expect(panel).toHaveTextContent("缓存写入300");
     expect(panel).toHaveTextContent("缓存命中97%");
     expect(panel).toHaveTextContent("本回合输出7 tok");
+    expect(panel).toHaveTextContent("其中思考4 tok");
     expect(panel).toHaveTextContent("API 耗时0.02s");
     expect(panel).toHaveTextContent("生成速度318 tok/s");
     expect(panel).toHaveTextContent("累计1 轮 · 9 条事件");

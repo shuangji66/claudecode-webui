@@ -80,6 +80,13 @@ describe("applyUsageMessage", () => {
     expect(snap.cacheHitRate).toBeCloseTo(9000 / 9312, 5);
   });
 
+  it("message_start 同时给出输入侧三项明细（新输入 / 新建缓存 / 命中缓存）", () => {
+    const snap = applyUsageMessage(undefined, MESSAGE_START)!;
+    expect(snap.inputTokens).toBe(12);
+    expect(snap.cacheCreationTokens).toBe(300);
+    expect(snap.cacheReadTokens).toBe(9000);
+  });
+
   it("message_delta 只更新输出 token，不清掉上下文", () => {
     const start = applyUsageMessage(undefined, MESSAGE_START)!;
     const snap = applyUsageMessage(start, {
@@ -103,6 +110,9 @@ describe("applyUsageMessage", () => {
     expect(snap.contextTokens).toBe(8573);
     expect(snap.cacheHitRate).toBeCloseTo(1792 / 8573, 5);
     expect(snap.outputTokens).toBe(10);
+    expect(snap.inputTokens).toBe(6781);
+    expect(snap.cacheReadTokens).toBe(1792);
+    expect(snap.cacheCreationTokens).toBe(0);
   });
 
   it("已有快照时，message_delta 的输入侧覆盖旧上下文", () => {
@@ -120,6 +130,30 @@ describe("applyUsageMessage", () => {
     expect(snap.contextWindow).toBe(200000);
     expect(snap.apiMs).toBe(22);
     expect(snap.outputTokens).toBe(7);
+  });
+
+  it("result 带 usage 明细与思考 token（0 的不显示）", () => {
+    const snap = applyUsageMessage(undefined, {
+      type: "result",
+      duration_api_ms: 5000,
+      usage: {
+        input_tokens: 6781,
+        cache_read_input_tokens: 1792,
+        cache_creation_input_tokens: 0,
+        output_tokens: 2300,
+        output_tokens_details: { thinking_tokens: 1200 },
+      },
+    })!;
+    expect(snap.inputTokens).toBe(6781);
+    expect(snap.cacheReadTokens).toBe(1792);
+    expect(snap.cacheCreationTokens).toBe(0);
+    expect(snap.thinkingTokens).toBe(1200);
+
+    const noThinking = applyUsageMessage(undefined, {
+      type: "result",
+      usage: { input_tokens: 10, output_tokens: 5, output_tokens_details: { thinking_tokens: 0 } },
+    })!;
+    expect(noThinking.thinkingTokens).toBeUndefined();
   });
 
   it("不认识的消息不产生快照", () => {
@@ -145,6 +179,9 @@ describe("usageFromTranscript", () => {
     expect(snap.cacheHitRate).toBeCloseTo(9000 / 9312, 5);
     expect(snap.outputTokens).toBe(7);
     expect(snap.apiMs).toBe(23);
+    expect(snap.inputTokens).toBe(12);
+    expect(snap.cacheReadTokens).toBe(9000);
+    expect(snap.cacheCreationTokens).toBe(300);
   });
 
   it("多条 cost-state 时用差值算最近一回合的 API 耗时", () => {

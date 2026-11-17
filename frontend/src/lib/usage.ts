@@ -27,8 +27,17 @@ export interface UsageSnapshot {
   contextWindow?: number;
   /** 缓存命中率 0..1（cache_read / 输入侧总量）。 */
   cacheHitRate?: number;
+  /**
+   * 输入侧的三项明细（最近一次请求）：新输入 / 命中缓存 / 新建缓存。
+   * 三者相加就是 `contextTokens`；都是 CLI 给的原始数字，不是换算。
+   */
+  inputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
   /** 最近一回合的输出 token 与 API 耗时，用于 tok/s。 */
   outputTokens?: number;
+  /** 输出里用于思考的 token；CLI 没给（或为 0）时为空。 */
+  thinkingTokens?: number;
   apiMs?: number;
 }
 
@@ -60,6 +69,21 @@ export function cacheHitRate(u: UsageTotals): number | undefined {
   const total = contextTokens(u);
   if (total <= 0) return undefined;
   return u.cacheRead / total;
+}
+
+/** 输入侧三项明细：新输入 / 命中缓存 / 新建缓存（原始数字，供详情面板摊开）。 */
+export function inputParts(
+  u: UsageTotals,
+): Pick<UsageSnapshot, "inputTokens" | "cacheReadTokens" | "cacheCreationTokens"> {
+  return { inputTokens: u.input, cacheReadTokens: u.cacheRead, cacheCreationTokens: u.cacheCreation };
+}
+
+/** 输出里用于思考的 token；字段缺失或为 0 时返回 undefined（不显示一行 0）。 */
+function thinkingTokensOf(usage: unknown): number | undefined {
+  const details = (usage as Record<string, unknown> | undefined)?.output_tokens_details;
+  if (!details || typeof details !== "object") return undefined;
+  const v = (details as Record<string, unknown>).thinking_tokens;
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined;
 }
 
 /** 输出速度（tok/s）：输出 token ÷ API 耗时。耗时缺失或为 0 时返回 undefined。 */
@@ -97,14 +121,20 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
     const ev = m.event as Record<string, unknown> | undefined;
     if (!ev) return undefined;
     if (ev.type === "message_start") {
-      const totals = totalsFromUsage((ev.message as Record<string, unknown> | undefined)?.usage);
+      const usage = (ev.message as Record<string, unknown> | undefined)?.usage;
+      const totals = totalsFromUsage(usage);
       if (!totals) return undefined;
-      return {
-        ...prev,
-        contextTokens: contextTokens(totals),
-        cacheHitRate: cacheHitRate(totals),
-        outputTokens: totals.output,
-      };
+      // 只有带输入侧时才更新上下文（start 里只有 output 的时候别把已知的上下文抹成 0）。
+      const context = contextTokens(totals);
+      const next: UsageSnapshot = { ...(prev ?? { contextTokens: 0 }), outputTokens: totals.output };
+      if (context > 0) {
+        next.contextTokens = context;
+        next.cacheHitRate = cacheHitRate(totals);
+        Object.assign(next, inputParts(totals));
+      }
+      const thinking = thinkingTokensOf(usage);
+      if (thinking !== undefined) next.thinkingTokens = thinking;
+      return next;
     }
     if (ev.type === "message_delta") {
       const totals = totalsFromUsage(ev.usage);
@@ -121,7 +151,10 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
       if (context > 0) {
         next.contextTokens = context;
         next.cacheHitRate = cacheHitRate(totals);
+        Object.assign(next, inputParts(totals));
       }
+      const thinking = thinkingTokensOf(ev.usage);
+      if (thinking !== undefined) next.thinkingTokens = thinking;
       return next;
     }
     return undefined;
@@ -140,13 +173,18 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
       }
     }
     if (!totals && window === undefined && apiMs === undefined) return undefined;
+    const context = totals ? contextTokens(totals) : 0;
     const next: UsageSnapshot = {
-      contextTokens: totals ? contextTokens(totals) : (prev?.contextTokens ?? 0),
-      cacheHitRate: totals ? cacheHitRate(totals) : prev?.cacheHitRate,
+      // 输入侧缺失（只给 output 的中转）时保留上一份，不要用 0 覆盖已知的上下文。
+      contextTokens: context > 0 ? context : (prev?.contextTokens ?? 0),
+      cacheHitRate: context > 0 && totals ? cacheHitRate(totals) : prev?.cacheHitRate,
       contextWindow: window ?? prev?.contextWindow,
       outputTokens: totals?.output ?? prev?.outputTokens,
       apiMs,
     };
+    if (context > 0 && totals) Object.assign(next, inputParts(totals));
+    const thinking = thinkingTokensOf(m.usage) ?? prev?.thinkingTokens;
+    if (thinking !== undefined) next.thinkingTokens = thinking;
     return next;
   }
 
@@ -166,6 +204,7 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
  */
 export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined {
   let totals: UsageTotals | undefined;
+  let thinking: number | undefined;
   let prevApiMs = 0;
   let apiMsFromTs: number | undefined;
   let apiMsFromCost: number | undefined;
@@ -178,8 +217,11 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
     if (m.type === "api-request") {
       if (Number.isFinite(ts)) lastRequestAt = ts;
     } else if (m.type === "assistant") {
-      const t = totalsFromUsage((m.message as Record<string, unknown> | undefined)?.usage);
+      const usage = (m.message as Record<string, unknown> | undefined)?.usage;
+      const t = totalsFromUsage(usage);
       if (t) totals = t;
+      const th = thinkingTokensOf(usage);
+      if (th !== undefined) thinking = th;
       if (lastRequestAt !== undefined && Number.isFinite(ts) && ts >= lastRequestAt) {
         apiMsFromTs = ts - lastRequestAt;
       }
@@ -204,7 +246,9 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
   return {
     contextTokens: totals ? contextTokens(totals) : 0,
     cacheHitRate: totals ? cacheHitRate(totals) : undefined,
+    ...(totals ? inputParts(totals) : {}),
     outputTokens: totals?.output,
+    thinkingTokens: thinking,
     apiMs,
     contextWindow: window,
   };
@@ -223,7 +267,11 @@ export function mergeUsage(
   return {
     contextTokens: live.contextTokens || persisted.contextTokens,
     cacheHitRate: live.cacheHitRate ?? persisted.cacheHitRate,
+    inputTokens: live.inputTokens ?? persisted.inputTokens,
+    cacheReadTokens: live.cacheReadTokens ?? persisted.cacheReadTokens,
+    cacheCreationTokens: live.cacheCreationTokens ?? persisted.cacheCreationTokens,
     outputTokens: live.outputTokens ?? persisted.outputTokens,
+    thinkingTokens: live.thinkingTokens ?? persisted.thinkingTokens,
     apiMs: live.apiMs ?? persisted.apiMs,
     contextWindow: live.contextWindow ?? persisted.contextWindow,
   };

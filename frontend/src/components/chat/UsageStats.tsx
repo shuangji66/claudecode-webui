@@ -61,14 +61,15 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-const PANEL_WIDTH = 232;
+// 详情里要放下输入侧的三个分项，比原来略宽；高度按 9 行估算（含两条分隔线）。
+const PANEL_WIDTH = 248;
 
 export function UsageStats({ snap, turns, tools, events }: Props) {
   const t = useT();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setAnchor(null), []);
-  const pos = useAnchoredPanel(anchor, anchor !== null, PANEL_WIDTH, 210);
+  const pos = useAnchoredPanel(anchor, anchor !== null, PANEL_WIDTH, 320);
   useDismiss(anchor !== null, panelRef, anchor, close);
 
   const tps = snap ? tokensPerSecond(snap.outputTokens ?? 0, snap.apiMs) : undefined;
@@ -138,18 +139,38 @@ export function UsageStats({ snap, turns, tools, events }: Props) {
                 {formatTokens(snap.contextTokens)}
                 {snap.contextWindow ? ` / ${formatTokens(snap.contextWindow)}` : ""}
               </Row>
+              {snap.inputTokens !== undefined && (
+                <Row label={t("新输入", "New input")}>{formatTokens(snap.inputTokens)}</Row>
+              )}
+              {snap.cacheReadTokens ? (
+                <Row label={t("缓存读取", "From cache")}>{formatTokens(snap.cacheReadTokens)}</Row>
+              ) : null}
+              {snap.cacheCreationTokens ? (
+                <Row label={t("缓存写入", "Cache write")}>{formatTokens(snap.cacheCreationTokens)}</Row>
+              ) : null}
               {snap.cacheHitRate !== undefined && (
                 <Row label={t("缓存命中", "Cache hit")}>{Math.round(snap.cacheHitRate * 100)}%</Row>
               )}
+            </div>
+            <div className="my-1.5 h-px bg-line" />
+            <div className="space-y-1 text-[11px]">
               {snap.outputTokens !== undefined && (
                 <Row label={t("本回合输出", "Turn output")}>{formatTokens(snap.outputTokens)} tok</Row>
+              )}
+              {snap.thinkingTokens !== undefined && (
+                <Row label={t("其中思考", "Thinking")}>{formatTokens(snap.thinkingTokens)} tok</Row>
               )}
               {snap.apiMs !== undefined && (
                 <Row label={t("API 耗时", "API time")}>{(snap.apiMs / 1000).toFixed(2)}s</Row>
               )}
               {tps !== undefined && <Row label={t("生成速度", "Throughput")}>{Math.round(tps)} tok/s</Row>}
-              {totals && <Row label={t("累计", "Totals")}>{totals}</Row>}
             </div>
+            <div className="my-1.5 h-px bg-line" />
+            {totals && (
+              <div className="text-[11px]">
+                <Row label={t("累计", "Totals")}>{totals}</Row>
+              </div>
+            )}
           </div>,
           document.body,
         )}
