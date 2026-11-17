@@ -241,6 +241,55 @@ func TestForkConversation(t *testing.T) {
 	}
 }
 
+// fork 的三类失败必须挡在起进程之前：没有转录（CLI 必然 --resume 失败）、
+// 已删除、会话池已满。起进程之后再报错会留下一条永远 resume 不了的元数据。
+func TestForkConversationRejectsBadSource(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	store := withConversationStore(t, srv)
+	root := srv.d.ProjectsRoot
+	fm := srv.d.Manager.(*fakeMgr)
+
+	post := func(id string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/conversations/fork", strings.NewReader(`{"id":"`+id+`"}`)))
+		return rec
+	}
+
+	// 1) 空对话：有元数据、没有转录。
+	emptyID := "44444444-5555-4666-8777-888888888888"
+	if err := store.Touch(emptyID, root); err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(emptyID); rec.Code != http.StatusBadRequest {
+		t.Fatalf("没有转录应 400，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 2) 已删除的对话。
+	deletedID := "55555555-6666-4777-8888-999999999999"
+	writeTranscript(t, srv.d.HistoryDir, deletedID, root)
+	if err := store.Touch(deletedID, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(deletedID); err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(deletedID); rec.Code != http.StatusConflict {
+		t.Fatalf("已删除应 409，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 3) 会话池满：manager 的错误是「当前状态冲突」，不是 500。
+	fullID := "66666666-7777-4888-8999-aaaaaaaaaaaa"
+	writeTranscript(t, srv.d.HistoryDir, fullID, root)
+	fm.failOn = "fork"
+	if rec := post(fullID); rec.Code != http.StatusConflict {
+		t.Fatalf("manager 报错应 409，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	// 失败之后不能留下任何新元数据。
+	if len(fm.forked) != 0 {
+		t.Fatalf("起进程前就该拦住: %v", fm.forked)
+	}
+}
+
 func TestConversationsRequireAuthAndRejectBadTranscriptID(t *testing.T) {
 	srv, _ := newTestServer(t, "secret")
 	withConversationStore(t, srv)

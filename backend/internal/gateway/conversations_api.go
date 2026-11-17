@@ -264,12 +264,24 @@ func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, "对话不存在", http.StatusNotFound)
 		return
 	}
+	if rec.Deleted {
+		writeErr(w, "该对话已删除，无法分叉", http.StatusConflict)
+		return
+	}
 	if rec.Cwd == "" {
 		writeErr(w, "这条对话没有工作目录，无法分叉", http.StatusBadRequest)
 		return
 	}
-	// 工作区可能已经被移除：fork 会在这里真起一个 claude 进程，必须和新建会话一样过授权。
-	if err := s.ensureCwdAuthorized(rec.Cwd); err != nil {
+	// 没有转录就没有可复制的东西：`--resume` 找不到会话时 CLI 会直接退出，
+	// 而我们那时已经落下一条永远 resume 不了的元数据（AGENTS 里的「幽灵对话」）。
+	// 挡在起进程之前，错误信息也才说得清。
+	if !history.TranscriptExists(s.d.HistoryDir, req.ID) {
+		writeErr(w, "这条对话还没有任何消息，无法分叉", http.StatusBadRequest)
+		return
+	}
+	// 工作区可能已经被移除：fork 会在这里真起一个 claude 进程，必须和新建会话走同一道门
+	// （含软链解析，否则软链目录能绕过 `/api/session` 的围栏）。
+	if err := s.ensureCwdAuthorizedReal(rec.Cwd); err != nil {
 		writeErr(w, err.Error(), http.StatusForbidden)
 		return
 	}
@@ -280,7 +292,9 @@ func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request) 
 			writeErr(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeErr(w, err.Error(), http.StatusInternalServerError)
+		// 和 POST /api/session 一样：会话上限、进程起不来都是「当前状态冲突」，
+		// 不是内部错误——报 500 只会让前端弹「服务器内部错误」，看不出该关几个空闲会话。
+		writeErr(w, err.Error(), http.StatusConflict)
 		return
 	}
 	// 先落元数据再等转录：列表接口靠它让新对话立刻出现（转录可能还没写完）。
