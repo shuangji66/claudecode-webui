@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anchoredPosition, panelMaxHeight } from "./Menu";
+import { anchoredPosition, menuHeight, panelMaxHeight } from "./Menu";
 
 /** 造一个只有位置信息的假触发器。 */
 function anchor(top: number, bottom: number): HTMLElement {
@@ -29,5 +29,28 @@ describe("anchoredPosition", () => {
     const pos = anchoredPosition(anchor(10, 30), 2000, 120, "end");
     expect(pos.width).toBe(window.innerWidth - 16);
     expect(pos.left).toBeGreaterThanOrEqual(8);
+  });
+});
+
+describe("menuHeight", () => {
+  // 侧栏「分组 / 排序 / 筛选」菜单的实际样子：8 项 + 3 个分组标题。
+  // 漏算分组标题时估算只有 248，手机竖屏（456px 高）里会被裁出一条滚动条。
+  it("把分组标题算进高度：8 项 3 组超过 300", () => {
+    const items = [
+      { group: "分组方式" },
+      { group: undefined },
+      { group: undefined },
+      { group: "排序方式" },
+      { group: undefined },
+      { group: "筛选会话" },
+      { group: undefined },
+      { group: undefined },
+    ];
+    expect(menuHeight(items)).toBe(8 * 30 + 3 * 23 + 8);
+  });
+
+  it("同一分组只在第一项前多一行，空菜单只有内边距", () => {
+    expect(menuHeight([])).toBe(8);
+    expect(menuHeight([{ group: "a" }, { group: "a" }])).toBe(30 * 2 + 23 + 8);
   });
 });

@@ -19,9 +19,15 @@ export const PORTAL_ATTR = "data-dsh-portal";
 /** 浮层与视口边缘的最小间距。 */
 const VIEWPORT_MARGIN = 8;
 
-/** 浮层高度上限：内容再多也只在这个高度内滚动（60vh 与 420px 取小）。 */
+/**
+ * 浮层高度上限：内容再多也只在这个高度内滚动（80vh 与 560px 取小）。
+ *
+ * 不要压回 60vh/420：真实的菜单经常只有 8~10 项，60vh 在手机竖屏（约 460px 高）
+ * 只有 274px，比菜单本身还矮——明明下方空间够，却白白给出一根滚动条。
+ * 最终高度仍由 anchoredPosition 的可用空间兜底，不会溢出视口。
+ */
 export function panelMaxHeight(): number {
-  return Math.min(Math.round(window.innerHeight * 0.6), 420);
+  return Math.min(Math.round(window.innerHeight * 0.8), 560);
 }
 
 /** 向上/向下展开时都要留的最小高度，免得贴边时被压成一条缝。 */
@@ -241,6 +247,23 @@ interface MenuProps {
 }
 
 /**
+ * 菜单的估算高度（用于决定向下/向上展开，以及给出的 maxHeight）。
+ *
+ * 必须把分组标题算进去：漏算时估算比真实内容矮，maxHeight 会把菜单裁出一条
+ * 滚动条——「空间明明够却在滚」就是这个估算漏掉 group 的结果。行高按
+ * `py-1.5 + 11.5px 字`（≈28px）与 `pt-1.5 + 10px 字 + pb-0.5`（≈23px）取整数。
+ */
+export function menuHeight(items: Pick<MenuItem, "group">[]): number {
+  const ITEM_H = 30;
+  const GROUP_H = 23;
+  const rows = items.reduce(
+    (h, item, i) => h + ITEM_H + (item.group && item.group !== items[i - 1]?.group ? GROUP_H : 0),
+    0,
+  );
+  return rows + 8; // 面板 p-1 的上下内边距
+}
+
+/**
  * 统一的「更多」下拉菜单。
  *
  * 关闭逻辑收在组件里：调用方只需要维护 open + anchor，
@@ -248,7 +271,7 @@ interface MenuProps {
  */
 export function Menu({ open, anchor, items, onClose, width = 176, align = "end" }: MenuProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const pos = useAnchoredPosition(anchor, open, width, items.length * 30 + 8, align);
+  const pos = useAnchoredPosition(anchor, open, width, menuHeight(items), align);
   useDismiss(open, ref, anchor, onClose);
 
   if (!open || !pos) return null;
