@@ -176,6 +176,71 @@ func TestConversationPinned(t *testing.T) {
 	}
 }
 
+func TestForkConversation(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	store := withConversationStore(t, srv)
+	root := srv.d.ProjectsRoot
+	oldID := "33333333-4444-4555-8666-777777777777"
+	writeTranscript(t, srv.d.HistoryDir, oldID, root)
+	forkID := "22222222-3333-4444-8555-666666666677"
+	// fakeMgr 返回固定的 fork id；预写转录，让 handler 的等待立刻返回。
+	writeTranscript(t, srv.d.HistoryDir, forkID, root)
+
+	body := `{"id":"` + oldID + `","title":"旧会话（分叉）"}`
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/conversations/fork", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("fork code = %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		ID  string `json:"id"`
+		Cwd string `json:"cwd"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.ID != forkID || out.Cwd != root {
+		t.Fatalf("fork 返回 = %+v", out)
+	}
+	if fm := srv.d.Manager.(*fakeMgr); len(fm.forked) != 1 || fm.forked[0] != oldID {
+		t.Fatalf("manager.Fork 的参数 = %v", fm.forked)
+	}
+	// 新会话要立刻出现在列表里（转录可能还没写完，靠元数据兜底）。
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/conversations", nil))
+	var list struct {
+		Conversations []struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"conversations"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range list.Conversations {
+		if c.ID == forkID {
+			found = true
+			if c.Title != "旧会话（分叉）" {
+				t.Fatalf("分叉标题 = %q", c.Title)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("分叉出来的对话不在列表里: %+v", list.Conversations)
+	}
+	if got, _ := store.Get(forkID); got.Cwd != root || got.Title != "旧会话（分叉）" {
+		t.Fatalf("分叉元数据 = %+v", got)
+	}
+
+	// 不存在的原对话
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/conversations/fork", strings.NewReader(`{"id":"unknown"}`)))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("未知对话应 404，实际 %d", rec.Code)
+	}
+}
+
 func TestConversationsRequireAuthAndRejectBadTranscriptID(t *testing.T) {
 	srv, _ := newTestServer(t, "secret")
 	withConversationStore(t, srv)

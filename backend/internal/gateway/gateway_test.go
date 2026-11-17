@@ -27,6 +27,7 @@ import (
 type fakeMgr struct {
 	created []string
 	resumed []string
+	forked  []string
 	closed  []string
 	failOn  string
 	inUse   map[string]bool
@@ -56,6 +57,15 @@ func (f *fakeMgr) Create(cwd, model, mode string) (manager.Info, error) {
 func (f *fakeMgr) Resume(id, cwd, model, mode string) (manager.Info, error) {
 	f.resumed = append(f.resumed, id)
 	return manager.Info{ID: id, Cwd: cwd, State: "ready"}, nil
+}
+
+func (f *fakeMgr) Fork(oldID, cwd, model, mode string) (manager.Info, error) {
+	if f.failOn == "fork" {
+		return manager.Info{}, errFake
+	}
+	f.forked = append(f.forked, oldID)
+	// 用合法 UUID：后端等转录落盘时会用它拼文件名 + 校验格式。
+	return manager.Info{ID: "22222222-3333-4444-8555-666666666677", Cwd: cwd, State: "ready"}, nil
 }
 
 func (f *fakeMgr) Ensure(cwd, model, mode string) (manager.Info, error) {

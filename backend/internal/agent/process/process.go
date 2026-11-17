@@ -19,6 +19,13 @@ type Options struct {
 	Effort string
 	// Resume 非空则续接该 session id。
 	Resume string
+	// Fork 为 true 时把 Resume 的历史复制到 SessionID 指定的新会话（--fork-session），
+	// 原会话不受影响。只有较新版本认识这个参数，调用方要先用 supportsFlag 探测。
+	//
+	// 必须和 Resume + SessionID 一起用：实测 2.1.326 上
+	// `--resume <旧> --fork-session --session-id <新>` 会把历史写到新文件、
+	// 行内 sessionId 全部重写成新 id，旧文件字节不变。
+	Fork bool
 	// SessionID 非空则强制使用该 session id（必须是 UUID）。
 	SessionID string
 	// AddDirs 追加可访问目录。
@@ -86,6 +93,9 @@ func Args(o Options) []string {
 	}
 	if o.Resume != "" {
 		args = append(args, "--resume", o.Resume)
+		if o.Fork {
+			args = append(args, "--fork-session")
+		}
 	}
 	if o.SessionID != "" {
 		args = append(args, "--session-id", o.SessionID)

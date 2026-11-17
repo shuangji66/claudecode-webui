@@ -46,7 +46,7 @@ type transcriptLine struct {
 	Timestamp   string `json:"timestamp"`
 	IsSidechain bool   `json:"isSidechain"`
 	IsMeta      bool   `json:"isMeta"`
-	Message   struct {
+	Message     struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
@@ -352,6 +352,18 @@ func findTranscript(projectsDir, id string) (string, error) {
 		return "", ErrTranscriptNotFound
 	}
 	return best, nil
+}
+
+// TranscriptExists 报告某个会话的转录文件是否已经落盘。
+//
+// fork 之后 CLI 会把历史写进新文件，但落盘时刻在进程启动之后；网关用它短暂等一下，
+// 免得前端紧接着回放时读到一个「还不存在」的转录、闪一下空对话。
+func TranscriptExists(projectsDir, id string) bool {
+	if !validSessionID(id) {
+		return false
+	}
+	_, err := findTranscript(projectsDir, id)
+	return err == nil
 }
 
 func validSessionID(id string) bool {

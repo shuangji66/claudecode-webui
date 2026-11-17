@@ -43,6 +43,8 @@ type SessionManager interface {
 	InUse(bin string) bool
 	Create(cwd, model, permissionMode string) (manager.Info, error)
 	Resume(id, cwd, model, permissionMode string) (manager.Info, error)
+	// Fork 从已有对话复制出一个新会话（新 id 由 manager 生成），原会话不受影响。
+	Fork(oldID, cwd, model, permissionMode string) (manager.Info, error)
 	Ensure(cwd, model, permissionMode string) (manager.Info, error)
 	Get(id string) (*session.Session, bool)
 	List() []manager.Info
@@ -150,6 +152,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/conversations", s.authed(s.handleListConversations))
 	s.mux.HandleFunc("PATCH /api/conversations", s.authed(s.handlePatchConversation))
 	s.mux.HandleFunc("DELETE /api/conversations", s.authed(s.handleDeleteConversation))
+	s.mux.HandleFunc("POST /api/conversations/fork", s.authed(s.handleForkConversation))
 	s.mux.HandleFunc("GET /api/settings", s.authed(s.handleGetSettings))
 	s.mux.HandleFunc("PUT /api/settings", s.authed(s.handlePutSettings))
 	s.mux.HandleFunc("POST /api/settings/test", s.authed(s.handleTestProvider))

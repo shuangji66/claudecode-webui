@@ -214,6 +214,85 @@ func (s *Server) handlePatchConversation(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, map[string]any{"ok": true})
 }
 
+type forkConversationReq struct {
+	ID    string `json:"id"`
+	Title string `json:"title,omitempty"`
+}
+
+// forkTranscriptWait 是 fork 之后等转录落盘的上限。测试会调小/置零。
+var forkTranscriptWait = 1500 * time.Millisecond
+
+// waitTranscript 短暂等 fork 出来的转录出现：前端拿到 id 后立刻会回放它，
+// 早于文件出现会先闪一下空对话。等不到也照常返回——CLI 稍后自己会写完。
+func (s *Server) waitTranscript(id string) {
+	deadline := time.Now().Add(forkTranscriptWait)
+	for {
+		if history.TranscriptExists(s.d.HistoryDir, id) {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// handleForkConversation 从一条对话复制出一个新会话（对齐 DSH 的「分叉会话」）。
+//
+// 落点必须是**我们生成的新 UUID**：`--resume 旧 --fork-session --session-id 新`
+// （2.1.326 实测可用），这样转录文件名、conversations.json、前端 activeId 仍然同源，
+// 不需要「收养 CLI 自造 id」那一层。原会话完全不受影响；fork 出去的是独立进程，
+// session 级授权不会继承（用户重新审批）。fork 读的是原转录的当前内容，
+// 原会话正在跑时结尾可能少最新一两条。
+func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request) {
+	if s.d.Conversations == nil {
+		writeErr(w, "对话存储未启用", http.StatusServiceUnavailable)
+		return
+	}
+	var req forkConversationReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+		writeErr(w, "请求体解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	if req.ID == "" {
+		writeErr(w, "missing id", http.StatusBadRequest)
+		return
+	}
+	rec, ok := s.ensureConversation(req.ID)
+	if !ok {
+		writeErr(w, "对话不存在", http.StatusNotFound)
+		return
+	}
+	if rec.Cwd == "" {
+		writeErr(w, "这条对话没有工作目录，无法分叉", http.StatusBadRequest)
+		return
+	}
+	// 工作区可能已经被移除：fork 会在这里真起一个 claude 进程，必须和新建会话一样过授权。
+	if err := s.ensureCwdAuthorized(rec.Cwd); err != nil {
+		writeErr(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	info, err := s.d.Manager.Fork(req.ID, rec.Cwd, rec.Model, "")
+	if err != nil {
+		// 版本太旧不认识 --fork-session：这是用户可修的事（去部署页升级），别报 500。
+		if errors.Is(err, manager.ErrForkUnsupported) {
+			writeErr(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeErr(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// 先落元数据再等转录：列表接口靠它让新对话立刻出现（转录可能还没写完）。
+	_ = s.d.Conversations.Touch(info.ID, rec.Cwd)
+	_ = s.d.Conversations.UpdateMeta(info.ID, info.Provider, info.Model, info.Effort)
+	if title := strings.TrimSpace(req.Title); title != "" {
+		_ = s.d.Conversations.Rename(info.ID, title)
+	}
+	s.waitTranscript(info.ID)
+	writeJSON(w, map[string]any{"ok": true, "id": info.ID, "cwd": rec.Cwd})
+}
+
 // handleDeleteConversation 软删除对话（写墓碑，保留转录文件）。
 func (s *Server) handleDeleteConversation(w http.ResponseWriter, r *http.Request) {
 	if s.d.Conversations == nil {

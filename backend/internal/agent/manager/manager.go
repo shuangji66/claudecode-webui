@@ -193,6 +193,39 @@ func (m *Manager) Resume(id, cwd, model, permissionMode string) (Info, error) {
 	})
 }
 
+// ErrForkUnsupported 表示当前 claude 二进制不认识 --fork-session。
+var ErrForkUnsupported = errors.New("manager: 当前 claude 版本不支持分叉会话（需要 --fork-session），请先在「设置 → 部署」升级")
+
+// Fork 从已有对话复制出一个新会话：历史留在新 id 下，原会话完全不受影响。
+//
+// 新 id 由我们生成（不是 CLI 自造）：`--resume 旧 --fork-session --session-id 新`
+// 在 2.1.326 实测可用，转录写入新文件、行内 sessionId 全部重写、旧文件字节不变。
+// 原会话仍在跑也没关系——fork 只读旧转录；代价是它读到的结尾可能比此刻早一两条。
+func (m *Manager) Fork(oldID, cwd, model, permissionMode string) (Info, error) {
+	oldID = strings.TrimSpace(oldID)
+	if !validUUID(oldID) {
+		return Info{}, errors.New("manager: 非法的对话 id")
+	}
+	abs, err := normalizeCwd(cwd)
+	if err != nil {
+		return Info{}, err
+	}
+	bin, err := m.resolve()
+	if err != nil {
+		return Info{}, fmt.Errorf("manager: %w；请在「设置 → 部署」里安装 claude", err)
+	}
+	if !m.supportsFlag(bin, "--fork-session") {
+		return Info{}, ErrForkUnsupported
+	}
+	id, err := newUUID()
+	if err != nil {
+		return Info{}, fmt.Errorf("manager: 生成会话 id: %w", err)
+	}
+	return m.createOnce("id:"+id, func() (Info, error) {
+		return m.createWith(abs, id, oldID, model, permissionMode, true)
+	})
+}
+
 // Info 按 id 返回会话描述。
 func (m *Manager) Info(id string) (Info, bool) {
 	m.mu.Lock()
@@ -295,6 +328,12 @@ func normalizeCwd(cwd string) (string, error) {
 // create 启动会话并完成握手。sessionID 是应用侧 / CLI 共用的 id；
 // resumeID 非空时走 --resume。调用方通过 createOnce 去重，这里不再持 createMu。
 func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string) (Info, error) {
+	return m.createWith(abs, sessionID, resumeID, model, permissionMode, false)
+}
+
+// createWith 是 create 的完整形态：fork=true 时把 resumeID 的历史复制到 sessionID
+// （--resume 旧 --fork-session --session-id 新），并允许两者同时出现。
+func (m *Manager) createWith(abs, sessionID, resumeID, model, permissionMode string, fork bool) (Info, error) {
 	m.reapIdle()
 	m.pruneClosed()
 
@@ -343,11 +382,14 @@ func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string)
 		Effort:         effort,
 		Resume:         resumeID,
 		SessionID: func() string {
-			if resumeID == "" {
+			// 普通 resume 不能再传 --session-id（id 已经由 --resume 指定）；
+			// fork 恰恰要传：新会话的 id 必须是我们生成的这个 UUID。
+			if resumeID == "" || fork {
 				return sessionID
 			}
 			return ""
 		}(),
+		Fork:                   fork,
 		IncludePartialMessages: true,
 		ForwardSubagentText:    m.supportsFlag(bin, "--forward-subagent-text"),
 		// 「跳过权限」要在会话里切得动，启动时就得带上这个能力开关；

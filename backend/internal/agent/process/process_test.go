@@ -32,6 +32,28 @@ func TestArgsBaseline(t *testing.T) {
 	}
 }
 
+// fork 的语义全在参数顺序上：--resume 旧 → --fork-session → --session-id 新。
+// 实测 2.1.326 只有这样才会「把历史复制到新 id、原会话不动」。
+func TestArgsFork(t *testing.T) {
+	args := Args(Options{Resume: "old-id", SessionID: "new-id", Fork: true})
+	i := slices.Index(args, "--resume")
+	if i < 0 || i+1 >= len(args) || args[i+1] != "old-id" {
+		t.Fatalf("--resume 后应为旧 id: %v", args)
+	}
+	if len(args) <= i+2 || args[i+2] != "--fork-session" {
+		t.Fatalf("--resume 后应紧跟 --fork-session: %v", args)
+	}
+	assertPair(t, args, "--session-id", "new-id")
+}
+
+// 不带 Fork 时绝不能出现 --fork-session：普通 resume 会因此每轮都复制一份转录。
+func TestArgsNoForkByDefault(t *testing.T) {
+	args := Args(Options{Resume: "old-id", SessionID: "new-id"})
+	if slices.Contains(args, "--fork-session") {
+		t.Fatalf("未要求分叉时不应带 --fork-session: %v", args)
+	}
+}
+
 func TestArgsOptions(t *testing.T) {
 	args := Args(Options{
 		Model:                  "sonnet",

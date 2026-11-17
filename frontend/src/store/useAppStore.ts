@@ -230,6 +230,8 @@ interface AppState {
   renameConversation: (id: string, title: string) => Promise<boolean>;
   archiveConversation: (id: string, archived: boolean) => Promise<boolean>;
   pinConversation: (id: string, pinned: boolean) => Promise<boolean>;
+  /** 从一条对话复制出新会话并打开它；title 是列表里显示的「原名（分叉）」。 */
+  forkConversation: (id: string, title?: string) => Promise<boolean>;
   deleteConversation: (id: string) => Promise<boolean>;
   closeSession: (id: string) => Promise<void>;
   /** 让切换后的推理等级对已在跑的会话生效（必要时按同一 id 重开进程）。 */
@@ -1280,6 +1282,27 @@ export const useAppStore = create<AppState>()((set, get) => ({
         body: JSON.stringify({ id, pinned }),
       });
       await get().refreshConversations();
+      return true;
+    } catch (e) {
+      set({ error: errText(e) });
+      return false;
+    }
+  },
+
+  /**
+   * 分叉会话（对齐 DSH）：后端用 `--resume 旧 --fork-session --session-id 新` 复制历史，
+   * 新 id 由后端生成并落元数据，回来后直接打开新对话。
+   *
+   * 新会话要「继承」的是上下文，不是权限：fork 是独立进程，会话级授权要重新审批。
+   */
+  forkConversation: async (id, title) => {
+    try {
+      const res = await apiFetch<{ id?: string }>("/api/conversations/fork", {
+        method: "POST",
+        body: JSON.stringify({ id, title }),
+      });
+      await get().refreshConversations();
+      if (res?.id) await get().openConversation(res.id);
       return true;
     } catch (e) {
       set({ error: errText(e) });

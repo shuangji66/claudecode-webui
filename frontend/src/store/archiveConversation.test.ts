@@ -9,6 +9,7 @@ vi.mock("../lib/runtime", async (importOriginal) => {
     ...actual,
     apiFetch: vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, init });
+      if (url === "/api/conversations/fork") return { ok: true, id: "c-fork" };
       return { ok: true };
     }),
   };
@@ -63,5 +64,21 @@ describe("归档对话", () => {
     useAppStore.setState({ activeId: "c2" });
     await useAppStore.getState().archiveConversation("c1", false);
     expect(useAppStore.getState().activeId).toBe("c2");
+  });
+});
+
+describe("分叉会话", () => {
+  beforeEach(() => seed());
+
+  // 新 id 由后端生成：前端拿到就打开，标题后缀由调用方给（列表里两条同名没法区分）。
+  it("POST /api/conversations/fork 后打开新对话", async () => {
+    const ok = await useAppStore.getState().forkConversation("c1", "第一个对话（分叉）");
+
+    expect(ok).toBe(true);
+    const call = calls.find((c) => c.url === "/api/conversations/fork");
+    expect(call?.init?.method).toBe("POST");
+    expect(JSON.parse(String(call?.init?.body))).toEqual({ id: "c1", title: "第一个对话（分叉）" });
+    expect(useAppStore.getState().openConversation).toHaveBeenCalledWith("c-fork");
+    expect(useAppStore.getState().refreshConversations).toHaveBeenCalled();
   });
 });

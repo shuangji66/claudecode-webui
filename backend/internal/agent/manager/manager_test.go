@@ -71,3 +71,11 @@ func TestCreateOnceSharesConcurrentResult(t *testing.T) {
 		t.Fatalf("creating 残留 %d 项", left)
 	}
 }
+
+// Fork 的 id 校验必须在起进程之前完成：非法 id 不能把 claude 拉起来。
+func TestForkRejectsInvalidID(t *testing.T) {
+	m := &Manager{}
+	if _, err := m.Fork("not-a-uuid", "/tmp", "", ""); err == nil {
+		t.Fatal("非法 id 应报错")
+	}
+}
