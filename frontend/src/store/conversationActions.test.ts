@@ -1,3 +1,4 @@
+// 侧栏会话菜单里「会改状态」的两个动作：归档（回新对话页）与分叉（复制上下文）。
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /** 记录 apiFetch 的调用；归档只关心 PATCH 是否发出。 */
