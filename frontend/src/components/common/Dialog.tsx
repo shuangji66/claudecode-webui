@@ -167,6 +167,9 @@ export function Dialog({
           </header>
         )}
 
+        {/* 注意：body 默认**没有**内边距。非 bare 的调用方必须自己给横向 padding
+            （表单类用 px-4 与标题/底栏对齐），否则窄屏上面板铺满视口，输入框的边框
+            会和弹窗边框重合。*/}
         {bare ? (
           children
         ) : (

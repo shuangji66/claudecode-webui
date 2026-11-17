@@ -274,6 +274,9 @@ export function McpSettings({ cwd }: { cwd: string }) {
         onClose={() => setDraft(null)}
         label={t("MCP 服务", "MCP server")}
         title={draft?.existing ? t("编辑 MCP 服务", "Edit MCP server") : t("添加 MCP 服务", "Add MCP server")}
+        // Dialog 的 body 默认没有内边距（列表类弹窗自己给 px-2）；这里是表单，
+        // 必须和标题/底栏的 px-4 对齐，否则手机上面板铺满宽度时输入框会贴到边框上。
+        bodyClassName="px-4 py-3.5"
         footer={
           <div className="flex justify-end gap-2">
             <Button onClick={() => setDraft(null)}>{t("取消", "Cancel")}</Button>
