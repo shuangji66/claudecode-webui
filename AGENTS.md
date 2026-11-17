@@ -161,6 +161,8 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **分叉（`POST /api/conversations/fork`）不改写原转录**：CLI 的
   `--resume 旧 --fork-session --session-id 新` 把历史复制到新 id 下（2.1.326 实测），
   新转录文件名就是我们生成的 UUID，与列表 / `activeId` 同源。不要自己去复制 jsonl。
+  没有转录的空对话（400）与已删除的对话（409）必须在**起进程之前**挡掉：CLI 的
+  `--resume` 找不到会话会直接退出，那时我们只会留下一条永远 resume 不了的元数据。
 - **claude 转录会包含 sidechain / meta / queue-operation 行**：回放只取
   user/assistant/system/result 且跳过 `isSidechain`/`isMeta`，否则子代理和系统提醒会混进主消息流。
 
