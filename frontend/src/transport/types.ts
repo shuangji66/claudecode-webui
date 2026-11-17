@@ -12,6 +12,7 @@ export type WireEventKind =
   | "permission"
   | "error"
   | "closed"
+  | "claude.update"
   | "pong";
 
 export interface WireEvent {

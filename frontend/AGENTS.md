@@ -186,6 +186,12 @@ src/
   （`mergeUsage`）；实时 WS 快照优先，不覆盖。窗口再兜底用设置里的模型窗口。
   只存快照、不存派生指标——tok/s 与百分比都是算出来的。
 - 新增事件类型：先改 `transport/types.ts` → 再在 `applyEvent` 里分支 → 最后补测试。
+- **系统通道**：`bootstrap` 里 `openSystemChannel()` 打开一条 **不带 id** 的 `/ws`
+  （`wsUrl("", token)`），只收应用级事件（`claude.update`）。它与会话连接分开：会话连接
+  随对话开关（关对话、换工作区、删对话都会断），更新提示跟对话无关，没有打开任何对话时
+  也要收到。系统通道的 `onEvent` 只放行 `claude.update` 再交给 `applyEvent("", ev)`——
+  别的 kind 带着空 sid 会写进各会话的桶里。重连成功后补拉一次 `/api/claude/status`
+  （断线期间可能发布了新版）。
 
 ## 4. 消息模型（Item）
 

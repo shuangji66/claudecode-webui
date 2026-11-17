@@ -28,11 +28,15 @@ export function apiUrl(path: string): string {
   return `${runtimeBase()}${p}`;
 }
 
-/** 拼 WebSocket 地址（浏览器无法给 WS 设置自定义头，鉴权只能走 query）。 */
+/** 拼 WebSocket 地址（浏览器无法给 WS 设置自定义头，鉴权只能走 query）。
+ *  sessionId 为空串表示**系统通道**：只收应用级事件（claude 更新提示），
+ *  与会话生命周期无关——没有打开任何对话时也要能连上。 */
 export function wsUrl(sessionId: string, token: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const base = `${proto}//${window.location.host}${runtimeBase()}/ws?id=${encodeURIComponent(sessionId)}`;
-  return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+  const query = sessionId ? `?id=${encodeURIComponent(sessionId)}` : "";
+  const base = `${proto}//${window.location.host}${runtimeBase()}/ws${query}`;
+  if (!token) return base;
+  return `${base}${query ? "&" : "?"}token=${encodeURIComponent(token)}`;
 }
 
 export function getToken(): string {

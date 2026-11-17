@@ -235,6 +235,13 @@ interface AppState {
 }
 
 const clients = new Map<string, ClaudeClient>();
+/** 系统通道：与会话无关的应用级事件（目前只有 claude 有新版本）。
+ *
+ *  独立一条 WS，而不是复用会话连接：会话连接随对话开关（关对话、换工作区、删对话
+ *  都会断），而「有新版本」跟对话无关——没有打开任何对话时也要收得到。
+ *  复用 /ws 而不是再加一条 SSE：鉴权（?token=）、心跳、指数重连都已经在这里，
+ *  而且 WS 已经过前置网关注入的验证。 */
+let systemClient: ClaudeClient | null = null;
 /** 会话悬浮预览的缓存：一轮结束后清掉，下次 hover 会重新读盘。 */
 const previewCache = new Map<string, HistoryPreview | null>();
 const resumePromises = new Map<string, Promise<boolean>>();
@@ -277,6 +284,29 @@ function token(): string {
   } catch {
     return "";
   }
+}
+
+/** 打开系统通道（幂等）。系统通道只收 claude 更新提示，事件交给 applyEvent 统一处理。 */
+function openSystemChannel(): void {
+  if (systemClient) return;
+  let firstOpen = true;
+  const client = new ClaudeClient("", token(), {
+    // 只放行应用级事件：别的 kind 落到 applyEvent 会带着空 sid 写进各会话的桶里。
+    onEvent: (ev) => {
+      if (ev.kind === "claude.update") useAppStore.getState().applyEvent("", ev);
+    },
+    onStatus: (status) => {
+      if (status !== "open") return;
+      // 首次连接后的状态由 bootstrap 自己拉；重连成功后补一次——断线期间可能有新版。
+      if (firstOpen) {
+        firstOpen = false;
+        return;
+      }
+      void useAppStore.getState().loadClaudeStatus();
+    },
+  });
+  systemClient = client;
+  client.connect();
 }
 
 function readActiveId(): string {
@@ -451,6 +481,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
         // 部署状态独立拉取：失败不影响主流程（离线时只是拿不到「有更新」提示）。
         void get().loadClaudeStatus();
+        // 后端每小时查一次新版本，有更新就通过系统通道推过来。
+        openSystemChannel();
 
         // 没有可用的 claude 时不要自动建会话：后端必然失败，只会弹一条红条，
         // 而首屏的安装引导已经把话说清楚了。
@@ -1418,6 +1450,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   applyEvent: (sid, ev) => {
     switch (ev.kind) {
+      case "claude.update": {
+        // 系统通道推来的「有新版」信号。推送只带版本号，完整状态照旧走
+        // /api/claude/status（已安装列表、生效版本、安装进度都在那里），
+        // 免得两处各维护一份解析。
+        void get().loadClaudeStatus();
+        return;
+      }
       case "session.snapshot": {
         const data = ev.data as
           | { init?: InitPayload; info?: { state?: string }; permissions?: PermissionPayload[] }

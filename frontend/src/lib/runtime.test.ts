@@ -44,6 +44,12 @@ describe("wsUrl", () => {
     setBase(null);
     expect(wsUrl("s", "")).not.toContain("token=");
   });
+
+  it("会话 id 为空时是系统通道：不带 id，令牌用 ? 起头", () => {
+    setBase("/app/ccweb/");
+    expect(wsUrl("", "tok")).toBe("ws://localhost:3000/app/ccweb/ws?token=tok");
+    expect(wsUrl("", "")).toBe("ws://localhost:3000/app/ccweb/ws");
+  });
 });
 
 describe("token 存储", () => {
