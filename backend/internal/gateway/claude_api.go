@@ -57,6 +57,8 @@ func (s *Server) handleClaudeCheck(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, "检查更新失败: "+err.Error(), http.StatusBadGateway)
 		return
 	}
+	// 手动检查的结果也广播一次：开着面板的其它标签页不用自己再点。
+	s.BroadcastClaudeUpdate()
 	writeJSON(w, res)
 }
 

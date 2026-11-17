@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"ccweb/backend/internal/agent/manager"
@@ -77,6 +78,10 @@ type Server struct {
 	log *log.Logger
 	// termSlots 限制同时存在的内置终端数量；每个终端是一个真实 shell。
 	termSlots chan struct{}
+	// notifiedMu/notifiedLatest 记录已推送过的最新版本号，避免每小时把同一条
+	// 「有更新」重复推给所有标签页（每次推送前端都会再拉一次 /api/claude/status）。
+	notifiedMu     sync.Mutex
+	notifiedLatest string
 }
 
 // New 构造网关。

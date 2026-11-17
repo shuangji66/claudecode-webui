@@ -303,6 +303,17 @@ hub ── manager ── session ── process ── claude (NDJSON)
   建会话时才返回「请去设置 → 部署安装」。
 - **`/api/info` 只在装配了部署管理时才带 `claude_installed`**：前端据此区分"确实没装"与
   "这套部署不走托管安装"，否则会弹一个装不了东西的提示。
+- **后台每小时查一次新版本**：`cmd/ccweb` 的 `startClaudeUpdateWatch` 在启动时查一次、
+  之后每小时一次，走的是面板里选中的下载源（`claudebin.Check` 内部按 source 取 registry），
+  与手动点「检查更新」等价。失败只记日志、不推送——NAS 上内网/离线是常态。
+  **定时策略在装配层，不要在 gateway 里再塞一个 ticker**：gateway 只提供
+  `BroadcastClaudeUpdate()` 这个 WS 推送出口。
+- **更新提示走 `/ws` 的「系统通道」**（不带 `?id`）：与会话连接分开，因为会话连接随对话开关
+  （关对话、换工作区、删对话都会断），而「有新版本」跟对话无关，没有打开任何对话时也要收到。
+  共用 `/ws` 而不是加一条 SSE：鉴权（`?token=`）、心跳、指数重连都已实现，且经过前置网关注入
+  的验证。推送只带 `{active, latest}`（`claude.update`），前端收到后照旧拉
+  `/api/claude/status`——状态里还有已安装列表与安装进度，别在前端再解析一份。
+  同一个最新版本只推一次；装上或切到该版本后清掉去重标记（回滚时同版本号仍要能推）。
 
 ### 4.10 技能管理（`internal/skills`）
 

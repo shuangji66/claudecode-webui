@@ -167,11 +167,18 @@ func main() {
 		}()
 	}
 
+	// 后台定时检查 claude 新版本：启动即查一次，之后每小时一次；有新版时
+	// 通过系统通道推给打开的面板（侧栏点亮更新提示）。
+	watchCtx, stopWatch := context.WithCancel(context.Background())
+	defer stopWatch()
+	startClaudeUpdateWatch(watchCtx, claudeMgr, srv, claudeUpdateInterval, logger)
+
 	// 收到 TERM/INT 时优雅退出：关掉全部子进程，避免 claude 变孤儿。
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-stop
+		stopWatch()
 		mgr.CloseAll()
 		os.Exit(0)
 	}()

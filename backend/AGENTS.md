@@ -215,6 +215,11 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   读取，唯一不受工作区围栏约束的接口）。目录浏览是只读但能枚举宿主目录，必须保持鉴权。
   右侧栏文件树的浏览走 `/api/fs/tree|file|raw`（见下方「右侧栏路由」）。
 - 新路由必须 `s.authed(...)`；WS 在 handler 内自行校验 token。
+- `GET /ws` 有两条语义：带 `?id=<session>` 是会话通道；**不带 id 是系统通道**
+  （只订阅 `systemTopic`，只收应用级事件，目前是 `claude.update`）。系统通道没有会话，
+  `dispatch` 里只放行 ping，其余命令回 `error`——不能让它落到 nil 会话上（那是 panic）。
+  定时策略不在 gateway：`cmd/ccweb` 的 `startClaudeUpdateWatch` 负责查，gateway 的
+  `BroadcastClaudeUpdate()` 只负责推。
 - 对话路由：`GET /api/conversations`、`PATCH /api/conversations`（重命名/归档/touch/usage）、
   `DELETE /api/conversations?id=`（软删除）、`GET /api/history/transcript?id=`（回放）。
 - 预览路由：`GET /api/history/preview?id=` 返回会话最近一问一答（侧栏悬浮预览用）。

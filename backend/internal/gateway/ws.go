@@ -150,33 +150,66 @@ type clientCmd struct {
 	Message            string           `json:"message,omitempty"`
 }
 
-// handleWS 处理 /ws?id=<session>。
+// handleWS 处理 /ws。
+//
+//	/ws?id=<session>  会话通道：该会话的事件（当前唯一的业务通道）
+//	/ws               系统通道：只收应用级事件（目前是 claude 更新提示）
+//
+// 系统通道是独立一条连接，而不是把系统事件挂到会话通道上：会话连接随对话开关
+// （关掉对话、换工作区、删对话都会断），而「有新版本」这件事与对话无关，
+// 没有打开任何对话时也要能到。共用 /ws 而不是再开一个 SSE：鉴权（?token=）、
+// 心跳、指数重连都已经在这里且经过前置网关注入的验证。
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	if !s.d.Guard.Check(r.Header.Get("Authorization"), r.URL.Query().Get("token")) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	id := r.URL.Query().Get("id")
-	if id == "" {
-		http.Error(w, "missing id", http.StatusBadRequest)
-		return
-	}
-	sess, ok := s.d.Manager.Get(id)
-	if !ok {
-		http.Error(w, "session not found", http.StatusNotFound)
-		return
+	var sess *session.Session
+	if id != "" {
+		got, ok := s.d.Manager.Get(id)
+		if !ok {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
+		sess = got
 	}
 	conn, reader, err := upgradeWebSocket(w, r)
 	if err != nil {
 		return
 	}
 
-	c := newWSClient(conn, reader, id)
-	s.d.Hub.Subscribe(id, c)
+	topic := id
+	if topic == "" {
+		topic = systemTopic
+	}
+	c := newWSClient(conn, reader, topic)
+	s.d.Hub.Subscribe(topic, c)
 	defer func() {
-		s.d.Hub.Unsubscribe(id, c)
+		s.d.Hub.Unsubscribe(topic, c)
 		c.close()
 	}()
+
+	// 系统通道没有会话快照：连上即可用，首次状态由前端启动时的 /api/claude/status 拉。
+	if sess == nil {
+		for {
+			_ = c.conn.SetReadDeadline(time.Now().Add(readIdleTimeout))
+			op, payload, err := wsframe.ReadMessage(c.r, wsframe.DefaultMaxMessageBytes)
+			if err != nil {
+				return
+			}
+			switch op {
+			case wsframe.OpText, wsframe.OpBinary:
+				s.dispatch(c, nil, "", payload)
+			case wsframe.OpPing:
+				if err := c.writeFrame(wsframe.OpPong, payload); err != nil {
+					return
+				}
+			case wsframe.OpClose:
+				return
+			}
+		}
+	}
 
 	// 先发快照：后加入的连接也能立刻渲染出历史与 UI 目录。
 	snapshot, _ := json.Marshal(map[string]any{
@@ -249,6 +282,16 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 	var cmd clientCmd
 	if err := json.Unmarshal(payload, &cmd); err != nil {
 		s.sendError(c, "命令解析失败: "+err.Error())
+		return
+	}
+	if sess == nil {
+		// 系统通道没有会话：只认心跳。其余命令一律报错，绝不能让 prompt 之类
+		// 落到 nil 会话上——那是 panic，会带走整个网关进程。
+		if cmd.Kind == "ping" {
+			_ = c.SendJSON(WireEvent{Kind: "pong"})
+			return
+		}
+		s.sendError(c, fmt.Sprintf("系统通道不接受命令 %q", cmd.Kind))
 		return
 	}
 	var err error
