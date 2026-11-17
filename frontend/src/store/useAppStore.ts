@@ -1242,6 +1242,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
         get().connect(info.id);
         return true;
       } catch (e) {
+        // 会话起不来（claude 未安装 / 版本被删 / 并发冲突返回 409）不等于历史读不到：
+        // 转录是磁盘上的 jsonl，跟进程无关。先回放历史再报错——否则用户看到的是
+        // 「开始新的对话」，像是整个对话被弄丢了。
+        await loadTranscript();
         set({ error: errText(e) });
         return false;
       } finally {
