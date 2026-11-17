@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useAppStore } from "./store/useAppStore";
-import { getToken, setToken } from "./lib/runtime";
+import { getToken } from "./lib/runtime";
 import { applyPreferences, watchSystemTheme } from "./lib/theme";
 import { installAutofillGuard } from "./lib/autofill";
 import { I18nProvider, useT } from "./lib/i18n";
@@ -86,7 +86,7 @@ function AppShell() {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"general" | "models" | "proxy" | "deploy" | undefined>(undefined);
+  const [settingsTab, setSettingsTab] = useState<"general" | "models" | "proxy" | "deploy" | "access" | undefined>(undefined);
   const [installPromptDismissed, setInstallPromptDismissed] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -129,10 +129,12 @@ function AppShell() {
     });
   };
 
-  // /api/info 需要鉴权：没有令牌时 bootstrap 会拿到 unauthorized。
-  // 这时必须进入令牌门，而不是显示「无法连接服务」。
-  if (!info && !loading && !getToken() && (error ?? "").toLowerCase().includes("unauthorized")) {
-    return <TokenGate onSaved={() => setTokenEpoch((n) => n + 1)} />;
+  // 任何 API 回 unauthorized（没凭据 / 密码被改 / 从 unix 入口换到 TCP 端口）
+  // 都必须进入鉴权页，而不是停在「无法连接服务」或让界面继续显示错误条。
+  // 本地即使存着旧凭据也要让用户重新输入。
+  const unauthorized = (error ?? "").toLowerCase().includes("unauthorized");
+  if (!loading && unauthorized) {
+    return <TokenGate onSaved={() => setTokenEpoch((n) => n + 1)} stale={Boolean(getToken())} />;
   }
 
   if (!info) {
@@ -153,20 +155,6 @@ function AppShell() {
               <IconRetry size={14} />
               {t("重试", "Retry")}
             </button>
-            {/* 令牌过期/填错时只会显示「无法连接服务」，没有入口换一个 —— 只能清缓存。
-                这里直接把本地令牌清掉，回到令牌门。 */}
-            {(error ?? "").toLowerCase().includes("unauthorized") && (
-              <button
-                type="button"
-                onClick={() => {
-                  setToken("");
-                  setTokenEpoch((n) => n + 1);
-                }}
-                className="rounded-full border border-line-strong px-4 py-2 text-[12px] font-medium text-ink hover:bg-panel-strong"
-              >
-                {t("重新输入令牌", "Enter a new token")}
-              </button>
-            )}
           </div>
         )}
       </div>

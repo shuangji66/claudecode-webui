@@ -81,6 +81,14 @@ export interface InfoResponse {
   auto_start: boolean;
   current_workspace: string;
   auth_required: boolean;
+  /** 本次连接的鉴权方式：环境变量令牌 / TCP 访问密码 / 不需要。 */
+  auth_mode?: "token" | "password" | "none";
+  /** 本次请求走的入口：unix socket 还是 TCP 直连。 */
+  channel?: "unix" | "tcp";
+  /** 正在监听的 TCP 端口（未监听时为 0）；「设置 → 访问」用它显示真实状态。 */
+  tcp_port?: number;
+  tcp_listening?: boolean;
+  tcp_error?: string;
   frontend: boolean;
   max_sessions: number;
   started_at: string;
@@ -106,6 +114,10 @@ export interface SettingsPatch {
   locale?: string;
   font_size?: number;
   proxy_url?: string;
+  tcp_enabled?: boolean;
+  tcp_port?: number;
+  /** 留空表示沿用已保存的密码。 */
+  tcp_password?: string;
 }
 
 interface AppState {
@@ -183,6 +195,8 @@ interface AppState {
 
   bootstrap: () => Promise<void>;
   loadSettings: () => Promise<void>;
+  /** 重新拉 /api/info（改完 TCP 端口后刷新监听状态）。 */
+  loadInfo: () => Promise<void>;
   saveSettings: (patch: SettingsPatch) => Promise<boolean>;
   selectModel: (provider: string, model: string, effort?: string) => Promise<void>;
   fetchModelsFor: (form: ProviderForm) => Promise<void>;
@@ -583,6 +597,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
     try {
       const s = normalizeSettings(await apiFetch<PublicSettings>("/api/settings"));
       set({ settings: s });
+    } catch (e) {
+      set({ error: errText(e) });
+    }
+  },
+
+  loadInfo: async () => {
+    try {
+      set({ info: await apiFetch<InfoResponse>("/api/info") });
     } catch (e) {
       set({ error: errText(e) });
     }

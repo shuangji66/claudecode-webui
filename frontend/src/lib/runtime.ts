@@ -56,6 +56,44 @@ export function setToken(token: string): void {
   }
 }
 
+/** 登录失败的分类错误：401=密码错，409=端口访问未开启，其余看后端原因。 */
+export class AccessError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "AccessError";
+    this.status = status;
+  }
+}
+
+/**
+ * 用访问密码换登录会话令牌。
+ *
+ * 密码只在这一次请求里发送；之后所有请求带的是随机会话令牌（服务端只存摘要，
+ * 内存里记会话）。这样 localStorage 里即使被读到，也拿不到密码本身。
+ * 网络异常会抛出（不是 AccessError），由调用方区分「密码错」和「连不上」。
+ */
+export async function loginAccess(password: string): Promise<string> {
+  const res = await fetch(apiUrl("/api/auth/login"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+    cache: "no-store",
+  });
+  const text = await res.text();
+  let body: { token?: string; error?: string } | null = null;
+  try {
+    body = text ? (JSON.parse(text) as { token?: string; error?: string }) : null;
+  } catch {
+    body = null;
+  }
+  if (!res.ok) throw new AccessError(res.status, body?.error ?? `HTTP ${res.status}`);
+  const token = body?.token ?? "";
+  if (!token) throw new AccessError(res.status, "invalid login response");
+  return token;
+}
+
 /** 带鉴权头的 fetch 封装。 */
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();

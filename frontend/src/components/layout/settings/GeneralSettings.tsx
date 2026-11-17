@@ -159,7 +159,8 @@ export function GeneralSettings() {
         </p>
       </Section>
 
-      {info?.auth_required && (
+      {/* 只有「环境变量令牌」这一种凭据在这里填；TCP 访问密码在「设置 → 访问」里管。 */}
+      {info?.auth_mode === "token" && (
         <Section title={t("访问令牌", "Access token")} desc={t("后端启用了 CCWEB_AUTH_TOKEN。令牌只保存在本浏览器。", "The backend requires CCWEB_AUTH_TOKEN. The token is stored only in this browser.")}>
           <div className="flex gap-2">
             <input {...NO_AUTOFILL}

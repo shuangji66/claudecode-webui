@@ -1,5 +1,5 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { apiUrl, runtimeBase, wsUrl, setToken, getToken } from "./runtime";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { AccessError, apiUrl, runtimeBase, wsUrl, setToken, getToken, loginAccess } from "./runtime";
 
 function setBase(href: string | null) {
   document.head.querySelectorAll("base").forEach((b) => b.remove());
@@ -64,5 +64,49 @@ describe("token 存储", () => {
     setToken("abc");
     setToken("");
     expect(getToken()).toBe("");
+  });
+});
+
+describe("loginAccess", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    setBase(null);
+  });
+
+  it("POST 密码换会话令牌，不带 Authorization", async () => {
+    setBase(null);
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ token: "sess-token" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(loginAccess("p@ss")).resolves.toBe("sess-token");
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/auth/login");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ password: "p@ss" });
+    expect((init.headers as Record<string, string>).Authorization).toBeUndefined();
+  });
+
+  it("401 抛 AccessError，携带后端原因", async () => {
+    setBase(null);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: "密码不正确" }), { status: 401 })),
+    );
+    await expect(loginAccess("wrong")).rejects.toMatchObject({ status: 401, message: "密码不正确" });
+    await expect(loginAccess("wrong")).rejects.toBeInstanceOf(AccessError);
+  });
+
+  it("409（端口访问未开启）同样带状态码", async () => {
+    setBase(null);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: "端口访问未开启" }), { status: 409 })),
+    );
+    await expect(loginAccess("x")).rejects.toMatchObject({ status: 409 });
   });
 });

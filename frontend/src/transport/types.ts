@@ -329,6 +329,12 @@ export interface PublicSettings {
   locale?: "zh" | "en" | string;
   font_size?: number;
   proxy_url?: string;
+  /** 端口访问开关（默认关闭）。 */
+  tcp_enabled?: boolean;
+  /** TCP 直连端口（默认 3141，可在「设置 → 访问」里改）。 */
+  tcp_port?: number;
+  /** 密码只回「是否已设置」，摘要与明文都不下发。 */
+  tcp_password_set?: boolean;
   path: string;
 }
 

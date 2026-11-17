@@ -38,6 +38,11 @@ export function themePreference(): "system" | "light" | "dark" {
   return value === "light" || value === "dark" ? value : "system";
 }
 
+/** 浏览器缓存的界面语言。鉴权页在 /api/settings 之前渲染，只能读这份缓存。 */
+export function cachedLocale(): "zh" | "en" {
+  return cacheGet(LOCALE_KEY) === "en" ? "en" : "zh";
+}
+
 /** 应用一个主题偏好（写 DOM + 缓存）。设置页切主题走这里，不经过后端。 */
 export function setThemePreference(preference: "system" | "light" | "dark"): void {
   applyTheme(preference);
