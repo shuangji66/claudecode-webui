@@ -138,6 +138,21 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, map[string]any{"conversations": out})
 }
 
+// maxTitleRunes 是对话标题的长度上限（按字符算，不是字节）。
+const maxTitleRunes = 120
+
+// normalizeTitle 折叠空白并校验长度；超长由调用方转成 400。
+//
+// 重命名（PATCH）与分叉（fork）共用：分叉的标题是前端拼的「原名（分叉）」，
+// 不校验的话它就成了一条绕过 120 字上限的后门。
+func normalizeTitle(raw string) (string, error) {
+	title := strings.Join(strings.Fields(raw), " ")
+	if len([]rune(title)) > maxTitleRunes {
+		return "", fmt.Errorf("标题过长（最多 %d 字）", maxTitleRunes)
+	}
+	return title, nil
+}
+
 type patchConversationReq struct {
 	ID       string  `json:"id"`
 	Title    *string `json:"title,omitempty"`
@@ -178,9 +193,9 @@ func (s *Server) handlePatchConversation(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if req.Title != nil {
-		title := strings.Join(strings.Fields(*req.Title), " ")
-		if len([]rune(title)) > 120 {
-			writeErr(w, "标题过长（最多 120 字）", http.StatusBadRequest)
+		title, err := normalizeTitle(*req.Title)
+		if err != nil {
+			writeErr(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if err := s.d.Conversations.Rename(req.ID, title); err != nil {
@@ -259,6 +274,16 @@ func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, "missing id", http.StatusBadRequest)
 		return
 	}
+	// 标题先校验再动手：fork 之后才发现超长，就只剩两种坏选择——回 400 骗人
+	// （新对话其实已经建好并起了进程），或者把超长标题写进元数据。
+	title := ""
+	if strings.TrimSpace(req.Title) != "" {
+		var err error
+		if title, err = normalizeTitle(req.Title); err != nil {
+			writeErr(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	rec, ok := s.ensureConversation(req.ID)
 	if !ok {
 		writeErr(w, "对话不存在", http.StatusNotFound)
@@ -300,7 +325,7 @@ func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request) 
 	// 先落元数据再等转录：列表接口靠它让新对话立刻出现（转录可能还没写完）。
 	_ = s.d.Conversations.Touch(info.ID, rec.Cwd)
 	_ = s.d.Conversations.UpdateMeta(info.ID, info.Provider, info.Model, info.Effort)
-	if title := strings.TrimSpace(req.Title); title != "" {
+	if title != "" {
 		_ = s.d.Conversations.Rename(info.ID, title)
 	}
 	s.waitTranscript(info.ID)

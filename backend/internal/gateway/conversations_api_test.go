@@ -255,6 +255,16 @@ func TestForkConversationRejectsBadSource(t *testing.T) {
 		return rec
 	}
 
+	// 0) 标题超长：起进程之前就拒绝，否则 fork 成了绕过 120 字上限的后门。
+	longTitleID := "77777777-8888-4999-8aaa-bbbbbbbbbbbb"
+	writeTranscript(t, srv.d.HistoryDir, longTitleID, root)
+	rec := httptest.NewRecorder()
+	longBody := `{"id":"` + longTitleID + `","title":"` + strings.Repeat("字", 121) + `"}`
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/conversations/fork", strings.NewReader(longBody)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("标题超长应 400，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+
 	// 1) 空对话：有元数据、没有转录。
 	emptyID := "44444444-5555-4666-8777-888888888888"
 	if err := store.Touch(emptyID, root); err != nil {
@@ -376,5 +386,37 @@ func TestPatchConversationValidatesBeforeWriting(t *testing.T) {
 	}
 	if got.Title != "" {
 		t.Fatalf("请求失败但标题被改了: %q", got.Title)
+	}
+}
+
+// 标题规则只有一份：重命名与分叉共用，否则两边会各自漂移。
+func TestNormalizeTitle(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"折叠多余空白", "  会话   甲\n", "会话 甲", false},
+		{"刚好上限", strings.Repeat("字", maxTitleRunes), strings.Repeat("字", maxTitleRunes), false},
+		{"超过上限", strings.Repeat("字", maxTitleRunes+1), "", true},
+		{"全空白等于清空", "   ", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := normalizeTitle(c.in)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("应报错，得到 %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != c.want {
+				t.Fatalf("normalizeTitle = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
