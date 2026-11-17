@@ -213,6 +213,14 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   （新进程要重新审批）；原会话在跑时 fork 只读到当时的转录（末尾可能少一两条）；
   `requestSessionId` 可能残留旧 id，但回放只按文件名定位（`history.scanTranscript` 不校验行内 id），
   别拿行内字段做归属校验。
+  **fork 的失败路径要挡在起进程之前**：没有转录（空对话）先 400——CLI 的 `--resume` 会
+  直接退出，而我们那时已经落了一条永远 resume 不了的元数据；已删除的对话 409（与
+  `POST /api/session {resume}` 同一判断）；manager 的失败（会话池满、进程起不来）也是 409，
+  和新建会话一个契约，别用 500 把「该关几个空闲会话」变成「服务器内部错误」。
+  授权走 `ensureCwdAuthorizedReal`（fork 要在这个 cwd 里 spawn，威胁模型同新建会话）。
+  标题先 `normalizeTitle` 再动手：起完进程才发现超长，只能回 400 骗人或者写进超长标题。
+  fork 之后网关只等**旧转录所在 project 目录**里的新文件（`history.TranscriptPath`），
+  不要每 50ms 重扫整个 projects 树。
 - 新会话在首条 prompt 成功后才 `Touch` 元数据；否则后端重启后会出现没有转录、无法 resume 的条目。
 - `--resume` 不会回放 transcript；`GET /api/history/transcript` 返回原始事件行，
   前端用 `applyCLI` 回放并保留 `timestamp`。`history.LoadTranscript` 过滤
@@ -278,7 +286,7 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   独立 goroutine 里跑，失败用 `error` 事件回（`writeFrame` 只入队，跨 goroutine 安全）。
   新增命令前先问：它会不会等对端？会就挪出去。
 - 对话路由：`GET /api/conversations`、`PATCH /api/conversations`（重命名/归档/置顶/touch/usage）、
-  `POST /api/conversations/fork`（复制出新会话，需过 `authorizedCwd` 同级的 `ensureCwdAuthorized`）、
+  `POST /api/conversations/fork`（复制出新会话，需过 `ensureCwdAuthorizedReal` 与转录存在性检查）、
   `DELETE /api/conversations?id=`（软删除）、`GET /api/history/transcript?id=`（回放）。
 - 预览路由：`GET /api/history/preview?id=` 返回会话最近一问一答（侧栏悬浮预览用）。
   `history.LoadPreview` 只读转录尾部 64KB、跳过 sidechain/meta 与本地命令回显，

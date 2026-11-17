@@ -228,6 +228,8 @@ src/
 - **置顶（`pinned`）只是排序偏好**（`lib/conversations.pinnedFirst`）：两种排序模式都先过它，
   置顶的永远在同一组最前，组内顺序保持原样；它不进 `LastFor`，不影响「默认恢复哪一条」，
   也不结束进程。行上常驻一颗小图钉表示置顶状态，取消置顶从行内按钮或菜单点。
+  **手动排序下把一条未置顶的拖到置顶项之上会被拉回**——`pinnedFirst` 是最后一道排序，
+  拖拽只改组内相对顺序。要换位置就先取消置顶，不要为此去掉这层排序。
 - **「复制 Session ID」已暂时下线**（`Sidebar.tsx` 的 `SHOW_COPY_SESSION_ID = false`）：
   菜单项藏起来了，但 `copySessionId`、剪贴板失败回落与实现都**没删**，恢复时改回 `true`
   并恢复它的组件测试。下线的理由：这个 id 只服务 `--resume` / 排查，粘进对话不会让模型
@@ -235,8 +237,10 @@ src/
 - **关于这个 id 的事实**：它就是 `--resume`、转录文件名、`conversations.json`、
   前端 `activeId` 的同一个值；在**右侧栏终端**里接管要显式换 HOME，否则 claude 找的是
   应用用户的 `~/.claude/projects`、必然报 "No conversation found"：
-  `HOME=$CCWEB_DATA_DIR/claude <版本>/claude --resume <id>`（ccweb 给子进程的 HOME 是
-  `CCWEB_CLAUDE_HOME`，默认就是 `<数据目录>/claude`）。另外这个 id 只属于 `--resume` /
+  `HOME=$CCWEB_DATA_DIR/claude $CCWEB_DATA_DIR/claude/versions/<版本>/claude --resume <id>`
+  （ccweb 给子进程的 HOME 是 `CCWEB_CLAUDE_HOME`，默认就是 `<数据目录>/claude`；
+  `HOME=$CCWEB_DATA_DIR/claude <版本>/claude` 少了一层 `versions/`，路径根本不成立）。
+  另外这个 id 只属于 `--resume` /
   转录这一套：claude 自己的多会话（`ListAgents` / `SendMessage`、Remote Control）用的是
   「自动生成的会话名 + 6 位 ref」（如 `claudecode-5c [11a448]`），与 UUID 无法互转
   （实测不是它的哈希；claude 用 `-n/--name` 设显示名、`--remote-control-session-name-prefix`
@@ -247,6 +251,9 @@ src/
   后端建好新会话并返回 id，前端 `refreshConversations()` 后直接 `openConversation(newId)`。
   标题**必须**由调用方带上「原名（分叉）」后缀：fork 出来的转录首条消息与原会话一模一样，
   不加工列表里就是两条同名对话。复制的是上下文不是权限——新进程要重新审批。
+  返回值**必须**是 `openConversation` 的结果（拿不到 `res.id` 直接算失败并写 error）：
+  后端没给 id、或新对话打不开（cwd 未授权 / 会话起不来）都算分叉没成，
+  报成功只会在界面上留下一条打不开的对话。
 - **侧栏状态标记**（`lib/conversations.conversationStatus`，优先级从高到低）：待审批 →
   强调色圆点；进程 `busy`/`starting` → 进度环；完成但没看过 → 绿点；活跃但空闲 → 不画点；
   没有常驻进程 → 灰点。「完成未看」由 `applyEvent` 在 `result` 到达且该对话不是当前打开的
