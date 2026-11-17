@@ -366,9 +366,13 @@ export function RightSidebar({ cwd, onClose }: Props) {
             </p>
           </div>
         ) : tabs.length === 0 ? (
-          // 开始页：三张功能卡片，点哪张就开哪个标签（参照 DSH 的两列网格）。
-          <div className="dsh-scroll flex min-h-0 flex-1 flex-col justify-center overflow-y-auto px-3 py-6">
-            <div className="grid grid-cols-2 gap-2">
+          // 开始页：三张功能卡片，点哪张就开哪个标签。
+          //
+          // 列数按**容器宽度**切（`@container`），不是视口：右侧栏宽度由拖动与停靠规则决定，
+          // 跟 viewport 无关。窄的时候排成一列（对齐 DSH）——两列塞不下时描述会被折成
+          // 「浏览工作区文 / 件」这种断字，很难看。
+          <div className="@container dsh-scroll flex min-h-0 flex-1 flex-col justify-center overflow-y-auto px-3 py-6">
+            <div className="grid grid-cols-1 gap-2 @min-[21rem]:grid-cols-2">
               {startCards.map((card) => {
                 const Icon = card.icon;
                 return (

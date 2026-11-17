@@ -19,6 +19,18 @@ function setup() {
 
 const openMenu = () => fireEvent.click(screen.getByRole("button", { name: "新建标签" }));
 
+describe("RightSidebar 开始页栅格", () => {
+  // 列数按容器宽度切，不看视口：右侧栏是拖出来的，宽度和 viewport 没关系。
+  // jsdom 不算容器查询，只能钉住这组类名，防止被人改回写死的两列。
+  it("窄了排一列、宽了才两列（容器查询）", () => {
+    setup();
+    const grid = screen.getByRole("button", { name: /工作区文件/ }).parentElement!;
+    expect(grid.parentElement!.className).toContain("@container");
+    expect(grid.className).toContain("grid-cols-1");
+    expect(grid.className).toContain("@min-[21rem]:grid-cols-2");
+  });
+});
+
 describe("RightSidebar 标签页", () => {
   it("默认停在开始页：三张功能卡片，不自动打开「文件」", () => {
     setup();
