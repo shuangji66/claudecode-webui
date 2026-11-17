@@ -529,6 +529,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `SessionTTL`=7 天，仅进程内存）。浏览器 localStorage 里存的是令牌，不是密码。
   `CCWEB_AUTH_TOKEN` 仍然可以直接当 Bearer；`/api/auth/login` 也会原样接受它并回同一个值，
   否则启用令牌的旧部署会卡在鉴权页（令牌本身只能当 Bearer，没法存成密码）。
+- **注销**：`POST /api/auth/logout` 只吊销请求里自带的会话令牌（无令牌/已失效也回 200，
+  便于前端在任何情况下清本地凭据）。侧栏底部在 `info.auth_required` 时显示「退出登录」，
+  点击后清 localStorage 并整页重载回鉴权页。环境变量令牌不是会话，注销不会让它失效
+  （清掉本地值后仍可用同一令牌重新登录）。
 - **改密码/关端口必须让旧会话失效**：会话里记录签发时的摘要指纹，摘要一变自动失效；
   关闭端口访问时 `Guard.ClearSessions()` 让令牌立刻失效，并 `StopTCPGracefully`：
   **立刻关闭 listener**（端口可立刻重开），500ms 后再 `http.Server.Close()` 断开已有连接

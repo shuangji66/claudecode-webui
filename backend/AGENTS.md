@@ -252,6 +252,8 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   与直连 TCP 端口（**默认关闭**，开启后默认 3141、根路径、不注入 baseurl）。两份根 handler
   分别是 `Handler()` / `TCPHandler()`，通道与有效 baseurl 放在 request context 里
   （`channelOf(r)` / `s.baseOf(r)`）；SPA 的 `<base>` 与 `/api/info` 都按请求回答。
+- 鉴权路由：`POST /api/auth/login`（密码或环境变量令牌换会话令牌）、
+  `POST /api/auth/logout`（只吊销请求自带的会话令牌；无令牌也 200）。两者都不挂 `s.authed`。
 - **鉴权按通道判定**：`s.authed` 与两条 WS handler 都传 `channelOf(r)`。
   `CCWEB_AUTH_TOKEN` 两条通道都校验；端口访问开启后 TCP 通道要求登录
   （`POST /api/auth/login` 用访问密码换随机会话令牌，unix socket 免密）。

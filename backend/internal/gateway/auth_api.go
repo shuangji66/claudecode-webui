@@ -7,6 +7,17 @@ import (
 	"ccweb/backend/internal/authz"
 )
 
+// handleLogout 注销调用方持有的登录会话。
+//
+// 不挂鉴权中间件：令牌过期/填错时前端也要能清掉本地凭据，所以这里对
+// 无效令牌同样返回 200（幂等）。它只能吊销「请求里自己带的那个令牌」，
+// 不能吊销别人的会话；环境变量令牌不是会话，这里对它没有影响。
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	token := authz.Credential(r.Header.Get("Authorization"), r.URL.Query().Get("token"))
+	s.d.Guard.RevokeSession(token)
+	writeJSON(w, map[string]any{"ok": true})
+}
+
 // handleLogin 用访问密码换一个登录会话令牌。
 //
 // 这是唯一接受明文密码的接口：密码在这里按 PBKDF2 摘要校验一次，之后浏览器

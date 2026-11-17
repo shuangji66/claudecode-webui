@@ -134,6 +134,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
 	// 登录是唯一接受明文密码的接口：它把密码换成随机会话令牌。
 	s.mux.HandleFunc("POST /api/auth/login", s.handleLogin)
+	s.mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
 	s.mux.HandleFunc("GET /api/info", s.authed(s.handleInfo))
 	s.mux.HandleFunc("GET /api/sessions", s.authed(s.handleListSessions))
 	s.mux.HandleFunc("POST /api/session", s.authed(s.handleCreateSession))

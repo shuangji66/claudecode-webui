@@ -109,10 +109,7 @@ func (g *Guard) Check(ch Channel, authorization, queryToken string) bool {
 	if !g.Required(ch) {
 		return true
 	}
-	cand := queryToken
-	if cand == "" {
-		cand = bearer(authorization)
-	}
+	cand := Credential(authorization, queryToken)
 	if cand == "" {
 		return false
 	}
@@ -125,6 +122,24 @@ func (g *Guard) Check(ch Channel, authorization, queryToken string) bool {
 		}
 	}
 	return false
+}
+
+// Credential 取出候选凭据：query 优先（WS 只能走 query），否则 Authorization。
+func Credential(authorization, queryToken string) string {
+	if queryToken != "" {
+		return queryToken
+	}
+	return bearer(authorization)
+}
+
+// RevokeSession 让指定会话令牌立刻失效（注销）。不存在的令牌是幂等的 no-op。
+func (g *Guard) RevokeSession(token string) {
+	if token == "" {
+		return
+	}
+	g.mu.Lock()
+	delete(g.sessions, token)
+	g.mu.Unlock()
 }
 
 // NewSession 在密码校验通过后签发一个会话令牌。

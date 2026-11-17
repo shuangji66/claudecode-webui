@@ -43,6 +43,7 @@ import {
   IconPin,
   IconPlus,
   IconSearch,
+  IconLogout,
   IconSettings,
   IconSliders,
   IconStop,
@@ -96,6 +97,8 @@ interface WsMenuState {
 export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onOpenDeploy, onAddWorkspace, onOpenHistory }: Props) {
   const t = useT();
   const claude = useAppStore((s) => s.claude);
+  const authRequired = useAppStore((s) => Boolean(s.info?.auth_required));
+  const logout = useAppStore((s) => s.logout);
   // 只有「已装过」才提示更新：一个版本都没装时走首屏的安装弹窗，
   // 否则左下角会同时出现两个入口，指向同一件事。
   const updateAvailable = Boolean(claude?.update_available && claude.active);
@@ -587,6 +590,17 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             <IconDownload size={18} />
           </button>
         )}
+        {authRequired && (
+          <button
+            type="button"
+            onClick={() => void logout()}
+            className="mb-2 flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:bg-black/5 hover:text-ink"
+            aria-label={t("退出登录", "Sign out")}
+            title={t("退出登录", "Sign out")}
+          >
+            <IconLogout size={18} />
+          </button>
+        )}
         <span className={`mb-3 h-2 w-2 rounded-full ${connTone}`} title={connLabel} />
         <button
           type="button"
@@ -807,6 +821,12 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             <IconDownload size={15} />
             <span className="text-[12px]">{t(`有更新 ${claudeLatest}`, `Update ${claudeLatest}`)}</span>
             <span className="ml-auto text-[10px] text-brand/80">{t("去安装", "Install")}</span>
+          </button>
+        )}
+        {authRequired && (
+          <button type="button" onClick={() => void logout()} className="side-row text-muted hover:text-ink">
+            <IconLogout size={15} />
+            <span className="text-[12px]">{t("退出登录", "Sign out")}</span>
           </button>
         )}
         <button type="button" onClick={onOpenSettings} className="side-row text-muted hover:text-ink">

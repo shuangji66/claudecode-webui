@@ -379,3 +379,29 @@ describe("Sidebar 工作区行与移动端抽屉", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("Sidebar 退出登录", () => {
+  beforeEach(() => {
+    useAppStore.setState({
+      conversations: [],
+      workspaces: [],
+      currentWorkspace: "",
+      activeId: null,
+      info: null,
+    });
+  });
+
+  it("需要鉴权时显示，点击调用 logout", () => {
+    const logout = vi.fn(async () => {});
+    useAppStore.setState({ info: { auth_required: true } as never, logout });
+    renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
+    expect(logout).toHaveBeenCalledTimes(1);
+  });
+
+  it("未启用鉴权时不显示", () => {
+    useAppStore.setState({ info: { auth_required: false } as never });
+    renderSidebar();
+    expect(screen.queryByRole("button", { name: "退出登录" })).toBeNull();
+  });
+});

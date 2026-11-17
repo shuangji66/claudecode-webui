@@ -9,7 +9,7 @@
 //   - 工作区 = 已授权目录；切换工作区会打开该目录最近活跃的对话（没有才新建）。
 
 import { create } from "zustand";
-import { apiFetch } from "../lib/runtime";
+import { apiFetch, setToken } from "../lib/runtime";
 import {
   appendError,
   appendUser,
@@ -197,6 +197,8 @@ interface AppState {
   loadSettings: () => Promise<void>;
   /** 重新拉 /api/info（改完 TCP 端口后刷新监听状态）。 */
   loadInfo: () => Promise<void>;
+  /** 注销：吊销后端会话、清本地凭据并回到鉴权页。 */
+  logout: () => Promise<void>;
   saveSettings: (patch: SettingsPatch) => Promise<boolean>;
   selectModel: (provider: string, model: string, effort?: string) => Promise<void>;
   fetchModelsFor: (form: ProviderForm) => Promise<void>;
@@ -608,6 +610,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
     } catch (e) {
       set({ error: errText(e) });
     }
+  },
+
+  logout: async () => {
+    // 后端不可达也要退出：本地凭据必须清掉，否则用户以为已经注销。
+    try {
+      await apiFetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      /* 忽略：本地照样清 */
+    }
+    setToken("");
+    // 整页重载最干净：顺带断掉所有 WS、清空内存里的会话状态，回到鉴权页。
+    window.location.reload();
   },
 
   saveSettings: async (patch) => {

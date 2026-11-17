@@ -444,3 +444,61 @@ func freePort(t *testing.T) int {
 	_ = ln.Close()
 	return port
 }
+
+// 注销只吊销请求里带的那个会话令牌，且对无效令牌幂等。
+func TestLogoutRevokesSession(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	setTCP(t, srv, true, testTCPPassword, 3141)
+	code, token := login(t, srv.TCPHandler(), testTCPPassword)
+	if code != http.StatusOK || token == "" {
+		t.Fatalf("登录 = %d token=%q", code, token)
+	}
+
+	logout := func(auth string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+		if auth != "" {
+			req.Header.Set("Authorization", "Bearer "+auth)
+		}
+		rec := httptest.NewRecorder()
+		srv.TCPHandler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := logout(token); code != http.StatusOK {
+		t.Fatalf("注销 = %d, want 200", code)
+	}
+	// 旧令牌立刻失效。
+	req := httptest.NewRequest(http.MethodGet, "/api/info", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.TCPHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("注销后旧令牌 = %d, want 401", rec.Code)
+	}
+	// 重复注销/无令牌都是 200（前端本地清凭据不受影响）。
+	if code := logout(token); code != http.StatusOK {
+		t.Fatalf("重复注销 = %d, want 200", code)
+	}
+	if code := logout(""); code != http.StatusOK {
+		t.Fatalf("无令牌注销 = %d, want 200", code)
+	}
+}
+
+// 环境变量令牌不是会话，注销它不影响 Bearer 校验。
+func TestLogoutDoesNotRevokeEnvToken(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	srv.TCPHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("注销 = %d, want 200", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/info", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.TCPHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("注销后环境变量令牌 = %d, want 200", rec.Code)
+	}
+}
