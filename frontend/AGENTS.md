@@ -227,6 +227,11 @@ src/
 
 不要把它做成简单的「是/否」——那会丢掉本项目相对 TUI 的增强点。
 
+**卡片只认 `store.perms`**：本机点「允许/拒绝」是乐观删除（`replyPermission`），
+在其他设备/标签上做掉的那次由后端广播的 `permission.resolved{request_id}` 触发删除——
+两条路都不能省。事件缺失的表现不是报错，而是**卡片一直挂着、一轮里越攒越多**；
+`closed` 时整桶清空（进程没了，挂起的审批永远不可能被批准）。
+
 ## 6. 样式
 
 - Tailwind v4（`@tailwindcss/vite` + `@import "tailwindcss"`），无 `tailwind.config.js`。

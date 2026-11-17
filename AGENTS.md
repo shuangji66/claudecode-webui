@@ -117,6 +117,13 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 审批挂起期间进程和内存（约 176 MB）一直占着。长时间等人工的场景应改用
   PreToolUse hook 的 `defer`（会以 `tool_deferred` 退出，决策状态落库），
   当前版本尚未实现。
+- **审批是会话级状态，不是浏览器本地状态**：`can_use_tool` 会群发给该会话的所有
+  连接（多台设备 / 多个标签拿到同一个 `request_id`），而 CLI 只认第一份回包，之后
+  不会再发任何东西暗示「这条已经处理完」。所以 `session.forgetPermission` 必须广播
+  `permission.resolved{request_id}`，前端据此撤卡片；中断（`Interrupt`）同理，整轮
+  审批作废时后端 `clearPermissions` 逐条广播。少了这条事件，别的设备上的卡片会
+  永远挂着、一轮里越攒越多（曾经的 bug）。回包之后前端**仍然**本地乐观删除一次，
+  事件是给其他连接的。
 
 ### 4.3 Go 侧
 

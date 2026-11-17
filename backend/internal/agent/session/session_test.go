@@ -653,6 +653,88 @@ func TestPendingPermissionsSurviveUntilReplied(t *testing.T) {
 	}
 }
 
+// 审批结论是会话级事实：一台设备批准后，其他设备/标签必须收到 permission.resolved。
+// CLI 拿到回包后只会继续跑，不会再用任何事件暗示「这条已经处理完」——不广播的话
+// 别的设备上的卡片永远消不掉，一轮里几条审批就会一直累积下去。
+func TestPermissionReplyBroadcastsResolution(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{
+		"type":       "control_request",
+		"request_id": "p7",
+		"request": map[string]any{
+			"subtype":   "can_use_tool",
+			"tool_name": "Bash",
+			"input":     map[string]any{"command": "rm -rf /tmp/y"},
+		},
+	})
+	if _, ok := rec.wait(KindPermission, 2*time.Second); !ok {
+		t.Fatal("未收到 permission 事件")
+	}
+	if rec.count(KindPermissionResolved) != 0 {
+		t.Fatal("还没做决定就广播了 permission.resolved")
+	}
+
+	if err := sess.ReplyPermission("p7", PermissionReply{Allow: false, Message: "no"}); err != nil {
+		t.Fatalf("ReplyPermission: %v", err)
+	}
+	ev, ok := rec.wait(KindPermissionResolved, 2*time.Second)
+	if !ok {
+		t.Fatal("审批结论没有广播")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(ev.Data, &payload); err != nil {
+		t.Fatalf("结论载荷不是合法 JSON: %v", err)
+	}
+	if payload["request_id"] != "p7" {
+		t.Fatalf("结论载荷 = %+v", payload)
+	}
+	// 同一个 request_id 只广播一次：重复回包不该让其他设备反复抖动。
+	if n := rec.count(KindPermissionResolved); n != 1 {
+		t.Fatalf("结论广播次数 = %d, want 1", n)
+	}
+}
+
+// 中断让整轮作废，挂起审批必须一起清掉并广播：只在本机清的话，
+// 另一台设备会继续显示一批点了也没用的卡片。
+func TestInterruptClearsPendingPermissions(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	for _, id := range []string{"p8", "p9"} {
+		fc.send(map[string]any{
+			"type":       "control_request",
+			"request_id": id,
+			"request": map[string]any{
+				"subtype":   "can_use_tool",
+				"tool_name": "Bash",
+				"input":     map[string]any{"command": "rm -rf /tmp/z"},
+			},
+		})
+	}
+	if _, ok := rec.wait(KindPermission, 2*time.Second); !ok {
+		t.Fatal("未收到 permission 事件")
+	}
+	if got := sess.PendingPermissions(); len(got) != 2 {
+		t.Fatalf("挂起审批数 = %d, want 2", len(got))
+	}
+
+	if err := sess.Interrupt(); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if left := sess.PendingPermissions(); len(left) != 0 {
+		t.Fatalf("中断后仍残留审批: %v", left)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for rec.count(KindPermissionResolved) < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := rec.count(KindPermissionResolved); n != 2 {
+		t.Fatalf("结论广播次数 = %d, want 2", n)
+	}
+}
+
 // slowSink 的 Write 会一直阻塞，模拟「CLI 暂时不读 stdin」（大 prompt 正在处理、
 // 或者对端卡住）。读循环不能因此停摆，否则 stdout 没人排空，双向死锁。
 type slowSink struct {

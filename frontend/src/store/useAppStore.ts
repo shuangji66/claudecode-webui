@@ -1618,6 +1618,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
         }
         return;
       }
+      case "permission.resolved": {
+        // 这条审批已经有结论了（很可能是别的设备/标签做掉的）。审批是会话级状态，
+        // 后端在回包之后会广播一次；不处理的话本机卡片会一直挂着、一轮里越攒越多。
+        const data = ev.data as { request_id?: string } | undefined;
+        const rid = data?.request_id;
+        if (!rid) return;
+        set((s) => ({
+          perms: { ...s.perms, [sid]: (s.perms[sid] ?? []).filter((p) => p.request_id !== rid) },
+        }));
+        return;
+      }
       case "error": {
         const data = ev.data as { message?: string } | undefined;
         set((s) => ({

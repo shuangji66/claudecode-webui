@@ -10,6 +10,8 @@ export type WireEventKind =
   | "session.state"
   | "cli"
   | "permission"
+  // 这条审批已经有结论（可能是别的设备/标签做掉的），收到就撤掉卡片。
+  | "permission.resolved"
   | "error"
   | "closed"
   | "claude.update"

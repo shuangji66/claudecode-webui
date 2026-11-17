@@ -59,8 +59,13 @@ const (
 	KindSessionState = "session.state"
 	KindCLI          = "cli"
 	KindPermission   = "permission"
-	KindError        = "error"
-	KindClosed       = "closed"
+	// KindPermissionResolved 通知所有观察该会话的连接：这条审批已经有结论了。
+	// 审批是**会话级**事实而不是浏览器本地状态——同一时刻可能有好几台设备/
+	// 好几个标签页都收到了同一个 can_use_tool，其中一台批准之后，CLI 只会
+	// 继续往下跑，不会再发任何东西暗示「这条已经处理完」，所以必须由后端广播。
+	KindPermissionResolved = "permission.resolved"
+	KindError              = "error"
+	KindClosed             = "closed"
 )
 
 // writeReq 是一条待写入 stdin 的行；ack 非空时调用方等待写入结果。
@@ -258,8 +263,16 @@ func (s *Session) PromptWithAttachments(text string, attachments []protocol.Atta
 }
 
 // Interrupt 中断当前回合。
+//
+// 这一轮的审批随回合一起作废：CLI 已经不再需要它们，留着只会让人点到一条失效回包。
+// 单设备上界面是本地清掉的，但别的设备看不到这个动作——所以清完还要广播
+// permission.resolved，否则那台设备上的卡片永远挂着。
 func (s *Session) Interrupt() error {
-	return s.writeLine(protocol.ControlRequest("ccweb-interrupt", protocol.SubtypeInterrupt))
+	err := s.writeLine(protocol.ControlRequest("ccweb-interrupt", protocol.SubtypeInterrupt))
+	if err == nil {
+		s.clearPermissions()
+	}
+	return err
 }
 
 // SetModel 切换模型。
@@ -369,18 +382,46 @@ func (s *Session) rememberPermission(requestID string, raw json.RawMessage) {
 	s.permMu.Unlock()
 }
 
+// forgetPermission 把一条审批从挂起表里摘掉，并把结论广播给所有观察该会话的连接。
+//
+// 广播不能省：审批发出时是群发的（多设备/多标签各收到一份同一个 request_id），
+// 但决定是某一条连接做的，CLI 拿到回包后只会继续往下跑，不会再发任何东西暗示
+// 「这条已经处理完」。少了这条事件，其他设备上的卡片就永远消不掉、一直累积。
 func (s *Session) forgetPermission(requestID string) {
+	if !s.dropPermission(requestID) {
+		return
+	}
+	s.emitData(KindPermissionResolved, map[string]any{"request_id": requestID})
+}
+
+// dropPermission 只动挂起表，不发事件；返回是否真的摘掉了一条。
+// emit 必须留在锁外：订阅者写帧有超时，持锁广播会让读循环跟着等。
+func (s *Session) dropPermission(requestID string) bool {
 	s.permMu.Lock()
-	if _, ok := s.perms[requestID]; ok {
-		delete(s.perms, requestID)
-		for i, id := range s.permOrder {
-			if id == requestID {
-				s.permOrder = append(s.permOrder[:i], s.permOrder[i+1:]...)
-				break
-			}
+	defer s.permMu.Unlock()
+	if _, ok := s.perms[requestID]; !ok {
+		return false
+	}
+	delete(s.perms, requestID)
+	for i, id := range s.permOrder {
+		if id == requestID {
+			s.permOrder = append(s.permOrder[:i], s.permOrder[i+1:]...)
+			break
 		}
 	}
+	return true
+}
+
+// clearPermissions 清空全部挂起审批并逐条广播结论（中断时整轮作废）。
+func (s *Session) clearPermissions() {
+	s.permMu.Lock()
+	ids := append([]string(nil), s.permOrder...)
+	s.perms = make(map[string]json.RawMessage)
+	s.permOrder = nil
 	s.permMu.Unlock()
+	for _, id := range ids {
+		s.emitData(KindPermissionResolved, map[string]any{"request_id": id})
+	}
 }
 
 // Close 关闭会话（幂等）。
