@@ -29,7 +29,7 @@ describe("设置页凭证输入框的自动填充", () => {
     });
   });
 
-  // 抽屉会顺带挂载其它标签页（技能 / 部署），它们会在挂载时拉数据；
+  // 各页是懒加载的（打开哪页才挂载哪页），进设置页时仍可能有请求；
   // 这里把 fetch 打桩，免得那些请求的 setState 落在 act 之外。
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
@@ -42,7 +42,7 @@ describe("设置页凭证输入框的自动填充", () => {
     await act(async () => {
       render(<SettingsDrawer open initialTab="models" onClose={() => {}} />);
     });
-    const url = screen.getByPlaceholderText("https://gateway.example/v1");
+    const url = await screen.findByPlaceholderText("https://gateway.example/v1");
     expect(url.getAttribute("autocomplete")).toBe("off");
     expect(url.getAttribute("data-1p-ignore")).toBe("true");
     expect(url.getAttribute("data-lpignore")).toBe("true");
@@ -79,7 +79,7 @@ describe("设置页凭证输入框的自动填充", () => {
     await act(async () => {
       render(<SettingsDrawer open initialTab="models" onClose={() => {}} />);
     });
-    const key = screen.getByPlaceholderText("已设置（留空不修改）");
+    const key = await screen.findByPlaceholderText("已设置（留空不修改）");
     expect(key.getAttribute("placeholder")).not.toContain("sk-gw");
     expect(screen.queryByText(/sk-gw/)).toBeNull();
     expect(screen.queryByDisplayValue(/sk-gw/)).toBeNull();
@@ -89,7 +89,7 @@ describe("设置页凭证输入框的自动填充", () => {
     await act(async () => {
       render(<SettingsDrawer open initialTab="models" onClose={() => {}} />);
     });
-    const manual = screen.getByPlaceholderText("手动添加模型 ID");
+    const manual = await screen.findByPlaceholderText("手动添加模型 ID");
     await act(async () => {
       fireEvent.change(manual, { target: { value: "my-model" } });
     });

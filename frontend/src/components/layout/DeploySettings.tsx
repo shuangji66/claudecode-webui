@@ -4,7 +4,7 @@
 // 存放，面板里可以切换生效版本。切换只影响之后新建的会话——已经在跑的 claude
 // 进程把二进制载入了内存，不会也不需要热替换。
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import { useT } from "../../lib/i18n";
 import { formatBytes } from "../../lib/attachments";
@@ -13,6 +13,7 @@ import { Button } from "../common/Button";
 import { askConfirm } from "../common/SystemDialogs";
 import { IconAlert, IconCheck, IconClose, IconDownload, IconRefresh, IconTrash } from "../common/Icons";
 import type { ClaudeJobPhase, ClaudeSource, ClaudeVersion } from "../../transport/types";
+import { Section } from "./settings/Section";
 
 const SOURCES: { value: ClaudeSource; zh: string; en: string }[] = [
   { value: "npmmirror", zh: "npmmirror 国内镜像（推荐）", en: "npmmirror (China mirror, recommended)" },
@@ -251,12 +252,4 @@ export function DeploySettings() {
   );
 }
 
-function Section({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
-  return (
-    <section className="border-b border-line pb-6 last:border-b-0">
-      <h4 className="text-[13px] font-medium text-ink">{title}</h4>
-      {desc && <p className="mt-0.5 text-[11px] leading-relaxed text-muted">{desc}</p>}
-      <div className="mt-3">{children}</div>
-    </section>
-  );
-}
+
