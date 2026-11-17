@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
 )
 
 // fakeBin 写一个假 claude：把收到的参数追加到 args.log，然后按 FAKE_OUT 输出、

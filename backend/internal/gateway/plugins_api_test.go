@@ -217,7 +217,7 @@ esac`)
 		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
 	}
 	var out struct {
-		Error   string        `json:"error"`
+		Error   string         `json:"error"`
 		Details plugin.Details `json:"details"`
 		Inspect plugin.Inspect `json:"inspect"`
 	}

@@ -23,10 +23,10 @@ import (
 //     `plugin-catalog-cache.json`）；慢的是首次把目录抓下来（约 13s，要联网）。
 //
 // 所以分成两件事：
-//   1. 面板把「上次读到的目录」落盘（`CCWEB_DATA_DIR/plugins-available.json`），
-//      重开设置页/重启进程先读它，不用等、也不用手点刷新；
-//   2. 目录只在服务端缓存，HTTP 只回**一页**（默认 20 条）+ 命中数，
-//      搜索与翻页都在服务端做（内存里过滤 3743 条是微秒级）。
+//  1. 面板把「上次读到的目录」落盘（`CCWEB_DATA_DIR/plugins-available.json`），
+//     重开设置页/重启进程先读它，不用等、也不用手点刷新；
+//  2. 目录只在服务端缓存，HTTP 只回**一页**（默认 20 条）+ 命中数，
+//     搜索与翻页都在服务端做（内存里过滤 3743 条是微秒级）。
 const (
 	// pluginAvailableCacheFile 是目录缓存的落盘文件名（在 CCWEB_DATA_DIR 下）。
 	pluginAvailableCacheFile = "plugins-available.json"

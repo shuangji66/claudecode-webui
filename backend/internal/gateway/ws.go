@@ -332,7 +332,18 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 	case "model":
 		err = sess.SetModel(cmd.Model)
 	case "permission_mode":
-		err = sess.SetPermissionMode(cmd.Mode)
+		// **不能在这个读循环上等 CLI 的回包**（SetPermissionMode 会等，最长 ModeTimeout）。
+		// 读循环是每条连接单线程的：等的时候同一连接后面的帧全被挡住，而其中最要命的
+		// 是审批回包——CLI 可能正挂在 can_use_tool 上等它，于是「切模式」要等审批、
+		// 「审批」要等切模式，白等一个超时。
+		// 前端本来就不等这个结果：模式以 CLI 上报的 system/status 为准，
+		// 失败用 error 事件回（writeFrame 只入队，从别的 goroutine 调是安全的）。
+		go func(mode string) {
+			if err := sess.SetPermissionMode(mode); err != nil {
+				s.sendError(c, err.Error())
+			}
+		}(cmd.Mode)
+		return
 	case "permission":
 		if cmd.RequestID == "" || cmd.Allow == nil {
 			s.sendError(c, "permission 需要 request_id 与 allow")
