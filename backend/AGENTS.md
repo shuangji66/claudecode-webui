@@ -259,6 +259,12 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `dispatch` 里只放行 ping，其余命令回 `error`——不能让它落到 nil 会话上（那是 panic）。
   定时策略不在 gateway：`cmd/ccweb` 的 `startClaudeUpdateWatch` 负责查，gateway 的
   `BroadcastClaudeUpdate()` 只负责推。
+- **读循环里不能有「等 CLI 回包」的命令**。每条连接只有一个读循环线程，阻塞它等于让这条
+  连接上的后续帧全部读不到——最要命的是审批回包：`set_permission_mode` 要等 CLI 应答
+  （最长 `ModeTimeout`），而 CLI 很可能正挂在 `can_use_tool` 上等审批，于是「切模式等审批、
+  审批等切模式」白等一个超时，用户点「允许」看起来毫无反应。所以 `permission_mode` 在
+  独立 goroutine 里跑，失败用 `error` 事件回（`writeFrame` 只入队，跨 goroutine 安全）。
+  新增命令前先问：它会不会等对端？会就挪出去。
 - 对话路由：`GET /api/conversations`、`PATCH /api/conversations`（重命名/归档/touch/usage）、
   `DELETE /api/conversations?id=`（软删除）、`GET /api/history/transcript?id=`（回放）。
 - 预览路由：`GET /api/history/preview?id=` 返回会话最近一问一答（侧栏悬浮预览用）。

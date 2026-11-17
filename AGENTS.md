@@ -451,7 +451,9 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `plugin list --available` **离线 1.2s** 就能出结果（只有首次抓目录要联网、约 13s）；
   ② 面板把读到的目录落盘到 `CCWEB_DATA_DIR/plugins-available.json`（带 claude HOME，原子写），
   进程启动/重进设置页先读它；没有缓存时 `GET /api/plugins` **只自动补一次**（每进程一次，
-  失败留给用户点「刷新」）；
+  失败留给用户点「刷新」）。**刷新失败只更新 `note`、必须保留上一次的目录**：离线是常态，
+  清空的话界面上 3743 条会凭空变成 0，而 `pluginAvailLoaded` 已是 true、不会再读回落盘缓存，
+  只能重启进程恢复。前端靠 `available_note` 说清「为什么这里是空的」；
   ③ HTTP 只回一页：`GET /api/plugins` 给 `available_total`，明细走
   `GET /api/plugins/available?q=&market=&hide_installed=&offset=&limit=`（默认 20、上限 100），
   过滤与翻页都在服务端内存里做。实测：主接口 284 字节 / 一页 6.4 KB。
