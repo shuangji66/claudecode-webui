@@ -42,7 +42,11 @@ interface Props {
   onSelectEffort: (effort: string) => void;
   onPermissionMode: (mode: string) => void;
   /** 返回 false 表示没发出去（连接断开等），此时输入框必须保留草稿与附件。 */
-  onSend: (text: string, attachments: WireAttachment[]) => Promise<boolean>;
+  onSend: (
+    text: string,
+    attachments: WireAttachment[],
+    opts?: { priority?: "now" },
+  ) => Promise<boolean>;
   /** 只入队，不立刻写给 claude（回合进行中按 Enter 走这里）。 */
   onQueue: (text: string, attachments: WireAttachment[]) => boolean;
   onDropQueued: (id: string) => void;
@@ -152,7 +156,7 @@ export function Composer({
     const queuedSend = !immediate && (busy || queued.length > 0);
     if (queuedSend) {
       if (!onQueue(value, wire)) return;
-    } else if (!(await onSend(value, wire))) {
+    } else if (!(await onSend(value, wire, immediate && busy ? { priority: "now" } : undefined))) {
       return; // 失败：草稿与已读入内存的附件原样保留
     }
     setText("");

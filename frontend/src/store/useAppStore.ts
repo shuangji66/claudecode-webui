@@ -240,7 +240,12 @@ interface AppState {
   disconnect: (id: string) => void;
   retryConnection: (id: string) => void;
 
-  sendPrompt: (text: string, attachments?: WireAttachment[], attachmentLabel?: string) => Promise<boolean>;
+  sendPrompt: (
+    text: string,
+    attachments?: WireAttachment[],
+    attachmentLabel?: string,
+    opts?: { priority?: "now" },
+  ) => Promise<boolean>;
   /**
    * 只入队，不立刻写给 claude。回合进行中按 Enter 走这里；空闲时 Enter 语义不变
    * （入队后立刻发队首）。返回 false 表示没入队（满了 / 没有活动对话）。
@@ -1467,7 +1472,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   // 返回「这条消息是否真的发出去了」：输入框据此决定要不要清空草稿。
   // 之前是 void，发送失败（WS 重连中）也照样清空，用户的提示词与附件就没了。
-  sendPrompt: async (text, attachments = [], attachmentLabel = "附件：") => {
+  sendPrompt: async (text, attachments = [], attachmentLabel = "附件：", opts) => {
     if (!text.trim() && attachments.length === 0) return false;
     // 刚点「新对话」时 active 还没切过去：等创建完成，避免把消息发给上一个对话。
     if (createTask) {
@@ -1494,7 +1499,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
       }
     }
     const client = clients.get(id);
-    if (!client?.send({ kind: "prompt", text, attachments: attachments.length > 0 ? attachments : undefined })) {
+    const frame = {
+      kind: "prompt" as const,
+      text,
+      attachments: attachments.length > 0 ? attachments : undefined,
+      priority: opts?.priority,
+    };
+    if (!client?.send(frame)) {
       set({ error: "发送失败：连接已断开" });
       return false;
     }
@@ -1550,7 +1561,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (!item) return false;
     // 先摘出队列再发：发送期间又点一次「立即插话」不该把同一条发两遍。
     set((s) => ({ queued: { ...s.queued, [id]: removePrompt(s.queued[id] ?? [], qid) } }));
-    const ok = await get().sendPrompt(item.text, item.attachments, item.label);
+    // priority=now：这是「插话」，不是「排队」——要不要让它进本轮是 CLI 的裁决，
+    // 但我们必须把意图标出来，否则它只能按默认的 next 等本轮收尾（看起来像没生效）。
+    const ok = await get().sendPrompt(item.text, item.attachments, item.label, { priority: "now" });
     if (!ok) set((s) => ({ queued: { ...s.queued, [id]: [item, ...(s.queued[id] ?? [])] } }));
     return ok;
   },

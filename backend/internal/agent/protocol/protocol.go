@@ -152,12 +152,29 @@ func UserText(text string) []byte {
 	return UserMessage(text, nil)
 }
 
-// UserMessage 构造带附件的用户消息。
+// UserMessage 构造带附件的用户消息（不带投递语义，CLI 按默认的 next 处理）。
+func UserMessage(text string, attachments []Attachment) []byte {
+	return UserMessageWith(text, attachments, PromptOptions{})
+}
+
+// PromptOptions 是写进 stdin 的用户帧的可选字段；零值表示两个都不写。
+type PromptOptions struct {
+	// Priority 控制「回合进行中写入的消息」什么时候被读到：
+	//   ""      = next：本轮的工具调用结束后就读（同一回合）
+	//   "later" = 等本轮结束，作为新的一轮
+	//   "now"   = 立刻：能后台化的工具被挪到后台、消息并入本轮（需要 Human）
+	Priority string
+	// Human 写 origin:{kind:"human"}，告诉 CLI 这是用户亲手打的，而不是 SDK
+	// 注入的上下文。它还会让「需要人类提示词」的检查（如 ultracode 关键字）认这条消息。
+	Human bool
+}
+
+// UserMessageWith 构造带附件与投递语义的用户消息。
 //
 // 图片走 Anthropic 的 image content block，PDF 走 document block；
 // 文本文件在服务端解码后作为 text block 附在提示词后面。这样 CLI 与
 // 上游 API 都按原生多模态消息处理，不需要把文件塞进 JSON 字符串。
-func UserMessage(text string, attachments []Attachment) []byte {
+func UserMessageWith(text string, attachments []Attachment, opt PromptOptions) []byte {
 	content := make([]map[string]any, 0, len(attachments)+1)
 	if text != "" {
 		content = append(content, map[string]any{"type": "text", "text": text})
@@ -194,7 +211,7 @@ func UserMessage(text string, attachments []Attachment) []byte {
 	if len(content) == 0 {
 		content = append(content, map[string]any{"type": "text", "text": text})
 	}
-	return mustMarshal(map[string]any{
+	frame := map[string]any{
 		"type":       TypeUser,
 		"session_id": nil,
 		"message": map[string]any{
@@ -202,7 +219,14 @@ func UserMessage(text string, attachments []Attachment) []byte {
 			"content": content,
 		},
 		"parent_tool_use_id": nil,
-	})
+	}
+	if opt.Priority != "" {
+		frame["priority"] = opt.Priority
+	}
+	if opt.Human {
+		frame["origin"] = map[string]any{"kind": "human"}
+	}
+	return mustMarshal(frame)
 }
 
 // ControlRequest 构造一个无参控制请求（interrupt 等）。

@@ -262,7 +262,8 @@ describe("Composer 待发送队列", () => {
     fireEvent.change(textarea(), { target: { value: "先别改测试" } });
     fireEvent.keyDown(textarea(), { key: "Enter", ctrlKey: true });
 
-    expect(onSend).toHaveBeenCalledWith("先别改测试", []);
+    // 进行中的 Ctrl+Enter 必须标 priority=now：不带的话 CLI 只会等这一轮收尾。
+    expect(onSend).toHaveBeenCalledWith("先别改测试", [], { priority: "now" });
     expect(onQueue).not.toHaveBeenCalled();
   });
 

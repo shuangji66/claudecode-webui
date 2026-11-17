@@ -267,7 +267,9 @@ export interface WireAttachment {
 
 /** 前端上行命令。 */
 export type ClientCommand =
-  | { kind: "prompt"; text: string; attachments?: WireAttachment[] }
+  // priority="now" = 插话：立刻写进 stdin，并要求 CLI 在当前回合读到它
+  // （能后台化的工具被挪到后台）。不带则按 CLI 默认的 next 处理。
+  | { kind: "prompt"; text: string; attachments?: WireAttachment[]; priority?: "now" }
   | { kind: "interrupt" }
   | { kind: "model"; model: string }
   | { kind: "permission_mode"; mode: string }

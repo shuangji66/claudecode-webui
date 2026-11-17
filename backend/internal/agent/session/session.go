@@ -268,14 +268,32 @@ func (s *Session) Prompt(text string) error {
 }
 
 // PromptWithAttachments 发送文本 + 文件/图片（图片走原生 image block）。
+//
+// 帧带 origin:{kind:"human"}：这条消息是用户亲手打的，CLI 需要它来正确归属
+// （缺了 origin 会被当成未标明来源，依赖「人类提示词」的检查不认）。
 func (s *Session) PromptWithAttachments(text string, attachments []protocol.Attachment) error {
+	return s.prompt(text, attachments, protocol.PromptOptions{Human: true})
+}
+
+// PromptInterject 在回合进行中写入一条「插话」。
+//
+// priority=now + origin=human（CLI ≥ 2.1.286）：能后台化的工具（shell 命令、
+// 子代理、MCP 调用，2.1.287 起还有 WebFetch/WebSearch）被挪到后台，消息**并入
+// 当前回合**立刻被读到；挪不动（例如正在写正文或某个不能后台的工具）时 CLI 会
+// 中断这一轮，把消息放到下一轮。只写 user 帧、不带这两个字段的话，CLI 只能按
+// 默认的 next 处理：本轮收尾后才轮得到，看起来就跟排队一样。
+func (s *Session) PromptInterject(text string, attachments []protocol.Attachment) error {
+	return s.prompt(text, attachments, protocol.PromptOptions{Priority: "now", Human: true})
+}
+
+func (s *Session) prompt(text string, attachments []protocol.Attachment, opt protocol.PromptOptions) error {
 	if s.State() == StateClosed {
 		return errors.New("session: 会话已关闭")
 	}
 	if text == "" && len(attachments) == 0 {
 		return errors.New("session: 消息不能为空")
 	}
-	if err := s.writeLine(protocol.UserMessage(text, attachments)); err != nil {
+	if err := s.writeLine(protocol.UserMessageWith(text, attachments, opt)); err != nil {
 		return err
 	}
 	s.setState(StateBusy)

@@ -363,7 +363,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
               if (selected?.provider && selected.model) void selectModel(selected.provider, selected.model, effort);
             }}
             onPermissionMode={(m) => setPermissionMode(m)}
-            onSend={(text, attachments) => sendPrompt(text, attachments, t("附件：", "File: "))}
+            onSend={(text, attachments, opts) => sendPrompt(text, attachments, t("附件：", "File: "), opts)}
             onQueue={(text, attachments) => enqueuePrompt(text, attachments, t("附件：", "File: "))}
             onDropQueued={dropQueued}
             onEditQueued={editQueued}

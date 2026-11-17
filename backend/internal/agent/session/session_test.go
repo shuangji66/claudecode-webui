@@ -429,6 +429,35 @@ func TestPromptDuringTurnIsAccepted(t *testing.T) {
 	}
 }
 
+// 插话帧必须带 priority=now + origin=human：只写 user 帧的话 CLI 按默认的 next
+// 处理（等本轮收尾），表现就跟排队一样，用户会说「插话没生效」。
+func TestPromptInterjectCarriesPriority(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.Prompt("先跑这条"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	first := fc.next()
+	if first["priority"] != nil {
+		t.Fatalf("普通消息不该带 priority: %v", first["priority"])
+	}
+	if origin, _ := first["origin"].(map[string]any); origin["kind"] != "human" {
+		t.Fatalf("普通消息也要标 origin:human，实际 %v", first["origin"])
+	}
+
+	if err := sess.PromptInterject("等一下，换个方向", nil); err != nil {
+		t.Fatalf("PromptInterject: %v", err)
+	}
+	msg := fc.next()
+	if msg["priority"] != "now" {
+		t.Fatalf("插话 priority = %v, want now", msg["priority"])
+	}
+	if origin, _ := msg["origin"].(map[string]any); origin["kind"] != "human" {
+		t.Fatalf("插话 origin = %v, want {kind:human}", msg["origin"])
+	}
+}
+
 // TestTurnInitAfterResultMarksBusy 覆盖「插话延后成新的一轮」：CLI 会在 result 之后
 // 立刻再发一条 init。不认这条信号，界面会在整轮里显示空闲（发送按钮而不是中断按钮）。
 func TestTurnInitAfterResultMarksBusy(t *testing.T) {

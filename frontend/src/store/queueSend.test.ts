@@ -120,14 +120,25 @@ describe("待发送队列", () => {
     expect(queueOf()).toHaveLength(0);
   });
 
-  it("「立即插话」把这一条现在就写信道，不再留在队列里", async () => {
+  it("「立即插话」现在就写信道，并标出 priority=now（否则 CLI 只会等本轮收尾）", async () => {
     useAppStore.getState().enqueuePrompt("先跑测试");
     const id = queueOf()[0].id;
 
     await useAppStore.getState().steerQueued(id);
 
-    expect(sendPrompt).toHaveBeenCalledWith("先跑测试", [], "附件：");
+    expect(sendPrompt).toHaveBeenCalledWith("先跑测试", [], "附件：", { priority: "now" });
     expect(queueOf()).toHaveLength(0);
+  });
+
+  it("排队投递不带 priority：等本轮结束后按普通消息发出去", async () => {
+    seedQueue("s1", "排队的那条");
+    useAppStore.getState().applyEvent("s1", {
+      kind: "cli",
+      data: { type: "result", subtype: "success", is_error: false },
+    } as never);
+    await Promise.resolve();
+
+    expect(sendPrompt).toHaveBeenCalledWith("排队的那条", [], "附件：");
   });
 
   it("发失败就把消息放回队首，不凭空消失", async () => {

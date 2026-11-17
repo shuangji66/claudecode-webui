@@ -140,6 +140,7 @@ type wireAttachment struct {
 type clientCmd struct {
 	Kind               string           `json:"kind"`
 	Text               string           `json:"text,omitempty"`
+	Priority           string           `json:"priority,omitempty"`
 	Attachments        []wireAttachment `json:"attachments,omitempty"`
 	Model              string           `json:"model,omitempty"`
 	Mode               string           `json:"mode,omitempty"`
@@ -309,7 +310,17 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 			s.sendError(c, attErr.Error())
 			return
 		}
-		err = sess.PromptWithAttachments(cmd.Text, atts)
+		// priority=now 是「插话」：立刻写进 stdin 并要求 CLI 在当前回合读到它。
+		// 只认这一个值——别的取值语义（later）前端用不到，静默降级会骗人。
+		switch cmd.Priority {
+		case "":
+			err = sess.PromptWithAttachments(cmd.Text, atts)
+		case "now":
+			err = sess.PromptInterject(cmd.Text, atts)
+		default:
+			s.sendError(c, fmt.Sprintf("未知的 priority %q（只支持 now）", cmd.Priority))
+			return
+		}
 		if err == nil {
 			// 首条消息把对话落进持久化列表；后续消息刷新 last_active。
 			if info, ok := s.conversationInfo(id); ok {

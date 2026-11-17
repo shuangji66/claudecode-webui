@@ -462,9 +462,17 @@ hub ── manager ── session ── process ── claude (NDJSON)
 ### 4.14 插话 / 待发送队列（`lib/queue.ts` + `store.queued`）
 
 - **协议事实**：回合进行中往 stdin 再写一条 user 帧是被接受的，不会报错、不会丢，pipe 也不关。
-  落点二选一：本轮还有工具边界 → 在下一个 tool_result 处**并入本轮**（CLI 内部的说法是
-  「用户在干活时发了新消息」）；本轮已经收尾 → CLI 先发 `result`，再发一条 `system/init`，
-  把这条消息当成**新的一轮**跑。CLI 自己的 TUI 就是这个语义（Enter 排队、Ctrl+Enter 立即发送）。
+  落点由帧上的两个字段决定（Agent SDK 的 `SDKUserMessage`）：
+  `priority` = 缺省/`next`（本轮工具调用结束后就读）、`later`（等本轮结束当新的一轮）、
+  `now`（立刻）；`origin: {kind:"human"}` 声明「这条是用户亲手打的」。
+  **`priority=now` + `origin=human`（CLI ≥ 2.1.286）才是真正的插话**：能后台化的工具
+  （shell 命令、子代理、MCP 调用，2.1.287 起还有 WebFetch/WebSearch）被挪到后台，消息
+  **并入当前回合**；挪不动或模型正在写正文时，CLI 改为中断本轮。本轮已收尾时 CLI 先发
+  `result`、再发 `system/init`，把消息当新的一轮跑。
+- **只写裸 user 帧而不带 `priority`/`origin`，表现就等同于排队**：CLI 按默认的 next 处理，
+  要等本轮工具收尾才轮得到。曾经被报「工具操作中插话没生效」就是这个原因——
+  `PromptInterject` 现在固定写 `priority=now` + `origin=human`，普通 prompt（含排队投递）
+  只带 `origin=human`。改这条链路时先看 `protocol.PromptOptions` 的注释。
 - **CLI 不回显被并入的消息**（没开 `--replay-user-messages`）：所以用户气泡只能本地乐观插入，
   转录里的位置可能和界面上略有出入——别为了「对得上」去开 replay，那会让同一条消息显示两遍。
 - **交互**：回合进行中按 Enter = 入队（草稿清空，消息进输入框上方的「待发送」面板）；点正文

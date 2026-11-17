@@ -230,6 +230,43 @@ func TestPermissionModeOf(t *testing.T) {
 	}
 }
 
+// 投递语义字段：origin 决定 CLI 是否把消息算作「用户亲手打的」，
+// priority=now 决定它能不能在当前回合被读到（而不是等本轮收尾）。
+func TestUserMessagePromptOptions(t *testing.T) {
+	decode := func(raw []byte) map[string]any {
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("解析失败: %v", err)
+		}
+		return m
+	}
+
+	plain := decode(UserMessageWith("hi", nil, PromptOptions{}))
+	if _, ok := plain["priority"]; ok {
+		t.Fatalf("默认帧不该带 priority: %v", plain["priority"])
+	}
+	if _, ok := plain["origin"]; ok {
+		t.Fatalf("默认帧不该带 origin: %v", plain["origin"])
+	}
+
+	human := decode(UserMessageWith("hi", nil, PromptOptions{Human: true}))
+	origin, ok := human["origin"].(map[string]any)
+	if !ok || origin["kind"] != "human" {
+		t.Fatalf("origin = %v, want {kind:human}", human["origin"])
+	}
+	if _, ok := human["priority"]; ok {
+		t.Fatalf("只标 human 时不该带 priority")
+	}
+
+	interject := decode(UserMessageWith("等一下", nil, PromptOptions{Priority: "now", Human: true}))
+	if interject["priority"] != "now" {
+		t.Fatalf("priority = %v, want now", interject["priority"])
+	}
+	if origin, _ := interject["origin"].(map[string]any); origin["kind"] != "human" {
+		t.Fatalf("插话帧必须同时带 origin:human，实际 %v", interject["origin"])
+	}
+}
+
 // TestIsTurnInit 只认 system/init：它是「一轮开始」的唯一信号（进程启动一次，
 // 插话没赶上本轮时 CLI 会再发一次，会话据此把状态标回 busy）。
 func TestIsTurnInit(t *testing.T) {

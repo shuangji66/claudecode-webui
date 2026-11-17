@@ -154,7 +154,9 @@ src/
     （按工作区路径分键，单列表用 `__flat__`）。手动排序的入口有两个：桌面拖拽 +
     会话「更多」菜单里的上移/下移（触屏没有拖拽）。视图偏好是**每台设备**的，不进后端。
 24. **回合进行中的消息走「待发送」队列，不许直接写 stdin 之外的地方**（`lib/queue.ts` +
-    `store.queued`）：`Composer` 在 `busy` 时按 Enter 只调 `onQueue`（草稿清空，消息进输入框
+    `store.queued`）：插话要带 **`priority: "now"`**（`sendPrompt` 的第 4 个参数）——只写裸
+    user 帧的话 CLI 按默认的 next 处理，要等本轮工具收尾，看起来跟排队一样（「插话没生效」
+    就是这么来的）。`Composer` 在 `busy` 时按 Enter 只调 `onQueue`（草稿清空，消息进输入框
     **上方**的待发送面板），`Ctrl/⌘+Enter` 才是 `onSend`（立刻插话）。面板每条**点正文就地展开
     编辑框**（Enter 保存 / Shift+Enter 换行 / Esc 取消，`lib/queue.updatePrompt` 保持位置；正文与
     附件都清空等于删掉，附件可逐个移除）、右侧垃圾桶直接删（编辑态里也有「删除」）、可用右侧箭头立即发。编辑态要调
