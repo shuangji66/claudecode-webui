@@ -1,0 +1,67 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+/** 记录 apiFetch 的调用；归档只关心 PATCH 是否发出。 */
+const calls: Array<{ url: string; init?: RequestInit }> = [];
+
+vi.mock("../lib/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/runtime")>();
+  return {
+    ...actual,
+    apiFetch: vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      return { ok: true };
+    }),
+  };
+});
+
+const { useAppStore } = await import("./useAppStore");
+
+function seed() {
+  calls.length = 0;
+  localStorage.clear();
+  useAppStore.setState({
+    activeId: "c1",
+    currentWorkspace: "/w",
+    workspaces: [{ path: "/w", name: "w", last_used: "", exists: true }],
+    conversations: [
+      { id: "c1", cwd: "/w", title: "第一个对话", messages: 2, archived: false, live: false },
+      { id: "c2", cwd: "/w", title: "第二个对话", messages: 1, archived: false, live: false },
+    ],
+    items: {},
+    error: null,
+    // 真去 openConversation 会建 WS：测试里换成假的，断言它没被调用。
+    openConversation: vi.fn(async () => true),
+    refreshConversations: vi.fn(async () => {}),
+    disconnect: vi.fn(),
+  } as never);
+}
+
+describe("归档对话", () => {
+  beforeEach(() => seed());
+
+  // 参照 DSH：归档掉当前对话就回「新对话」页 —— 那个「下一条」只是按最近活跃猜的，
+  // 用户归档完想停下来时却被拉进另一个对话、又起一个 claude 进程。
+  it("归档当前对话后回到新对话页，不自动打开下一条", async () => {
+    const ok = await useAppStore.getState().archiveConversation("c1", true);
+
+    expect(ok).toBe(true);
+    expect(useAppStore.getState().activeId).toBeNull();
+    expect(useAppStore.getState().openConversation).not.toHaveBeenCalled();
+    expect(useAppStore.getState().disconnect).toHaveBeenCalledWith("c1");
+    // 刷新页面后也不能又回到刚被归档的那条。
+    expect(localStorage.getItem("ccweb-active-session")).toBeNull();
+    expect(JSON.parse(String(calls.find((c) => c.url === "/api/conversations")?.init?.body))).toEqual({
+      id: "c1",
+      archived: true,
+    });
+  });
+
+  it("归档别的对话不动当前对话", async () => {
+    await useAppStore.getState().archiveConversation("c1", true);
+    expect(useAppStore.getState().activeId).toBeNull();
+
+    useAppStore.setState({ activeId: "c2" });
+    await useAppStore.getState().archiveConversation("c1", false);
+    expect(useAppStore.getState().activeId).toBe("c2");
+  });
+});

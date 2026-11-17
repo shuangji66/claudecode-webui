@@ -1288,7 +1288,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   archiveConversation: async (id, archived) => {
-    const conv = get().conversations.find((c) => c.id === id);
     try {
       await apiFetch("/api/conversations", {
         method: "PATCH",
@@ -1296,17 +1295,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
       });
       get().disconnect(id);
       await get().refreshConversations();
-      if (archived && get().activeId === id) {
-        const root = conv ? workspaceFor(conv.cwd, get().workspaces) || conv.cwd : get().currentWorkspace;
-        const next = get()
-          .conversations.filter((c) => c.id !== id && !c.archived && belongs(c.cwd, root))
-          .sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""))[0];
-        if (next) await get().openConversation(next.id);
-        else {
-          get().setActive(null);
-          writeActiveId(null);
-        }
-      }
+      // 归档当前对话后回「新对话」页，不替用户挑下一条打开：那个「下一条」是按最近活跃
+      // 猜的，用户归档完想停下时却会被拉进另一个对话、又起一个 claude 进程。
+      if (archived && get().activeId === id) get().setActive(null);
       return true;
     } catch (e) {
       set({ error: errText(e) });
