@@ -109,9 +109,20 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
     if (ev.type === "message_delta") {
       const totals = totalsFromUsage(ev.usage);
       if (!totals) return undefined;
-      // 没有 message_start（例如中途接上的流）时上下文未知，先记 0，等 result 补。
-      if (!prev) return { contextTokens: 0, outputTokens: totals.output };
-      return { ...prev, outputTokens: totals.output };
+      // 官方协议里 message_delta 只带 output_tokens，输入侧在 message_start；
+      // 但自建中转常常反过来：message_start 给全 0 占位，完整 usage（含 input/cache）
+      // 落在 message_delta（实测：start = {input:0,output:0}，delta = {input:6781,
+      // cache_read:1792,output:10}）。所以这里**两样都看**：
+      //   有输入侧 → 直接更新上下文与缓存命中；
+      //   没有（官方形状）→ 保留上一份上下文，只更新输出。
+      // 回合进行中不更新上下文的话，整个回合都显示不出占用，只能等 result。
+      const context = contextTokens(totals);
+      const next: UsageSnapshot = { ...(prev ?? { contextTokens: 0 }), outputTokens: totals.output };
+      if (context > 0) {
+        next.contextTokens = context;
+        next.cacheHitRate = cacheHitRate(totals);
+      }
+      return next;
     }
     return undefined;
   }

@@ -90,6 +90,31 @@ describe("applyUsageMessage", () => {
     expect(snap.outputTokens).toBe(7);
   });
 
+  // 自建中转实测：message_start 只有全 0 占位，输入侧 token 落在 message_delta。
+  // 以前这里只取 output_tokens，导致整个回合都显示不出上下文占用，只能等 result。
+  it("message_delta 带输入侧时更新上下文与缓存命中", () => {
+    const snap = applyUsageMessage(undefined, {
+      type: "stream_event",
+      event: {
+        type: "message_delta",
+        usage: { cache_creation_input_tokens: 0, cache_read_input_tokens: 1792, input_tokens: 6781, output_tokens: 10 },
+      },
+    })!;
+    expect(snap.contextTokens).toBe(8573);
+    expect(snap.cacheHitRate).toBeCloseTo(1792 / 8573, 5);
+    expect(snap.outputTokens).toBe(10);
+  });
+
+  it("已有快照时，message_delta 的输入侧覆盖旧上下文", () => {
+    const start = applyUsageMessage(undefined, MESSAGE_START)!;
+    const snap = applyUsageMessage(start, {
+      type: "stream_event",
+      event: { type: "message_delta", usage: { input_tokens: 100, cache_read_input_tokens: 0, output_tokens: 3 } },
+    })!;
+    expect(snap.contextTokens).toBe(100);
+    expect(snap.outputTokens).toBe(3);
+  });
+
   it("result 补上 contextWindow 与 API 耗时", () => {
     const snap = applyUsageMessage(undefined, RESULT)!;
     expect(snap.contextWindow).toBe(200000);
