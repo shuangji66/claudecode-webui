@@ -281,6 +281,13 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   下一次请求就没有凭据，网关直接回 13 字节 `invalid token`（HTTP 200、text/plain，
   应用完全收不到请求）；301 还会被 webview 长期缓存，之后连新凭据都带不上。
   相对资源靠 index.html 注入的 `<base href>` 解析，不需要尾斜杠。
+- **fpk 入口的 `url` 必须与 `gatewayPrefix` 逐字相同（裸前缀）**。飞牛 App 的网关凭据是
+  按入口注入的：`url` 带尾斜杠（`/app/ClaudeCode/`）或落在子路径（`/app/Harness/dsh`）时，
+  App 用独立 WebView 打开、短 token 不被 portal 的 `/app/token` 续期，空闲几小时后第一次
+  导航就被 `trim_http_cgi` 拒成 `200 + 13 字节 "invalid token"`——请求到不了 app.sock，
+  应用拦不住也重试不了，手动刷新一次才恢复。NAS 实测（2026-11）：`/app/ClaudeCode/` 55 次、
+  `/app/Harness/dsh/` 5 次，裸前缀的 Terminal / WebSSH / Fluxor / fpkstudio 主入口 0 次。
+  dsh 的 README/AGENTS 也记了同一条边界。**排查时别把 `{"repos":[]}\n`（同样 13 字节）当成它。**
 - 设置路由：`GET/PUT /api/settings`、`POST /api/settings/test|models|verify|proxy`——
   全部敏感（有密钥），务必保持鉴权。`GET /api/health` 不带鉴权（只报存活，不回信息）。
 - 技能路由：`GET /api/skills`、`GET/PUT/DELETE /api/skills/doc`（写入见根 AGENTS.md 4.10）。
