@@ -228,8 +228,19 @@ src/
 - **置顶（`pinned`）只是排序偏好**（`lib/conversations.pinnedFirst`）：两种排序模式都先过它，
   置顶的永远在同一组最前，组内顺序保持原样；它不进 `LastFor`，不影响「默认恢复哪一条」，
   也不结束进程。行上常驻一颗小图钉表示置顶状态，取消置顶从行内按钮或菜单点。
-- **「复制 Session ID」是排查入口**：id 就是 `--resume`、转录文件名、`conversations.json`、
-  前端 `activeId` 的同一个值，终端里 `claude --resume <id>` 能接管同一条对话。菜单项把完整
+- **「复制 Session ID」已暂时下线**（`Sidebar.tsx` 的 `SHOW_COPY_SESSION_ID = false`）：
+  菜单项藏起来了，但 `copySessionId`、剪贴板失败回落与实现都**没删**，恢复时改回 `true`
+  并恢复它的组件测试。下线的理由：这个 id 只服务 `--resume` / 排查，粘进对话不会让模型
+  回看别的会话，容易让人误以为它是跨会话寻址。
+- **关于这个 id 的事实**：它就是 `--resume`、转录文件名、`conversations.json`、
+  前端 `activeId` 的同一个值；在**右侧栏终端**里接管要显式换 HOME，否则 claude 找的是
+  应用用户的 `~/.claude/projects`、必然报 "No conversation found"：
+  `HOME=$CCWEB_DATA_DIR/claude <版本>/claude --resume <id>`（ccweb 给子进程的 HOME 是
+  `CCWEB_CLAUDE_HOME`，默认就是 `<数据目录>/claude`）。另外这个 id 只属于 `--resume` /
+  转录这一套：claude 自己的多会话（`ListAgents` / `SendMessage`、Remote Control）用的是
+  「自动生成的会话名 + 6 位 ref」（如 `claudecode-5c [11a448]`），与 UUID 无法互转
+  （实测不是它的哈希；claude 用 `-n/--name` 设显示名、`--remote-control-session-name-prefix`
+  设名字前缀）。菜单项把完整
   id 写进剪贴板、`hint` 给前 8 位（让人确认复制的是哪条）；剪贴板被拒（局域网 http / 非安全
   上下文）时回落 `askPrompt` 让用户手抄，不要做成「点了没反应」。
 - **分叉会话**：菜单项 → `store.forkConversation(id, title)`（`POST /api/conversations/fork`），

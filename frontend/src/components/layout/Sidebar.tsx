@@ -72,6 +72,16 @@ interface WorkspaceGroup {
   depth: number;
 }
 
+/**
+ * 「复制 Session ID」暂时下线（**保留实现，不删**，以后再说）。
+ *
+ * 它复制的是 claude 的 session id：`--resume`、转录文件名、`session-env/<id>/` 都用它，
+ * 但它跟 claude 多会话那套「名字 + 6 位 ref」（`ListAgents` / `SendMessage`）不是一套，
+ * 粘进对话也不会让模型自己回看，所以当前用途只剩排查/终端接管，先收起来。
+ * 要恢复就把开关改成 true（菜单项、`copySessionId` 与它的测试都在）。
+ */
+const SHOW_COPY_SESSION_ID = false;
+
 interface MenuState {
   id: string;
   anchor: HTMLElement;
@@ -934,14 +944,18 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                   icon: <IconGitBranch size={13} className="text-muted" />,
                   onSelect: () => void forkConversation(menuConv.id, `${titleOf(menuConv)}${t("（分叉）", " (fork)")}`),
                 },
-                {
-                  id: "copy-id",
-                  label: t("复制 Session ID", "Copy session ID"),
-                  // 前 8 位让人确认"复制的是哪一条"，完整 id 在剪贴板里。
-                  hint: menuConv.id.slice(0, 8),
-                  icon: <IconCopy size={13} className="text-muted" />,
-                  onSelect: () => void copySessionId(menuConv),
-                },
+                ...(SHOW_COPY_SESSION_ID
+                  ? [
+                      {
+                        id: "copy-id",
+                        label: t("复制 Session ID", "Copy session ID"),
+                        // 前 8 位让人确认"复制的是哪一条"，完整 id 在剪贴板里。
+                        hint: menuConv.id.slice(0, 8),
+                        icon: <IconCopy size={13} className="text-muted" />,
+                        onSelect: () => void copySessionId(menuConv),
+                      },
+                    ]
+                  : []),
                 ...(view.sort === "manual" && groupOf(menuConv)
                   ? [
                       {

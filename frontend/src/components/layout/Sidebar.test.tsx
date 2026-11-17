@@ -2,9 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { Sidebar } from "./Sidebar";
 import { useAppStore } from "../../store/useAppStore";
-import { copyText } from "../../lib/clipboard";
-
-vi.mock("../../lib/clipboard", () => ({ copyText: vi.fn(async () => true) }));
 
 function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
   return render(
@@ -254,15 +251,13 @@ describe("Sidebar 会话行的管理入口", () => {
     expect(pinConversation).toHaveBeenCalledWith("c-menu", true);
   });
 
-  // id 是会话的唯一句柄：终端接管、排查转录、跨设备定位都靠它。
-  it("菜单里可以复制 Session ID（提示前 8 位）", () => {
+  // 「复制 Session ID」暂时下线（SHOW_COPY_SESSION_ID=false）：实现与「复制到剪贴板」的
+  // 失败回落都还在，只是不在菜单里露出来。恢复时把开关改回 true，并把这个断言反过来。
+  it("复制 Session ID 已下线，菜单里不出现", () => {
     renderSidebar();
     fireEvent.click(screen.getByRole("button", { name: "管理对话 会话甲" }));
-
-    const item = screen.getByRole("menuitem", { name: /复制 Session ID/ });
-    expect(item).toHaveTextContent("c-menu");
-    fireEvent.click(item);
-    expect(copyText).toHaveBeenCalledWith("c-menu");
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /复制 Session ID/ })).toBeNull();
   });
 
   // 分叉：复制上下文到新会话，标题加后缀便于在列表里区分（原对话一字不动）。
