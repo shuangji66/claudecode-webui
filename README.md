@@ -1,7 +1,8 @@
 # Claude Code 控制台（ccweb）
 
-把本地 `claude` CLI 包成一个**可视化 Web 界面**：单 Go 二进制、内嵌前端、只监听 unix socket，
-由网关注入 baseurl 前缀反代。后端常驻 claude 子进程，通过 `stream-json` 协议双向转发，
+把本地 `claude` CLI 包成一个**可视化 Web 界面**：单 Go 二进制、内嵌前端。默认由网关注入
+baseurl 前缀反代到 unix socket，同时可直连一个 TCP 端口（默认 3141，根路径、不需要 baseurl）。
+后端常驻 claude 子进程，通过 `stream-json` 协议双向转发，
 主对话区不做终端模拟，全部是结构化渲染（消息流 / 工具卡片 / diff / 审批面板）。
 右侧栏额外提供工作区文件树、Git 面板与一个真正跑在 PTY 上的 bash 终端。
 
@@ -27,7 +28,7 @@ CCWEB_ADMIN_SOCK=/run/ccweb/ccweb.sock \
 /opt/cc/ccweb
 ```
 
-程序**不监听 TCP**。用 nginx 反代到 socket：
+用 nginx 反代到 socket：
 
 ```nginx
 location /app/ccweb/ {
@@ -43,13 +44,32 @@ location /app/ccweb/ {
 > `/` 结尾与 `proxy_pass` 的路径要成对：`location /app/ccweb/` + `proxy_pass .../`
 > 才能把前缀剥掉；后端同时也会校验 `CCWEB_BASEURL`，两者必须一致。
 
+## TCP 直连访问（默认关闭）
+
+不想配网关时，可以在「设置 → 访问」里开启端口访问，然后用 `http://<NAS 地址>:3141/` 打开：
+
+- **端口访问默认关闭**；开启前必须设置访问密码，端口保存在设置里（默认 3141）；
+- TCP 入口挂在**根路径**，不需要 baseurl（unix socket 入口的 `CCWEB_BASEURL` 前缀照旧）；
+- 开启后，经 TCP 访问必须先输入**访问密码**登录（单密码，无用户名）。
+  密码只以加盐 PBKDF2-SHA256 摘要保存在 `settings.json`，浏览器保存的是登录会话令牌；
+  设置了 `CCWEB_AUTH_TOKEN` 的部署也可以直接在鉴权页输入该令牌；
+- **unix socket 入口（前置网关）不校验这个密码**——那是本机可信通道；
+- 端口范围 **1025–65535**；保存后立即换监听（服务端先 bind 成功才落盘，
+  端口被占用或没有权限会直接报错、设置不变，旧端口继续服务）；
+  关闭端口访问会断开所有 TCP 连接；
+- 密码要求：至少 8 位，同时包含字母与数字，不含控制字符；
+- 密码与页面内容都走明文 HTTP，跨不可信网络时请在前面加一层 HTTPS 反代；
+- 服务重启后登录会话失效（令牌只在内存里），需要重新输入密码；
+- 想只绑定某个网卡时用 `CCWEB_TCP_HOST=127.0.0.1`（默认绑定所有网卡）。
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `CCWEB_ADMIN_SOCK` | `$TMPDIR/ccweb/ccweb.sock` | 唯一监听入口（unix socket） |
 | `CCWEB_BASEURL` | 空（根路径） | 网关路径前缀，自动归一成 `/x/y` |
-| `CCWEB_AUTH_TOKEN` | 空 | 非空即启用 Bearer 鉴权（WS 走 `?token=`） |
+| `CCWEB_AUTH_TOKEN` | 空 | 非空即启用 Bearer 鉴权（两条入口都校验；WS 走 `?token=`） |
+| `CCWEB_TCP_HOST` | 空（所有网卡） | TCP 直连入口绑定的地址；端口在设置页配置（默认 3141） |
 | `CCWEB_DATA_DIR` | `$TMPDIR/ccweb` | **数据目录**：socket、设置、授权目录、claude 家目录都在这下面 |
 | `CCWEB_SETTINGS_FILE` | `$DATA_DIR/settings.json` | 持久化配置（含第三方端点、密钥与界面偏好），权限 0600 |
 | `CCWEB_WORKSPACES_FILE` | `$DATA_DIR/workspaces.json` | 授权目录与当前工作区，权限 0600 |
@@ -305,8 +325,8 @@ $CCWEB_DATA_DIR/
 **这是一个浏览器里的命令执行面板。** 一旦反代到内网可访问地址而没有任何鉴权，
 等于把机器的 shell 敞开。部署时至少做到：
 
-1. 设置 `CCWEB_AUTH_TOKEN`；
-2. 网关层再加一层认证 / 仅监听 localhost / 只对内网开放；
+1. 设置 `CCWEB_AUTH_TOKEN`，或在「设置 → 访问」里开启 TCP 访问鉴权；
+2. 网关层再加一层认证 / 仅监听 localhost（`CCWEB_TCP_HOST`）/ 只对内网开放；
 3. 不要用 `bypassPermissions` 作为默认权限模式；
 4. 授权目录会扩大 Claude 可读写的范围——只添加确实需要的目录。
 

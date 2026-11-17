@@ -7,7 +7,7 @@
 ```
 cmd/ccweb            装配层：读配置 → 建 hub → 建 manager → 建 gateway → 等信号
 internal/config      环境变量解析（唯一允许读 os.Getenv 的地方，测试除外）
-internal/gateway     HTTP/WS 入口、baseurl 剥离、路由、SPA、鉴权中间件
+internal/gateway     HTTP/WS 入口、两条通道（unix socket / TCP）、baseurl 剥离、路由、SPA、鉴权中间件
 internal/wsframe     WebSocket 帧编解码（零依赖，服务端视角）
 internal/hub         topic → 订阅者集合的广播
 internal/agent/protocol   stream-json 编解码与消息构造（纯函数）
@@ -21,7 +21,7 @@ internal/conversation 对话元数据（conversations.json：归档/置顶/删�
 internal/fsapi       工作区内文件树/文本预览/原始字节（路径围栏 + 符号链接校验）
 internal/gitctl      Git 面板后端：repos/status/diff/stage/commit/log/branch/pull
 internal/terminal    Linux PTY 会话（/dev/ptmx + ioctl，零依赖）
-internal/authz       token 鉴权
+internal/authz       通道鉴权：令牌、密码摘要（PBKDF2）、TCP 登录会话
 internal/settings    持久化配置（第三方端点/密钥/模型）+ 端点探测
 internal/claudebin   claude 版本管理：npm 平台包下载、sha512 校验、按版本目录隔离与切换
 internal/skills      技能管理：SKILL.md 的列出/读写/删除（个人 + 项目，synced 只读）
@@ -248,7 +248,31 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 
 ## 6. 网关规则（`internal/gateway`）
 
-- 只监听 unix socket；启动时清理残留 socket 文件并 `chmod 0660`。
+- 两条入口：unix socket（启动时清理残留 socket 文件并 `chmod 0660`，走 `CCWEB_BASEURL` 前缀）
+  与直连 TCP 端口（**默认关闭**，开启后默认 3141、根路径、不注入 baseurl）。两份根 handler
+  分别是 `Handler()` / `TCPHandler()`，通道与有效 baseurl 放在 request context 里
+  （`channelOf(r)` / `s.baseOf(r)`）；SPA 的 `<base>` 与 `/api/info` 都按请求回答。
+- **鉴权按通道判定**：`s.authed` 与两条 WS handler 都传 `channelOf(r)`。
+  `CCWEB_AUTH_TOKEN` 两条通道都校验；端口访问开启后 TCP 通道要求登录
+  （`POST /api/auth/login` 用访问密码换随机会话令牌，unix socket 免密）。
+  登录接口也要接受环境变量令牌并原样返回（`Guard.EnvTokenMatches`），
+  否则用旧令牌部署的用户会被鉴权页挡死。
+- **密码只存 PBKDF2-SHA256 摘要**（`authz.HashPassword`，随机盐），会话只在内存里
+  （`Guard.NewSession`，7 天）。密码唯一被接受的地方是登录接口；`Bearer <密码>` 必须被拒。
+  关闭端口访问/改密码要让旧会话失效（指纹失配 + `ClearSessions`），
+  服务重启后重新登录是预期行为。
+- **密码复杂度**：`authz.ValidatePassword`（≥8 位、含字母与数字、无控制字符）。
+  开启端口访问必须已有密码，`settings.Apply` 与 `PUT /api/settings` 都会挡。
+- **端口范围 1025–65535**（`settings.MinTCPPort/MaxTCPPort`）：前端先挡一次，
+  后端 `Apply`/`ListenTCP` 再校验。保存时真的 bind 一次，端口被占用返回 400、
+  设置不落盘、旧监听继续服务。
+- TCP 端口是设置项（`settings.DefaultTCPPort` = 3141）。`PUT /api/settings` 碰
+  `tcp_enabled`/`tcp_port` 时**先 `ListenTCP` 成功再 `Apply`**，Apply 失败把监听切回原状态；
+  换端口只关旧 listener（页面不踢）；**关闭端口访问走两段式**：立刻 `detach` + 关 listener
+  （端口可立即重开、`Guard.ClearSessions`），500ms 后再关旧 `http.Server` 断开已有连接
+  （含 WS）。**不要延迟执行 `CloseTCP`**，否则会把期间重新开启的新监听一起关掉。
+  启动时 TCP 绑定失败只记日志
+  （不能挡住用户去设置页改端口）；其它设置页的保存不碰监听。
 - `withBaseURL` 剥离前缀，**前缀外的请求 404**（不要放行裸路径）。
 - **裸前缀（`/app/<Name>`，无尾斜杠）直接当 `/` 处理，不要 301 到 `base+"/"`**。
   飞牛网关（`trim_http_cgi`）把会话凭据放在 query 上（`?token=` / ticket），301 会丢掉它，

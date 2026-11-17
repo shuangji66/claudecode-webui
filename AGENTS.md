@@ -10,7 +10,9 @@
 把本地 `claude` CLI 包装成可视化 Web 控制台：
 
 - **单 Go 二进制**，前端产物用 `go:embed` 打进去；
-- **只监听 unix socket**，由前置网关注入 baseurl 前缀反代（不监听 TCP）；
+- **两条入口**：unix socket（前置网关注入 baseurl 前缀反代，本机可信）与直连 TCP 端口
+  （默认**关闭**，开启后端口 3141、挂在根路径、不需要 baseurl，必须用访问密码登录）。
+  开关/端口/密码在「设置 → 访问」里配，密码只存 PBKDF2 摘要；unix socket 入口不校验该密码；
 - 后端**常驻 claude 子进程**，通过 `--input-format stream-json --output-format stream-json`
   双向 NDJSON 通信；
 - 主对话区**不做终端模拟**，全部结构化渲染：消息流、thinking、工具卡片、diff、审批面板；
@@ -19,8 +21,9 @@
   `xterm.js` 只做渲染）；
 - **授权目录 = 工作区**，持久化在 `workspaces.json`；对话列表来自 claude 转录 +
   `conversations.json` 元数据，启动时恢复上次对话（`--resume`）而不是新建；
-- 设置页分「通用 / 模型 / 技能 / 插件 / MCP / 代理 / 部署」：默认权限（置顶）、主题、语言、字号、技能、代理、
-  每个模型的推理强度/图片能力/上下文窗口/最大输出，以及 claude 版本的下载源/安装/切换；
+- 设置页分「通用 / 模型 / 技能 / 插件 / MCP / 代理 / 部署 / 访问」：默认权限（置顶）、主题、语言、字号、
+  技能、代理、每个模型的推理强度/图片能力/上下文窗口/最大输出、claude 版本的下载源/安装/切换，
+  以及端口访问开关、TCP 端口与访问密码（单密码，无用户名）；
 - 输入框 `+` 是添加菜单（对齐 DSH）：本地文件/图片、从飞牛选择、以及 claude 的 `/` 指令；
   附件随 prompt 发送。模型与推理等级是 DSH 风格的两级菜单（按提供商分组，不显示图片标记；
   档位是「默认（不向 API 声明）+ 模型声明的档位」，默认选中「默认」；切换档位会按同一 id
@@ -37,7 +40,7 @@
 浏览器 (React)
    │  WebSocket /ws?id=<session>
    ▼
-gateway（unix socket）
+gateway（unix socket，网关前缀 baseurl；TCP 端口 3141，根路径）
    │  订阅/广播
    ▼
 hub ── manager ── session ── process ── claude (NDJSON)
@@ -73,7 +76,9 @@ hub ── manager ── session ── process ── claude (NDJSON)
 
 ## 3. 不可破坏的约定
 
-1. **只监听 unix socket**。不要为了"方便"加 TCP 监听；需要远程访问就加网关。
+1. **入口只有两条：unix socket 与一个 TCP 端口**。不要再加第三个监听端口或让 TCP 也挂 baseurl：
+   TCP 通道固定根路径、无前缀；unix 通道固定 `CCWEB_BASEURL`。两条通道的凭据规则见
+   `internal/authz`（TCP 必须用访问密码登录换会话令牌，unix 免密）。
 2. **路径全部来自环境变量**（`CCWEB_*`）。禁止硬编码 `/tmp`、`/var/apps` 之类。
 3. **baseurl 在运行期决定**。前端资源用相对路径，`index.html` 由后端注入 `<base href>`；
    前端任何请求必须走 `runtimeBase()` / `apiUrl()` / `wsUrl()`。
@@ -82,7 +87,11 @@ hub ── manager ── session ── process ── claude (NDJSON)
 5. **`initialize` 必须由客户端先发**，且要在进程启动后立刻发。顺序错了会死锁。
 6. **控制响应不得阻塞读循环**。`session.handleLine` 里的写操作走 `writeLine`（带锁）。
 7. **未实现的控制请求子类型必须回 `unsupported_request`**，不能让 CLI 干等。
-8. **鉴权默认关闭但必须可用**。新增 HTTP 路由要挂 `s.authed`；WS 必须校验 token。
+8. **鉴权按通道区分，且端口访问默认关闭**。新增 HTTP 路由要挂 `s.authed`；WS 必须校验 token。
+   环境变量 `CCWEB_AUTH_TOKEN` 两条通道都校验；端口访问开启后，TCP 通道必须登录
+   （`POST /api/auth/login` 用访问密码换会话令牌，unix socket 是本机可信入口、免密）。
+   密码只存 PBKDF2 摘要，**任何接口都不得回传密码、摘要或把密码当令牌**。
+   `/api/info` 的 `auth_required`/`auth_mode`/`channel` 必须按本次请求的通道回答，不能给全局答案。
 9. **日志只在异常/失败时输出**。不要加启动横幅、例行生命周期日志。
 10. **不提交构建产物**：`bin/`、`frontend/dist/`、`embed/assets/`、`.gocache/` 等见 `.gitignore`。
 11. **会话 cwd 必须在授权目录内**。`POST /api/session` / `/api/session/ensure` 都要过
@@ -504,6 +513,48 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `protocol.IsTurnInit` + `resultAt`（`TurnHandoffWindow`）把它标回 busy。不认的话界面会在整轮里
   显示空闲（发送按钮而不是中断按钮），待发送队列也会被提前放出去。
 
+### 4.15 端口访问、密码摘要与登录会话
+
+- **同一个 mux、两个根 handler**：`Handler()`（unix，`CCWEB_BASEURL` 前缀）与
+  `TCPHandler()`（TCP，根路径）。通道与有效 baseurl 都放进 request context
+  （`channelOf(r)` / `s.baseOf(r)`），SPA 注入 `<base>`、`/api/info` 的 `base_url` /
+  `auth_required` / `auth_mode` / `channel` 全部按请求回答——**不要**改回读全局 `Cfg.BaseURL`
+  或全局 `Guard.Required()`：同一个进程里 TCP 要登录、unix 免密，全局答案必然是错的。
+- **端口访问默认关闭**：`settings.tcp_enabled` 默认 false，只有开启后 `ListenAndServe`
+  才 bind TCP；开启必须已有密码，否则 `Apply`/`PUT /api/settings` 都直接 400。
+- **密码只存摘要**：`authz.HashPassword` 产出
+  `pbkdf2-sha256$<iter>$<salt>$<key>`（随机盐）；`settings.json` 只有 `tcp_password_hash`，
+  `Public` 只回 `tcp_password_set`。密码不能当 Bearer 用：唯一接受明文的是
+  `POST /api/auth/login`，它校验摘要后发随机会话令牌（`Guard.NewSession`，有效期
+  `SessionTTL`=7 天，仅进程内存）。浏览器 localStorage 里存的是令牌，不是密码。
+  `CCWEB_AUTH_TOKEN` 仍然可以直接当 Bearer；`/api/auth/login` 也会原样接受它并回同一个值，
+  否则启用令牌的旧部署会卡在鉴权页（令牌本身只能当 Bearer，没法存成密码）。
+- **改密码/关端口必须让旧会话失效**：会话里记录签发时的摘要指纹，摘要一变自动失效；
+  关闭端口访问时 `Guard.ClearSessions()` 让令牌立刻失效，并 `StopTCPGracefully`：
+  **立刻关闭 listener**（端口可立刻重开），500ms 后再 `http.Server.Close()` 断开已有连接
+  （含 WebSocket）——先把本次响应发出去，否则正在用 TCP 的管理员只会看到「请求失败」。
+  **不要用「延迟执行一次 `CloseTCP`」**：那会把 500ms 内重新开启的新 listener 一起关掉。
+- **`CloseTCP` 要连活动连接一起断**：换端口只关旧 listener（页面不被踢），但关闭端口访问
+  是安全动作，必须 `http.Server.Close()` 掉当前与所有 retired server（含 WebSocket）。
+  只关 listener 的话，已经打开的页面会继续可用，直到自己断开。
+- **密码复杂度在 `authz.ValidatePassword`**：≥8 位、同时含字母与数字、不含控制字符；
+  前端 `lib/password.ts` 是同一规则的镜像，只做即时反馈，后端仍然独立校验。
+- **端口 = 设置项，不是环境变量**：默认 3141（`settings.DefaultTCPPort`），
+  范围 **1025–65535**（`settings.MinTCPPort/MaxTCPPort`；1024 及以下是特权端口）。
+  开启/换端口必须**先 bind 成功再落盘**（`PUT /api/settings` 先 `ListenTCP` 再 `Apply`，
+  端口冲突/权限不足时回 400，设置不变、旧监听保留），否则配置里躺着一个起不来的端口，
+  重启后照样坏。
+- **TCP 起不来不能让进程退出**：否则用户进不了设置页改端口。`ListenAndServe` 只记日志，
+  真实状态通过 `/api/info` 的 `tcp_listening` / `tcp_error` 给「设置 → 访问」。
+  其它设置页的保存不碰监听（只有补丁带 `tcp_enabled`/`tcp_port` 时才动作），
+  否则「上次端口没绑上」会把改模型之类的保存也连带报错。
+- **前端凭据跟着通道走**：改密码后，若当前是 TCP 通道（`info.channel === "tcp"`），
+  AccessSettings 会用新密码重新登录换令牌；unix 通道用的是环境变量令牌，
+  绝不能拿访问密码覆盖它（unix 不认它，覆盖等于把自己锁在外面）。服务重启后会话失效，
+  鉴权页会重新要求输入密码——这是刻意的（令牌不落盘）。
+- **想只绑本机用 `CCWEB_TCP_HOST=127.0.0.1`**（默认所有网卡）；TCP 是明文 HTTP，
+  跨不可信网络要加 HTTPS 反代。
+
 ## 5. 命令速查
 
 ```bash
@@ -522,7 +573,7 @@ cd frontend && npx tsc --noEmit
 ## 6. 修改前自查
 
 - [ ] 是否新增了硬编码路径 / 端口 / 前缀？
-- [ ] 新 HTTP 路由是否挂了鉴权？WS 是否校验 token？
+- [ ] 新 HTTP 路由是否挂了鉴权？WS 是否校验 token？鉴权判定是否用了 `channelOf(r)`（而不是写死通道）？
 - [ ] 改动 `protocol` 后是否同步了 `session` 与前端 `transport/types.ts`？
 - [ ] 新增工具卡片是否注册进 `ToolCardHost`，且未删除兜底？
 - [ ] 流式路径是否仍满足「替换而非追加」？

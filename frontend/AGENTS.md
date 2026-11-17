@@ -28,6 +28,8 @@ src/
   lib/queue.ts         待发送（插话）队列：入队/删除/编辑/队首、何时能自动发
   lib/autofill.ts      全局禁用浏览器/密码管理器自动填充（App 挂载时补属性）
   lib/clipboard.ts     复制文本（Clipboard API → execCommand 回退）
+  lib/password.ts      访问密码复杂度判定（与后端 authz.ValidatePassword 同一规则）
+  lib/access.ts        端口访问的端口范围校验（1025–65535，与后端 settings 一致）
   lib/download.ts      带鉴权的文件下载（fetch → blob → <a download>，token 走头）
   lib/newChat.ts       「新对话」判定（按对话元数据，不是 items 是否为空）
   lib/permissionModes.ts 权限模式判定与危险模式标记（唯一入口）
@@ -52,10 +54,10 @@ src/
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
                        / Collapsible（折叠块）/ FileIcon（按扩展名给颜色的文件图标 + 文件夹图标）
                        / ErrorBoundary（渲染异常兜底，挂在 main.tsx 最外层）
-  components/layout/   Sidebar（工作区/对话列表）/ ConversationPreview（会话悬浮预览）/ TopBar / TokenGate / SettingsDrawer（只留导航壳）
+  components/layout/   Sidebar（工作区/对话列表）/ ConversationPreview（会话悬浮预览）/ TopBar / TokenGate（访问鉴权页）/ SettingsDrawer（只留导航壳）
                        / WorkspaceDialog / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / DeploySettings / HistoryDialog
                        / ClaudeInstallPrompt
-  components/layout/settings/  设置页分区：GeneralSettings / ModelsSettings / ProxySettings / Section（共用分区标题）
+  components/layout/settings/  设置页分区：GeneralSettings / ModelsSettings / ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题）
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
                        / UsageStats / ResultBar / WorkspacePicker
   components/tools/    ToolCardHost（注册表）/ AgentCard / BashCard / EditCard / GenericCard（兜底）
@@ -76,7 +78,10 @@ src/
 3. **工具卡片必须保留 `GenericCard` 兜底**。工具集会随 CLI 版本漂移，
    禁止硬编码工具清单；新增工具只在 `ToolCardHost` 的 registry 加一行。
 4. **未知消息类型静默忽略**，不要 throw —— 协议会演进。
-5. **令牌只存 localStorage**，并通过 `?token=` 传给 WS（浏览器限制，无法设头）。
+5. **凭据只存 localStorage**（键名 `ccweb-token`；存的是登录会话令牌或环境变量令牌，
+   绝不存访问密码），并通过 `?token=` 传给 WS（浏览器限制，无法设头）。
+   鉴权页必须先用 `loginAccess` 换令牌再写入：直接把输入存下再刷新，输错只会看到
+   「无法连接服务」；密码本身也不能当 Bearer 用（后端只认会话令牌）。
 6. **不要用 `dangerouslySetInnerHTML`**。Markdown 渲染走 React 节点（`common/Markdown.tsx`）。
    `index.html` 的启动兜底（白屏自我解释）同样只能用 `textContent`：它显示的是未捕获异常
    信息 / 资源地址，里面可能带着工作区文件名或服务端报文，拼成 HTML 就等于给了工作区内容
@@ -340,7 +345,14 @@ src/
   **宽度必须由「用户偏好 + 当前视口」派生**（`preferredWidth` 存偏好、`useViewportWidth()`
   跟踪 resize、渲染时 `clampWidth(preferredWidth, viewport)`）：只在拖动时 clamp 的话，
   窗口缩小后右侧栏不会自己变窄，会一直把对话挤成一条缝，直到用户拖一下才被纠正。
-- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 技能 / 插件 / MCP / 代理 / 部署 / 关于」；
+- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 技能 / 插件 / MCP / 代理 / 部署 / 访问 / 关于」；
+  「访问」页管**端口访问开关（默认关闭）**、TCP 端口（默认 3141，保存后立即换监听）与访问密码：
+  开启后经 TCP 访问必须用密码登录（单密码、无用户名），unix socket 入口免密；
+  密码有基础复杂度（`lib/password.ts`：≥8 位、含字母与数字），只以摘要落在服务端；
+  端口范围 1025–65535（`lib/access.ts`），越界时保存按钮置灰；
+  端口冲突等保存失败要把后端原因就地显示（不只靠全局错误条）。
+  改密码后若当前通道是 `tcp`，要用新密码重新登录换会话令牌，
+  否则下一个请求就 401；unix 通道绝不覆盖环境变量令牌。
   「关于」页只放：一句话特性、版本号（`/api/info` 的 version）、致谢
   （DeepSeek / DeepSeek Harness / dsh-better-sidebar），以及**标题右侧的 GitHub 图标**
   （只有图标不带文字，`aria-label` 说明是仓库链接，`https://github.com/shuangji66/claudecode-webui`，
@@ -439,7 +451,9 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
   `attachments`（类型/大小/格式化）、`sessionExport`（Markdown 导出）、`newChat`（按元数据判定）、
   `permissionModes`（危险模式标记）、`sidebarView`（偏好合并/手动顺序）、`clipboard`（回退路径）、
   `queue`（入队/上限/删除/编辑保序/中断或出错不自动发）、
-  `autofill`、`providerCatalog`、`subagents`、`usage`、`fnos`（宿主判定三条件/回包归一化）。
+  `autofill`、`providerCatalog`、`subagents`、`usage`、`fnos`（宿主判定三条件/回包归一化）、
+  `password`（访问密码复杂度：长度/字母/数字/控制字符）、
+  `access`（端口范围 1025–65535）。
 - 右侧栏纯函数（`workspace`）覆盖 statusOfXY、MM 双分组、unified diff 行号、预览类型、
   `pickRepo` 默认选中。
 - 对话纯函数（`conversations`）覆盖工作区归属/最长匹配/归档跳过；`labels` 覆盖
