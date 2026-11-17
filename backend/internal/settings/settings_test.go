@@ -378,7 +378,7 @@ func TestModelMetaAndEffort(t *testing.T) {
 			ID:     "gw",
 			Models: []string{"m1", "m2"},
 			ModelMeta: map[string]ModelSpec{
-				"m1": {Name: "模型一", ReasoningEfforts: []string{"low", "high"}, DefaultReasoningEffort: "high", SupportsImage: true, ContextWindow: 1000000, MaxOutputTokens: 128000},
+				"m1": {Name: "模型一", ReasoningEfforts: []string{"low", "high"}, SupportsImage: true, ContextWindow: 1000000, MaxOutputTokens: 128000},
 				"m2": {ReasoningEfforts: []string{"bogus"}},
 			},
 		}},
@@ -389,7 +389,7 @@ func TestModelMetaAndEffort(t *testing.T) {
 	got := s.Get()
 	p := got.Providers[0]
 	spec := p.ModelMeta["m1"]
-	if spec.Name != "模型一" || !spec.SupportsImage || spec.DefaultReasoningEffort != "high" {
+	if spec.Name != "模型一" || !spec.SupportsImage {
 		t.Fatalf("m1 meta = %+v", spec)
 	}
 	if spec.ContextWindow != 1000000 || spec.MaxOutputTokens != 128000 {
@@ -406,18 +406,36 @@ func TestModelMetaAndEffort(t *testing.T) {
 		t.Fatalf("DefaultEffort = %q", eff)
 	}
 
-	// 默认强度不合法时回落到列表第一项。
+	// 未选择（空串）= 默认档：不向 API 声明推理等级；off 是关闭思考档，两者都合法。
+	for _, tc := range []struct{ selected, want string }{
+		{"", ""},
+		{EffortOff, EffortOff},
+		{"high", "high"},
+		{"nope", ""},
+	} {
+		if _, err := s.Apply(Patch{Selected: &Selection{Provider: "gw", Model: "m1", Effort: tc.selected}}); err != nil {
+			t.Fatalf("Apply(%q): %v", tc.selected, err)
+		}
+		if eff := s.Get().DefaultEffort(); eff != tc.want {
+			t.Fatalf("选中的 %q 应归一成 %q，实际 %q", tc.selected, tc.want, eff)
+		}
+	}
+}
+
+func TestEffortOffNeedsDeclaredLevels(t *testing.T) {
+	s, _ := openTemp(t)
 	if _, err := s.Apply(Patch{
 		Providers: &[]ProviderPatch{{
-			ID: "gw", Models: []string{"m1"},
-			ModelMeta: map[string]ModelSpec{"m1": {ReasoningEfforts: []string{"medium", "high"}, DefaultReasoningEffort: "nope"}},
+			ID: "gw", Models: []string{"m1", "m2"},
+			ModelMeta: map[string]ModelSpec{"m1": {ReasoningEfforts: []string{"low", "high"}}, "m2": {}},
 		}},
-		Selected: &Selection{Provider: "gw", Model: "m1", Effort: "low"},
+		Selected: &Selection{Provider: "gw", Model: "m2", Effort: EffortOff},
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if eff := s.Get().DefaultEffort(); eff != "medium" {
-		t.Fatalf("默认强度应回落到 medium，实际 %q", eff)
+	// 没有声明档位的模型没有「关闭」可选，残留值要被清掉。
+	if eff := s.Get().DefaultEffort(); eff != "" {
+		t.Fatalf("未声明档位时应为空，实际 %q", eff)
 	}
 }
 

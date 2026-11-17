@@ -4,11 +4,14 @@
 // 点进去分别是按提供商分组的模型列表和档位列表。这样模型很多时仍然好找，
 // 也避免在工具条上并排放两个下拉把输入区挤窄。
 //
+// 档位列表是「默认 / 关闭 / 模型声明的档位」：「默认」不向 API 声明推理等级，
+// 「关闭」关掉思考（后端改用 MAX_THINKING_TOKENS=0，见 lib/providerForm 的 effortChoices）。
+//
 // 菜单只负责选择；模型能力（图片、上下文窗口）不在这里展示。
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { ModelOption } from "../../lib/providerForm";
+import { EFFORT_OFF, effortChoices, type ModelOption } from "../../lib/providerForm";
 import { useT } from "../../lib/i18n";
 import { POPUP_PANEL, PORTAL_ATTR, useAnchoredPanel, useDismiss } from "../common/Menu";
 import { IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconSpark } from "../common/Icons";
@@ -60,8 +63,13 @@ export function ModelMenu({ options, selectedKey, selectedEffort, disabled, onSe
 
   const selected = options.find((o) => `${o.provider}/${o.model}` === selectedKey);
   const modelLabel = selected ? selected.spec.name || selected.model : t("未添加模型", "No models");
-  const efforts = selected?.spec.reasoning_efforts ?? [];
-  const effortLabel = selectedEffort || t("默认", "Default");
+  const efforts = effortChoices(selected?.spec);
+  /** 「默认」「关闭」两档是界面自己的词，其余档位沿用设置里声明的值。 */
+  const effortLabel = (effort: string) => {
+    if (!effort) return t("默认", "Default");
+    if (effort === EFFORT_OFF) return t("关闭", "Off");
+    return effortName(effort);
+  };
   const groups = useMemo(() => groupModelOptions(options), [options]);
   const showSearch = options.length > 4;
   const filtered = useMemo(() => {
@@ -154,12 +162,12 @@ export function ModelMenu({ options, selectedKey, selectedEffort, disabled, onSe
         aria-label={t("模型与推理等级", "Model and reasoning level")}
         aria-haspopup="menu"
         aria-expanded={open}
-        title={`${modelLabel}${efforts.length > 0 ? ` · ${effortName(effortLabel)}` : ""}`}
+        title={`${modelLabel}${efforts.length > 0 ? ` · ${effortLabel(selectedEffort)}` : ""}`}
         className="flex min-w-0 flex-1 items-center gap-1 rounded-full px-2 py-1 text-[11px] text-muted outline-none hover:bg-panel-strong hover:text-ink focus-visible:bg-panel-strong disabled:cursor-not-allowed disabled:opacity-40"
       >
         <IconSpark size={13} className="shrink-0" />
         <span className="min-w-0 flex-1 truncate text-left">{options.length === 0 ? t("未添加模型", "No models") : modelLabel}</span>
-        {efforts.length > 0 && <span className="shrink-0 text-[10.5px] text-faint">{effortName(effortLabel)}</span>}
+        {efforts.length > 0 && <span className="shrink-0 text-[10.5px] text-faint">{effortLabel(selectedEffort)}</span>}
         <IconChevronDown size={11} className={`shrink-0 opacity-60 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
@@ -194,7 +202,7 @@ export function ModelMenu({ options, selectedKey, selectedEffort, disabled, onSe
                       className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left hover:bg-panel-strong"
                     >
                       <span className="shrink-0 text-[11.5px] text-muted">{t("推理等级", "Reasoning level")}</span>
-                      <span className="min-w-0 flex-1 truncate text-right text-[12px] font-medium text-ink">{effortName(effortLabel)}</span>
+                      <span className="min-w-0 flex-1 truncate text-right text-[12px] font-medium text-ink">{effortLabel(selectedEffort)}</span>
                       <IconChevronRight size={13} className="shrink-0 text-faint" />
                     </button>
                   )}
@@ -272,7 +280,7 @@ export function ModelMenu({ options, selectedKey, selectedEffort, disabled, onSe
                           active ? "bg-panel-strong text-ink" : "text-ink-2"
                         }`}
                       >
-                        <span className="min-w-0 flex-1 truncate">{effortName(effort)}</span>
+                        <span className="min-w-0 flex-1 truncate">{effortLabel(effort)}</span>
                         {active && <IconCheck size={13} className="shrink-0 text-brand" />}
                       </button>
                     );

@@ -54,9 +54,10 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
   const [mode, setModeState] = useState("");
 
   const conversation = useMemo(() => conversations.find((c) => c.id === activeId) ?? null, [conversations, activeId]);
+  // 活着的会话才带着「进程启动时固定的」模型与推理强度；下面据此判断改了强度要不要提示。
+  const liveSession = useMemo(() => sessions.find((s) => s.id === activeId) ?? null, [sessions, activeId]);
   const session = useMemo(() => {
-    const live = sessions.find((s) => s.id === activeId);
-    if (live) return live;
+    if (liveSession) return liveSession;
     if (!conversation) return null;
     return {
       id: conversation.id,
@@ -67,7 +68,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
       effort: conversation.effort,
       last_active: conversation.last_active,
     };
-  }, [sessions, conversation, activeId]);
+  }, [liveSession, conversation]);
   const itemList = activeId ? (items[activeId] ?? []) : [];
   // 页头「子智能体 N」：从消息流里现算，不额外存一份状态。
   const subs = useMemo(() => subagentEntries(itemList), [itemList]);
@@ -142,7 +143,9 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
           : undefined;
 
   const tools = itemList.filter((i) => i.kind === "tool").length;
-  const effortMismatch = Boolean(activeId && selectedEffort && session && session.effort !== selectedEffort);
+  // 推理强度在进程启动时固定：只有活着的会话才会「选了却不生效」。
+  // 「默认」档是空串，不能像以前那样拿它当「没选」的哨兵，否则切回默认时不会提示。
+  const effortMismatch = Boolean(liveSession && (liveSession.effort ?? "") !== selectedEffort);
 
   // 用量只显示 CLI 真的给出的数字（换算与文案见 UsageStats / lib/usage）。
   // 转录回放时 store 里没有实时快照，就退回最后一条 result 上挂的那份。
@@ -322,7 +325,8 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
             permissionMode={mode}
             onSelectModel={(provider, model) => {
               const opt = findOption(modelOptions, provider, model);
-              void selectModel(provider, model, effortFor(opt?.spec, undefined));
+              // 新模型也支持当前档位就沿用它；否则回到「默认」（不声明推理等级）。
+              void selectModel(provider, model, effortFor(opt?.spec, selectedEffort));
             }}
             onSelectEffort={(effort) => {
               if (selected?.provider && selected.model) void selectModel(selected.provider, selected.model, effort);

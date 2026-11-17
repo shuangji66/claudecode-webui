@@ -7,6 +7,7 @@ import {
   formsFromSettings,
   normalizeSettings,
   modelOptionsFromSettings,
+  effortChoices,
   effortFor,
   formatCapacity,
   parseCapacity,
@@ -135,7 +136,7 @@ describe("模型能力元数据", () => {
         ...sample.providers[0],
         models: ["m1", "m2"],
         model_meta: {
-          m1: { name: "模型一", reasoning_efforts: ["low", "high"], default_reasoning_effort: "high", supports_image: true },
+          m1: { name: "模型一", reasoning_efforts: ["low", "high"], supports_image: true },
           m2: { reasoning_efforts: [] },
         },
       },
@@ -146,7 +147,7 @@ describe("模型能力元数据", () => {
     const [f] = formsFromSettings(withMeta);
     expect(f.modelMeta.m1.name).toBe("模型一");
     expect(f.modelMeta.m1.supports_image).toBe(true);
-    expect(f.modelMeta.m2).toEqual({ name: undefined, reasoning_efforts: [], default_reasoning_effort: undefined, supports_image: false });
+    expect(f.modelMeta.m2).toEqual({ name: undefined, reasoning_efforts: [], supports_image: false });
   });
 
   it("提交补丁带 model_meta，且只保留仍存在的模型", () => {
@@ -164,11 +165,21 @@ describe("模型能力元数据", () => {
     expect(opts[0].spec.supports_image).toBe(true);
   });
 
-  it("推理强度回落到默认值/第一项", () => {
-    const spec = { reasoning_efforts: ["low", "high"], default_reasoning_effort: "high" };
+  it("推理等级候选是「默认 / 关闭 / 声明的档位」", () => {
+    expect(effortChoices({ reasoning_efforts: ["low", "high"] })).toEqual(["", "off", "low", "high"]);
+    // 没有声明档位的模型不该出现推理等级。
+    expect(effortChoices({})).toEqual([]);
+    expect(effortChoices(undefined)).toEqual([]);
+  });
+
+  it("没有有效选择时用「默认」，不声明推理等级", () => {
+    const spec = { reasoning_efforts: ["low", "high"] };
     expect(effortFor(spec, "low")).toBe("low");
-    expect(effortFor(spec, "nope")).toBe("high");
-    expect(effortFor({ reasoning_efforts: ["low"] }, "")).toBe("low");
+    expect(effortFor(spec, "off")).toBe("off");
+    expect(effortFor(spec, "")).toBe("");
+    expect(effortFor(spec, undefined)).toBe("");
+    expect(effortFor(spec, "nope")).toBe("");
+    expect(effortFor({ reasoning_efforts: ["low"] }, "high")).toBe("");
     expect(effortFor({}, "high")).toBe("");
   });
 
@@ -178,7 +189,7 @@ describe("模型能力元数据", () => {
       providers: [{ ...withMeta.providers[0], model_meta: null as unknown as Record<string, never> }],
     };
     const s = normalizeSettings(raw)!;
-    expect(s.providers[0].model_meta).toEqual({ m1: { name: undefined, reasoning_efforts: [], default_reasoning_effort: undefined, supports_image: false }, m2: { name: undefined, reasoning_efforts: [], default_reasoning_effort: undefined, supports_image: false } });
+    expect(s.providers[0].model_meta).toEqual({ m1: { name: undefined, reasoning_efforts: [], supports_image: false }, m2: { name: undefined, reasoning_efforts: [], supports_image: false } });
   });
 });
 

@@ -1050,9 +1050,7 @@ function ModelRow({
   const toggleEffort = (level: string) => {
     const next = efforts.includes(level) ? efforts.filter((e) => e !== level) : [...efforts, level];
     const order = EFFORT_LEVELS as readonly string[];
-    const sorted = [...next].sort((a, b) => order.indexOf(a) - order.indexOf(b));
-    const def = spec.default_reasoning_effort && sorted.includes(spec.default_reasoning_effort) ? spec.default_reasoning_effort : (sorted[0] ?? "");
-    onChange({ reasoning_efforts: sorted, default_reasoning_effort: def });
+    onChange({ reasoning_efforts: [...next].sort((a, b) => order.indexOf(a) - order.indexOf(b)) });
   };
 
   return (
@@ -1158,17 +1156,12 @@ function ModelRow({
               })}
             </div>
             {ordered.length > 0 && (
-              <label className="mt-1.5 flex items-center gap-1.5 text-[10px] text-faint">
-                {t("默认强度", "Default effort")}
-                <Select
-                  className="w-auto px-1.5 py-0.5 text-[10.5px]"
-                  ariaLabel={t("默认强度", "Default effort")}
-                  value={spec.default_reasoning_effort ?? ordered[0]}
-                  onChange={(next) => onChange({ default_reasoning_effort: next })}
-                  options={ordered.map((e) => ({ value: e, label: e }))}
-                  menuWidth={110}
-                />
-              </label>
+              <p className="mt-1.5 text-[9.5px] leading-relaxed text-faint">
+                {t(
+                  "聊天页的档位列表会额外给出「默认」（不向 API 声明推理等级，也是新的默认选择）与「关闭」（关掉思考）。",
+                  "The composer also offers Default (declare no reasoning level; also the new default) and Off (turn thinking off).",
+                )}
+              </p>
             )}
           </div>
         </div>

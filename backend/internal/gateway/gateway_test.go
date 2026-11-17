@@ -634,7 +634,7 @@ func TestSettingsModelMetaAndPreferences(t *testing.T) {
 	srv, _ := newTestServer(t, "")
 	body := `{
 	  "providers":[{"id":"gw","name":"网关","protocol":"anthropic-messages","base_url":"https://gw.example",
-	    "models":["m1"],"model_meta":{"m1":{"name":"模型一","reasoning_efforts":["low","high"],"default_reasoning_effort":"high","supports_image":true}}}],
+	    "models":["m1"],"model_meta":{"m1":{"name":"模型一","reasoning_efforts":["low","high"],"supports_image":true}}}],
 	  "selected":{"provider":"gw","model":"m1","effort":"low"},
 	  "locale":"en","font_size":16
 	}`
@@ -647,7 +647,6 @@ func TestSettingsModelMetaAndPreferences(t *testing.T) {
 			ModelMeta map[string]struct {
 				Name          string   `json:"name"`
 				Efforts       []string `json:"reasoning_efforts"`
-				DefaultEffort string   `json:"default_reasoning_effort"`
 				SupportsImage bool     `json:"supports_image"`
 			} `json:"model_meta"`
 		} `json:"providers"`
@@ -667,7 +666,7 @@ func TestSettingsModelMetaAndPreferences(t *testing.T) {
 		t.Fatalf("effort = %q", pub.Selected.Effort)
 	}
 	m := pub.Providers[0].ModelMeta["m1"]
-	if m.Name != "模型一" || !m.SupportsImage || m.DefaultEffort != "high" || len(m.Efforts) != 2 {
+	if m.Name != "模型一" || !m.SupportsImage || len(m.Efforts) != 2 {
 		t.Fatalf("model meta = %+v", m)
 	}
 }

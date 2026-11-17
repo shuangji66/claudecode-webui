@@ -19,6 +19,11 @@ export const PROTOCOLS = [
 /** CLI `--effort` 接受的档位（见 claude --help）。 */
 export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
+/** 「默认」档：不向 API 声明推理等级，也是没有任何显式选择时的取值。 */
+export const EFFORT_DEFAULT = "";
+/** 「关闭」档：关掉思考。CLI 的 --effort 不接受 off，后端改用 MAX_THINKING_TOKENS=0。 */
+export const EFFORT_OFF = "off";
+
 export interface ProviderForm {
   /** 仅前端使用的稳定 key：新建时 id 还是空，不能拿 id 当 React key。 */
   uid: string;
@@ -62,7 +67,6 @@ function specOf(raw: ModelSpec | undefined): ModelSpec {
   return {
     name: spec.name?.trim() || undefined,
     reasoning_efforts: [...(spec.reasoning_efforts ?? [])],
-    default_reasoning_effort: spec.default_reasoning_effort || undefined,
     supports_image: Boolean(spec.supports_image),
     context_window: capacity(spec.context_window),
     max_output_tokens: capacity(spec.max_output_tokens),
@@ -247,13 +251,21 @@ export function findOption(options: ModelOption[], provider: string, model: stri
   return options.find((o) => o.provider === provider && o.model === model);
 }
 
-/** 选中模型的推理强度：选中的值无效时回落到模型默认值。 */
-export function effortFor(spec: ModelSpec | undefined, selected: string | undefined): string {
+/**
+ * 模型可选的推理档位：默认、关闭、以及设置里声明的档位（对齐 DSH 的档位列表）。
+ *
+ * 模型没有声明档位时返回空数组——这时菜单里连「默认」都不该出现，
+ * 推理等级对它是没有意义的选项。
+ */
+export function effortChoices(spec: ModelSpec | undefined): string[] {
   const efforts = spec?.reasoning_efforts ?? [];
-  if (efforts.length === 0) return "";
-  if (selected && efforts.includes(selected)) return selected;
-  if (spec?.default_reasoning_effort && efforts.includes(spec.default_reasoning_effort)) {
-    return spec.default_reasoning_effort;
-  }
-  return efforts[0];
+  if (efforts.length === 0) return [];
+  return [EFFORT_DEFAULT, EFFORT_OFF, ...efforts];
+}
+
+/** 选中档位归一化：不在候选里的值（含旧配置）一律回落到「默认」，不声明推理等级。 */
+export function effortFor(spec: ModelSpec | undefined, selected: string | undefined): string {
+  const choices = effortChoices(spec);
+  if (choices.length === 0) return "";
+  return selected !== undefined && choices.includes(selected) ? selected : EFFORT_DEFAULT;
 }

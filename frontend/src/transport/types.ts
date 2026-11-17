@@ -282,8 +282,8 @@ export type ClientCommand =
 /** 单个模型的展示与能力元数据。 */
 export interface ModelSpec {
   name?: string;
+  /** 该模型声明的推理档位；界面上还会多出「默认」「关闭」两档。 */
   reasoning_efforts?: string[];
-  default_reasoning_effort?: string;
   supports_image?: boolean;
   /** 上下文窗口（token 数）；未声明时由后端回落到全局压缩窗口。 */
   context_window?: number;
