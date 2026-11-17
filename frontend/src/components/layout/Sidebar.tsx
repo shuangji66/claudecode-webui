@@ -728,9 +728,11 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         <button type="button" onClick={onOpenSettings} className="side-row text-muted hover:text-ink">
           <IconSettings size={15} />
           <span className="text-[12px]">{t("设置", "Settings")}</span>
-          <span className="ml-auto flex items-center gap-1 text-[10px] text-faint">
+          {/* 正常连接只留一个绿点（title 里有完整状态）：底部一直挂一行「已连接」
+              是纯噪音，异常状态（未连接 / 启动中 / 运行中）才值得写出来。 */}
+          <span className="ml-auto flex items-center gap-1 text-[10px] text-faint" title={connLabel}>
             <span className={`h-1.5 w-1.5 rounded-full ${connTone}`} />
-            {connLabel}
+            {activeConn === "ready" ? null : connLabel}
           </span>
         </button>
       </div>
