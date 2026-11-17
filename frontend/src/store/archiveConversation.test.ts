@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /** 记录 apiFetch 的调用；归档只关心 PATCH 是否发出。 */
 const calls: Array<{ url: string; init?: RequestInit }> = [];
+/** fork 的假回包；测试改它来覆盖「后端没给 id」这条路径。 */
+let forkReply: { ok: boolean; id?: string } = { ok: true, id: "c-fork" };
 
 vi.mock("../lib/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/runtime")>();
@@ -9,7 +11,7 @@ vi.mock("../lib/runtime", async (importOriginal) => {
     ...actual,
     apiFetch: vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, init });
-      if (url === "/api/conversations/fork") return { ok: true, id: "c-fork" };
+      if (url === "/api/conversations/fork") return forkReply;
       return { ok: true };
     }),
   };
@@ -19,6 +21,7 @@ const { useAppStore } = await import("./useAppStore");
 
 function seed() {
   calls.length = 0;
+  forkReply = { ok: true, id: "c-fork" };
   localStorage.clear();
   useAppStore.setState({
     activeId: "c1",
@@ -80,5 +83,25 @@ describe("分叉会话", () => {
     expect(JSON.parse(String(call?.init?.body))).toEqual({ id: "c1", title: "第一个对话（分叉）" });
     expect(useAppStore.getState().openConversation).toHaveBeenCalledWith("c-fork");
     expect(useAppStore.getState().refreshConversations).toHaveBeenCalled();
+  });
+
+  // 没有新 id 等于分叉没成：不能返回 true 让界面以为开了一条新对话。
+  it("后端没返回 id 时算失败并写错误", async () => {
+    forkReply = { ok: true };
+    const ok = await useAppStore.getState().forkConversation("c1");
+
+    expect(ok).toBe(false);
+    expect(useAppStore.getState().openConversation).not.toHaveBeenCalled();
+    expect(useAppStore.getState().error).toBeTruthy();
+  });
+
+  // 打开新对话失败（cwd 未授权 / 会话起不来）时，fork 的返回值要跟着失败，
+  // openConversation 已经写过具体原因，这里只透传。
+  it("新对话打不开时返回 false", async () => {
+    useAppStore.setState({ openConversation: vi.fn(async () => false) });
+
+    const ok = await useAppStore.getState().forkConversation("c1", "第一个对话（分叉）");
+
+    expect(ok).toBe(false);
   });
 });

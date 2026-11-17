@@ -1302,8 +1302,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
         body: JSON.stringify({ id, title }),
       });
       await get().refreshConversations();
-      if (res?.id) await get().openConversation(res.id);
-      return true;
+      // 没有新 id 等于分叉没成（正常情况下后端一定给）：别让调用方以为开了一条新对话。
+      if (!res?.id) {
+        set({ error: "分叉失败：后端没有返回新会话 id" });
+        return false;
+      }
+      // 用 openConversation 的结果：它可能因为 cwd 未授权 / 会话起不来而失败，
+      // 那时它自己已经写了 error，这里再返回 true 就和界面不一致了。
+      return await get().openConversation(res.id);
     } catch (e) {
       set({ error: errText(e) });
       return false;
