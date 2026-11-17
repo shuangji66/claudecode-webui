@@ -316,3 +316,31 @@ func TestPluginListUnsupportedWhenNoSubcommand(t *testing.T) {
 		t.Fatal("要带原因，否则用户不知道该升级什么")
 	}
 }
+
+// 没装 claude 时设置页必须能打开，并说清「去部署页装一个」。
+//
+// 这条路径很容易被写成 500：List 一定失败，只有走到 Support() 才分得清
+// 「这套版本没有 plugin 子命令」与「根本没装」。前者整页置灰，后者是指路。
+func TestListPluginsWithoutClaude(t *testing.T) {
+	mgr := plugin.New(func() (string, error) { return "", plugin.ErrNotInstalled }, t.TempDir())
+	srv := serverWithPlugins(t, mgr)
+
+	rec := mcpReq(t, srv, http.MethodGet, "/api/plugins", "secret", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("没装 claude 时不应报错，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	var payload pluginsPayload
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Supported {
+		t.Fatal("没装 claude 不能报 supported")
+	}
+	if !strings.Contains(payload.Reason, "部署") {
+		t.Fatalf("原因要指到「设置 → 部署」，实际 %q", payload.Reason)
+	}
+	// 数组字段不能是 null：前端 .map 会直接白屏。
+	if payload.Installed == nil || payload.Marketplaces == nil {
+		t.Fatalf("installed/marketplaces 不能为 null: %+v", payload)
+	}
+}
