@@ -101,6 +101,12 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   设置层已做白名单过滤，不要在 process 层再放行任意字符串。
   「默认」档是空串 → 不传 `--effort`（不向 API 声明推理等级）。
   **不要试图做「关闭思考」档**：`--effort` 没有 off，`MAX_THINKING_TOKENS=0` 在中转下实测无效。
+- **「跳过权限」要能切得动，启动时就得带能力开关**：`--allow-dangerously-skip-permissions`
+  加到 `process.Args`（按 `supportsFlag` 探测），否则会话里切 bypassPermissions 会被
+  CLI 拒掉（"session was not launched with --dangerously-skip-permissions"，实测 2.1.325）。
+  它不改变启动模式：实测带它 + `--permission-mode default`，首轮照常 `can_use_tool`，
+  切到 bypass 之后同一会话的工具调用直接放行。别用 `--dangerously-skip-permissions` ——
+  那是「一上来就跳过所有审批」。
 - `CleanEnv()` 剔除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`HOME`、`PWD`，
   再强制注入 `HOME`/`PWD`；**保留 `ANTHROPIC_*`**。
 - `Spawn()` 必须持续排空 stderr（否则管道写满会卡住子进程），只保留尾部用于报错。

@@ -144,6 +144,9 @@ src/
     `ExitPlanMode`、回包被拒、进程重启换回默认模式，都只有 CLI 知道，界面自己记一份必然飘。
     没有活着的进程（新对话 / 会话已结束）时，切换写进 `settings.permission_mode`
     （设置页的「默认权限」），建会话时生效，否则在新对话里选模式等于什么都没发生。
+    **「跳过权限」要求会话启动时带 `--allow-dangerously-skip-permissions`**
+    （`process.Args` 里按版本探测后一直带；它只开能力、不会以 bypass 启动），
+    没带的会话切过去会被 CLI 拒绝——后端现在已经等回包，错误会原样显示在对话里。
 23. **左侧栏的「分组 / 排序 / 筛选」走 `lib/sidebarView.ts`**：分组（按工作区 / 按工作区树 /
     单列表）、排序（手动 / 最近更新）、筛选（隐藏已归档 / 全部 / 仅已归档）三种偏好存在
     localStorage（`ccweb-sidebar-view`），手动顺序存在 `ccweb-session-order`

@@ -350,6 +350,9 @@ func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string)
 		}(),
 		IncludePartialMessages: true,
 		ForwardSubagentText:    m.supportsFlag(bin, "--forward-subagent-text"),
+		// 「跳过权限」要在会话里切得动，启动时就得带上这个能力开关；
+		// 它不会让会话以 bypass 启动（实测带 + --permission-mode default 时首轮照常审批）。
+		AllowBypassPermissions: m.supportsFlag(bin, "--allow-dangerously-skip-permissions"),
 		AllowedTools:           allowTools,
 		DisallowedTools:        denyTools,
 	})

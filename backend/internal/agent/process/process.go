@@ -28,6 +28,14 @@ type Options struct {
 	// ForwardSubagentText 把子代理的正文与思考也转发到 stdout（带 parent_tool_use_id）。
 	// 只有较新版本支持，调用方要先用 manager.supportsFlag 探测。
 	ForwardSubagentText bool
+	// AllowBypassPermissions 允许会话在运行中切到 bypassPermissions（界面上的「跳过权限」）。
+	//
+	// claude 只在「启动时带着这个能力」的会话里接受 set_permission_mode
+	// bypassPermissions，否则回 "session was not launched with
+	// --dangerously-skip-permissions"。注意它是**能力开关**，不是模式本身：
+	// 会话仍按 PermissionMode 启动，实测带它 + default 时第一轮照常弹审批，
+	// 切过去之后才自动放行。
+	AllowBypassPermissions bool
 	// AllowedTools 是**本会话预先放行**的工具名（跳过审批面板）。内置搜索注册后
 	// 用它让模型直接调 mcp__ccweb-web__web_search，不必每搜一次弹一次审批。
 	AllowedTools []string
@@ -54,6 +62,9 @@ func Args(o Options) []string {
 	}
 	if o.ForwardSubagentText {
 		args = append(args, "--forward-subagent-text")
+	}
+	if o.AllowBypassPermissions {
+		args = append(args, "--allow-dangerously-skip-permissions")
 	}
 	if o.Model != "" {
 		args = append(args, "--model", o.Model)

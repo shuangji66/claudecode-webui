@@ -112,6 +112,20 @@ func countPrefix(list []string, prefix string) int {
 	return n
 }
 
+func TestArgsAllowBypassPermissions(t *testing.T) {
+	args := strings.Join(Args(Options{AllowBypassPermissions: true}), " ")
+	if !strings.Contains(args, "--allow-dangerously-skip-permissions") {
+		t.Fatalf("缺少 --allow-dangerously-skip-permissions: %s", args)
+	}
+	// 它是能力开关，不是模式：不能顺手把会话起成 bypass。
+	if strings.Contains(args, "--dangerously-skip-permissions ") || strings.Contains(args, "--permission-mode bypassPermissions") {
+		t.Fatalf("不应改启动模式: %s", args)
+	}
+	if strings.Contains(strings.Join(Args(Options{}), " "), "--allow-dangerously-skip-permissions") {
+		t.Fatal("默认不应带这个开关")
+	}
+}
+
 func TestArgsEffort(t *testing.T) {
 	args := strings.Join(Args(Options{Effort: "high"}), " ")
 	if !strings.Contains(args, "--effort high") {

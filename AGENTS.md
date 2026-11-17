@@ -114,6 +114,12 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 不带 `--permission-prompt-tool stdio` → 无 `can_use_tool` 事件；
 - 工作目录内的安全命令（如 `echo`）会被**自动放行**，拿它测审批会误判。用
   `rm -rf <工作目录外的路径>` 之类才会触发。
+- **「跳过权限」不是普通模式**：`set_permission_mode bypassPermissions` 只在「启动时带了
+  `--allow-dangerously-skip-permissions`」的会话里被接受，否则 CLI 回
+  `Cannot set permission mode to bypassPermissions because the session was not launched
+  with --dangerously-skip-permissions`（实测 2.1.325）。所以 `process.Args` 一直带这个
+  **能力开关**（按 `supportsFlag` 探测）：它不会让会话以 bypass 启动——带上它 +
+  `--permission-mode default` 时第一轮照常弹审批，切过去之后才自动放行。
 - 审批挂起期间进程和内存（约 176 MB）一直占着。长时间等人工的场景应改用
   PreToolUse hook 的 `defer`（会以 `tool_deferred` 退出，决策状态落库），
   当前版本尚未实现。
