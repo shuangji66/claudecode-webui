@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import { primeFnosSdk } from "./lib/fnos";
 import "./styles.css";
 
@@ -12,6 +13,8 @@ primeFnosSdk();
 
 createRoot(el).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );

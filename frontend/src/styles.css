@@ -415,3 +415,30 @@ pre {
   background: transparent !important;
   scrollbar-width: thin;
 }
+
+/* 键盘焦点必须看得见。
+   多数交互元素带了 Tailwind 的 outline-none（默认聚焦环在浅色底上不好看），
+   但那是给鼠标用的：只用 Tab 的人会完全丢失位置。这里用 :focus-visible 兜底——
+   鼠标点击不触发，键盘导航一定出现。这条规则无 layer，优先于 utilities，
+   所以不用逐个去改那些 outline-none 的类名。 */
+:where(
+  a[href],
+  button,
+  input,
+  select,
+  textarea,
+  summary,
+  [role="button"],
+  [role="tab"],
+  [role="option"],
+  [role="menuitem"],
+  [tabindex]:not([tabindex="-1"])
+):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--c-brand) 88%, transparent);
+  outline-offset: 2px;
+}
+
+/* 已经靠边框变色表达聚焦的输入卡，不要再叠一层外框。 */
+.composer-textarea:focus-visible {
+  outline: none;
+}
