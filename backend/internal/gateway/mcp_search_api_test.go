@@ -147,3 +147,72 @@ func TestProbeOnlyAcceptsSavedServers(t *testing.T) {
 		t.Fatalf("非法名字应 400，实际 %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// 注册内置搜索时要一并落到配置里的是「工具常驻工具表」：不然 claude 会把这两个
+// 工具藏到 ToolSearch 后面，模型只看到名字、看不到描述，最终又得靠 CLAUDE.md 硬记。
+func TestAttachSearchSetsAlwaysLoad(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	withMcp(t, srv)
+	key, enabled := "sk-search-key", true
+	if _, err := srv.d.Settings.Apply(settings.Patch{SearchAPIKey: &key, SearchEnabled: &enabled}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	rec := mcpReq(t, srv, http.MethodPost, "/api/search/attach", "secret", "{}")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("attach 应 200，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	payload, err := srv.d.Mcp.List("")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found *mcp.Server
+	for i := range payload.User {
+		if payload.User[i].Name == mcpSearchServer {
+			found = &payload.User[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("没注册上: %+v", payload.User)
+	}
+	if !found.AlwaysLoad {
+		t.Fatal("内置搜索必须 alwaysLoad，否则模型看不到工具描述")
+	}
+	if found.Type != mcp.TypeStdio || found.Command == "" {
+		t.Fatalf("注册形态不对: %+v", found)
+	}
+
+	// 状态里要能看出这一条带没带 alwaysLoad：老版本注册的条目没有它，
+	// 前端据此提示「补上常驻」，而不是让用户以为已经生效了。
+	rec = mcpReq(t, srv, http.MethodGet, "/api/search", "secret", "")
+	var status struct {
+		Attached   bool `json:"attached"`
+		AlwaysLoad bool `json:"always_load"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Attached || !status.AlwaysLoad {
+		t.Fatalf("状态不对: %+v", status)
+	}
+}
+
+// 会话层的两条规则：放行面板自己的搜索工具，挡掉 claude 自带的 WebSearch/WebFetch。
+// 名字必须与 mcp__<服务名>__<工具> 的拼法一致，否则放行的是不存在的工具。
+func TestSearchToolRules(t *testing.T) {
+	allow, deny := SearchToolRules()
+	wantAllow := map[string]bool{
+		"mcp__" + SearchMCPServer + "__web_search": true,
+		"mcp__" + SearchMCPServer + "__web_fetch":  true,
+	}
+	if len(allow) != len(wantAllow) {
+		t.Fatalf("allow = %v", allow)
+	}
+	for _, n := range allow {
+		if !wantAllow[n] {
+			t.Fatalf("多出/写错了放行项: %v", allow)
+		}
+	}
+	if len(deny) != 2 || deny[0] != "WebSearch" || deny[1] != "WebFetch" {
+		t.Fatalf("deny = %v", deny)
+	}
+}

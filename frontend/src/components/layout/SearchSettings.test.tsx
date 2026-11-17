@@ -16,6 +16,7 @@ const STATUS: SearchStatus = {
   search_api_key_set: true,
   search_api_key_masked: "****abcd",
   attached: false,
+  always_load: false,
   server_name: "ccweb-web",
   command: "/bin/ccweb",
   mcp_supported: true,

@@ -8,7 +8,7 @@ import { NO_AUTOFILL } from "../../lib/autofill";
 import { useT } from "../../lib/i18n";
 import { useSearchStore } from "../../store/useSearchStore";
 import { Button } from "../common/Button";
-import { IconAlert, IconGlobe, IconPlus, IconTrash } from "../common/Icons";
+import { IconAlert, IconGlobe, IconPlus, IconRefresh, IconTrash } from "../common/Icons";
 
 const inputClass =
   "w-full rounded-lg border border-line-strong bg-canvas px-2.5 py-1.5 text-[12.5px] text-ink outline-none placeholder:text-faint focus-visible:border-brand/60";
@@ -159,6 +159,22 @@ export function SearchSettings() {
               {t("已注册到用户级 MCP 配置（所有项目可用）", "Registered in user-scope MCP config (all projects)")}
               <span className="ml-1 font-mono text-[10px] text-faint">{status.server_name}</span>
             </span>
+            {!status.always_load && (
+              // 老版本注册的条目没有 alwaysLoad：工具被延迟到 ToolSearch 后面，
+              // 模型只看到名字。重新注册一次就补上了。
+              <span className="min-w-0 text-warn">
+                {t("这条注册来自旧版本，工具没有常驻工具表，模型可能想不到用它。", "This registration predates always-load, so the tools may stay hidden from the model.")}
+              </span>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => void attach()}
+              icon={<IconRefresh size={12} />}
+            >
+              {status.always_load ? t("重新注册", "Re-register") : t("补上常驻", "Enable always-load")}
+            </Button>
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => void detach()} icon={<IconTrash size={12} />}>
               {t("移除", "Remove")}
             </Button>

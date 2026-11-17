@@ -31,6 +31,7 @@ interface Draft {
   url: string;
   env: string;
   headers: string;
+  alwaysLoad: boolean;
   /** true = 编辑已有项（名字与作用域锁定）。 */
   existing: boolean;
 }
@@ -44,6 +45,7 @@ const EMPTY_DRAFT: Draft = {
   url: "",
   env: "",
   headers: "",
+  alwaysLoad: false,
   existing: false,
 };
 
@@ -57,6 +59,7 @@ function draftOf(srv: McpServer): Draft {
     url: srv.url ?? "",
     env: formatPairs(srv.env),
     headers: formatPairs(srv.headers),
+    alwaysLoad: srv.always_load === true,
     existing: true,
   };
 }
@@ -118,6 +121,7 @@ export function McpSettings({ cwd }: { cwd: string }) {
       type: draft.type,
       config_path: "",
       disabled: false,
+      ...(draft.alwaysLoad ? { always_load: true } : {}),
       ...(draft.type === "stdio"
         ? { command: draft.command.trim(), args: parseArgs(draft.args), env: env.pairs }
         : { url: draft.url.trim(), headers: headers.pairs }),
@@ -180,7 +184,14 @@ export function McpSettings({ cwd }: { cwd: string }) {
               </Button>
             </span>
           </div>
-          <div className="mt-1 min-w-0 truncate font-mono text-[11px] text-muted">{summarize(srv)}</div>
+          <div className="mt-1 min-w-0 truncate font-mono text-[11px] text-muted">
+            {summarize(srv)}
+            {srv.always_load && (
+              <span className="ml-1.5 rounded bg-panel-strong px-1 py-0.5 align-middle text-[10px] text-muted">
+                {t("常驻", "always load")}
+              </span>
+            )}
+          </div>
           {res && (
             <div className={`mt-1 flex items-start gap-1 text-[11px] ${res.ok ? "text-muted" : "text-danger"}`}>
               {!res.ok && <IconAlert size={12} className="mt-0.5 shrink-0" />}
@@ -327,6 +338,25 @@ export function McpSettings({ cwd }: { cwd: string }) {
                 />
               </div>
             </div>
+
+            <label className="flex items-start gap-2 rounded-lg border border-line bg-canvas px-2.5 py-2">
+              <input
+                {...NO_AUTOFILL}
+                type="checkbox"
+                className="mt-0.5 accent-[var(--c-brand)]"
+                checked={draft.alwaysLoad}
+                onChange={(e) => setDraft({ ...draft, alwaysLoad: e.target.checked })}
+              />
+              <span className="min-w-0">
+                <span className="block text-[12px] text-ink">{t("工具常驻工具表", "Always load tools")}</span>
+                <span className="block text-[10.5px] leading-relaxed text-faint">
+                  {t(
+                    "不勾选时 claude 会把工具延迟到 ToolSearch 后面：模型只看到工具名、看不到描述，往往意识不到该用它。让模型主动想起来用的服务（搜索、抓取）建议勾上。",
+                    "Unchecked, claude defers the tools behind ToolSearch: the model sees only names, not descriptions, and often never reaches for them. Enable it for tools the model should think of on its own (search, fetch).",
+                  )}
+                </span>
+              </span>
+            </label>
 
             {draft.type === "stdio" ? (
               <>

@@ -28,6 +28,35 @@ import (
 // mcpSearchServer 是写进 claude 的 mcpServers 的键名。
 const mcpSearchServer = "ccweb-web"
 
+// SearchMCPServer 是对外暴露的服务名：装配层要靠它判断「内置搜索是否已注册」。
+const SearchMCPServer = mcpSearchServer
+
+// 内置搜索注册后，会话层面的两条工具规则（见 SearchToolRules）。
+var (
+	searchDisallowedTools = []string{"WebSearch", "WebFetch"}
+	searchAllowedTools    = []string{
+		"mcp__" + mcpSearchServer + "__web_search",
+		"mcp__" + mcpSearchServer + "__web_fetch",
+	}
+)
+
+// SearchToolRules 返回内置搜索启用时该加到会话上的工具规则：允许面板自己的两个
+// 搜索工具、禁止 claude 内置的 WebSearch/WebFetch。
+//
+// 为什么要在会话参数里做，而不是让用户去改 settings.json：
+//   - 内置那两个工具在自建中转下走的是 Anthropic 服务端工具，通常根本调不通；
+//     但它们仍会以裸名字出现在延迟工具名单里，和 mcp__ccweb-web__web_search 抢选择。
+//     实测 --disallowedTools 会把它们从延迟名单里一并抹掉，模型看不到也就不会试。
+//   - MCP 工具默认要过 can_use_tool 审批。每搜一次弹一次审批（或被拒一次）之后，
+//     模型就学会不用它了。允许列表让搜索像 Read 一样直接可用——代价是它会自己花钱，
+//     所以调用方必须先确认「用户真的启用了搜索」。
+//
+// 规则随会话进程启动而定：注册/取消注册之后新建的会话才生效，与 MCP server 本身的
+// 生命周期一致（都是会话启动时连接的）。
+func SearchToolRules() (allow, deny []string) {
+	return searchAllowedTools, searchDisallowedTools
+}
+
 type searchStatus struct {
 	BaseURL   string `json:"base_url"`
 	Count     int    `json:"search_count"`
@@ -36,6 +65,10 @@ type searchStatus struct {
 	KeyMasked string `json:"search_api_key_masked"`
 	// Attached 表示用户级 MCP 配置里已经有这条内置服务。
 	Attached bool `json:"attached"`
+	// AlwaysLoad 表示已注册的那条配置带 alwaysLoad（工具常驻工具表）。
+	// false 只可能是「本版本之前注册的」：那时面板还不会写这个键，
+	// 模型看不到工具描述，前端据此提示重新注册一次。
+	AlwaysLoad bool `json:"always_load"`
 	// ServerName / Command 供界面显示「注册成了什么、用的哪个二进制」。
 	ServerName string `json:"server_name"`
 	Command    string `json:"command"`
@@ -75,6 +108,7 @@ func (s *Server) searchStatus() searchStatus {
 	for _, srv := range payload.User {
 		if srv.Name == mcpSearchServer {
 			out.Attached = true
+			out.AlwaysLoad = srv.AlwaysLoad
 		}
 	}
 	return out
@@ -176,6 +210,9 @@ func (s *Server) handleAttachSearch(w http.ResponseWriter, r *http.Request) {
 		Command: exe,
 		Args:    []string{"mcp-web"},
 		Env:     env,
+		// 必须常驻工具表：默认的延迟加载只把工具名发给模型、不带描述，
+		// 模型不会意识到这个 MCP 服务是「联网搜索」，只能靠用户在 CLAUDE.md 里硬写。
+		AlwaysLoad: true,
 	}); err != nil {
 		writeMcpError(w, err)
 		return

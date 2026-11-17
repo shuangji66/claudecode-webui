@@ -5,8 +5,8 @@
 package process
 
 import (
-	"strings"
 	"ccweb/backend/internal/envpath"
+	"strings"
 )
 
 // Options 描述一次 claude 调用的启动参数。
@@ -28,6 +28,13 @@ type Options struct {
 	// ForwardSubagentText 把子代理的正文与思考也转发到 stdout（带 parent_tool_use_id）。
 	// 只有较新版本支持，调用方要先用 manager.supportsFlag 探测。
 	ForwardSubagentText bool
+	// AllowedTools 是**本会话预先放行**的工具名（跳过审批面板）。内置搜索注册后
+	// 用它让模型直接调 mcp__ccweb-web__web_search，不必每搜一次弹一次审批。
+	AllowedTools []string
+	// DisallowedTools 是**本会话禁用**的工具名。内置搜索注册后用它挡掉 claude 自带的
+	// WebSearch/WebFetch：这两个在自建中转下走服务端工具，通常调不通，却会以裸名字
+	// 出现在延迟工具名单里，和面板的搜索工具抢选择。
+	DisallowedTools []string
 }
 
 // Args 返回传给 claude 的参数列表（不含程序名）。
@@ -56,6 +63,15 @@ func Args(o Options) []string {
 	}
 	if o.Effort != "" {
 		args = append(args, "--effort", o.Effort)
+	}
+	// 工具规则走命令行而不是改用户的 settings.json：随会话存在、随会话消失，
+	// 用户手动改过的配置不会因为注册一次内置搜索就被写走样。
+	// 两个参数都很老，不需要 supportsFlag 探测。
+	if len(o.AllowedTools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(o.AllowedTools, ","))
+	}
+	if len(o.DisallowedTools) > 0 {
+		args = append(args, "--disallowedTools", strings.Join(o.DisallowedTools, ","))
 	}
 	if o.Resume != "" {
 		args = append(args, "--resume", o.Resume)

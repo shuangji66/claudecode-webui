@@ -97,10 +97,36 @@ func main() {
 	mcp.SetProxySource(proxyNow)
 	search.SetProxySource(proxyNow)
 
+	// MCP 配置：用户级是 claude 子进程 HOME 下的 .claude.json（不是宿主机的
+	// ~/.claude.json），项目级按工作区现算；停用暂存放本应用自己的数据目录。
+	// 先建出来再交给网关：上面的工具规则也要查同一份配置（「注册了没有」）。
+	mcpMgr := mcp.New(
+		filepath.Join(cfg.ClaudeHome, ".claude.json"),
+		filepath.Join(cfg.DataDir, "mcp-disabled.json"),
+	)
+
 	mgr := manager.New(cfg, resolveClaude, store, func(sid string, ev session.Event) {
 		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data})
 	})
 	defer mgr.CloseAll()
+
+	// 内置搜索的会话规则：只有「用户启用了搜索」且「这条 MCP 服务真的注册了」才生效。
+	// 否则会把内置 WebSearch/WebFetch 挡掉却换不上任何搜索工具——比原来更糟。
+	mgr.SetToolRules(func() (allow, deny []string) {
+		if !store.Get().SearchEnabled {
+			return nil, nil
+		}
+		payload, err := mcpMgr.List("")
+		if err != nil {
+			return nil, nil
+		}
+		for _, srv := range payload.User {
+			if srv.Name == gateway.SearchMCPServer {
+				return gateway.SearchToolRules()
+			}
+		}
+		return nil, nil
+	})
 
 	historyDir := filepath.Join(cfg.ClaudeHome, ".claude", "projects")
 	srv := gateway.New(gateway.Deps{
@@ -114,13 +140,8 @@ func main() {
 		Conversations: convStore,
 		// 个人技能挂在 claude 子进程的 HOME 下：process.CleanEnv 会把 HOME 改成
 		// CCWEB_CLAUDE_HOME，所以这里不能用自己的 ~/.claude/skills。
-		Skills: skills.New(filepath.Join(cfg.ClaudeHome, ".claude", "skills")),
-		// MCP 配置：用户级是 claude 子进程 HOME 下的 .claude.json（不是宿主机的
-		// ~/.claude.json），项目级按工作区现算；停用暂存放本应用自己的数据目录。
-		Mcp: mcp.New(
-			filepath.Join(cfg.ClaudeHome, ".claude.json"),
-			filepath.Join(cfg.DataDir, "mcp-disabled.json"),
-		),
+		Skills:        skills.New(filepath.Join(cfg.ClaudeHome, ".claude", "skills")),
+		Mcp:           mcpMgr,
 		Claude:        claudeMgr,
 		ProjectsRoot:  cfg.ProjectsRoot,
 		ClaudeVersion: probeClaudeVersion(mgr.Binary()),

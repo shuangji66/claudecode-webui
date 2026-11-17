@@ -180,12 +180,22 @@ func handleRPC(req rpcRequest) (rpcResponse, bool) {
 	}
 }
 
+// toolDefs 返回 tools/list 的内容。
+//
+// 描述就是模型判断「什么时候该用它」的唯一依据：这条 MCP 服务注册成 alwaysLoad
+// （不延迟加载），描述会原样进请求体，所以它必须写**触发条件**，而不只是「这是什么」。
+// 之前只写「搜索互联网并返回结构化结果」，模型没有任何理由在「我知道答案」和
+// 「我该查一下」之间选后者——用户只能靠 CLAUDE.md 硬记。
 func toolDefs() []map[string]any {
 	return []map[string]any{
 		{
 			"name": toolWebSearch,
-			"description": "搜索互联网并返回结构化结果（标题 + 链接 + 摘要），走 DeepSeek Search API。" +
-				"需要正文时再用 web_fetch 打开具体链接。",
+			"description": "搜索互联网并返回结构化结果（标题 / 链接 / 日期 / 摘要），一次调用直接返回，不消耗模型回合。" +
+				"**需要外部事实时先调它，不要凭记忆作答**：新闻与近期事件、版本号与发布日期、" +
+				"价格与规格、榜单与排名、法规政策现状、某个服务或 API 是否仍可用；" +
+				"不熟悉的名词/缩写/产品/论文/人名/错误码；第三方库的配置方式与版本兼容性；" +
+				"选型与横向对比先搜再下结论。与内置 WebSearch 等价——会话里没有内置联网工具时就是它。" +
+				"摘要不足以回答时再用 web_fetch 打开具体链接；结果为空或来源冲突时如实说明未验证，不要补全。",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -197,8 +207,10 @@ func toolDefs() []map[string]any {
 			},
 		},
 		{
-			"name":        toolWebFetch,
-			"description": "抓取一个网页并返回 Markdown 正文（DeepSeek Fetch API），超长会被截断。",
+			"name": toolWebFetch,
+			"description": "抓取一个网页并返回 Markdown 正文（DeepSeek Fetch API），超长会被截断。" +
+				"用在：web_search 的摘要不足以回答、用户直接给了链接、要读官方文档或更新日志的具体段落、" +
+				"需要确认页面上的原文而不是转述。与内置 WebFetch 等价。",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{

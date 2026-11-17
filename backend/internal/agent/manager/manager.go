@@ -46,6 +46,9 @@ type Manager struct {
 	resolve func() (string, error)
 	store   *settings.Store
 	emit    func(sessionID string, ev session.Event)
+	// toolRules 返回「本会话该预先允许 / 禁用的工具」，由装配层按内置搜索的状态接上
+	// （见 SetToolRules）。为 nil 表示不加任何规则。
+	toolRules func() (allow, deny []string)
 
 	// createMu 只保护 creating 这张「正在创建」表，不覆盖 spawn 与握手。
 	// 它保证同一个 key（会话 id 或目录）的并发创建共享一次结果：
@@ -80,20 +83,29 @@ type Manager struct {
 // 未安装时服务必须照常起来，否则用户没有入口去装。
 func New(cfg config.Config, resolve func() (string, error), store *settings.Store, emit func(string, session.Event)) *Manager {
 	m := &Manager{
-		cfg:      cfg,
-		resolve:  resolve,
-		store:    store,
-		emit:     emit,
-		sessions: make(map[string]*session.Session),
-		procs:    make(map[string]*process.Proc),
-		metas:    make(map[string]meta),
-		caps:     make(map[string]bool),
-		creating: make(map[string]*pendingCreate),
+		cfg:             cfg,
+		resolve:         resolve,
+		store:           store,
+		emit:            emit,
+		sessions:        make(map[string]*session.Session),
+		procs:           make(map[string]*process.Proc),
+		metas:           make(map[string]meta),
+		caps:            make(map[string]bool),
+		creating:        make(map[string]*pendingCreate),
 		closingSessions: make(map[string]chan struct{}),
-		closing:  make(chan struct{}),
+		closing:         make(chan struct{}),
 	}
 	go m.reapLoop()
 	return m
+}
+
+// SetToolRules 接上「本会话的工具规则」取值函数。
+//
+// 规则只在会话启动时生效（--allowedTools / --disallowedTools 是命令行参数），
+// 所以它在装配层按「内置搜索已启用且已注册」现算，而不在这里缓存。
+// 只在装配阶段调用一次，之后不再改动（否则与 create 里的读取构成竞争）。
+func (m *Manager) SetToolRules(fn func() (allow, deny []string)) {
+	m.toolRules = fn
 }
 
 // Binary 返回当前生效的 claude 路径；未安装时返回空串（/api/info 只做展示）。
@@ -321,6 +333,10 @@ func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string)
 	if err != nil {
 		return Info{}, fmt.Errorf("manager: %w；请在「设置 → 部署」里安装 claude", err)
 	}
+	var allowTools, denyTools []string
+	if m.toolRules != nil {
+		allowTools, denyTools = m.toolRules()
+	}
 	args := process.Args(process.Options{
 		Model:          model,
 		PermissionMode: permissionMode,
@@ -334,6 +350,8 @@ func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string)
 		}(),
 		IncludePartialMessages: true,
 		ForwardSubagentText:    m.supportsFlag(bin, "--forward-subagent-text"),
+		AllowedTools:           allowTools,
+		DisallowedTools:        denyTools,
 	})
 	// 先净化继承环境，再追加设置里的 ANTHROPIC_*（后者生效，从而覆盖宿主机同名变量）。
 	env := process.CleanEnv(os.Environ(), m.cfg.ClaudeHome, abs)

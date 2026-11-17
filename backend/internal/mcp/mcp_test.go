@@ -139,6 +139,75 @@ func TestSaveProjectServerRoundTrip(t *testing.T) {
 	}
 }
 
+// alwaysLoad 是「工具常驻工具表」的开关：写进去、读回来、被停用再启用都要保住。
+// 丢了它，模型就退回「只看到工具名」的状态，界面上勾了也白勾。
+func TestAlwaysLoadRoundTrip(t *testing.T) {
+	m, _, dir := newManager(t)
+	cfgPath := filepath.Join(dir, "home", ".claude.json")
+	if _, err := m.Save("", Server{Name: "ccweb-web", Scope: ScopeUser, Type: TypeStdio, Command: "ccweb", Args: []string{"mcp-web"}, AlwaysLoad: true}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// 配置里的键名必须是 claude 认的 camelCase，写错等于没写。
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("读配置: %v", err)
+	}
+	var spec struct {
+		AlwaysLoad bool `json:"alwaysLoad"`
+	}
+	rawServers := readJSON(t, cfgPath)[serversKey]
+	var byName map[string]json.RawMessage
+	if err := json.Unmarshal(rawServers, &byName); err != nil {
+		t.Fatalf("解析 mcpServers: %v", err)
+	}
+	if err := json.Unmarshal(byName["ccweb-web"], &spec); err != nil {
+		t.Fatalf("解析 ccweb-web: %v", err)
+	}
+	if !spec.AlwaysLoad {
+		t.Fatalf("配置里没有 alwaysLoad: %s", raw)
+	}
+
+	payload, err := m.List("")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(payload.User) != 1 || !payload.User[0].AlwaysLoad {
+		t.Fatalf("读回来丢了 alwaysLoad: %+v", payload.User)
+	}
+
+	// 停用会把整条配置挪进暂存文件，再启用要原样回来。
+	if err := m.SetEnabled("", ScopeUser, "ccweb-web", false); err != nil {
+		t.Fatalf("停用: %v", err)
+	}
+	if err := m.SetEnabled("", ScopeUser, "ccweb-web", true); err != nil {
+		t.Fatalf("启用: %v", err)
+	}
+	payload, err = m.List("")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(payload.User) != 1 || !payload.User[0].AlwaysLoad {
+		t.Fatalf("停用再启用后丢了 alwaysLoad: %+v", payload.User)
+	}
+}
+
+// 默认不写这个键：false 就是 claude 的默认语义，写进去只会让人以为配置更特别。
+func TestAlwaysLoadOmittedWhenFalse(t *testing.T) {
+	m, _, dir := newManager(t)
+	cfgPath := filepath.Join(dir, "home", ".claude.json")
+	if _, err := m.Save("", Server{Name: "plain", Scope: ScopeUser, Type: TypeStdio, Command: "npx"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("读配置: %v", err)
+	}
+	if strings.Contains(string(raw), "alwaysLoad") {
+		t.Fatalf("未开启时不该写 alwaysLoad: %s", raw)
+	}
+}
+
 func TestNormalizeValidation(t *testing.T) {
 	cases := []struct {
 		name string

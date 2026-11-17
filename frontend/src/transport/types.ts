@@ -63,6 +63,14 @@ export interface McpServer {
   url?: string;
   env?: Record<string, string>;
   headers?: Record<string, string>;
+  /**
+   * 工具常驻工具表（claude 配置里的 alwaysLoad）。
+   *
+   * 不设时 claude 会把 MCP 工具延迟到 ToolSearch 后面：模型只看到
+   * `mcp__<名>__<工具>` 这串名字、看不到描述，于是「有这个工具」这件事
+   * 只能靠提示词记着。搜索类、需要模型主动想到的服务都该打开它。
+   */
+  always_load?: boolean;
   /** true = 已从 claude 的配置里摘出来，存在本应用的暂存文件里。 */
   disabled: boolean;
   /** 这条配置实际写在哪个文件（排错用）。 */
@@ -86,6 +94,8 @@ export interface SearchStatus {
   search_api_key_masked: string;
   /** 用户级 MCP 配置里是否已经有这条内置服务。 */
   attached: boolean;
+  /** 已注册的那条配置是否带 alwaysLoad（工具常驻工具表）。 */
+  always_load: boolean;
   server_name: string;
   command: string;
   /** false 表示这套部署没装 MCP 管理（后端 Deps.Mcp 为 nil）。 */

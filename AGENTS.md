@@ -385,6 +385,23 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `SetProxySource` 不会继承过来（`http.ProxyFromEnvironment` 只读启动时的环境变量）。
 - **定位 `settings.json` 复用 `config.Load`**，不要手拼路径、更不要用相对路径兜底：
   子进程的 cwd 是用户的工作区，`data/settings.json` 会去读工作区里那份文件。
+- **MCP 工具默认是"延迟加载"的（2.1.325 起）**：默认开着 tool search，MCP 工具**不进**
+  请求的 `tools` 数组，只在一条 system-reminder 里**一行一个裸名字**列出来（内置
+  `WebSearch`/`WebFetch` 也在同一份名单里，实测 12 个工具 + `ToolSearch` +
+  `DeferredToolPlaceholder`）。模型看到的不是「这是个搜索工具」，而是字符串
+  `mcp__ccweb-web__web_search`——所以「让模型知道能用搜索」过去只能靠用户 CLAUDE.md 硬写。
+  修法：注册时写 **`alwaysLoad: true`**（claude 配置字段，等价 API 的 `defer_loading:false`，
+  实测工具带上描述直接进 `tools`，其余内置照旧延迟）。工具**描述**因此要写触发条件，
+  不能只写「这是什么」；这是模型唯一的判断依据。
+- **会话层的两条工具规则由装配层注入，不改用户的 settings.json**：`--disallowedTools
+  WebSearch,WebFetch`（内置那两个在自建中转下走服务端工具通常调不通，却会和 MCP 那条抢
+  选择；实测连延迟名单里都会一并消失）+ `--allowedTools mcp__ccweb-web__web_search,…`
+  （MCP 工具默认要过 `can_use_tool`，每搜一次弹一次审批之后模型就学会不用它了；代价是
+  它会自己花搜索费）。注入口是 `manager.SetToolRules`，**条件必须是「搜索已启用」且
+  「这条 MCP 真的注册了」**——否则等于把内置搜索挡掉却换不上任何东西，比原来更糟。
+- **`always_load` 只写 true、不写 false**（false 是默认语义），但**老版本注册的条目没有
+  这个键**：`GET /api/search` 的 `always_load` 就是给前端提示「补上常驻」用的，
+  别把它当成 `attached` 的重复字段。
 
 ## 5. 命令速查
 

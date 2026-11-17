@@ -153,6 +153,27 @@ func TestArgsForwardSubagentText(t *testing.T) {
 	}
 }
 
+// 内置搜索注册后，会话靠这两个参数把内置 WebSearch/WebFetch 挡掉、把自己的
+// MCP 搜索工具放行。名字要原样到模型眼前，别被拼成别的形状。
+func TestArgsToolRules(t *testing.T) {
+	if slices.Contains(Args(Options{}), "--allowedTools") || slices.Contains(Args(Options{}), "--disallowedTools") {
+		t.Fatal("没有规则时不应带这两个参数")
+	}
+	args := Args(Options{
+		AllowedTools:    []string{"mcp__ccweb-web__web_search", "mcp__ccweb-web__web_fetch"},
+		DisallowedTools: []string{"WebSearch", "WebFetch"},
+	})
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"--allowedTools mcp__ccweb-web__web_search,mcp__ccweb-web__web_fetch",
+		"--disallowedTools WebSearch,WebFetch",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("缺少 %q: %v", want, args)
+		}
+	}
+}
+
 func TestCleanEnvEnsuresPath(t *testing.T) {
 	// 空环境（启动器没给 PATH）时也要补一个可用的 PATH，否则 claude 里的
 	// bash 工具与 git 都找不到。

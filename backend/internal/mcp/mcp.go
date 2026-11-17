@@ -74,6 +74,12 @@ const serversKey = "mcpServers"
 //
 // Name/Scope/Type/Command/Args/URL/Env/Headers 对应配置文件里的字段；
 // Disabled/ConfigPath 只是展示信息，不写回文件。
+//
+// AlwaysLoad 对应 claude 配置里的 alwaysLoad：这条服务的工具**不进入延迟加载**，
+// 带着完整描述直接进工具表（等价于 API 的 defer_loading: false）。不写时 claude
+// 默认会把 MCP 工具藏到 ToolSearch 后面——模型只看到 `mcp__<名>__<工具>` 这串名字，
+// 看不到描述，于是「有个搜索工具」这件事只能靠提示词硬记（实测 2.1.325 的请求体里
+// 延迟名单是一行一个裸名字，连 builtin 的 WebSearch 也在里面）。
 type Server struct {
 	Name       string            `json:"name"`
 	Scope      string            `json:"scope"`
@@ -83,6 +89,7 @@ type Server struct {
 	URL        string            `json:"url,omitempty"`
 	Env        map[string]string `json:"env,omitempty"`
 	Headers    map[string]string `json:"headers,omitempty"`
+	AlwaysLoad bool              `json:"always_load,omitempty"`
 	Disabled   bool              `json:"disabled"`
 	ConfigPath string            `json:"config_path"`
 }
@@ -243,19 +250,25 @@ func (s Server) marshalSpec() (json.RawMessage, error) {
 	if len(s.Headers) > 0 {
 		out["headers"] = s.Headers
 	}
+	// 只在为 true 时写：false 是 claude 的默认语义，写进配置反而会让人以为
+	// 它比人手写的那份多点什么。配置键是 camelCase（claude 侧的名字）。
+	if s.AlwaysLoad {
+		out["alwaysLoad"] = true
+	}
 	return json.Marshal(out)
 }
 
 // parseSpec 把配置里的原始 JSON 读成 Server（不含 Name/Scope）。
 func parseSpec(name, scope, path string, raw json.RawMessage) Server {
 	var spec struct {
-		Type      string            `json:"type"`
-		Transport string            `json:"transport"`
-		Command   string            `json:"command"`
-		Args      []string          `json:"args"`
-		URL       string            `json:"url"`
-		Env       map[string]string `json:"env"`
-		Headers   map[string]string `json:"headers"`
+		Type       string            `json:"type"`
+		Transport  string            `json:"transport"`
+		Command    string            `json:"command"`
+		Args       []string          `json:"args"`
+		URL        string            `json:"url"`
+		Env        map[string]string `json:"env"`
+		Headers    map[string]string `json:"headers"`
+		AlwaysLoad bool              `json:"alwaysLoad"`
 	}
 	_ = json.Unmarshal(raw, &spec)
 	typ := strings.ToLower(strings.TrimSpace(spec.Type))
@@ -279,6 +292,7 @@ func parseSpec(name, scope, path string, raw json.RawMessage) Server {
 		URL:        spec.URL,
 		Env:        spec.Env,
 		Headers:    spec.Headers,
+		AlwaysLoad: spec.AlwaysLoad,
 		ConfigPath: path,
 	}
 }
