@@ -223,6 +223,38 @@ func SetModel(requestID, model string) []byte {
 	})
 }
 
+// InitPermissionMode 从 initialize 回包里取会话启动时的权限模式。
+//
+// 字段名与 system 消息不同：initialize 回包是 snake_case 的
+// current_permission_mode，system/status 与 system/init 是 camelCase 的 permissionMode。
+func InitPermissionMode(payload []byte) string {
+	var init struct {
+		CurrentPermissionMode string `json:"current_permission_mode"`
+	}
+	if err := json.Unmarshal(payload, &init); err != nil {
+		return ""
+	}
+	return init.CurrentPermissionMode
+}
+
+// PermissionModeOf 从 CLI 的 system 消息里取当前权限模式。
+//
+// 两个来源都带这个字段：切模式回包之后的 system/status，以及每个回合的
+// system/init。界面上的「当前模式」以它为准，不要自己记一份可能过期的状态。
+func PermissionModeOf(raw []byte) (string, bool) {
+	var msg struct {
+		Type           string `json:"type"`
+		PermissionMode string `json:"permissionMode"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return "", false
+	}
+	if msg.Type != TypeSystem || msg.PermissionMode == "" {
+		return "", false
+	}
+	return msg.PermissionMode, true
+}
+
 // SetPermissionMode 构造切换权限模式的控制请求。
 func SetPermissionMode(requestID, mode string) []byte {
 	return mustMarshal(map[string]any{

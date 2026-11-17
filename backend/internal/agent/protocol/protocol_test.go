@@ -209,3 +209,36 @@ func TestParsePermissionKeepsAgentID(t *testing.T) {
 		t.Fatalf("ToolName = %q", p.ToolName)
 	}
 }
+
+func TestPermissionModeOf(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		line  string
+		want  string
+		found bool
+	}{
+		{"status", `{"type":"system","subtype":"status","status":null,"permissionMode":"plan"}`, "plan", true},
+		{"init", `{"type":"system","subtype":"init","permissionMode":"acceptEdits"}`, "acceptEdits", true},
+		{"not system", `{"type":"assistant","permissionMode":"plan"}`, "", false},
+		{"no mode", `{"type":"system","subtype":"init"}`, "", false},
+		{"broken", `{`, "", false},
+	} {
+		got, ok := PermissionModeOf([]byte(tc.line))
+		if ok != tc.found || got != tc.want {
+			t.Fatalf("%s: PermissionModeOf = (%q,%v), want (%q,%v)", tc.name, got, ok, tc.want, tc.found)
+		}
+	}
+}
+
+func TestInitPermissionMode(t *testing.T) {
+	if got := InitPermissionMode([]byte(`{"claude_code_version":"2.1.325","current_permission_mode":"default"}`)); got != "default" {
+		t.Fatalf("InitPermissionMode = %q", got)
+	}
+	// 字段名是 camelCase 的 system 消息不能当成 initialize 回包。
+	if got := InitPermissionMode([]byte(`{"permissionMode":"plan"}`)); got != "" {
+		t.Fatalf("不应读取 camelCase 字段，实际 %q", got)
+	}
+	if got := InitPermissionMode([]byte(`{`)); got != "" {
+		t.Fatalf("坏 JSON 应返回空，实际 %q", got)
+	}
+}

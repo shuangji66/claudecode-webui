@@ -137,6 +137,13 @@ src/
     **权限模式菜单没有「空模式」**：`""` 与 `default` 在 CLI 侧等价（不传参数就是 default），
     以前并排列出「标准模式 / 默认模式」两项，既重复、选中空值还会让后端报「mode 为空」。
     现在只列 default/acceptEdits/plan/dontAsk/bypassPermissions，`permissionLabel("")` 按 default 显示。
+    **模式是会话级实时切换，不是「新会话生效」**：claude 的控制协议有 `set_permission_mode`
+    （实测 2.1.325 连进行中的回合也接受，从下一次工具判定起生效），所以菜单直接发
+    `{kind:"permission_mode"}`。界面显示的当前模式**只认 CLI 上报的值**（`store.modes`：
+    `session.state` 带来的 `system/status`，加上重连快照的 `info.mode`）——模型自己
+    `ExitPlanMode`、回包被拒、进程重启换回默认模式，都只有 CLI 知道，界面自己记一份必然飘。
+    没有活着的进程（新对话 / 会话已结束）时，切换写进 `settings.permission_mode`
+    （设置页的「默认权限」），建会话时生效，否则在新对话里选模式等于什么都没发生。
 23. **左侧栏的「分组 / 排序 / 筛选」走 `lib/sidebarView.ts`**：分组（按工作区 / 按工作区树 /
     单列表）、排序（手动 / 最近更新）、筛选（隐藏已归档 / 全部 / 仅已归档）三种偏好存在
     localStorage（`ccweb-sidebar-view`），手动顺序存在 `ccweb-session-order`

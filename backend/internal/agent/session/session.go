@@ -31,6 +31,10 @@ const (
 // InitTimeout 是等待 initialize 回包的上限。测试可以调小。
 var InitTimeout = 30 * time.Second
 
+// ModeTimeout 是等待 set_permission_mode 回包的上限。CLI 是本机进程、回包立刻到，
+// 给小一点的值没坏处；超时不能让界面一直停在「已切换」的错觉里。
+var ModeTimeout = 10 * time.Second
+
 // maxLineBytes 是单行 NDJSON 的上限（工具结果可能很长）。
 // 变量而非常量：测试要把它调小来验证超长行的行为。
 var maxLineBytes = 8 << 20
@@ -93,11 +97,11 @@ type Session struct {
 	tr   Transport
 	emit func(Event)
 
-	wmu     sync.Mutex // 串行化对 stdin 的写
+	wmu sync.Mutex // 串行化对 stdin 的写
 	// send 是写队列：读循环里要回控制响应（例如未实现的子类型回 unsupported），
 	// 但写 stdin 可能被对端不读而阻塞 —— 在读循环里同步写会把「读 stdout」也一起卡死。
 	// 所有写都投给 writer goroutine，读循环只做非阻塞入队。
-	send chan writeReq
+	send    chan writeReq
 	pmu     sync.Mutex
 	pending map[string]*pendingCall
 
@@ -109,6 +113,15 @@ type Session struct {
 
 	initMu      sync.RWMutex
 	initPayload json.RawMessage
+
+	// mode 是 CLI 最近一次报上来的权限模式。界面「当前模式」以它为准：
+	// 模型自己 ExitPlanMode、用户在别处切换、重连后进程换了默认模式，都只在这里体现。
+	modeMu sync.RWMutex
+	mode   string
+
+	// seq 给「一次性的控制请求」发号：request_id 重复会让 pending 表互相覆盖
+	// （set_permission_mode 尤其明显——用户可能在几秒内连点两下档位）。
+	seq atomic.Uint64
 
 	// permMu/perms 记录「已下发给前端、还没收到决定」的审批请求。
 	// WS 重连时要把它们重放出去：不重放的话刷新页面就再也点不到那个审批，
@@ -159,6 +172,9 @@ func (s *Session) Start() error {
 	s.initMu.Lock()
 	s.initPayload = resp.payload
 	s.initMu.Unlock()
+	if mode := protocol.InitPermissionMode(resp.payload); mode != "" {
+		s.setMode(mode)
+	}
 
 	s.setState(StateReady)
 	s.emitData(KindSessionReady, map[string]any{
@@ -197,6 +213,20 @@ func (s *Session) State() string {
 // LastActive 返回最近一次活动时间。
 func (s *Session) LastActive() time.Time {
 	return time.Unix(0, s.idle.Load())
+}
+
+// setMode 记录 CLI 报上来的权限模式。
+func (s *Session) setMode(mode string) {
+	s.modeMu.Lock()
+	s.mode = mode
+	s.modeMu.Unlock()
+}
+
+// Mode 返回 CLI 最近一次报上来的权限模式；还没拿到时为空。
+func (s *Session) Mode() string {
+	s.modeMu.RLock()
+	defer s.modeMu.RUnlock()
+	return s.mode
 }
 
 func (s *Session) setState(st string) {
@@ -257,11 +287,35 @@ func (s *Session) BackgroundTasks(toolUseID string) error {
 }
 
 // SetPermissionMode 切换权限模式。
+//
+// claude 支持**会话进行中**切换（控制协议 set_permission_mode）：实测 2.1.325
+// 在接受请求后立刻回 success，并发一条 system/status 带上新的 permissionMode；
+// 已经发出、正在跑的那一轮不受影响，之后的工具判定与下一次请求按新模式走。
+//
+// 回包必须等：取值非法时 CLI 只在回包里说明原因（"must be one of ..."），
+// 丢掉回包就等于让界面永远显示「切成功了」。
 func (s *Session) SetPermissionMode(mode string) error {
 	if mode == "" {
 		return errors.New("session: mode 为空")
 	}
-	return s.writeLine(protocol.SetPermissionMode("ccweb-permmode", mode))
+	id := s.nextControlID("permmode")
+	resp, err := s.request(protocol.SetPermissionMode(id, mode), id, ModeTimeout)
+	if err != nil {
+		return err
+	}
+	if resp.subtype == "error" || resp.errText != "" {
+		reason := resp.errText
+		if reason == "" {
+			reason = "claude 没有说明原因"
+		}
+		return fmt.Errorf("session: 切换权限模式失败: %s", reason)
+	}
+	return nil
+}
+
+// nextControlID 生成一次性的控制请求 id。
+func (s *Session) nextControlID(prefix string) string {
+	return fmt.Sprintf("ccweb-%s-%d", prefix, s.seq.Add(1))
 }
 
 // PermissionReply 是一次审批的完整决定。
@@ -522,6 +576,16 @@ func (s *Session) handleLine(line []byte) {
 
 	case protocol.TypeResult:
 		s.setState(StateReady)
+		s.emitData(KindCLI, env.Raw)
+
+	case protocol.TypeSystem:
+		// 当前权限模式只有 CLI 说了算：切模式的回包之后跟一条 system/status，
+		// 每个回合的 system/init 也带着 permissionMode；模型自己 ExitPlanMode
+		// 同样会走到这里。界面据此对齐，而不是自己记一份可能过期的状态。
+		if mode, ok := protocol.PermissionModeOf(env.Raw); ok {
+			s.setMode(mode)
+			s.emitData(KindSessionState, map[string]any{"mode": mode})
+		}
 		s.emitData(KindCLI, env.Raw)
 
 	default:

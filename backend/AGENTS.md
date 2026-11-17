@@ -79,6 +79,17 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 事件出口只有一个 `emit`，由 `manager` 接到 `hub`。**不要在 session 里直接写 WS**。
 - `PermissionReply` 支持 `UpdatedInput`（编辑后运行）与 `UpdatedPermissions`
   （始终允许 / 切模式），两者都要透传到 `control_response`。
+- **权限模式可以会话内热切换**（`SetPermissionMode` → 控制请求 `set_permission_mode`，
+  实测 2.1.325 在接受请求后立刻回 success；进行中的回合不受影响，之后按新模式判定）。
+  回包**必须等**：非法取值时 CLI 只在回包里给原因（`must be one of …`），不等就等于
+  让界面一直显示「切成功了」。请求 id 走 `nextControlID` 生成，别用固定串——
+  连点两下会同时挂在 pending 表上。
+- **当前模式以 CLI 上报的为准**：切模式后 CLI 发 `system/status`（带 `permissionMode`），
+  每个回合的 `system/init` 也带；`handleLine` 把它转成 `session.state{mode}` 并记进
+  `Session.Mode()`，WS 快照 `info.mode` 带上它。界面不要自己记。
+  注意字段名两套：initialize 回包是 `current_permission_mode`（snake_case，
+  `protocol.InitPermissionMode`），system 消息是 `permissionMode`（camelCase，
+  `protocol.PermissionModeOf`）。
 
 ## 5. 进程层规则（`agent/process`）
 

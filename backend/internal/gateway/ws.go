@@ -217,6 +217,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			"id":    id,
 			"cwd":   sess.Cwd,
 			"state": sess.State(),
+			// 重连后界面要显示「现在真的是哪个模式」，不能拿启动时的快照顶替：
+			// 用户可能在会话里切过，模型也可能自己 ExitPlanMode。
+			"mode": sess.Mode(),
 		},
 		"init": sess.InitPayload(),
 		// 挂起审批要一起重放：刷新/重连后若拿不到它们，用户就再也点不到，

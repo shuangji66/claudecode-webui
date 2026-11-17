@@ -666,7 +666,7 @@ func newSlowSink() *slowSink {
 }
 
 func (s *slowSink) Read([]byte) (int, error) { select {} }
-func (s *slowSink) Close() error            { s.once.Do(func() { close(s.release) }); return nil }
+func (s *slowSink) Close() error             { s.once.Do(func() { close(s.release) }); return nil }
 func (s *slowSink) Write(b []byte) (int, error) {
 	s.wrote <- struct{}{}
 	<-s.release
@@ -721,4 +721,81 @@ func TestWriteQueueFullClosesSession(t *testing.T) {
 		_ = line
 	}
 	t.Fatal("写队列灌满后会话没有关闭")
+}
+
+func TestSetPermissionModeWaitsForResponse(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	done := make(chan error, 1)
+	go func() { done <- sess.SetPermissionMode("plan") }()
+
+	msg := fc.next()
+	req := msg["request"].(map[string]any)
+	if req["subtype"] != "set_permission_mode" || req["mode"] != "plan" {
+		t.Fatalf("请求体不对: %v", req)
+	}
+	// 回包前不能返回：CLI 只在回包里说明拒绝原因，提前返回等于假装切成功。
+	select {
+	case err := <-done:
+		t.Fatalf("回包前就返回了: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	fc.respond(msg["request_id"].(string), map[string]any{"mode": "plan"})
+	if err := <-done; err != nil {
+		t.Fatalf("SetPermissionMode: %v", err)
+	}
+}
+
+func TestSetPermissionModeReportsCLIRejection(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	done := make(chan error, 1)
+	go func() { done <- sess.SetPermissionMode("bogus") }()
+
+	msg := fc.next()
+	fc.send(map[string]any{
+		"type": "control_response",
+		"response": map[string]any{
+			"subtype":    "error",
+			"request_id": msg["request_id"],
+			"error":      "Cannot set permission mode: must be one of acceptEdits, auto, bypassPermissions, default, dontAsk, plan",
+		},
+	})
+	err := <-done
+	if err == nil || !strings.Contains(err.Error(), "must be one of") {
+		t.Fatalf("应把 CLI 的拒绝原因带回来，实际 %v", err)
+	}
+}
+
+func TestPermissionModeEventFromCLIStatus(t *testing.T) {
+	_, fc, rec := startSession(t)
+
+	// 切模式后 CLI 会发一条 system/status；每个回合的 system/init 也带 permissionMode。
+	fc.send(map[string]any{
+		"type": "system", "subtype": "status", "status": nil, "permissionMode": "plan",
+		"uuid": "u1", "session_id": "s1",
+	})
+	// 握手本身也会发 session.state（带 state 字段），所以按内容等那条带 mode 的。
+	var mode string
+	deadline := time.Now().Add(time.Second)
+	for mode == "" && time.Now().Before(deadline) {
+		rec.mu.Lock()
+		for _, ev := range rec.evs {
+			if ev.Kind != KindSessionState {
+				continue
+			}
+			var data map[string]string
+			if json.Unmarshal(ev.Data, &data) == nil {
+				mode = data["mode"]
+			}
+		}
+		rec.mu.Unlock()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if mode != "plan" {
+		t.Fatalf("mode = %q，没有收到权限模式事件", mode)
+	}
+	// 原始行仍要转给前端（审计/日志用），不能被这条分支吞掉。
+	if rec.count(KindCLI) != 1 {
+		t.Fatalf("system 原文应继续作为 cli 事件转发，count=%d", rec.count(KindCLI))
+	}
 }

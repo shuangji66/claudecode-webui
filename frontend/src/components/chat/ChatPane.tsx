@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
@@ -40,6 +40,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
   const perms = useAppStore((s) => s.perms);
   const inits = useAppStore((s) => s.inits);
   const states = useAppStore((s) => s.states);
+  const modes = useAppStore((s) => s.modes);
   const conns = useAppStore((s) => s.conns);
   const settings = useAppStore((s) => s.settings);
   const usage = useAppStore((s) => s.usage);
@@ -50,8 +51,6 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
   const setPermissionMode = useAppStore((s) => s.setPermissionMode);
   const replyPermission = useAppStore((s) => s.replyPermission);
   const retryConnection = useAppStore((s) => s.retryConnection);
-
-  const [mode, setModeState] = useState("");
 
   const conversation = useMemo(() => conversations.find((c) => c.id === activeId) ?? null, [conversations, activeId]);
   // 活着的会话才带着「进程启动时固定的」模型与推理强度；下面据此判断改了强度要不要提示。
@@ -91,10 +90,6 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
     : t("新对话", "New chat");
 
   useEffect(() => {
-    setModeState(init?.current_permission_mode ?? settings?.permission_mode ?? "");
-  }, [init?.current_permission_mode, settings?.permission_mode, activeId]);
-
-  useEffect(() => {
     document.title = session ? title : "Claude Code";
   }, [session, title]);
 
@@ -108,13 +103,16 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
   ) => {
     if (opts.allow && opts.updatedPermissions && (opts.updatedPermissions as { type?: string }).type === "setMode") {
       const next = (opts.updatedPermissions as { mode?: string }).mode;
-      if (next) {
-        setModeState(next);
-        setPermissionMode(next);
-      }
+      if (next) setPermissionMode(next);
     }
     replyPermission(perm, opts.allow, opts.updatedInput, opts.updatedPermissions, opts.message);
   };
+
+  // 当前权限模式以会话为准：CLI 报上来的值存在 store.modes（模型自己 ExitPlanMode、
+  // 切模式回包被拒、重开后进程换了模式，都只有 CLI 知道）；没有活着的会话就看默认权限。
+  const mode = activeId
+    ? (modes[activeId] ?? init?.current_permission_mode ?? settings?.permission_mode ?? "")
+    : (settings?.permission_mode ?? "");
 
   const modelOptions = useMemo(() => modelOptionsFromSettings(settings), [settings]);
   const selected = settings?.selected;
@@ -335,10 +333,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
             onSelectEffort={(effort) => {
               if (selected?.provider && selected.model) void selectModel(selected.provider, selected.model, effort);
             }}
-            onPermissionMode={(m) => {
-              setModeState(m);
-              setPermissionMode(m);
-            }}
+            onPermissionMode={(m) => setPermissionMode(m)}
             onSend={(text, attachments) => sendPrompt(text, attachments, t("附件：", "File: "))}
             onInterrupt={interrupt}
             footer={footer}

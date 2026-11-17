@@ -143,6 +143,12 @@ interface AppState {
    */
   doneIds: Record<string, boolean>;
   /**
+   * 每个会话当前生效的权限模式，只认 CLI 报上来的值（system/status 与 system/init）。
+   * 界面上「记住自己点过什么」会骗人：模型自己 ExitPlanMode、回包被拒、
+   * 重启后进程换了默认模式，都只有 CLI 知道。
+   */
+  modes: Record<string, string>;
+  /**
    * 每个会话的实时用量（上下文 / 缓存命中 / 输出速度）。
    * 只从 CLI 真实给出的 usage 派生，见 lib/usage 的说明。
    */
@@ -268,6 +274,7 @@ function purgeSession(state: {
   conns: Record<string, unknown>;
   usage: Record<string, unknown>;
   doneIds: Record<string, boolean>;
+  modes: Record<string, string>;
 }, id: string) {
   delete state.items[id];
   delete state.subagentItems[id];
@@ -277,6 +284,7 @@ function purgeSession(state: {
   delete state.conns[id];
   delete state.usage[id];
   delete state.doneIds[id];
+  delete state.modes[id];
 }
 /** 正在创建的新对话；此时发送必须等它落定，不能发到上一个 active。 */
 let createTask: Promise<SessionInfo | null> | null = null;
@@ -445,6 +453,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   states: {},
   conns: {},
   doneIds: {},
+  modes: {},
   usage: {},
   modelsFor: "",
   gatewayModels: [],
@@ -1250,6 +1259,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
           conns: { ...s.conns },
           usage: { ...s.usage },
           doneIds: { ...s.doneIds },
+          modes: { ...s.modes },
         };
         purgeSession(buckets, id);
         return buckets;
@@ -1462,9 +1472,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setPermissionMode: (mode) => {
+    if (!mode) return;
     const id = get().activeId;
-    if (!id) return;
-    clients.get(id)?.send({ kind: "permission_mode", mode });
+    const client = id ? clients.get(id) : undefined;
+    if (id && client) {
+      // 先乐观更新：控制请求的回包在几百毫秒内就到，CLI 的 system/status 会再校正一次。
+      set((s) => ({ modes: { ...s.modes, [id]: mode } }));
+      client.send({ kind: "permission_mode", mode });
+      return;
+    }
+    // 还没有活着的进程（新对话 / 会话已结束 / 正在启动）：写进「默认权限」，
+    // 下一次建会话时按它启动。不这么做的话，在新对话里选模式等于什么都没发生。
+    void get().saveSettings({ permission_mode: mode });
   },
 
   loadPreview: async (id) => {
@@ -1532,9 +1551,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
       }
       case "session.snapshot": {
         const data = ev.data as
-          | { init?: InitPayload; info?: { state?: string }; permissions?: PermissionPayload[] }
+          | {
+              init?: InitPayload;
+              info?: { state?: string; mode?: string };
+              permissions?: PermissionPayload[];
+            }
           | undefined;
         if (data?.init) set((s) => ({ inits: { ...s.inits, [sid]: data.init! } }));
+        // info.mode 是会话**此刻**的模式（后端记录 CLI 最近一次上报的值）；
+        // init 里那份只是启动时的快照，重连后不能拿它顶替。
+        const mode = data?.info?.mode || data?.init?.current_permission_mode;
+        if (mode) set((s) => ({ modes: { ...s.modes, [sid]: mode } }));
         // 后端会把「还没决定」的审批一起发过来：重连/刷新后必须能继续点，
         // 否则 CLI 一直挂着等回包，而界面上找不到入口。
         if (data?.permissions) {
@@ -1552,7 +1579,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
       }
       case "session.ready": {
         const data = ev.data as { init?: InitPayload } | undefined;
-        if (data?.init) set((s) => ({ inits: { ...s.inits, [sid]: data.init! } }));
+        if (data?.init) {
+          const mode = data.init.current_permission_mode;
+          set((s) => ({
+            inits: { ...s.inits, [sid]: data.init! },
+            ...(mode ? { modes: { ...s.modes, [sid]: mode } } : {}),
+          }));
+        }
         set((s) => ({
           states: { ...s.states, [sid]: "ready" },
           conversations: s.conversations.map((c) => (c.id === sid ? { ...c, live: true, state: "ready" } : c)),
@@ -1560,7 +1593,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return;
       }
       case "session.state": {
-        const data = ev.data as { state?: string } | undefined;
+        // 同一个事件既承载状态机流转，也承载 CLI 报上来的权限模式（system/status）。
+        const data = ev.data as { state?: string; mode?: string } | undefined;
+        if (data?.mode) set((s) => ({ modes: { ...s.modes, [sid]: data.mode! } }));
         if (data?.state) {
           const state = data.state;
           set((s) => ({
