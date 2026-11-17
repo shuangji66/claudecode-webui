@@ -388,6 +388,17 @@ func TestPatchConversationValidatesBeforeWriting(t *testing.T) {
 	if got.Title != "" {
 		t.Fatalf("请求失败但标题被改了: %q", got.Title)
 	}
+
+	// 反过来也一样：标题超长时那次 usage 不能已经落盘（两处校验都在写盘之前）。
+	body = `{"id":"11111111-2222-3333-4444-555555555555","title":"` + strings.Repeat("字", maxTitleRunes+1) + `","usage":{"input_tokens":1}}`
+	rec2 = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec2, httptest.NewRequest(http.MethodPatch, "/api/conversations", strings.NewReader(body)))
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("超长标题应 400，实际 %d: %s", rec2.Code, rec2.Body.String())
+	}
+	if got, _ := store.Get("11111111-2222-3333-4444-555555555555"); len(got.Usage) != 0 {
+		t.Fatalf("标题被拒时 usage 却写进去了: %s", got.Usage)
+	}
 }
 
 // 标题规则只有一份：重命名与分叉共用，否则两边会各自漂移。

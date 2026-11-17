@@ -186,8 +186,16 @@ func (s *Server) handlePatchConversation(w http.ResponseWriter, r *http.Request)
 		writeErr(w, "对话不存在", http.StatusNotFound)
 		return
 	}
-	// usage 先校验并落盘：它可能因为超长/非法 JSON 返回 400，而标题与归档的写盘
-	// 是不回滚的 —— 把校验放在最前面，失败时文件里什么都没变。
+	// 标题与 usage 的校验都放在写盘之前：两者的写盘都不回滚，任何一处失败都
+	// 不该留下「标题改了、usage 没存」这样的半截修改。
+	title := ""
+	if req.Title != nil {
+		var err error
+		if title, err = normalizeTitle(*req.Title); err != nil {
+			writeErr(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if len(req.Usage) > 0 {
 		if err := s.d.Conversations.SetUsage(req.ID, req.Usage); err != nil {
 			writeErr(w, err.Error(), http.StatusBadRequest)
@@ -195,11 +203,6 @@ func (s *Server) handlePatchConversation(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if req.Title != nil {
-		title, err := normalizeTitle(*req.Title)
-		if err != nil {
-			writeErr(w, err.Error(), http.StatusBadRequest)
-			return
-		}
 		if err := s.d.Conversations.Rename(req.ID, title); err != nil {
 			writeErr(w, err.Error(), http.StatusInternalServerError)
 			return
