@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { Sidebar } from "./Sidebar";
 import { useAppStore } from "../../store/useAppStore";
+import { copyText } from "../../lib/clipboard";
+
+vi.mock("../../lib/clipboard", () => ({ copyText: vi.fn(async () => true) }));
 
 function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
   return render(
@@ -249,6 +252,28 @@ describe("Sidebar 会话行的管理入口", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "置顶 会话甲" }));
     expect(pinConversation).toHaveBeenCalledWith("c-menu", true);
+  });
+
+  // id 是会话的唯一句柄：终端接管、排查转录、跨设备定位都靠它。
+  it("菜单里可以复制 Session ID（提示前 8 位）", () => {
+    renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "管理对话 会话甲" }));
+
+    const item = screen.getByRole("menuitem", { name: /复制 Session ID/ });
+    expect(item).toHaveTextContent("c-menu");
+    fireEvent.click(item);
+    expect(copyText).toHaveBeenCalledWith("c-menu");
+  });
+
+  // 分叉：复制上下文到新会话，标题加后缀便于在列表里区分（原对话一字不动）。
+  it("菜单里的分叉会话带上「（分叉）」标题", () => {
+    const forkConversation = vi.fn(async () => true);
+    useAppStore.setState({ forkConversation });
+
+    renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "管理对话 会话甲" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "分叉会话" }));
+    expect(forkConversation).toHaveBeenCalledWith("c-menu", "会话甲（分叉）");
   });
 
   // 菜单里也有置顶（触屏唯一入口）。

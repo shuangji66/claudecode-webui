@@ -228,6 +228,14 @@ src/
 - **置顶（`pinned`）只是排序偏好**（`lib/conversations.pinnedFirst`）：两种排序模式都先过它，
   置顶的永远在同一组最前，组内顺序保持原样；它不进 `LastFor`，不影响「默认恢复哪一条」，
   也不结束进程。行上常驻一颗小图钉表示置顶状态，取消置顶从行内按钮或菜单点。
+- **「复制 Session ID」是排查入口**：id 就是 `--resume`、转录文件名、`conversations.json`、
+  前端 `activeId` 的同一个值，终端里 `claude --resume <id>` 能接管同一条对话。菜单项把完整
+  id 写进剪贴板、`hint` 给前 8 位（让人确认复制的是哪条）；剪贴板被拒（局域网 http / 非安全
+  上下文）时回落 `askPrompt` 让用户手抄，不要做成「点了没反应」。
+- **分叉会话**：菜单项 → `store.forkConversation(id, title)`（`POST /api/conversations/fork`），
+  后端建好新会话并返回 id，前端 `refreshConversations()` 后直接 `openConversation(newId)`。
+  标题**必须**由调用方带上「原名（分叉）」后缀：fork 出来的转录首条消息与原会话一模一样，
+  不加工列表里就是两条同名对话。复制的是上下文不是权限——新进程要重新审批。
 - **侧栏状态标记**（`lib/conversations.conversationStatus`，优先级从高到低）：待审批 →
   强调色圆点；进程 `busy`/`starting` → 进度环；完成但没看过 → 绿点；活跃但空闲 → 不画点；
   没有常驻进程 → 灰点。「完成未看」由 `applyEvent` 在 `result` 到达且该对话不是当前打开的

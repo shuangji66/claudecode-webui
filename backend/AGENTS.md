@@ -203,6 +203,16 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   用量快照（`usage`）是前端从 CLI 的 `usage` 算好的几个数字，后端不解释内容，只校验
   是合法 JSON 且 ≤ 2KB（`SetUsage`），随对话一起读写。
   删除写墓碑，不删 jsonl；`LastFor`/列表/自动预热都必须跳过 deleted/archived。
+- **分叉会话的落点必须是我们生成的新 UUID**：`--resume 旧 --fork-session --session-id 新`
+  实测 2.1.326 可用——历史写入新 `<新>.jsonl`、行内 `sessionId` 全部重写、旧文件字节不变。
+  `process.Options.Fork` 负责拼这段参数（`--resume` 后紧跟 `--fork-session`），
+  `manager.Fork` 先 `supportsFlag("--fork-session")` 再 spawn，旧版本回 `ErrForkUnsupported`
+  （网关转 400，不是 500）。**不要「收养 CLI 自造 id」**——那要改 manager 的 id 所有权，
+  等于把稳定 id 这个前提拆掉。
+  约束：cwd 必须与原会话一致（CLI 按 cwd 编码找转录）；fork 不继承 session 级授权
+  （新进程要重新审批）；原会话在跑时 fork 只读到当时的转录（末尾可能少一两条）；
+  `requestSessionId` 可能残留旧 id，但回放只按文件名定位（`history.scanTranscript` 不校验行内 id），
+  别拿行内字段做归属校验。
 - 新会话在首条 prompt 成功后才 `Touch` 元数据；否则后端重启后会出现没有转录、无法 resume 的条目。
 - `--resume` 不会回放 transcript；`GET /api/history/transcript` 返回原始事件行，
   前端用 `applyCLI` 回放并保留 `timestamp`。`history.LoadTranscript` 过滤
@@ -268,6 +278,7 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   独立 goroutine 里跑，失败用 `error` 事件回（`writeFrame` 只入队，跨 goroutine 安全）。
   新增命令前先问：它会不会等对端？会就挪出去。
 - 对话路由：`GET /api/conversations`、`PATCH /api/conversations`（重命名/归档/置顶/touch/usage）、
+  `POST /api/conversations/fork`（复制出新会话，需过 `authorizedCwd` 同级的 `ensureCwdAuthorized`）、
   `DELETE /api/conversations?id=`（软删除）、`GET /api/history/transcript?id=`（回放）。
 - 预览路由：`GET /api/history/preview?id=` 返回会话最近一问一答（侧栏悬浮预览用）。
   `history.LoadPreview` 只读转录尾部 64KB、跳过 sidechain/meta 与本地命令回显，

@@ -158,6 +158,9 @@ hub ── manager ── session ── process ── claude (NDJSON)
   跳过 deleted/archived。不要把「删除」实现成直接 `os.Remove` 转录。
 - **自动预热不是新建**：`CCWEB_AUTO_START` 只恢复 `LastFor` 或最近转录；没有对话就什么都不做，
   由前端创建第一条。改回 `mgr.Ensure` 会让每次重启多一条空对话。
+- **分叉（`POST /api/conversations/fork`）不改写原转录**：CLI 的
+  `--resume 旧 --fork-session --session-id 新` 把历史复制到新 id 下（2.1.326 实测），
+  新转录文件名就是我们生成的 UUID，与列表 / `activeId` 同源。不要自己去复制 jsonl。
 - **claude 转录会包含 sidechain / meta / queue-operation 行**：回放只取
   user/assistant/system/result 且跳过 `isSidechain`/`isMeta`，否则子代理和系统提醒会混进主消息流。
 

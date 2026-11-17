@@ -20,6 +20,7 @@ import {
   type SidebarView,
 } from "../../lib/sidebarView";
 import { askConfirm, askPrompt } from "../common/SystemDialogs";
+import { copyText } from "../../lib/clipboard";
 import { Menu, type MenuItem } from "../common/Menu";
 import { StateDot } from "../common/StateDot";
 import {
@@ -30,6 +31,7 @@ import {
   IconChevronRight,
   IconClock,
   IconClose,
+  IconCopy,
   IconDownload,
   IconFolder,
   IconFolderPlus,
@@ -109,6 +111,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const renameConversation = useAppStore((s) => s.renameConversation);
   const archiveConversation = useAppStore((s) => s.archiveConversation);
   const pinConversation = useAppStore((s) => s.pinConversation);
+  const forkConversation = useAppStore((s) => s.forkConversation);
   const deleteConversation = useAppStore((s) => s.deleteConversation);
 
   const [query, setQuery] = useState("");
@@ -484,6 +487,24 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   const askArchive = (c: ConversationInfo) => {
     void archiveConversation(c.id, !c.archived);
+  };
+
+  /**
+   * 复制会话 id（对齐 DSH 的「复制 Session ID」）。
+   *
+   * id 是这个应用里唯一的会话句柄：终端里 `claude --resume <id>` 能接管同一条对话，
+   * 排查时转录文件名 / 后端日志 / conversations.json 也只认它。
+   */
+  const copySessionId = async (c: ConversationInfo) => {
+    if (await copyText(c.id)) return;
+    // 非安全上下文（局域网 http）或用户拒绝时剪贴板会失败：把 id 摆出来让用户手动复制，
+    // 比"点了没反应"强。
+    await askPrompt({
+      title: t("复制 Session ID", "Copy session ID"),
+      message: t("浏览器不允许自动复制，请手动选中下面的 ID。", "The browser blocked clipboard access; select the ID below manually."),
+      initial: c.id,
+      confirmText: t("完成", "Done"),
+    });
   };
 
   const askDelete = async (c: ConversationInfo) => {
@@ -894,7 +915,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         open={Boolean(menu && menuConv)}
         anchor={menu?.anchor ?? null}
         onClose={() => setMenu(null)}
-        width={168}
+        width={208}
         items={
           menuConv
             ? ([
@@ -906,6 +927,21 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                   onSelect: () => void pinConversation(menuConv.id, !menuConv.pinned),
                 },
                 { id: "archive", label: menuConv.archived ? t("取消归档", "Unarchive") : t("归档", "Archive"), icon: <IconArchive size={13} className="text-muted" />, onSelect: () => askArchive(menuConv) },
+                {
+                  id: "fork",
+                  // 复制的是上下文，不是权限：新进程要重新审批（CLI 的 fork 语义）。
+                  label: t("分叉会话", "Fork conversation"),
+                  icon: <IconGitBranch size={13} className="text-muted" />,
+                  onSelect: () => void forkConversation(menuConv.id, `${titleOf(menuConv)}${t("（分叉）", " (fork)")}`),
+                },
+                {
+                  id: "copy-id",
+                  label: t("复制 Session ID", "Copy session ID"),
+                  // 前 8 位让人确认"复制的是哪一条"，完整 id 在剪贴板里。
+                  hint: menuConv.id.slice(0, 8),
+                  icon: <IconCopy size={13} className="text-muted" />,
+                  onSelect: () => void copySessionId(menuConv),
+                },
                 ...(view.sort === "manual" && groupOf(menuConv)
                   ? [
                       {
