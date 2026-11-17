@@ -3,7 +3,7 @@ import { useState } from "react";
 import { AccessError, loginAccess, setToken } from "../../lib/runtime";
 import { cachedLocale } from "../../lib/theme";
 import { tr } from "../../lib/i18n";
-import { IconEye, IconEyeOff, IconTerminal } from "../common/Icons";
+import { BrandMark, IconEye, IconEyeOff } from "../common/Icons";
 import { Button } from "../common/Button";
 
 /**
@@ -58,9 +58,9 @@ export function TokenGate({ onSaved, stale = false }: { onSaved: () => void; sta
 
       <div className="relative w-full max-w-[380px]">
         <div className="mb-5 flex flex-col items-center gap-3 text-center">
-          <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand text-white shadow-soft">
-            <IconTerminal size={24} />
-          </span>
+          {/* 与左侧栏共用同一个品牌图标（claude-code.svg），不再套色块：
+              logo 本身就是陶土色，叠在 brand 底上会糊成一块。 */}
+          <BrandMark size={42} />
           <div>
             <h1 className="text-[17px] font-semibold tracking-tight text-ink">
               {t("访问受密码保护", "Password protected")}
