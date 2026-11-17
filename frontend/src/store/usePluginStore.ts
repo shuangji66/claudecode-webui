@@ -111,6 +111,10 @@ export const usePluginStore = create<PluginsState>((set, get) => {
         }
         await settle();
       } catch (e) {
+        // 句柄必须清掉：定时器触发后 id 仍留在 pollTimer 上，而 load() 用
+        // `!pollTimer` 判断「要不要接着轮询」。不清的话一次网络抖动就能让
+        // 「正在安装」永久卡住——之后谁都不会再去问任务状态，只能刷新页面。
+        pollTimer = null;
         set({ error: errText(e), busy: false });
       }
     };
