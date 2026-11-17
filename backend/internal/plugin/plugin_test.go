@@ -347,7 +347,7 @@ func TestRunTimesOut(t *testing.T) {
 	}
 	m := newManager(t, bin)
 	start := time.Now()
-	_, _, err := m.run(context.Background(), 200*time.Millisecond, nil, "list", "--json")
+	_, err := m.run(context.Background(), 200*time.Millisecond, "list", "--json")
 	if err == nil || !strings.Contains(err.Error(), "超时") {
 		t.Fatalf("应报超时，实际 %v", err)
 	}

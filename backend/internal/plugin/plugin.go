@@ -274,7 +274,7 @@ func (m *Manager) Support(ctx context.Context) (bool, string) {
 	}
 	m.caps.mu.Unlock()
 
-	out, _, err := m.run(ctx, timeoutRead, nil, "list", "--json")
+	out, err := m.run(ctx, timeoutRead, "list", "--json")
 	if err == nil {
 		m.cacheCap(bin, true, "")
 		return true, ""
@@ -303,7 +303,7 @@ func (m *Manager) cacheCap(bin string, ok bool, reason string) {
 
 // List 列出已安装的插件（含停用的）。
 func (m *Manager) List(ctx context.Context) ([]Plugin, error) {
-	out, _, err := m.run(ctx, timeoutRead, nil, "list", "--json")
+	out, err := m.run(ctx, timeoutRead, "list", "--json")
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +321,7 @@ func (m *Manager) List(ctx context.Context) ([]Plugin, error) {
 //
 // 这一步可能需要刷新 marketplace 目录（联网），因此超时给得比 list 长。
 func (m *Manager) Available(ctx context.Context) ([]Plugin, []Entry, error) {
-	out, _, err := m.run(ctx, timeoutAvailable, nil, "list", "--available", "--json")
+	out, err := m.run(ctx, timeoutAvailable, "list", "--available", "--json")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -343,7 +343,7 @@ func (m *Manager) Available(ctx context.Context) ([]Plugin, []Entry, error) {
 
 // Marketplaces 列出已注册的 marketplace。
 func (m *Manager) Marketplaces(ctx context.Context) ([]Marketplace, error) {
-	out, _, err := m.run(ctx, timeoutRead, nil, "marketplace", "list", "--json")
+	out, err := m.run(ctx, timeoutRead, "marketplace", "list", "--json")
 	if err != nil {
 		return nil, err
 	}
@@ -362,7 +362,7 @@ func (m *Manager) Details(ctx context.Context, id string) (Details, error) {
 	if !pluginIDRE.MatchString(id) {
 		return Details{}, ErrBadPluginID
 	}
-	out, _, err := m.run(ctx, timeoutRead, nil, "details", id)
+	out, err := m.run(ctx, timeoutRead, "details", id)
 	if err != nil {
 		return Details{}, err
 	}
@@ -407,16 +407,16 @@ func (m *Manager) Install(ctx context.Context, id, marketplace, scope, acceptCom
 	if !validScope(scope) {
 		return Result{}, ErrBadScope
 	}
-	target := id
+	// 带 marketplace 时 id 只是插件名（市场由 --marketplace 指定）；不带时必须已经是
+	// `名字@市场`。两种形状都要先过白名单：id 会原样拼进命令行。
 	if marketplace != "" {
 		if !nameRE.MatchString(id) {
 			return Result{}, ErrBadPluginID
 		}
-		target = id
 	} else if !pluginIDRE.MatchString(id) {
 		return Result{}, ErrBadPluginID
 	}
-	args := []string{"install", target, "-s", scope, "-y", "--json"}
+	args := []string{"install", id, "-s", scope, "-y", "--json"}
 	if marketplace != "" {
 		src, err := NormalizeSource(marketplace)
 		if err != nil {
@@ -674,7 +674,7 @@ func validScope(scope string) bool {
 func (m *Manager) mutate(ctx context.Context, kind string, args ...string) (Result, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out, _, err := m.run(ctx, timeoutMutate, nil, args...)
+	out, err := m.run(ctx, timeoutMutate, args...)
 	var res Result
 	if perr := unmarshalPayload(out, &res); perr != nil {
 		if err != nil {
@@ -696,16 +696,16 @@ func (m *Manager) mutate(ctx context.Context, kind string, args ...string) (Resu
 
 // run 执行 `claude plugin <args…>`。
 //
-// 返回值：stdout（可能是多行 JSON 或一行 JSON）、stderr 尾部、错误。
+// 返回值：stdout（可能是多行 JSON 或一行 JSON）与错误。
 // 退出码非 0 时优先用 stdout 里的 JSON 造 CLIError（那里有可读原因与 failureCode），
 // 解析不出来才退回 stderr——「命令不存在 / 克隆失败」这类原因只在 stderr 里。
-func (m *Manager) run(ctx context.Context, timeout time.Duration, _ []byte, args ...string) ([]byte, []byte, error) {
+func (m *Manager) run(ctx context.Context, timeout time.Duration, args ...string) ([]byte, error) {
 	bin, err := m.bin()
 	if err != nil || bin == "" {
 		if err == nil {
 			err = ErrNotInstalled
 		}
-		return nil, nil, fmt.Errorf("%w（请去「设置 → 部署」安装）", err)
+		return nil, fmt.Errorf("%w（请去「设置 → 部署」安装）", err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -732,7 +732,7 @@ func (m *Manager) run(ctx context.Context, timeout time.Duration, _ []byte, args
 	out := stdout.Bytes()
 	errTail := tail(stderr.String(), 600)
 	if ctx.Err() == context.DeadlineExceeded {
-		return out, []byte(errTail), fmt.Errorf("plugin: %s 超时（%s），网络慢或 marketplace 仓库过大", strings.Join(args, " "), timeout)
+		return out, fmt.Errorf("plugin: %s 超时（%s），网络慢或 marketplace 仓库过大", strings.Join(args, " "), timeout)
 	}
 	if runErr != nil {
 		var res Result
@@ -741,15 +741,15 @@ func (m *Manager) run(ctx context.Context, timeout time.Duration, _ []byte, args
 			if msg == "" && errTail != "" {
 				msg = errTail
 			}
-			return out, []byte(errTail), &CLIError{Command: strings.Join(args, " "), Message: msg, Code: res.FailureCode, Detail: errTail}
+			return out, &CLIError{Command: strings.Join(args, " "), Message: msg, Code: res.FailureCode, Detail: errTail}
 		}
 		msg := errTail
 		if msg == "" {
 			msg = runErr.Error()
 		}
-		return out, []byte(errTail), &CLIError{Command: strings.Join(args, " "), Detail: msg}
+		return out, &CLIError{Command: strings.Join(args, " "), Detail: msg}
 	}
-	return out, []byte(errTail), nil
+	return out, nil
 }
 
 // env 构造子进程环境。
