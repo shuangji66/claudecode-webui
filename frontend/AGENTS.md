@@ -51,9 +51,11 @@ src/
   store/usePluginStore.ts  设置页插件数据（/api/plugins 的列表/任务轮询/详情）
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
                        / Collapsible（折叠块）/ FileIcon（按扩展名给颜色的文件图标 + 文件夹图标）
-  components/layout/   Sidebar（工作区/对话列表）/ ConversationPreview（会话悬浮预览）/ TopBar / TokenGate / SettingsDrawer
+                       / ErrorBoundary（渲染异常兜底，挂在 main.tsx 最外层）
+  components/layout/   Sidebar（工作区/对话列表）/ ConversationPreview（会话悬浮预览）/ TopBar / TokenGate / SettingsDrawer（只留导航壳）
                        / WorkspaceDialog / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / DeploySettings / HistoryDialog
                        / ClaudeInstallPrompt
+  components/layout/settings/  设置页分区：GeneralSettings / ModelsSettings / ProxySettings / Section（共用分区标题）
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
                        / UsageStats / ResultBar / WorkspacePicker
   components/tools/    ToolCardHost（注册表）/ AgentCard / BashCard / EditCard / GenericCard（兜底）
@@ -168,6 +170,21 @@ src/
     `lib/queue.shouldFlushAfter`），被中断/出错时留在队列里；`session.state ready`、切对话、
     重连都**不**触发——那会在用户按 Esc 之后偷偷把消息发出去。队列跟着对话走（`queued[sid]`），
     上限 `MAX_QUEUED`（8 条，附件是 base64 常驻内存），只在内存里、刷新即丢（与草稿一致）。
+25. **首屏只留壳层，重的面板按需加载**：`App.tsx` 对 SettingsDrawer / RightSidebar /
+    WorkspaceDialog / HistoryDialog 一律 `lazy()` + `Suspense`，不要改回静态 import——
+    这几块占了首屏包体的一半（实测主 chunk 604 KB → 382 KB，gzip 173 KB → 118 KB）。
+    模态用 `useLazyMount`：**首次打开才挂载，之后保持挂载**，关闭再打开不会丢表单状态。
+26. **设置页按页签懒加载**：`SettingsDrawer` 只剩导航壳，每页在自己首次被访问时挂载
+    （`visited` 集合）并动态 import。各页 `useEffect` 一挂载就发请求（技能、插件目录、
+    MCP、搜索），全部常驻会让「打开设置」变成一次并发拉取，插件目录首次还可能联网十几秒。
+    新增页签照这个模式加，不要写成「全部渲染 + hidden」。
+    `Section`（分区标题 + 说明）统一在 `settings/Section.tsx`，不要再在页面里各写一份。
+27. **键盘焦点必须可见**：全局 `:focus-visible` 兜底在 `styles.css` 末尾（无 layer，
+    优先于 utilities），所以页面上那 30 多个 `outline-none` 只影响鼠标。新增输入控件
+    不需要自己写 focus 样式，也不要用 `!important` 去盖掉那条规则。
+28. **会话起不来 ≠ 历史读不到**：`openConversation` 在 `POST /api/session` 失败
+    （claude 未安装 / 版本被删 / 409 并发冲突）时仍然要 `loadTranscript()` 回放转录，
+    然后再报错。少了这一步，界面会显示「开始新的对话」，看起来像整段对话被弄丢。
 
 ## 3. 状态管理（zustand）
 
