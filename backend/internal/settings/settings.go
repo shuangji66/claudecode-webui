@@ -65,20 +65,13 @@ var (
 	SupportedEfforts = []string{"low", "medium", "high", "xhigh", "max"}
 )
 
-// EffortOff 是「关闭思考」档。
-//
-// 它不是 `claude --effort` 的取值（CLI 只认 SupportedEfforts 那几个），所以不能进白名单：
-// 打开这个档时既不传 `--effort`，也不向 API 声明推理等级，而是注入
-// `MAX_THINKING_TOKENS=0` 让 CLI 自己关掉 thinking（见 agent/manager）。
-const EffortOff = "off"
-
 // ModelSpec 是某个模型的展示与能力元数据，按模型 ID 存在 Provider.ModelMeta 里。
 // 模型 ID 列表仍是 Provider.Models，保持与旧配置 / 网关列表兼容。
 type ModelSpec struct {
 	// Name 是显示名，留空用模型 ID。
 	Name string `json:"name,omitempty"`
 	// ReasoningEfforts 是该模型支持的推理强度；为空表示不暴露强度选择。
-	// 界面上还会额外给出「默认」（不声明）与「关闭」（关闭思考）两档，它们不在这里。
+	// 界面上还会额外给出「默认」（不声明）档，它不在这里。
 	ReasoningEfforts []string `json:"reasoning_efforts,omitempty"`
 	// SupportsImage 表示模型接受图片输入（仅影响界面提示与能力标记）。
 	SupportsImage bool `json:"supports_image,omitempty"`
@@ -133,7 +126,7 @@ type Selection struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	// Effort 是选中的推理强度：空串 = 默认（不向 API 声明推理等级），
-	// EffortOff = 关闭思考，其余必须是该模型声明的档位。
+	// 其余必须是该模型声明的档位。
 	Effort string `json:"effort,omitempty"`
 }
 
@@ -431,16 +424,12 @@ func (v Settings) ActiveModel() (Provider, string, ModelSpec, bool) {
 
 // DefaultEffort 返回新建会话应使用的推理强度。
 //
-// 空串 = 默认档：不在启动参数 / 环境里声明推理等级，由 API 与服务端自行决定
-// （与 DSH 的 Default 一致）。这是没有任何显式选择时的取值。
-// EffortOff 是关闭思考档；模型未声明推理等级时同样是空串（没有档位可选）。
+// 空串 = 默认档：不传 `--effort`，由 API 自己决定推理等级（与 DSH 的 Default 一致），
+// 也是没有任何显式选择时的取值。模型未声明推理等级时同样是空串（没有档位可选）。
 func (v Settings) DefaultEffort() string {
 	_, _, spec, ok := v.ActiveModel()
 	if !ok || len(spec.ReasoningEfforts) == 0 {
 		return ""
-	}
-	if v.Selected.Effort == EffortOff {
-		return EffortOff
 	}
 	if containsString(spec.ReasoningEfforts, v.Selected.Effort) {
 		return v.Selected.Effort
@@ -661,12 +650,11 @@ func (s *Store) Apply(p Patch) (Public, error) {
 			next.Selected = Selection{}
 		} else if next.Selected.Model != "" {
 			spec := p.ModelMeta[next.Selected.Model]
-			// 空串（默认）与 off（关闭思考）对任何声明了档位的模型都合法；
-			// 其它值必须是该模型声明的档位，否则回落到默认（不声明推理等级）。
+			// 空串（默认）对任何声明了档位的模型都合法；其它值必须是该模型声明的档位，
+			// 否则回落到默认（不声明推理等级）。
 			if len(spec.ReasoningEfforts) == 0 {
 				next.Selected.Effort = ""
-			} else if next.Selected.Effort != "" && next.Selected.Effort != EffortOff &&
-				!containsString(spec.ReasoningEfforts, next.Selected.Effort) {
+			} else if next.Selected.Effort != "" && !containsString(spec.ReasoningEfforts, next.Selected.Effort) {
 				next.Selected.Effort = ""
 			}
 		}

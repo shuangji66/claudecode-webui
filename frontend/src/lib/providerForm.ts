@@ -21,8 +21,6 @@ export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 /** 「默认」档：不向 API 声明推理等级，也是没有任何显式选择时的取值。 */
 export const EFFORT_DEFAULT = "";
-/** 「关闭」档：关掉思考。CLI 的 --effort 不接受 off，后端改用 MAX_THINKING_TOKENS=0。 */
-export const EFFORT_OFF = "off";
 
 export interface ProviderForm {
   /** 仅前端使用的稳定 key：新建时 id 还是空，不能拿 id 当 React key。 */
@@ -252,7 +250,7 @@ export function findOption(options: ModelOption[], provider: string, model: stri
 }
 
 /**
- * 模型可选的推理档位：默认、关闭、以及设置里声明的档位（对齐 DSH 的档位列表）。
+ * 模型可选的推理档位：默认 + 设置里声明的档位（对齐 DSH 的档位列表）。
  *
  * 模型没有声明档位时返回空数组——这时菜单里连「默认」都不该出现，
  * 推理等级对它是没有意义的选项。
@@ -260,7 +258,7 @@ export function findOption(options: ModelOption[], provider: string, model: stri
 export function effortChoices(spec: ModelSpec | undefined): string[] {
   const efforts = spec?.reasoning_efforts ?? [];
   if (efforts.length === 0) return [];
-  return [EFFORT_DEFAULT, EFFORT_OFF, ...efforts];
+  return [EFFORT_DEFAULT, ...efforts];
 }
 
 /** 选中档位归一化：不在候选里的值（含旧配置）一律回落到「默认」，不声明推理等级。 */
@@ -268,4 +266,25 @@ export function effortFor(spec: ModelSpec | undefined, selected: string | undefi
   const choices = effortChoices(spec);
   if (choices.length === 0) return "";
   return selected !== undefined && choices.includes(selected) ? selected : EFFORT_DEFAULT;
+}
+
+/**
+ * 切档位后怎么让已在跑的会话生效。
+ *
+ * claude 的 `--effort` 只在进程启动时固定（控制协议里没有 set_effort），
+ * 所以要么按同一 id 重开进程（`--resume` 保住上下文），要么等这一轮结束再重开。
+ * "none" = 没有活着的进程，下次打开对话自然按新档位起。
+ */
+export type EffortApply = "none" | "restart" | "afterTurn";
+
+export function effortApply(
+  state: string | undefined,
+  sessionEffort: string | undefined,
+  nextEffort: string,
+): EffortApply {
+  if (!state || state === "closed") return "none";
+  if ((sessionEffort ?? "") === (nextEffort ?? "")) return "none";
+  // 进行中不能直接杀进程：等这一轮 result 到达后再重开，别把正在跑的回合丢掉。
+  if (state === "busy") return "afterTurn";
+  return "restart";
 }

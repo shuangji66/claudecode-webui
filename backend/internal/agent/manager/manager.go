@@ -328,13 +328,6 @@ func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string)
 		permissionMode = m.cfg.PermissionMode
 	}
 	effort := cfgSet.DefaultEffort()
-	// 「关闭思考」档不是 --effort 的取值：不传参数，改用 CLI 的思考开关（环境变量）。
-	effortLevel := effort
-	thinkingOff := false
-	if effortLevel == settings.EffortOff {
-		effortLevel = ""
-		thinkingOff = true
-	}
 	// 先解析二进制：参数里的能力开关要按版本探测，不能盲加。
 	bin, err := m.resolve()
 	if err != nil {
@@ -347,7 +340,7 @@ func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string)
 	args := process.Args(process.Options{
 		Model:          model,
 		PermissionMode: permissionMode,
-		Effort:         effortLevel,
+		Effort:         effort,
 		Resume:         resumeID,
 		SessionID: func() string {
 			if resumeID == "" {
@@ -363,11 +356,6 @@ func (m *Manager) create(abs, sessionID, resumeID, model, permissionMode string)
 	// 先净化继承环境，再追加设置里的 ANTHROPIC_*（后者生效，从而覆盖宿主机同名变量）。
 	env := process.CleanEnv(os.Environ(), m.cfg.ClaudeHome, abs)
 	env = append(env, cfgSet.Env()...)
-	if thinkingOff {
-		// MAX_THINKING_TOKENS=0 是 claude 官方的「关掉 thinking」开关；
-		// 空档（默认）什么都不注入，推理等级由 API 自己决定。
-		env = append(env, "MAX_THINKING_TOKENS=0")
-	}
 
 	proc, err := process.Spawn(bin, args, abs, env)
 	if err != nil {

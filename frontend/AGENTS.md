@@ -293,9 +293,16 @@ src/
   `context_length` / `max_output_tokens` 预填。
 - 聊天页的模型与推理等级是 `components/chat/ModelMenu.tsx` 的两级菜单（参照 DSH）：
   一级「模型 / 推理等级」，模型页按提供商分组；菜单里不展示图片能力标记。
-  档位列表由 `providerForm.effortChoices` 给出：**默认（`""`，不声明推理等级）/ 关闭（`off`）
-  / 模型声明的档位**；没有声明档位的模型不出现这一行。`effortFor` 遇到无效值一律回落到「默认」，
+  档位列表由 `providerForm.effortChoices` 给出：**默认（`""`，不声明推理等级）** +
+  模型声明的档位；没有声明档位的模型不出现这一行。`effortFor` 遇到无效值一律回落到「默认」，
   别再回落到「模型的第一个档位」——那等于替用户向 API 声明了一个推理等级。
+  **改档位不是热切换**：CLI 没有 `set_effort`，`--effort` 只在进程启动时固定，
+  `selectModel` 保存后调 `applyEffortChange`（判定在 `providerForm.effortApply`）：
+  空闲就 `close → POST /api/session {resume:id}` 按同一 id 重开（上下文在转录里），
+  进行中只记进 `effortRestarts`，等 `result` 到达再重开——不要在 busy 时直接杀进程。
+  **还没发过消息的对话没有转录，`--resume` 一定失败**：这种情况关掉后新建一个
+  （`restartSession` 里单独一条分支，不能走 `createSession`——它的「已在空对话里就不新建」
+  守卫会把重开挡掉）。
 - 右上角「更多」是下拉菜单（复制会话为 Markdown / 下载 Session 日志），不要直接打开设置。
 - **全局禁用浏览器自动填充**：`lib/autofill.ts` 在 `App` 挂载时给所有
   `input/textarea` 补 `autocomplete=off`（密码框用 `new-password`）与主流密码管理器的

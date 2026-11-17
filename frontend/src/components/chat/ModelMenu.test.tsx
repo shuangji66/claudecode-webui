@@ -82,8 +82,8 @@ describe("ModelMenu", () => {
     expect(onSelectEffort).toHaveBeenCalledWith("low");
   });
 
-  it("档位列表是「默认 / 关闭 / 声明的档位」，默认档不向 API 声明", () => {
-    const { onSelectEffort } = setup({ selectedEffort: "" });
+  it("档位列表是「默认 + 声明的档位」，默认档不向 API 声明", () => {
+    setup({ selectedEffort: "" });
     const trigger = screen.getByRole("button", { name: "模型与推理等级" });
     // 默认档也要显示在触发器上，用户才知道现在没有声明推理等级。
     expect(trigger.textContent).toContain("默认");
@@ -91,11 +91,18 @@ describe("ModelMenu", () => {
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole("menuitem", { name: /推理等级/ }));
     const labels = screen.getAllByRole("menuitemradio").map((el) => el.textContent);
-    expect(labels).toEqual(["默认", "关闭", "Low", "High"]);
+    expect(labels).toEqual(["默认", "Low", "High"]);
     expect(screen.getByRole("menuitemradio", { name: "默认" }).getAttribute("aria-checked")).toBe("true");
+  });
 
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "关闭" }));
-    expect(onSelectEffort).toHaveBeenCalledWith("off");
+  it("从档位切回默认时用空串回调（不声明推理等级）", () => {
+    const { onSelectEffort } = setup();
+    fireEvent.click(screen.getByRole("button", { name: "模型与推理等级" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /推理等级/ }));
+    expect(screen.getByRole("menuitemradio", { name: "High" }).getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "默认" }));
+    expect(onSelectEffort).toHaveBeenCalledWith("");
   });
 
   it("Esc 从二级页退回一级而不是直接关闭", () => {

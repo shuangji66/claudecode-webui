@@ -1158,8 +1158,8 @@ function ModelRow({
             {ordered.length > 0 && (
               <p className="mt-1.5 text-[9.5px] leading-relaxed text-faint">
                 {t(
-                  "聊天页的档位列表会额外给出「默认」（不向 API 声明推理等级，也是新的默认选择）与「关闭」（关掉思考）。",
-                  "The composer also offers Default (declare no reasoning level; also the new default) and Off (turn thinking off).",
+                  "聊天页的档位列表会额外给出「默认」（不向 API 声明推理等级，也是新的默认选择）；切换档位后当前会话会按同一 id 重开，上下文保留。",
+                  "The composer also offers Default (declare no reasoning level; also the new default). Changing the level reopens the current session with the same id, keeping its context.",
                 )}
               </p>
             )}

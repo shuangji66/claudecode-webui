@@ -113,11 +113,6 @@ var strippedEnvKeys = map[string]bool{
 	"all_proxy":          true,
 	"socks_proxy":        true,
 	"no_proxy":           true,
-	// 思考开关同样由设置页决定（「关闭」档注入 MAX_THINKING_TOKENS=0）。
-	// 继承值必须先剔除：环境里出现两份同名变量时哪一份生效取决于读它的实现，
-	// 留着就等于让宿主机悄悄改掉用户在界面上的选择。
-	"MAX_THINKING_TOKENS":          true,
-	"CLAUDE_CODE_DISABLE_THINKING": true,
 }
 
 // CleanEnv 构造子进程环境：剔除会干扰启动的继承变量，并强制 HOME/PWD。

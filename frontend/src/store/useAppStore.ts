@@ -21,6 +21,8 @@ import {
   turnsFromTranscript,
 } from "../lib/normalize";
 import { applyUsageMessage, mergeUsage, usageFromTranscript, type UsageSnapshot } from "../lib/usage";
+import { effortApply } from "../lib/providerForm";
+import { isNewChat } from "../lib/newChat";
 import { openFnosFileManager } from "../lib/fnos";
 import type { Item } from "../lib/model";
 import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
@@ -208,6 +210,10 @@ interface AppState {
   archiveConversation: (id: string, archived: boolean) => Promise<boolean>;
   deleteConversation: (id: string) => Promise<boolean>;
   closeSession: (id: string) => Promise<void>;
+  /** 让切换后的推理等级对已在跑的会话生效（必要时按同一 id 重开进程）。 */
+  applyEffortChange: (id: string, effort: string) => Promise<void>;
+  /** 关掉进程再按同一 id `--resume` 拉起来，上下文留在转录里。 */
+  restartSession: (id: string) => Promise<boolean>;
   setActive: (id: string | null) => void;
   connect: (id: string) => void;
   disconnect: (id: string) => void;
@@ -245,6 +251,8 @@ let systemClient: ClaudeClient | null = null;
 /** 会话悬浮预览的缓存：一轮结束后清掉，下次 hover 会重新读盘。 */
 const previewCache = new Map<string, HistoryPreview | null>();
 const resumePromises = new Map<string, Promise<boolean>>();
+/** 等这一轮结束后要按新档位重开的会话（`--effort` 只在进程启动时固定）。 */
+const effortRestarts = new Set<string>();
 // openSeq 记录「用户最近一次想打开/切换对话」的序号。openConversation 里有多段 await，
 // 迟到的旧请求不能在结束时把 activeId 改回它自己 —— 用户看到的是他最后点的那条。
 let openSeq = 0;
@@ -550,6 +558,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (sess.provider === provider) {
       clients.get(id)?.send({ kind: "model", model });
       await get().refreshSessions();
+      await get().applyEffortChange(id, effort ?? "");
       return;
     }
 
@@ -1280,6 +1289,70 @@ export const useAppStore = create<AppState>()((set, get) => ({
     await Promise.all([get().refreshSessions(), get().refreshConversations()]);
   },
 
+  // 切档位之后让它在**当前**会话生效：claude 的控制协议里没有 set_effort，
+  // `--effort` 只在进程启动时固定，所以按同一 id 关掉进程再 --resume 拉起来
+  // （上下文在转录里，对话 id 不变）。进行中不杀进程，等这一轮 result 再重开。
+  applyEffortChange: async (id, effort) => {
+    const sess = get().sessions.find((s) => s.id === id);
+    if (!sess) return;
+    const state = get().states[id] ?? sess.state;
+    const plan = effortApply(state, sess.effort, effort);
+    if (plan === "none") {
+      effortRestarts.delete(id);
+      return;
+    }
+    if (plan === "afterTurn") {
+      effortRestarts.add(id);
+      return;
+    }
+    effortRestarts.delete(id);
+    await get().restartSession(id);
+  },
+
+  restartSession: async (id) => {
+    const sess = get().sessions.find((s) => s.id === id);
+    const conv = get().conversations.find((c) => c.id === id);
+    const cwd = sess?.cwd || conv?.cwd;
+    if (!cwd) return false;
+    // 还没发过消息的对话没有转录，`--resume` 会找不到会话：关掉后按新设置新建一个
+    // （它本来就没有上下文可丢）。这里不走 createSession：它的「已经在空对话里就
+    // 不新建」守卫是给「新对话」按钮用的，正好会把这次重开挡掉。
+    if (isNewChat(conv, (get().items[id] ?? []).length)) {
+      get().disconnect(id);
+      try {
+        await apiFetch(`/api/session?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+        const info = await apiFetch<SessionInfo>("/api/session", {
+          method: "POST",
+          body: JSON.stringify({ cwd }),
+        });
+        await Promise.all([get().refreshSessions(), get().refreshConversations()]);
+        get().setActive(info.id);
+        get().connect(info.id);
+        return true;
+      } catch (e) {
+        set({ error: errText(e) });
+        return false;
+      }
+    }
+    // 先断开自己的 WS：重开前旧进程会广播 closed，收下它等于把界面标成已结束。
+    // 同时把连接标成 connecting：重开期间发送按钮必须禁用，否则消息会写进旧管道。
+    get().disconnect(id);
+    set((s) => ({ conns: { ...s.conns, [id]: { state: "connecting" } }, states: { ...s.states, [id]: "starting" } }));
+    try {
+      await apiFetch(`/api/session?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      const info = await apiFetch<SessionInfo>("/api/session", {
+        method: "POST",
+        body: JSON.stringify({ cwd, resume: id }),
+      });
+      await get().refreshSessions();
+      get().connect(info.id);
+      return true;
+    } catch (e) {
+      set({ error: errText(e) });
+      return false;
+    }
+  },
+
   setActive: (id) => {
     set((s) => {
       if (!id || !s.doneIds[id]) return { activeId: id };
@@ -1560,6 +1633,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
         }));
         // 一回合结束就把用量写进对话元数据：页面重开 / 换设备打开时底部统计不丢。
         if (usage && isTurnResult(ev.data)) void persistUsage(sid, usage);
+        // 本轮开始前切过的档位：等 result 到了再重开，别把正在跑的回合丢掉。
+        if (isTurnResult(ev.data) && effortRestarts.delete(sid)) {
+          const next = get().settings?.selected?.effort ?? "";
+          const cur = get().sessions.find((x) => x.id === sid);
+          if (cur && (cur.effort ?? "") !== next) void get().restartSession(sid);
+        }
         // 新回合的回复变了，悬浮预览要重新读。
         if (isTurnResult(ev.data)) previewCache.delete(sid);
         return;

@@ -406,10 +406,9 @@ func TestModelMetaAndEffort(t *testing.T) {
 		t.Fatalf("DefaultEffort = %q", eff)
 	}
 
-	// 未选择（空串）= 默认档：不向 API 声明推理等级；off 是关闭思考档，两者都合法。
+	// 未选择（空串）= 默认档：不向 API 声明推理等级；未声明的档位一律归一到默认。
 	for _, tc := range []struct{ selected, want string }{
 		{"", ""},
-		{EffortOff, EffortOff},
 		{"high", "high"},
 		{"nope", ""},
 	} {
@@ -422,18 +421,18 @@ func TestModelMetaAndEffort(t *testing.T) {
 	}
 }
 
-func TestEffortOffNeedsDeclaredLevels(t *testing.T) {
+func TestEffortClearedForModelWithoutLevels(t *testing.T) {
 	s, _ := openTemp(t)
 	if _, err := s.Apply(Patch{
 		Providers: &[]ProviderPatch{{
 			ID: "gw", Models: []string{"m1", "m2"},
 			ModelMeta: map[string]ModelSpec{"m1": {ReasoningEfforts: []string{"low", "high"}}, "m2": {}},
 		}},
-		Selected: &Selection{Provider: "gw", Model: "m2", Effort: EffortOff},
+		Selected: &Selection{Provider: "gw", Model: "m2", Effort: "high"},
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	// 没有声明档位的模型没有「关闭」可选，残留值要被清掉。
+	// 没有声明档位的模型不暴露档位，残留值要被清掉。
 	if eff := s.Get().DefaultEffort(); eff != "" {
 		t.Fatalf("未声明档位时应为空，实际 %q", eff)
 	}

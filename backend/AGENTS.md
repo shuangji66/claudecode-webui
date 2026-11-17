@@ -88,9 +88,8 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   无条件加参数会让旧版本（面板可以切版本）起不来，表现成「会话启动失败」。
 - `Effort` 非空时追加 `--effort <level>`；CLI 只接受 low/medium/high/xhigh/max，
   设置层已做白名单过滤，不要在 process 层再放行任意字符串。
-  「关闭思考」档（`settings.EffortOff`）**不是** `--effort` 的取值：manager 把它翻译成
-  「不传 `--effort`」+ 注入 `MAX_THINKING_TOKENS=0`；「默认」档两者都不做。
-  `CleanEnv` 因此必须剔除继承的 `MAX_THINKING_TOKENS` / `CLAUDE_CODE_DISABLE_THINKING`。
+  「默认」档是空串 → 不传 `--effort`（不向 API 声明推理等级）。
+  **不要试图做「关闭思考」档**：`--effort` 没有 off，`MAX_THINKING_TOKENS=0` 在中转下实测无效。
 - `CleanEnv()` 剔除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`HOME`、`PWD`，
   再强制注入 `HOME`/`PWD`；**保留 `ANTHROPIC_*`**。
 - `Spawn()` 必须持续排空 stderr（否则管道写满会卡住子进程），只保留尾部用于报错。
@@ -124,10 +123,14 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   新增字段时保持老配置（只有 `models: ["id"]`）可读。
 - 推理强度没有控制请求，只在 `process.Args` 里用 `--effort` 固定；已有会话改强度
   只能提示「新会话生效」，不要假装热切换。
-- **档位只有三种来源**：模型声明的 `reasoning_efforts`、界面自带的「默认」（`Selection.Effort`
-  为空，不向 API 声明）、「关闭」（`settings.EffortOff`）。**没有每模型「默认强度」配置**，
-  未选择就是「默认」——`DefaultEffort()` 不再回落到 `reasoning_efforts[0]`，
-  旧配置里的 `default_reasoning_effort` 读时忽略、下次写盘即消失。
+- **档位只有两种来源**：模型声明的 `reasoning_efforts` 与界面自带的「默认」（`Selection.Effort`
+  为空，不向 API 声明）。**没有每模型「默认强度」配置**，未选择就是「默认」——
+  `DefaultEffort()` 不再回落到 `reasoning_efforts[0]`，旧配置里的
+  `default_reasoning_effort` 读时忽略、下次写盘即消失。
+- **改档位靠重开会话**：控制协议里没有 `set_effort`，`--effort` 只在启动时固定。
+  前端 `applyEffortChange` 判断：空闲就 `DELETE /api/session?id=` + `POST /api/session
+  {cwd, resume:id}`（同一 id，`--resume` 保住上下文），进行中则等 `result` 到达再重开；
+  还没发过消息的对话没有转录，`--resume` 会失败，那种情况直接新建。
 - 界面偏好 `locale`（zh/en）、`font_size`（12–20）、
   `proxy_url`（http/https/socks5/socks5h，空=直连）落在 `settings.json`；
   **主题不在这里**：`theme` 只缓存在浏览器 localStorage（每台设备各看各的），

@@ -7,6 +7,7 @@ import {
   formsFromSettings,
   normalizeSettings,
   modelOptionsFromSettings,
+  effortApply,
   effortChoices,
   effortFor,
   formatCapacity,
@@ -165,8 +166,8 @@ describe("模型能力元数据", () => {
     expect(opts[0].spec.supports_image).toBe(true);
   });
 
-  it("推理等级候选是「默认 / 关闭 / 声明的档位」", () => {
-    expect(effortChoices({ reasoning_efforts: ["low", "high"] })).toEqual(["", "off", "low", "high"]);
+  it("推理等级候选是「默认 + 声明的档位」", () => {
+    expect(effortChoices({ reasoning_efforts: ["low", "high"] })).toEqual(["", "low", "high"]);
     // 没有声明档位的模型不该出现推理等级。
     expect(effortChoices({})).toEqual([]);
     expect(effortChoices(undefined)).toEqual([]);
@@ -175,12 +176,26 @@ describe("模型能力元数据", () => {
   it("没有有效选择时用「默认」，不声明推理等级", () => {
     const spec = { reasoning_efforts: ["low", "high"] };
     expect(effortFor(spec, "low")).toBe("low");
-    expect(effortFor(spec, "off")).toBe("off");
     expect(effortFor(spec, "")).toBe("");
     expect(effortFor(spec, undefined)).toBe("");
     expect(effortFor(spec, "nope")).toBe("");
     expect(effortFor({ reasoning_efforts: ["low"] }, "high")).toBe("");
     expect(effortFor({}, "high")).toBe("");
+  });
+
+  it("切档位后：进行中等这一轮结束、空闲立刻重开、没有进程就什么都不做", () => {
+    // 档位没变：不动（进行中也不该白等一次重开）。
+    expect(effortApply("ready", "high", "high")).toBe("none");
+    expect(effortApply("busy", "high", "high")).toBe("none");
+    // 空闲（含「默认」空串）→ 立刻按同一 id 重开。
+    expect(effortApply("ready", "high", "low")).toBe("restart");
+    expect(effortApply("ready", "high", "")).toBe("restart");
+    expect(effortApply("starting", "", "high")).toBe("restart");
+    // 进行中不能杀进程。
+    expect(effortApply("busy", "high", "low")).toBe("afterTurn");
+    // 没有活着的进程：下次打开对话自然按新档位起。
+    expect(effortApply("closed", "high", "low")).toBe("none");
+    expect(effortApply(undefined, undefined, "low")).toBe("none");
   });
 
   it("model_meta 为 null 时归一成空对象", () => {

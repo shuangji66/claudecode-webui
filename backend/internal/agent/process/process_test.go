@@ -123,21 +123,6 @@ func TestArgsEffort(t *testing.T) {
 	}
 }
 
-func TestCleanEnvStripsThinkingKnobs(t *testing.T) {
-	// 「关闭思考」档注入的是 MAX_THINKING_TOKENS=0；继承值必须先剔除，
-	// 否则环境里会有两份，哪一份生效取决于读它的实现。
-	env := CleanEnv([]string{
-		"MAX_THINKING_TOKENS=4096",
-		"CLAUDE_CODE_DISABLE_THINKING=1",
-		"PATH=/bin",
-	}, "/home/u", "/work")
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "MAX_THINKING_TOKENS=") || strings.HasPrefix(kv, "CLAUDE_CODE_DISABLE_THINKING=") {
-			t.Fatalf("思考开关不应被继承: %v", env)
-		}
-	}
-}
-
 func TestCleanEnvStripsProxy(t *testing.T) {
 	env := CleanEnv([]string{
 		"HTTPS_PROXY=http://host:1",

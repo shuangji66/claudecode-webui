@@ -4,14 +4,14 @@
 // 点进去分别是按提供商分组的模型列表和档位列表。这样模型很多时仍然好找，
 // 也避免在工具条上并排放两个下拉把输入区挤窄。
 //
-// 档位列表是「默认 / 关闭 / 模型声明的档位」：「默认」不向 API 声明推理等级，
-// 「关闭」关掉思考（后端改用 MAX_THINKING_TOKENS=0，见 lib/providerForm 的 effortChoices）。
+// 档位列表是「默认 / 模型声明的档位」：「默认」不向 API 声明推理等级
+// （见 lib/providerForm 的 effortChoices）。
 //
 // 菜单只负责选择；模型能力（图片、上下文窗口）不在这里展示。
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { EFFORT_OFF, effortChoices, type ModelOption } from "../../lib/providerForm";
+import { effortChoices, type ModelOption } from "../../lib/providerForm";
 import { useT } from "../../lib/i18n";
 import { POPUP_PANEL, PORTAL_ATTR, useAnchoredPanel, useDismiss } from "../common/Menu";
 import { IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconSpark } from "../common/Icons";
@@ -64,12 +64,8 @@ export function ModelMenu({ options, selectedKey, selectedEffort, disabled, onSe
   const selected = options.find((o) => `${o.provider}/${o.model}` === selectedKey);
   const modelLabel = selected ? selected.spec.name || selected.model : t("未添加模型", "No models");
   const efforts = effortChoices(selected?.spec);
-  /** 「默认」「关闭」两档是界面自己的词，其余档位沿用设置里声明的值。 */
-  const effortLabel = (effort: string) => {
-    if (!effort) return t("默认", "Default");
-    if (effort === EFFORT_OFF) return t("关闭", "Off");
-    return effortName(effort);
-  };
+  /** 「默认」是界面自己的词，其余档位沿用设置里声明的值。 */
+  const effortLabel = (effort: string) => (effort ? effortName(effort) : t("默认", "Default"));
   const groups = useMemo(() => groupModelOptions(options), [options]);
   const showSearch = options.length > 4;
   const filtered = useMemo(() => {

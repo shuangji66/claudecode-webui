@@ -143,9 +143,11 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
           : undefined;
 
   const tools = itemList.filter((i) => i.kind === "tool").length;
-  // 推理强度在进程启动时固定：只有活着的会话才会「选了却不生效」。
-  // 「默认」档是空串，不能像以前那样拿它当「没选」的哨兵，否则切回默认时不会提示。
+  // 推理等级在进程启动时固定（CLI 没有 set_effort），store 会按同一 id 重开会话让它生效；
+  // 进行中不能杀进程，所以这时只剩「等这一轮结束再重开」的过渡态需要提示。
   const effortMismatch = Boolean(liveSession && (liveSession.effort ?? "") !== selectedEffort);
+  // 进行中切换只能等这一轮结束再重开；重开期间的「正在启动」由下面的 starting 分支说。
+  const effortPending = effortMismatch && busy;
 
   // 用量只显示 CLI 真的给出的数字（换算与文案见 UsageStats / lib/usage）。
   // 转录回放时 store 里没有实时快照，就退回最后一条 result 上挂的那份。
@@ -164,14 +166,16 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
   const footer = (
     <>
       <span className="truncate">
-        {effortMismatch
-          ? t("推理强度将在新会话生效", "Reasoning effort applies to new sessions")
-          : busy ? t("Claude 正在工作，可随时中断", "Claude is working; interrupt anytime") : starting ? t("正在启动 Claude…", "Starting Claude…") : (
-            <>
-              <span className="hidden sm:inline">{t("Enter 发送 · Shift+Enter 换行", "Enter to send · Shift+Enter for newline")}</span>
-              <span className="sm:hidden">{t("点右下角发送 · / 唤起命令", "Tap send · / commands")}</span>
-            </>
-          )}
+        {starting ? t("正在启动 Claude…", "Starting Claude…")
+          : effortPending
+            ? t("本轮结束后按新的推理等级重开（上下文保留）", "Reopening with the new reasoning level after this turn")
+            : effortMismatch ? t("推理等级将在重开会话后生效", "Reasoning level applies after the session reopens")
+            : busy ? t("Claude 正在工作，可随时中断", "Claude is working; interrupt anytime") : (
+              <>
+                <span className="hidden sm:inline">{t("Enter 发送 · Shift+Enter 换行", "Enter to send · Shift+Enter for newline")}</span>
+                <span className="sm:hidden">{t("点右下角发送 · / 唤起命令", "Tap send · / commands")}</span>
+              </>
+            )}
       </span>
       <UsageStats snap={snap} turns={turns} tools={tools} events={itemList.length} />
     </>
