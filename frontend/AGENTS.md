@@ -118,7 +118,10 @@ src/
 18. **列表标题**走 `conversationTitle(自定义标题, items, locale)`：自定义 > 首条用户消息 >
     “新对话”。不要用目录名当空对话标题。
 19. **归档/删除后**要刷新对话列表；删除是软删除，前端不要把转录当作可删除文件。
-    当前对话被归档/删除时，打开同工作区下一条非归档对话；没有就回到新对话空态。
+    当前对话被归档时**回到「新对话」页**（`setActive(null)`，localStorage 的
+    `ccweb-active-session` 一并清掉），**不要**自动打开同工作区的下一条：那个「下一条」只是
+    按最近活跃猜的，用户归档完想停下时却被拉进另一个对话、又起一个 claude 进程。
+    删除当前对话仍打开该工作区的下一条（没有就空态）——删除的意图是「继续干活」。
 20. **添加授权目录：能读写就不申请授权**。应用以独立应用用户运行，用户能浏览不代表
     claude 能读写，所以提交前先 `probeDir(target)` → `POST /api/fs/access`：`writable`
     就直接登记（应用自己的数据目录、已授权共享、刚建的空文件夹都是这种），不再弹飞牛
@@ -213,6 +216,16 @@ src/
   最近一问一答），离开/滚动/点击即收；触屏没有 hover 不显示；卡片 `pointer-events-none`，
   不挡点击。内容来自 `GET /api/history/preview`（后端只读转录尾部 64KB，不进列表接口），
   前端按 id 缓存，一轮结束后（`result`）清掉该 id 的缓存。
+- **会话行的两套显示（对齐 DSH）**：桌面（`md` 以上）不悬停只显示相对时间，
+  悬停 / 键盘聚焦 / 该行菜单打开时换成操作组「归档 · 置顶 · ⋯」；触屏没有 hover，
+  只有时间与「⋯」常驻（归档 / 置顶在菜单里也能点，那是触屏唯一的入口）。
+  操作组用 `md:hidden` ↔ `md:group-hover/session:flex` 切换（`display` 而不是 `opacity`）：
+  三颗按钮必须真的把时间和标题挤掉，用透明度叠在时间槽上会盖住长标题。
+  **右键会话行等同点「⋯」**（`onContextMenu` → 同一个菜单，锚在整行上，并顺手收掉悬浮预览）
+  ——不要把右键做成第二套菜单，也不要只在按钮上挂事件。
+- **置顶（`pinned`）只是排序偏好**（`lib/conversations.pinnedFirst`）：两种排序模式都先过它，
+  置顶的永远在同一组最前，组内顺序保持原样；它不进 `LastFor`，不影响「默认恢复哪一条」，
+  也不结束进程。行上常驻一颗小图钉表示置顶状态，取消置顶从行内按钮或菜单点。
 - **侧栏状态标记**（`lib/conversations.conversationStatus`，优先级从高到低）：待审批 →
   强调色圆点；进程 `busy`/`starting` → 进度环；完成但没看过 → 绿点；活跃但空闲 → 不画点；
   没有常驻进程 → 灰点。「完成未看」由 `applyEvent` 在 `result` 到达且该对话不是当前打开的
@@ -370,6 +383,9 @@ src/
     点外部/Esc 关闭），不要在组件里各写一套 document 监听。**向上翻要用 `bottom` 锚定
     底边**（`anchoredPosition` 已这么做）：按估算高度算 `top` 会让高菜单飘到视口顶端、
     和触发器脱节。菜单高度上限由定位层给出（`panelMaxHeight()`），内部滚动。
+    **估算高度必须把分组标题算进去**（`menuHeight()`）：漏算时估算比内容矮，明明下方
+    空间够也会被裁出一条滚动条（侧栏「分组 / 排序 / 筛选」菜单就是这么踩的）。
+    `panelMaxHeight()` 取 80vh / 560px：60vh 在手机竖屏只有 274px，够不着普通菜单。
   - 确认 / 输入走 `askConfirm` / `askPrompt`（`SystemDialogs` 在 `App` 挂一次），
     **禁止 `window.confirm` / `window.prompt` / `window.alert`**。
   - 按钮统一 `components/common/Button.tsx`（primary/secondary/ghost/danger + sm/md），

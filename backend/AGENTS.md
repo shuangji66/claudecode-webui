@@ -17,7 +17,7 @@ internal/agent/manager    会话池、上限、空闲回收
 internal/history     转录摘要 + 按 id 回放原始事件行 + 子代理旁路转录
 internal/project     工作目录枚举/校验、目录浏览器
 internal/workspace   授权目录 + 当前工作区（workspaces.json）
-internal/conversation 对话元数据（conversations.json：归档/删除/重命名/最近活跃）
+internal/conversation 对话元数据（conversations.json：归档/置顶/删除/重命名/最近活跃）
 internal/fsapi       工作区内文件树/文本预览/原始字节（路径围栏 + 符号链接校验）
 internal/gitctl      Git 面板后端：repos/status/diff/stage/commit/log/branch/pull
 internal/terminal    Linux PTY 会话（/dev/ptmx + ioctl，零依赖）
@@ -197,7 +197,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 
 - 新建会话生成 UUID，同时作为 manager id 与 claude `--session-id`；恢复用同一个 UUID
   `--resume`。`Manager.Resume` 对已在运行的 id 直接返回现有 info，并在 createMu 内串行化。
-- `conversation.Store` 只存应用增量（标题/归档/删除/last_active/模型/用量快照），转录仍由 claude 写。
+- `conversation.Store` 只存应用增量（标题/归档/置顶/删除/last_active/模型/用量快照），转录仍由 claude 写。
+  `pinned` 只是侧栏排序偏好（前端 `pinnedFirst` 用），后端不替它排序、也不让它影响
+  `LastFor` 的自动恢复；PATCH `/api/conversations {id,pinned}` 改，列表原样带出去。
   用量快照（`usage`）是前端从 CLI 的 `usage` 算好的几个数字，后端不解释内容，只校验
   是合法 JSON 且 ≤ 2KB（`SetUsage`），随对话一起读写。
   删除写墓碑，不删 jsonl；`LastFor`/列表/自动预热都必须跳过 deleted/archived。
@@ -265,7 +267,7 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   审批等切模式」白等一个超时，用户点「允许」看起来毫无反应。所以 `permission_mode` 在
   独立 goroutine 里跑，失败用 `error` 事件回（`writeFrame` 只入队，跨 goroutine 安全）。
   新增命令前先问：它会不会等对端？会就挪出去。
-- 对话路由：`GET /api/conversations`、`PATCH /api/conversations`（重命名/归档/touch/usage）、
+- 对话路由：`GET /api/conversations`、`PATCH /api/conversations`（重命名/归档/置顶/touch/usage）、
   `DELETE /api/conversations?id=`（软删除）、`GET /api/history/transcript?id=`（回放）。
 - 预览路由：`GET /api/history/preview?id=` 返回会话最近一问一答（侧栏悬浮预览用）。
   `history.LoadPreview` 只读转录尾部 64KB、跳过 sidechain/meta 与本地命令回显，
