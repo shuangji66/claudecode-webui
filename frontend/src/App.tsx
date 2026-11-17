@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useAppStore } from "./store/useAppStore";
 import { getToken, setToken } from "./lib/runtime";
 import { applyPreferences, watchSystemTheme } from "./lib/theme";
@@ -6,14 +6,33 @@ import { installAutofillGuard } from "./lib/autofill";
 import { I18nProvider, useT } from "./lib/i18n";
 import { Sidebar } from "./components/layout/Sidebar";
 import { ChatPane } from "./components/chat/ChatPane";
-import { SettingsDrawer } from "./components/layout/SettingsDrawer";
 import { ClaudeInstallPrompt } from "./components/layout/ClaudeInstallPrompt";
 import { TokenGate } from "./components/layout/TokenGate";
-import { WorkspaceDialog } from "./components/layout/WorkspaceDialog";
-import { HistoryDialog } from "./components/layout/HistoryDialog";
 import { SystemDialogs } from "./components/common/SystemDialogs";
 import { BrandMark, IconClose, IconRetry } from "./components/common/Icons";
-import { RightSidebar } from "./components/right/RightSidebar";
+
+// 首屏只留壳层。设置抽屉（含全部设置页与提供商目录）、右侧栏（文件/Git/终端）、
+// 两个对话框都在第一次打开时按需拉取——它们加起来占掉首屏包体的大半，
+// 而打开对话本身一次都不需要。
+const SettingsDrawer = lazy(() =>
+  import("./components/layout/SettingsDrawer").then((m) => ({ default: m.SettingsDrawer })),
+);
+const WorkspaceDialog = lazy(() =>
+  import("./components/layout/WorkspaceDialog").then((m) => ({ default: m.WorkspaceDialog })),
+);
+const HistoryDialog = lazy(() =>
+  import("./components/layout/HistoryDialog").then((m) => ({ default: m.HistoryDialog })),
+);
+const RightSidebar = lazy(() => import("./components/right/RightSidebar").then((m) => ({ default: m.RightSidebar })));
+
+/** 首次打开后才挂载，之后保持挂载：配合 lazy，关闭再打开不会丢表单状态。 */
+function useLazyMount(flag: boolean): boolean {
+  const [mounted, setMounted] = useState(flag);
+  useEffect(() => {
+    if (flag) setMounted(true);
+  }, [flag]);
+  return mounted || flag;
+}
 
 const COLLAPSE_KEY = "ccweb-sidebar-collapsed";
 const RIGHT_OPEN_KEY = "ccweb-right-open";
@@ -75,6 +94,11 @@ function AppShell() {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [rightOpen, setRightOpen] = useState(readRightOpen);
   const subagentView = useAppStore((s) => s.subagentView);
+
+  // 三个模态首次打开才加载代码；之后保持挂载，行为和以前一致。
+  const settingsMounted = useLazyMount(settingsOpen);
+  const workspaceMounted = useLazyMount(workspaceOpen);
+  const historyMounted = useLazyMount(historyOpen);
 
   // 聊天里点「查看对话」：右侧栏可能还没开，这里替用户打开。
   useEffect(() => {
@@ -224,9 +248,19 @@ function AppShell() {
       </main>
 
       {/* 标签页由右侧栏自己管：文件 / Git / 每个终端各一个标签，切走不卸载。 */}
-      {rightOpen && <RightSidebar cwd={rightCwd} onClose={() => setRightOpen(false)} />}
+      {rightOpen && (
+        <Suspense fallback={null}>
+          <RightSidebar cwd={rightCwd} onClose={() => setRightOpen(false)} />
+        </Suspense>
+      )}
 
-      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsTab} cwd={rightCwd} />
+      <Suspense fallback={null}>
+        {settingsMounted && (
+          <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsTab} cwd={rightCwd} />
+        )}
+        {workspaceMounted && <WorkspaceDialog open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />}
+        {historyMounted && <HistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} />}
+      </Suspense>
       {/* 一个版本都没装：后端能起来，但开不了会话，首屏直接把人送到部署页 */}
       <ClaudeInstallPrompt
         open={Boolean(info && info.claude_installed === false) && !installPromptDismissed}
@@ -236,13 +270,12 @@ function AppShell() {
           openDeploy();
         }}
       />
-      <WorkspaceDialog open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />
-      <HistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} />
       {/* 全局确认 / 输入框（替代 window.confirm / prompt），由这里挂一次 */}
       <SystemDialogs />
 
+      {/* 提示条放顶部：底部会压住输入卡和它的提示行，而错误恰恰需要用户一边看一边改。 */}
       {error && (
-        <div className="fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] z-[60] md:left-1/2 md:right-auto md:w-auto md:-translate-x-1/2">
+        <div className="fixed inset-x-3 top-[calc(env(safe-area-inset-top,0px)+68px)] z-[45] md:left-1/2 md:right-auto md:w-auto md:-translate-x-1/2">
           <div className="flex items-start gap-2 rounded-xl bg-ink px-3.5 py-2.5 text-[12px] text-canvas shadow-xl">
             <span className="min-w-0 flex-1 break-words">{error}</span>
             <button type="button" onClick={clearError} className="shrink-0 rounded p-0.5 opacity-70 hover:opacity-100" aria-label={t("关闭提示", "Dismiss")}>
