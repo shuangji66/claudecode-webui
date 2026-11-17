@@ -130,10 +130,12 @@ func (s *Server) handleListPlugins(w http.ResponseWriter, r *http.Request) {
 		Marketplaces: []pluginMarketplace{},
 		Home:         s.d.Plugins.Home(),
 	}
-	if avail, at, note := s.pluginAvailableSnapshot(); avail != nil {
-		payload.AvailableTotal = len(avail)
+	// 失败原因（note）即使还没有目录也要带出去，见 pluginAvailableSnapshot。
+	avail, at, note := s.pluginAvailableSnapshot()
+	payload.AvailableTotal = len(avail)
+	payload.AvailableNote = note
+	if !at.IsZero() {
 		payload.AvailableAt = at.Format(time.RFC3339)
-		payload.AvailableNote = note
 	}
 	// 没有缓存就在后台补一次（首次抓目录可能十几秒，不能卡住这个请求）。
 	s.maybeAutoRefreshAvailable()
@@ -516,8 +518,9 @@ func (s *Server) pluginJobSnapshot() *pluginJobView {
 func (s *Server) pluginAvailableSnapshot() ([]pluginAvailable, time.Time, string) {
 	s.pluginMu.Lock()
 	defer s.pluginMu.Unlock()
+	// 失败原因即使还没有目录也要带出去：界面要能说清「为什么这里是空的」。
 	if s.pluginAvailAt.IsZero() {
-		return nil, time.Time{}, ""
+		return nil, time.Time{}, s.pluginAvailNote
 	}
 	out := make([]pluginAvailable, len(s.pluginAvail))
 	copy(out, s.pluginAvail)
@@ -525,15 +528,21 @@ func (s *Server) pluginAvailableSnapshot() ([]pluginAvailable, time.Time, string
 }
 
 func (s *Server) setPluginAvailable(list []pluginAvailable, at time.Time, note string) {
+	// 失败（at 为零 / list 为空）只更新「为什么没刷到」，**保留上一次的目录**：
+	// 离线或 registry 抖动时清空它，界面上的 3743 条会凭空变成 0，而且
+	// pluginAvailLoaded 已经是 true，不会再从落盘缓存里读回来（只能重启进程）。
+	if at.IsZero() || len(list) == 0 {
+		s.pluginMu.Lock()
+		s.pluginAvailNote = note
+		s.pluginMu.Unlock()
+		return
+	}
+
 	s.pluginMu.Lock()
 	s.pluginAvail = list
 	s.pluginAvailAt = at
 	s.pluginAvailNote = note
 	s.pluginMu.Unlock()
 
-	// 成功读到目录才落盘（at 为零表示刷新失败，保留上一次的缓存）。
-	if at.IsZero() || len(list) == 0 {
-		return
-	}
 	s.savePluginCache(list, at, note)
 }

@@ -227,3 +227,73 @@ func TestPluginAvailablePagingHandler(t *testing.T) {
 		t.Fatalf("limit 应被夹到 %d，实际 %d", pluginPageMax, page.Limit)
 	}
 }
+
+// 刷新失败不能把已经读到的目录清空。
+//
+// 离线是常态（NAS 在内网、registry 偶尔不可达）：点一次「刷新可用插件」失败，
+// 如果顺手把内存里的目录抹成空，界面上 3743 条会立刻变成 0 条，而且
+// pluginAvailLoaded 已经为 true，不会再从落盘缓存里读回来——只能重启进程。
+func TestPluginAvailableKeepsCatalogOnRefreshFailure(t *testing.T) {
+	mgr, _ := availableClaude(t, 3)
+	srv := serverWithPlugins(t, mgr)
+	srv.setPluginAvailable([]pluginAvailable{
+		{PluginID: "p0@m", Name: "alpha", Description: "first", Marketplace: "m"},
+		{PluginID: "p1@m", Name: "beta", Description: "second", Marketplace: "m"},
+	}, time.Now(), "")
+	// 模拟「用户已经打开过设置页」：落盘缓存只读一次，之后内存就是唯一来源。
+	// 不先标记的话，下面的断言会被 loadPluginCache 重新读盘掩盖掉。
+	srv.loadPluginCache()
+
+	// 失败路径：refreshAvailable 里就是 setPluginAvailable(nil, 零值时间, 原因)。
+	srv.setPluginAvailable(nil, time.Time{}, "拉取失败: dial tcp: 网络不可达")
+
+	page := pluginAvailablePageFor(t, srv, "?limit=10")
+	if page.Total != 2 || page.Matched != 2 || len(page.Items) != 2 {
+		t.Fatalf("刷新失败后应保留上一次的目录: total=%d matched=%d items=%d", page.Total, page.Matched, len(page.Items))
+	}
+	if !strings.Contains(page.Note, "网络不可达") {
+		t.Fatalf("失败原因要带出去，实际 %q", page.Note)
+	}
+
+	// 主接口的 total 同理：它决定界面是否显示「可安装」这一块。
+	rec := mcpReq(t, srv, http.MethodGet, "/api/plugins", "secret", "")
+	var payload pluginsPayload
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.AvailableTotal != 2 {
+		t.Fatalf("主接口应保留目录条数，实际 %d", payload.AvailableTotal)
+	}
+	if !strings.Contains(payload.AvailableNote, "网络不可达") {
+		t.Fatalf("主接口要带上失败原因，实际 %q", payload.AvailableNote)
+	}
+}
+
+// 从没有目录到第一次刷新失败：条数是 0，但原因必须看得见（界面据此说「为什么是空的」）。
+func TestPluginAvailableNoteWithoutCatalog(t *testing.T) {
+	mgr, _ := availableClaude(t, 0)
+	srv := serverWithPlugins(t, mgr)
+	srv.setPluginAvailable(nil, time.Time{}, "拉取失败: 离线")
+
+	page := pluginAvailablePageFor(t, srv, "")
+	if page.Total != 0 || len(page.Items) != 0 {
+		t.Fatalf("没有目录时不该有结果: %+v", page)
+	}
+	if page.Note != "拉取失败: 离线" {
+		t.Fatalf("没有目录时也要带上失败原因，实际 %q", page.Note)
+	}
+}
+
+// pluginAvailablePageFor 读一页可安装插件（断言状态码后解析）。
+func pluginAvailablePageFor(t *testing.T, srv *Server, qs string) pluginAvailablePage {
+	t.Helper()
+	rec := mcpReq(t, srv, http.MethodGet, "/api/plugins/available"+qs, "secret", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	var page pluginAvailablePage
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("解析分页响应: %v", err)
+	}
+	return page
+}
