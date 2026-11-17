@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ccweb/backend/internal/authz"
 )
 
 func openTemp(t *testing.T) (*Store, string) {
@@ -651,5 +653,142 @@ func TestSearchSettingsValidation(t *testing.T) {
 	zero := 0
 	if _, err := s.Apply(Patch{SearchCount: &zero}); err == nil {
 		t.Fatalf("条数 0 应当报错")
+	}
+}
+
+// TCP 直连访问：默认关闭、默认 3141；开启必须带合规密码，落盘只有摘要。
+func TestTCPAccessDefaults(t *testing.T) {
+	s, _ := openTemp(t)
+	got := s.Get()
+	if got.TCPEnabled {
+		t.Fatal("端口访问默认必须关闭")
+	}
+	if got.TCPPort != DefaultTCPPort {
+		t.Fatalf("TCPPort = %d, want %d", got.TCPPort, DefaultTCPPort)
+	}
+	if got.TCPPasswordHash != "" {
+		t.Fatal("默认不应有密码摘要")
+	}
+	pub := s.Public()
+	if pub.TCPEnabled || pub.TCPPasswordSet || pub.TCPPort != DefaultTCPPort {
+		t.Fatalf("Public 默认值不对: %+v", pub)
+	}
+}
+
+func TestTCPAccessRequiresStrongPassword(t *testing.T) {
+	s, path := openTemp(t)
+	on := true
+	if _, err := s.Apply(Patch{TCPEnabled: &on}); err == nil {
+		t.Fatal("没有密码时开启端口访问应当报错")
+	}
+	for _, weak := range []string{"short", "allletters", "12345678"} {
+		pwd := weak
+		if _, err := s.Apply(Patch{TCPEnabled: &on, TCPPassword: &pwd}); err == nil {
+			t.Fatalf("弱密码 %q 应当报错", weak)
+		}
+	}
+
+	pwd := "s3cret-123"
+	port := 4040
+	pub, err := s.Apply(Patch{TCPEnabled: &on, TCPPort: &port, TCPPassword: &pwd})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !pub.TCPEnabled || pub.TCPPort != 4040 || !pub.TCPPasswordSet {
+		t.Fatalf("Public = %+v", pub)
+	}
+
+	got := s.Get()
+	if got.TCPPasswordHash == "" {
+		t.Fatal("密码摘要没落盘")
+	}
+	if strings.Contains(got.TCPPasswordHash, pwd) {
+		t.Fatalf("摘要里出现了明文: %s", got.TCPPasswordHash)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), pwd) {
+		t.Fatalf("settings.json 里有明文密码: %s", raw)
+	}
+	pubJSON, _ := json.Marshal(pub)
+	if strings.Contains(string(pubJSON), got.TCPPasswordHash) {
+		t.Fatalf("Public 回传了密码摘要: %s", pubJSON)
+	}
+
+	re, err := Open(path)
+	if err != nil {
+		t.Fatalf("重新打开: %v", err)
+	}
+	if reloaded := re.Get(); !reloaded.TCPEnabled || !authz.VerifyPassword(reloaded.TCPPasswordHash, pwd) {
+		t.Fatalf("落盘后无法用原密码登录: %+v", reloaded)
+	}
+
+	// 空串=沿用旧密码（与其它密钥一致）。
+	empty := ""
+	if _, err := s.Apply(Patch{TCPPassword: &empty}); err != nil {
+		t.Fatalf("Apply 空密码: %v", err)
+	}
+	if s.Get().TCPPasswordHash != got.TCPPasswordHash {
+		t.Fatal("空串不该改密码")
+	}
+
+	// 关闭端口访问后密码可以保留，供下次开启直接使用。
+	off := false
+	if _, err := s.Apply(Patch{TCPEnabled: &off}); err != nil {
+		t.Fatalf("关闭: %v", err)
+	}
+	if s.Get().TCPEnabled {
+		t.Fatal("应当已关闭")
+	}
+	if s.Get().TCPPasswordHash == "" {
+		t.Fatal("关闭后不应丢掉密码")
+	}
+}
+
+func TestTCPPortValidation(t *testing.T) {
+	s, _ := openTemp(t)
+	on := true
+	pwd := "s3cret-123"
+	if _, err := s.Apply(Patch{TCPPassword: &pwd}); err != nil {
+		t.Fatalf("设置密码: %v", err)
+	}
+	for _, port := range []int{0, 1024, 70000} {
+		p := port
+		if _, err := s.Apply(Patch{TCPPort: &p, TCPEnabled: &on}); err == nil {
+			t.Fatalf("端口 %d 应当报错", port)
+		}
+	}
+	if s.Get().TCPPort != DefaultTCPPort || s.Get().TCPEnabled {
+		t.Fatalf("失败的 Apply 不该改动内存态: %+v", s.Get())
+	}
+	// 1025 是允许的最小端口。
+	min := MinTCPPort
+	if _, err := s.Apply(Patch{TCPPort: &min, TCPEnabled: &on}); err != nil {
+		t.Fatalf("端口 %d 应当允许: %v", min, err)
+	}
+	if got := s.Get(); got.TCPPort != min || !got.TCPEnabled {
+		t.Fatalf("端口 %d 没生效: %+v", min, got)
+	}
+}
+
+// 「开启但没有密码摘要」的坏配置读进来要回落成关闭，否则连登录都做不到。
+func TestNormalizeDisablesEnabledWithoutHash(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	body := `{"tcp_enabled":true,"tcp_port":4141}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	got := s.Get()
+	if got.TCPEnabled {
+		t.Fatalf("无密码的坏配置应回落成关闭: %+v", got)
+	}
+	if got.TCPPort != 4141 {
+		t.Fatalf("端口应保留: %d", got.TCPPort)
 	}
 }

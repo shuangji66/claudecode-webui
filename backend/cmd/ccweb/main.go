@@ -1,7 +1,9 @@
 // Command ccweb 是 Claude Code 的可视化 Web 控制台服务端。
 //
-// 形态：单二进制（内嵌前端），只监听 unix socket，由前置网关按 baseurl 反代。
-// 它自身不实现 agent 逻辑，而是常驻 claude 子进程并通过 stream-json 协议转发。
+// 形态：单二进制（内嵌前端）。两条入口并存：unix socket 由前置网关按 baseurl
+// 反代（本机可信入口，免密），直连 TCP 端口默认 3141、挂在根路径，可在设置页
+// 改端口并开启访问密码。它自身不实现 agent 逻辑，而是常驻 claude 子进程并通过
+// stream-json 协议转发。
 package main
 
 import (

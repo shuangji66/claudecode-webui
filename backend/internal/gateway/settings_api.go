@@ -3,9 +3,12 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
+	"ccweb/backend/internal/authz"
 	"ccweb/backend/internal/history"
 	"ccweb/backend/internal/settings"
 )
@@ -19,16 +22,96 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 //
 // 提供商数组是「整体替换」语义；其中某个提供商的密钥留空表示沿用已保存的值，
 // 清除必须显式 clear_key——否则「只改模型列表」的保存会把密钥抹掉。
+//
+// TCP 端口/开关不一样：它们是监听状态，必须**先 bind 成功再落盘**。否则开关
+// 写进 settings.json 却监听失败，下次启动还是坏的，用户也不知道该改哪里。
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	var patch settings.Patch
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&patch); err != nil {
 		writeErr(w, "请求体解析失败: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// 只有请求真的碰了 TCP 设置才动监听：其它页面的保存不该因为
+	// 「上次端口没绑上」被连带报错。Access 页每次都会带上这两个字段，
+	// 所以它按保存键本身就能重试失败的监听。
+	//
+	// 串行化整段「监听调整 + 落盘」：两个标签页同时保存时，监听和
+	// settings.json 不能各自保留不同请求的结果。
+	touchingTCP := patch.TCPEnabled != nil || patch.TCPPort != nil
+	if touchingTCP {
+		s.tcpOpMu.Lock()
+		defer s.tcpOpMu.Unlock()
+	}
+
+	prevPort, prevListening, _ := s.TCPStatus()
+	listened := false
+	disabling := false
+
+	if touchingTCP {
+		cur := s.d.Settings.Get()
+		enabled := cur.TCPEnabled
+		if patch.TCPEnabled != nil {
+			enabled = *patch.TCPEnabled
+		}
+		port := cur.TCPPort
+		if patch.TCPPort != nil {
+			port = *patch.TCPPort
+		}
+		if !settings.ValidTCPPort(port) {
+			writeErr(w, fmt.Sprintf("TCP 端口必须在 %d–%d 之间", settings.MinTCPPort, settings.MaxTCPPort), http.StatusBadRequest)
+			return
+		}
+		// 密码与开关在同一个补丁里时以补丁为准（Apply 里还会真正哈希）。
+		hasPassword := cur.TCPPasswordHash != ""
+		if patch.TCPPassword != nil && *patch.TCPPassword != "" {
+			if err := authz.ValidatePassword(*patch.TCPPassword); err != nil {
+				writeErr(w, "访问密码不符合要求："+err.Error(), http.StatusBadRequest)
+				return
+			}
+			hasPassword = true
+		}
+		if enabled && !hasPassword {
+			writeErr(w, "开启端口访问前请先设置访问密码", http.StatusBadRequest)
+			return
+		}
+		if enabled {
+			if !prevListening || prevPort != port {
+				if err := s.ListenTCP(port); err != nil {
+					// 保存前真的 bind 一次：端口被别的程序占用时直接 400，
+					// 设置不落盘、旧监听也不受影响。
+					writeErr(w, "TCP 端口无法监听（可能已被其它程序占用）："+err.Error(), http.StatusBadRequest)
+					return
+				}
+				listened = true
+			}
+		} else {
+			// 关闭端口访问：落盘成功后才真正断开（见下面）。
+			disabling = true
+		}
+	}
+
 	pub, err := s.d.Settings.Apply(patch)
 	if err != nil {
+		if listened {
+			if prevListening && prevPort > 0 {
+				_ = s.ListenTCP(prevPort)
+			} else {
+				s.CloseTCP()
+			}
+		}
 		writeErr(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	if disabling {
+		// 会话立刻作废；listener 也马上关掉（端口可立刻重开），
+		// 已有连接再活 500ms——足够让「保存成功」的响应送出去。
+		// 先摘状态再延迟关旧 server，能避免「关掉后立刻重开」被误杀。
+		s.d.Guard.ClearSessions()
+		if prevListening {
+			s.StopTCPGracefully(500 * time.Millisecond)
+		}
 	}
 	writeJSON(w, pub)
 }

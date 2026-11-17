@@ -18,19 +18,22 @@ var spaFS = webui.FS
 // 为什么要注入 base：前端资源用相对路径（vite base:'./'），SPA 路由一旦是
 // `/app/ccweb/session/xx` 这种多级路径，`./assets/x.js` 就会解析到
 // `/app/ccweb/session/assets/x.js`。注入 <base> 后所有相对路径都以 baseurl 为基准。
+//
+// TCP 直连通道的 baseurl 是空串（根路径），此时不注入 <base>，相对路径原样生效。
 func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	root, err := spaFS()
 	if err != nil {
 		http.Error(w, "前端产物缺失", http.StatusInternalServerError)
 		return
 	}
+	base := s.baseOf(r)
 	p := strings.TrimPrefix(r.URL.Path, "/")
 	if p == "" {
 		p = "index.html"
 	}
 	if b, err := fs.ReadFile(root, p); err == nil {
 		if p == "index.html" {
-			b = rewriteBase(b, s.d.Cfg.BaseURL)
+			b = rewriteBase(b, base)
 		}
 		serveBytes(w, p, b)
 		return
@@ -49,7 +52,7 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	serveBytes(w, "index.html", rewriteBase(b, s.d.Cfg.BaseURL))
+	serveBytes(w, "index.html", rewriteBase(b, base))
 }
 
 // rewriteBase 把 index.html 里的相对资源改成带 base 前缀的绝对路径，并插入 <base>。

@@ -1,10 +1,15 @@
-// Package gateway 是对外唯一入口：unix socket + baseurl 前缀 + 路由 + 鉴权。
+// Package gateway 是对外唯一入口：路由 + 两条通道（unix socket / TCP 端口）+ 鉴权。
 //
-// 程序自身不监听 TCP，由前置网关（nginx / 飞牛网关）把 HTTP 与 WebSocket
-// 反代到这个 socket。baseurl 与 socket 路径全部来自环境变量（见 config 包）。
+// 两条通道提供的页面相同，差别只在路径前缀与凭据：
+//   - unix socket：前置网关（nginx / 飞牛网关）按 baseurl 前缀反代，是可信入口，
+//     不校验「TCP 访问密码」（CCWEB_AUTH_TOKEN 仍然两条通道都校验）；
+//   - TCP 端口：挂在根路径、不注入 baseurl，局域网可达，设置页打开鉴权后要求访问密码。
+//
+// socket 路径与 baseurl 来自环境变量（见 config 包），TCP 端口来自设置。
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -99,6 +104,12 @@ type Server struct {
 	// 补过一次「可用插件」（每进程只自动一次，失败留给用户手动重试）。
 	pluginAvailLoaded bool
 	pluginAutoTried   bool
+
+	// tcp 是直连 TCP 端口的监听状态：端口来自设置，保存后可运行期换端口。
+	tcp tcpState
+	// tcpOpMu 串行化「改端口/开关 + 落盘」这一整段：两个标签页同时保存时，
+	// 不能让监听和 settings.json 各自保留不同请求的结果。
+	tcpOpMu sync.Mutex
 }
 
 // New 构造网关。
@@ -107,12 +118,22 @@ func New(d Deps, logger *log.Logger) *Server {
 		logger = log.New(os.Stdout, "[ccweb] ", log.LstdFlags)
 	}
 	s := &Server{d: d, mux: http.NewServeMux(), log: logger, termSlots: make(chan struct{}, maxTerminals)}
+	// TCP 访问密码存在设置里、可运行期修改，所以把取值函数接到 Guard 上，
+	// 而不是启动时快照一份。unix socket 通道本来就不校验它。
+	if d.Guard != nil && d.Settings != nil {
+		d.Guard.SetPasswordSource(func() string {
+			_, hash := d.Settings.TCPAccess()
+			return hash
+		})
+	}
 	s.routes()
 	return s
 }
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/health", s.handleHealth)
+	// 登录是唯一接受明文密码的接口：它把密码换成随机会话令牌。
+	s.mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	s.mux.HandleFunc("GET /api/info", s.authed(s.handleInfo))
 	s.mux.HandleFunc("GET /api/sessions", s.authed(s.handleListSessions))
 	s.mux.HandleFunc("POST /api/session", s.authed(s.handleCreateSession))
@@ -194,9 +215,60 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/", s.handleSPA)
 }
 
-// Handler 返回带 baseurl 前缀剥离的根 handler。
+// Handler 返回 unix socket 通道的根 handler：带 baseurl 前缀剥离，
+// 鉴权只认环境变量令牌（TCP 访问密码不适用于本机 socket）。
 func (s *Server) Handler() http.Handler {
-	return withBaseURL(s.d.Cfg.BaseURL, s.mux)
+	return s.channelHandler(authz.ChannelUnix, s.d.Cfg.BaseURL)
+}
+
+// TCPHandler 返回直连 TCP 端口用的根 handler：挂在根路径（不注入 baseurl），
+// 并且启用鉴权时要求 TCP 访问密码。
+func (s *Server) TCPHandler() http.Handler {
+	return s.channelHandler(authz.ChannelTCP, "")
+}
+
+// channelHandler 把通道与本次请求的有效 baseurl 放进 context。
+//
+// baseurl 必须跟着请求走而不是全局读配置：同一个进程里 unix 通道可能挂在
+// /app/ccweb 下，TCP 通道则始终是根路径；SPA 注入 <base>、/api/info 的
+// base_url 都由它决定。
+func (s *Server) channelHandler(ch authz.Channel, base string) http.Handler {
+	base = strings.TrimRight(base, "/")
+	h := withBaseURL(base, s.mux)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), channelKey{}, ch)
+		ctx = context.WithValue(ctx, baseKey{}, base)
+		h.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// context key 用私有类型，避免和别的包撞键。
+type channelKey struct{}
+type baseKey struct{}
+
+// channelOf 返回请求到达的通道；未标注时按 unix socket 处理。
+func channelOf(r *http.Request) authz.Channel {
+	if v, ok := r.Context().Value(channelKey{}).(authz.Channel); ok {
+		return v
+	}
+	return authz.ChannelUnix
+}
+
+// channelName 把通道转成 /api/info 里的字符串。
+func channelName(ch authz.Channel) string {
+	if ch == authz.ChannelTCP {
+		return "tcp"
+	}
+	return "unix"
+}
+
+// baseOf 返回本次请求的有效 baseurl（TCP 通道为空串）。
+// 没经过 channelHandler 的调用（单测直接打 mux）退回配置里的 baseurl。
+func (s *Server) baseOf(r *http.Request) string {
+	if v, ok := r.Context().Value(baseKey{}).(string); ok {
+		return v
+	}
+	return strings.TrimRight(s.d.Cfg.BaseURL, "/")
 }
 
 // withBaseURL 负责剥离网关配置的前缀；前缀不匹配的请求一律 404，
@@ -231,10 +303,10 @@ func withBaseURL(base string, h http.Handler) http.Handler {
 	})
 }
 
-// authed 是 HTTP 侧的鉴权中间件。
+// authed 是 HTTP 侧的鉴权中间件（凭据要求跟着通道走）。
 func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.d.Guard.Check(r.Header.Get("Authorization"), r.URL.Query().Get("token")) {
+		if !s.d.Guard.Check(channelOf(r), r.Header.Get("Authorization"), r.URL.Query().Get("token")) {
 			writeErr(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -242,7 +314,10 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// ListenAndServe 在 unix socket 上提供服务。
+// ListenAndServe 先起 unix socket（阻塞），再起 TCP 端口（后台）。
+//
+// TCP 监听失败不退出进程：那样用户连设置页都进不去改端口。失败只记日志，
+// 端口写进 /api/info 的状态，设置页保存一次即重试。
 func (s *Server) ListenAndServe() error {
 	sock := s.d.Cfg.AdminSock
 	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
@@ -258,6 +333,14 @@ func (s *Server) ListenAndServe() error {
 	}
 	if err := os.Chmod(sock, 0o660); err != nil {
 		s.log.Printf("chmod socket 失败: %v", err)
+	}
+	// 端口访问默认关闭；开启后才监听。绑定失败不退出进程：用户还要进设置页改端口。
+	if s.d.Settings != nil {
+		if enabled, _ := s.d.Settings.TCPAccess(); enabled {
+			if err := s.ListenTCP(s.configuredTCPPort()); err != nil {
+				s.log.Printf("TCP 访问端口 %d 监听失败（可在「设置 → 访问」里改端口后重试）: %v", s.configuredTCPPort(), err)
+			}
+		}
 	}
 	srv := &http.Server{
 		Handler:           s.Handler(),

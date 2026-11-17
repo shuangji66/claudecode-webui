@@ -22,9 +22,12 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	//
 	// 未装配部署管理时**不带这两个字段**：前端据此区分"确实没装"与"这套部署不
 	// 走托管安装"，否则会误弹一个装不了东西的安装提示。
+	ch := channelOf(r)
+	tcpPort, tcpListening, tcpErr := s.TCPStatus()
 	body := map[string]any{
-		"version":            s.d.Cfg.Version,
-		"base_url":           s.d.Cfg.BaseURL,
+		"version": s.d.Cfg.Version,
+		// base_url 是本次请求的有效前缀：unix 通道是网关前缀，TCP 通道为空。
+		"base_url":           s.baseOf(r),
 		"socket":             s.d.Cfg.AdminSock,
 		"claude_bin":         s.d.Manager.Binary(),
 		"claude_version":     s.d.ClaudeVersion,
@@ -41,7 +44,17 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 			}
 			return s.d.Workspaces.Current()
 		}(),
-		"auth_required": s.d.Guard.Required(),
+		// auth_required / auth_mode 都按「本次请求的通道」回答：同一个进程里
+		// unix socket 免密、TCP 端口要密码，不能给一个全局答案。
+		"auth_required": s.d.Guard.Required(ch),
+		"auth_mode":     s.d.Guard.Mode(ch),
+		// channel 让前端区分「本机网关入口」与「TCP 直连入口」：改访问密码后
+		// 只有 TCP 入口需要把本地凭据一起换掉。
+		"channel": channelName(ch),
+		// TCP 直连通道的真实状态，供「设置 → 访问」显示「监听中 / 监听失败」。
+		"tcp_port":      tcpPort,
+		"tcp_listening": tcpListening,
+		"tcp_error":     tcpErr,
 		"frontend":      webui.HasIndex(),
 		"max_sessions":  s.d.Cfg.MaxSessions,
 		"started_at":    s.d.StartedAt,

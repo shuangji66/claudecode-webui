@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"ccweb/backend/internal/authz"
 )
 
 // DefaultAPIProtocol 是未指定协议时的默认值（Claude Code 走 Anthropic Messages）。
@@ -58,6 +60,20 @@ const (
 	SearchMinCount = 1
 	SearchMaxCount = 50
 )
+
+// TCP 直连访问的默认端口。设置页可改，保存后立即换监听；
+// unix socket 仍由前置网关反代，两条入口并存。
+const DefaultTCPPort = 3141
+
+// TCP 端口范围。下限取 1025：1024 及以下是特权端口，普通应用用户绑不上，
+// 让用户填了再报「permission denied」没有意义。
+const (
+	MinTCPPort = 1025
+	MaxTCPPort = 65535
+)
+
+// ValidTCPPort 判断端口是否在可监听范围内。
+func ValidTCPPort(port int) bool { return port >= MinTCPPort && port <= MaxTCPPort }
 
 // SupportedLocales / SupportedEfforts 是配置校验白名单。
 var (
@@ -146,6 +162,12 @@ type Settings struct {
 	// ProxyURL 是派给 claude 子进程的 HTTP/HTTPS/SOCKS5 代理；空表示直连。
 	ProxyURL string `json:"proxy_url"`
 
+	// TCP 直连访问：默认关闭，端口默认 3141。开启后必须登录（访问密码，无用户名），
+	// 密码只存 PBKDF2 摘要、绝不落明文；unix socket（前置网关）不校验这个密码。
+	TCPEnabled      bool   `json:"tcp_enabled"`
+	TCPPort         int    `json:"tcp_port"`
+	TCPPasswordHash string `json:"tcp_password_hash,omitempty"`
+
 	// 内置搜索（DeepSeek Search / Fetch API）。密钥与对话用的密钥分开：
 	// 搜索按次计费，不能指望用户愿意把对话密钥复用出去。
 	SearchBaseURL string `json:"search_base_url"`
@@ -185,6 +207,11 @@ type Public struct {
 	SearchAPIKeyMask string `json:"search_api_key_masked"`
 	SearchCount      int    `json:"search_count"`
 	SearchEnabled    bool   `json:"search_enabled"`
+
+	// TCP 直连访问。密码摘要永不回传，只回「是否已设置」。
+	TCPEnabled     bool `json:"tcp_enabled"`
+	TCPPort        int  `json:"tcp_port"`
+	TCPPasswordSet bool `json:"tcp_password_set"`
 
 	// Path 是配置文件路径，方便在 NAS 上备份。
 	Path string `json:"path"`
@@ -228,6 +255,10 @@ type Patch struct {
 	Locale                    *string          `json:"locale"`
 	FontSize                  *int             `json:"font_size"`
 	ProxyURL                  *string          `json:"proxy_url"`
+
+	TCPEnabled  *bool   `json:"tcp_enabled"`
+	TCPPort     *int    `json:"tcp_port"`
+	TCPPassword *string `json:"tcp_password"`
 
 	SearchBaseURL  *string `json:"search_base_url"`
 	SearchAPIKey   *string `json:"search_api_key"`
@@ -289,6 +320,14 @@ func normalizePreferences(v *Settings) {
 		} else {
 			v.ProxyURL = proxy
 		}
+	}
+	// TCP 访问：端口补默认 3141。「开启但没有密码摘要」是坏配置
+	// （会把所有人永远挡在登录页），一律回落成关闭。
+	if !ValidTCPPort(v.TCPPort) {
+		v.TCPPort = DefaultTCPPort
+	}
+	if v.TCPPasswordHash == "" {
+		v.TCPEnabled = false
 	}
 }
 
@@ -387,6 +426,16 @@ func cloneSettings(v Settings) Settings {
 		out.Providers[i] = p.Clone()
 	}
 	return out
+}
+
+// TCPAccess 返回「端口访问是否开启」与访问密码摘要。
+//
+// 单独给一个不做深拷贝的读取口：鉴权在每个 HTTP 请求与 WS 握手上都要查，
+// 走 Get() 会顺带复制整份提供商/模型配置，纯属浪费。
+func (s *Store) TCPAccess() (enabled bool, passwordHash string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cur.TCPEnabled, s.cur.TCPPasswordHash
 }
 
 // Provider 按 id 查找提供商。
@@ -527,6 +576,9 @@ func (s *Store) Public() Public {
 		Locale:                    cur.Locale,
 		FontSize:                  cur.FontSize,
 		ProxyURL:                  cur.ProxyURL,
+		TCPEnabled:                cur.TCPEnabled,
+		TCPPort:                   cur.TCPPort,
+		TCPPasswordSet:            cur.TCPPasswordHash != "",
 		SearchBaseURL:             cur.SearchBaseURL,
 		SearchAPIKeySet:           cur.SearchAPIKey != "",
 		SearchAPIKeyMask:          Mask(cur.SearchAPIKey),
@@ -561,6 +613,17 @@ func (s *Store) Public() Public {
 
 // Apply 合并补丁、写盘并更新内存态。
 func (s *Store) Apply(p Patch) (Public, error) {
+	// 密码摘要在锁外算：PBKDF2 要几十毫秒，不能占着设置锁把读路径（含鉴权）
+	// 一起堵住。补丁本身是不可变入参，先算好再进锁合并。
+	var newHash string
+	if p.TCPPassword != nil && *p.TCPPassword != "" {
+		hash, err := authz.HashPassword(*p.TCPPassword)
+		if err != nil {
+			return Public{}, fmt.Errorf("settings: %w", err)
+		}
+		newHash = hash
+	}
+
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -609,6 +672,24 @@ func (s *Store) Apply(p Patch) (Public, error) {
 			return Public{}, err
 		}
 		next.ProxyURL = proxy
+	}
+	if p.TCPEnabled != nil {
+		next.TCPEnabled = *p.TCPEnabled
+	}
+	if p.TCPPort != nil {
+		if !ValidTCPPort(*p.TCPPort) {
+			s.mu.Unlock()
+			return Public{}, fmt.Errorf("settings: TCP 端口必须在 %d–%d 之间", MinTCPPort, MaxTCPPort)
+		}
+		next.TCPPort = *p.TCPPort
+	}
+	if newHash != "" {
+		// 空串=沿用旧密码（与其它密钥一致），已在锁外跳过哈希。
+		next.TCPPasswordHash = newHash
+	}
+	if next.TCPEnabled && next.TCPPasswordHash == "" {
+		s.mu.Unlock()
+		return Public{}, fmt.Errorf("settings: 开启端口访问前请先设置访问密码")
 	}
 	if p.SearchBaseURL != nil {
 		base := strings.TrimSpace(*p.SearchBaseURL)

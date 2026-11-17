@@ -161,7 +161,7 @@ type clientCmd struct {
 // 没有打开任何对话时也要能到。共用 /ws 而不是再开一个 SSE：鉴权（?token=）、
 // 心跳、指数重连都已经在这里且经过前置网关注入的验证。
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
-	if !s.d.Guard.Check(r.Header.Get("Authorization"), r.URL.Query().Get("token")) {
+	if !s.d.Guard.Check(channelOf(r), r.Header.Get("Authorization"), r.URL.Query().Get("token")) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}

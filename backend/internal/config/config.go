@@ -1,7 +1,8 @@
 // Package config 负责把运行期配置从环境变量解析出来。
 //
-// 约定：本应用只通过 unix socket + baseurl 前缀对外提供服务，两者都从环境变量获取，
-// 由前置网关（nginx / 飞牛网关等）反代到该 socket。程序自身不监听 TCP。
+// 约定：本应用有两条入口——unix socket（前置网关按 baseurl 前缀反代）与
+// 直连 TCP 端口（端口在设置页里配置，默认 3141，挂在根路径）。
+// socket 路径、baseurl 与 TCP 绑定地址都来自环境变量（见下方 Config）。
 package config
 
 import (
@@ -23,6 +24,9 @@ type Config struct {
 	BaseURL string
 	// AuthToken 非空时要求 Bearer token 鉴权（CCWEB_AUTH_TOKEN）。
 	AuthToken string
+	// TCPHost 是直连 TCP 端口绑定的地址（CCWEB_TCP_HOST），空表示所有网卡。
+	// 端口本身来自设置页（默认 3141），因为要在界面上可改、改完立即换监听。
+	TCPHost string
 	// ProjectsRoot 是「新建会话时可选工作目录」的根（CCWEB_PROJECTS_ROOT）。
 	ProjectsRoot string
 	// DataDir 存放运行期产生的临时数据（CCWEB_DATA_DIR）。
@@ -120,6 +124,7 @@ func Load(version string) Config {
 		AdminSock:         EnvOr("ADMIN_SOCK", filepath.Join(dataDir, "ccweb.sock")),
 		BaseURL:           baseURL,
 		AuthToken:         EnvOr("AUTH_TOKEN", ""),
+		TCPHost:           EnvOr("TCP_HOST", ""),
 		ProjectsRoot:      EnvOr("PROJECTS_ROOT", home),
 		DataDir:           dataDir,
 		ClaudeHome:        claudeHome,

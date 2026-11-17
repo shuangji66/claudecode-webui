@@ -42,7 +42,7 @@ type termEvent struct {
 // 终端进程与连接同生命周期：关页/关侧栏即 SIGHUP。这样不会留下看不见的 shell，
 // 代价是重新打开会得到一个新 shell。
 func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
-	if !s.d.Guard.Check(r.Header.Get("Authorization"), r.URL.Query().Get("token")) {
+	if !s.d.Guard.Check(channelOf(r), r.Header.Get("Authorization"), r.URL.Query().Get("token")) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
