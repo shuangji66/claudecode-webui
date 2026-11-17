@@ -215,8 +215,8 @@ export function McpSettings({ cwd }: { cwd: string }) {
           <h2 className="text-[15px] font-semibold text-ink">{t("MCP 服务", "MCP servers")}</h2>
           <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted">
             {t(
-              "MCP 是给 Claude 增加外部工具的方式（GitHub、数据库、浏览器…）。配置直接写进 claude 的文件，改完需要重开会话才生效。",
-              "MCP adds external tools to Claude (GitHub, databases, browsers…). Entries are written into claude's own files; restart the conversation to apply.",
+              "MCP 是给 Claude 增加外部工具的方式（GitHub、数据库、浏览器…）。",
+              "MCP adds external tools to Claude (GitHub, databases, browsers…).",
             )}
           </p>
         </div>

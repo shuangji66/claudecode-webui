@@ -70,8 +70,8 @@ export function SearchSettings() {
           </h3>
           <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
             {t(
-              "走 DeepSeek 的 Search / Fetch API：一次搜索是一次 HTTP 请求，不额外花模型回合。需要单独的 API 密钥（不复用对话密钥），一次请求最多 50 条。",
-              "Uses the DeepSeek Search / Fetch API: one search is one HTTP request, no extra model turn. Needs its own API key (not the chat key); up to 50 results per request.",
+              "走 DeepSeek 的 Search / Fetch API：一次搜索是一次 HTTP 请求，不额外花模型回合。一次请求最多 50 条。",
+              "Uses the DeepSeek Search / Fetch API: one search is one HTTP request, no extra model turn. Up to 50 results per request.",
             )}
           </p>
         </div>
@@ -174,8 +174,8 @@ export function SearchSettings() {
       </div>
       <p className="mt-1 text-[10.5px] leading-relaxed text-faint">
         {t(
-          "注册/移除后要重开会话才生效（MCP server 在会话启动时连接）。子命令用当前 ccweb 二进制的绝对路径，升级后若换了路径需重新注册。",
-          "Reopen the conversation after registering or removing (MCP servers connect at session start). The entry points at the current ccweb binary; re-register if an upgrade changes its path.",
+          "注册/移除后要重开会话才生效（MCP server 在会话启动时连接）。",
+          "Reopen the conversation after registering or removing (MCP servers connect at session start).",
         )}
       </p>
     </section>

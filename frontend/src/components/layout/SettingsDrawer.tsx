@@ -194,8 +194,8 @@ export function AboutSettings() {
 
       <p className="text-[12.5px] leading-relaxed text-ink-2">
         {t(
-          "把本地 claude CLI 包成可视化 Web 控制台：消息、思考、工具卡片、diff 与审批全部结构化渲染，右侧栏带文件、Git 和真正的终端。",
-          "A visual console for the local claude CLI: messages, thinking, tool cards, diffs and approvals rendered structurally, with files, Git and a real terminal in the side panel.",
+          "把本地 claude CLI 包成可视化 Web 控制台：消息、思考、工具卡片、diff 与审批全部结构化渲染。",
+          "A visual console for the local claude CLI: messages, thinking, tool cards, diffs and approvals rendered structurally.",
         )}
       </p>
 
@@ -286,7 +286,7 @@ function GeneralSettings() {
         )}
       </div>
 
-      <Section title={t("默认权限", "Default permission")} desc={t("新建会话时使用的权限模式。当前会话可用输入框上方的选择器切换。", "Permission mode for new sessions. The current session can be changed from the composer.")}>
+      <Section title={t("默认权限", "Default permission")} desc={t("新建会话时使用的权限模式。", "Permission mode for new sessions.")}>
         <Select
           className="max-w-xs"
           ariaLabel={t("默认权限", "Default permission")}
@@ -610,7 +610,7 @@ function ProxySettings() {
       <div>
         <h3 className="text-[15px] font-semibold text-ink">{t("代理", "Proxy")}</h3>
         <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
-          {t("为 claude 子进程、右侧栏的 git 拉取，以及面板自己的请求（拉模型列表、探测端点、下载 claude）设置 HTTP / HTTPS / SOCKS5 代理；留空表示直连。保存后会重启所有正在运行的 claude 会话，对话会用 --resume 恢复。", "Set an HTTP / HTTPS / SOCKS5 proxy for the claude subprocess, the sidebar's git pull, and the panel's own requests (model list, endpoint probe, claude download). Leave blank for direct access. Saving restarts all running claude sessions and resumes them with --resume.")}
+          {t("为 claude 子进程、右侧栏的 git 拉取，以及面板自己的请求（拉模型列表、探测端点、下载 claude）设置 HTTP / HTTPS / SOCKS5 代理；留空表示直连。", "Set an HTTP / HTTPS / SOCKS5 proxy for the claude subprocess, the sidebar's git pull, and the panel's own requests (model list, endpoint probe, claude download). Leave blank for direct access.")}
         </p>
       </div>
 
