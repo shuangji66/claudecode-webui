@@ -27,6 +27,7 @@ import (
 	"ccweb/backend/internal/history"
 	"ccweb/backend/internal/hub"
 	"ccweb/backend/internal/mcp"
+	"ccweb/backend/internal/plugin"
 	"ccweb/backend/internal/search"
 	"ccweb/backend/internal/settings"
 	"ccweb/backend/internal/skills"
@@ -96,6 +97,8 @@ func main() {
 	// MCP 探测与内置搜索都是面板自己发的出站请求，不会自动继承设置里的代理。
 	mcp.SetProxySource(proxyNow)
 	search.SetProxySource(proxyNow)
+	// 插件的下载走 CLI 内部的 git：不接代理会直接克隆失败（实测 GnuTLS 报错）。
+	plugin.SetProxySource(proxyNow)
 
 	// MCP 配置：用户级是 claude 子进程 HOME 下的 .claude.json（不是宿主机的
 	// ~/.claude.json），项目级按工作区现算；停用暂存放本应用自己的数据目录。
@@ -104,6 +107,9 @@ func main() {
 		filepath.Join(cfg.ClaudeHome, ".claude.json"),
 		filepath.Join(cfg.DataDir, "mcp-disabled.json"),
 	)
+
+	// 插件与 marketplace：真源是 CLI 自己维护的状态文件，只能 spawn 它来读写。
+	pluginMgr := plugin.New(resolveClaude, cfg.ClaudeHome)
 
 	mgr := manager.New(cfg, resolveClaude, store, func(sid string, ev session.Event) {
 		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data})
@@ -142,6 +148,7 @@ func main() {
 		// CCWEB_CLAUDE_HOME，所以这里不能用自己的 ~/.claude/skills。
 		Skills:        skills.New(filepath.Join(cfg.ClaudeHome, ".claude", "skills")),
 		Mcp:           mcpMgr,
+		Plugins:       pluginMgr,
 		Claude:        claudeMgr,
 		ProjectsRoot:  cfg.ProjectsRoot,
 		ClaudeVersion: probeClaudeVersion(mgr.Binary()),

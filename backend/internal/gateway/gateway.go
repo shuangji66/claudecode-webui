@@ -23,6 +23,7 @@ import (
 	"ccweb/backend/internal/conversation"
 	"ccweb/backend/internal/hub"
 	"ccweb/backend/internal/mcp"
+	"ccweb/backend/internal/plugin"
 	"ccweb/backend/internal/settings"
 	"ccweb/backend/internal/skills"
 	"ccweb/backend/internal/workspace"
@@ -65,7 +66,9 @@ type Deps struct {
 	Skills *skills.Manager
 	// Mcp 管理 MCP server 配置（用户级 .claude.json / 项目级 .mcp.json）；
 	// 为 nil 时相关路由返回 503。
-	Mcp           *mcp.Manager
+	Mcp *mcp.Manager
+	// Plugins 通过 `claude plugin` 管理插件与 marketplace；为 nil 时相关路由返回 503。
+	Plugins       *plugin.Manager
 	ClaudeVersion string
 	TerminalShell string
 	StartedAt     time.Time
@@ -82,6 +85,18 @@ type Server struct {
 	// 「有更新」重复推给所有标签页（每次推送前端都会再拉一次 /api/claude/status）。
 	notifiedMu     sync.Mutex
 	notifiedLatest string
+
+	// pluginMu 同时保护下面四个字段：插件变更任务的状态与「可用插件」缓存。
+	// 任务同一时刻只有一个（CLI 会读改写同一批配置文件），所以用单槽而不是队列。
+	pluginMu        sync.Mutex
+	pluginJob       *pluginJobView
+	pluginAvail     []pluginAvailable
+	pluginAvailAt   time.Time
+	pluginAvailNote string
+	// pluginAvailLoaded 表示已经尝试读过落盘缓存；pluginAutoTried 表示已经自动
+	// 补过一次「可用插件」（每进程只自动一次，失败留给用户手动重试）。
+	pluginAvailLoaded bool
+	pluginAutoTried   bool
 }
 
 // New 构造网关。
@@ -150,6 +165,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/mcp", s.authed(s.handleDeleteMcp))
 	s.mux.HandleFunc("POST /api/mcp/enabled", s.authed(s.handleSetMcpEnabled))
 	s.mux.HandleFunc("POST /api/mcp/probe", s.authed(s.handleProbeMcp))
+	s.mux.HandleFunc("GET /api/plugins", s.authed(s.handleListPlugins))
+	s.mux.HandleFunc("GET /api/plugins/available", s.authed(s.handleAvailablePlugins))
+	s.mux.HandleFunc("POST /api/plugins/refresh", s.authed(s.handleRefreshPlugins))
+	s.mux.HandleFunc("GET /api/plugins/details", s.authed(s.handlePluginDetails))
+	s.mux.HandleFunc("POST /api/plugins/install", s.authed(s.handleInstallPlugin))
+	s.mux.HandleFunc("POST /api/plugins/enabled", s.authed(s.handleSetPluginEnabled))
+	s.mux.HandleFunc("POST /api/plugins/update", s.authed(s.handleUpdatePlugin))
+	s.mux.HandleFunc("POST /api/plugins/uninstall", s.authed(s.handleUninstallPlugin))
+	s.mux.HandleFunc("POST /api/plugins/marketplace", s.authed(s.handlePluginMarketplace))
 	s.mux.HandleFunc("GET /api/search", s.authed(s.handleGetSearch))
 	s.mux.HandleFunc("POST /api/search/config", s.authed(s.handleSaveSearch))
 	s.mux.HandleFunc("POST /api/search/test", s.authed(s.handleTestSearch))

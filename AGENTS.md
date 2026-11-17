@@ -19,7 +19,7 @@
   `xterm.js` 只做渲染）；
 - **授权目录 = 工作区**，持久化在 `workspaces.json`；对话列表来自 claude 转录 +
   `conversations.json` 元数据，启动时恢复上次对话（`--resume`）而不是新建；
-- 设置页分「通用 / 模型 / 技能 / MCP / 代理 / 部署」：默认权限（置顶）、主题、语言、字号、技能、代理、
+- 设置页分「通用 / 模型 / 技能 / 插件 / MCP / 代理 / 部署」：默认权限（置顶）、主题、语言、字号、技能、代理、
   每个模型的推理强度/图片能力/上下文窗口/最大输出，以及 claude 版本的下载源/安装/切换；
 - 输入框 `+` 是添加菜单（对齐 DSH）：本地文件/图片、从飞牛选择、以及 claude 的 `/` 指令；
   附件随 prompt 发送。模型与推理等级是 DSH 风格的两级菜单（按提供商分组，不显示图片标记）；
@@ -402,6 +402,47 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **`always_load` 只写 true、不写 false**（false 是默认语义），但**老版本注册的条目没有
   这个键**：`GET /api/search` 的 `always_load` 就是给前端提示「补上常驻」用的，
   别把它当成 `attached` 的重复字段。
+
+### 4.13 插件管理（`internal/plugin`）
+
+- **claude 是唯一真源**：插件状态分散在 `$CCWEB_CLAUDE_HOME/.claude/settings.json`
+  （`enabledPlugins` / `extraKnownMarketplaces`）、`.claude/plugins/installed_plugins.json`
+  （现在 `version: 2`）、`known_marketplaces.json` 与 `plugins/cache/<市场>/<插件>/<版本>`，
+  格式随 claude 版本漂移。**不要像 MCP 那样手写这些文件**——`claude plugin` 自带非交互接口
+  （`--json` 输出结构化结果、`-y` 跳过确认），无 TTY 可用，实测全部动作都能拿到结论。
+- **每个变更动作都会读改写同一批配置**：网关用**单槽任务**（`pluginJob`）串行化，并发请求回 409。
+  克隆/刷新在 CLI 内部有 120s 上限，同步接口会被浏览器与前置网关掐断，所以接口立即返回
+  「已接受」，前端轮询 `GET /api/plugins` 的 `job.phase`。
+- **`plugin list --available` 不挂在「打开设置页」的同步路径上**：首次可能联网抓目录（十几秒）。
+- **代理要显式注入**：`plugin.SetProxySource` 接设置里的代理。实测无代理时
+  `marketplace add https://github.com/…` 报 `GnuTLS recv error (-110)` 并白等 90 秒；
+  接上后同一仓库 6.7 秒完成 sparse clone。子进程是独立进程，不继承主进程那套设置。
+- **裸 `owner/repo` 会被 CLI 当 SSH**（`git@github.com:…`），而 claude 的 HOME 里通常没有
+  `known_hosts`，必然 `Host key verification failed`。`NormalizeSource` 统一补成 https，
+  并拒收 `git@` / `ssh://` 形式。
+- **市场名 ≠ marketplace 来源**：CLI 的 `--marketplace` 只接受 owner/repo|URL|路径。界面点
+  「安装」拿到的是 `名字@市场`，后端必须还原成完整 id 且不传 `--marketplace`（照抄会 400）。
+- **插件就是可执行代码**：`plugin.json` 里能声明 `hooks`（会话事件里跑命令）与 `mcpServers`
+  （起进程），而 `install -y` **不会**为这类插件弹确认（只有 command-source 才有
+  `shownCommand` + `--accept-command`）。所以界面必须展示组件清单：`plugin details` 给
+  已安装插件的清单与 token 成本，未安装的只能读清单文件（`Manager.Inspect`，并拒绝
+  `source` 把路径带出 marketplace 目录）。不要把 `-y` 包装成「永不再问」。
+- **project 作用域靠 cwd**：写在 `<工作区>/.claude/settings.json`，所以必须先过
+  `authorizedCwd`，并用 `Manager.WithDir(cwd)` 在那一层跑命令；user/local 不需要工作区。
+- **生效时机与会话一致**：插件在会话启动时加载，「装/停用/更新之后要重开会话」，与 MCP 同一条规矩。
+- **可安装目录必须"缓存优先 + 服务端分页"**：官方市场实测 **3743 条 / 全量 JSON 1.27 MB**，
+  每次打开设置页都拉一遍既慢又白占内存。现在的分层是：
+  ① CLI 自己会把目录缓存到 `$HOME/.claude/plugins/plugin-catalog-cache.json`，之后
+  `plugin list --available` **离线 1.2s** 就能出结果（只有首次抓目录要联网、约 13s）；
+  ② 面板把读到的目录落盘到 `CCWEB_DATA_DIR/plugins-available.json`（带 claude HOME，原子写），
+  进程启动/重进设置页先读它；没有缓存时 `GET /api/plugins` **只自动补一次**（每进程一次，
+  失败留给用户点「刷新」）；
+  ③ HTTP 只回一页：`GET /api/plugins` 给 `available_total`，明细走
+  `GET /api/plugins/available?q=&market=&hide_installed=&offset=&limit=`（默认 20、上限 100），
+  过滤与翻页都在服务端内存里做。实测：主接口 284 字节 / 一页 6.4 KB。
+- **版本耦合**：`plugin` 子命令与状态文件版本都跟 claude 版本走。`Support()` 跑一次
+  `plugin list --json` 并按二进制路径缓存：**CLI 给得出 JSON 就算支持**（报错也属支持，
+  把原因显示出来），连 JSON 都给不出（unknown command）才整页置灰——否则用户永远看不到真实错误。
 
 ## 5. 命令速查
 

@@ -85,6 +85,101 @@ export interface McpPayload {
   project_path: string;
 }
 
+/** 插件（`claude plugin`）的一条已安装记录。 */
+export interface PluginEntry {
+  id: string;
+  version: string;
+  scope: "user" | "project" | "local" | string;
+  enabled: boolean;
+  install_path: string;
+  project_path?: string;
+  installed_at?: string;
+  last_updated?: string;
+  /** 插件自己声明的 MCP server：装之前/之后都值得先看一眼。 */
+  has_mcp_servers: boolean;
+}
+
+/** 已注册的 marketplace。 */
+export interface PluginMarketplace {
+  name: string;
+  /** directory | git | …（CLI 原始值）。 */
+  source: string;
+  path?: string;
+  install_location: string;
+}
+
+/** marketplace 里可安装的插件。 */
+export interface PluginAvailable {
+  plugin_id: string;
+  name: string;
+  description: string;
+  marketplace: string;
+}
+
+/** 插件变更任务（同一时刻只有一个）。 */
+export interface PluginJob {
+  kind: string;
+  target: string;
+  phase: "running" | "done" | "error";
+  message?: string;
+  error?: string;
+  started_at: string;
+  finished_at?: string;
+}
+
+export interface PluginsPayload {
+  supported: boolean;
+  reason?: string;
+  home: string;
+  installed: PluginEntry[];
+  marketplaces: PluginMarketplace[];
+  /** 可安装目录的总条数（明细走 /api/plugins/available 分页，官方市场一份就 3743 条）。 */
+  available_total: number;
+  available_at?: string;
+  available_note?: string;
+  job: PluginJob | null;
+}
+
+/** 可安装插件的一页。过滤与分页都在服务端做。 */
+export interface PluginAvailablePage {
+  items: PluginAvailable[];
+  /** 当前过滤条件下的命中数。 */
+  matched: number;
+  /** 目录里一共有多少条。 */
+  total: number;
+  offset: number;
+  limit: number;
+  fetched_at?: string;
+  note?: string;
+}
+
+/** 组件清单（只对已安装的插件有内容）。 */
+export interface PluginDetails {
+  text: string;
+  skills: number;
+  agents: number;
+  hooks: number;
+  mcp_servers: number;
+}
+
+/** 装之前能看到的清单信息（读 plugin.json 与目录，不跑 CLI）。 */
+export interface PluginInspect {
+  found: boolean;
+  dir: string;
+  hooks: boolean;
+  mcp_servers: boolean;
+  commands: number;
+  skills: number;
+}
+
+export interface PluginDetailsPayload {
+  id: string;
+  details: PluginDetails;
+  inspect: PluginInspect;
+  /** 未安装时 CLI 会报 not found：这是正常情况，界面据它显示提示。 */
+  error?: string;
+}
+
 /** 内置搜索（DeepSeek Search / Fetch API）的状态。密钥只回脱敏值。 */
 export interface SearchStatus {
   base_url: string;

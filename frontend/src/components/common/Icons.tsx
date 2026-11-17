@@ -492,3 +492,12 @@ export function IconRefresh(props: Props) {
     </Svg>
   );
 }
+
+// 插件：拼图块。中间一个圆点是插头，与「MCP 用的地球」区分开。
+export function IconPlugin(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M10 4a2 2 0 0 1 4 0v1h2.5A1.5 1.5 0 0 1 18 6.5V9h1a2 2 0 0 1 0 4h-1v3.5A1.5 1.5 0 0 1 16.5 18H14v1a2 2 0 0 1-4 0v-1H7.5A1.5 1.5 0 0 1 6 16.5V14H5a2 2 0 0 1 0-4h1V6.5A1.5 1.5 0 0 1 7.5 5H10z" />
+    </Svg>
+  );
+}

@@ -39,6 +39,7 @@ src/
   lib/conversations.ts 对话归属/最近对话排序（纯函数）
   lib/labels.ts        界面词汇表 / claude 指令中文说明（conversationTitle 等）
   lib/mcpForm.ts       MCP 表单转换：参数/环境变量的文本互转、校验、一行摘要
+  lib/plugins.ts       插件响应兜底、目录查询串、id 拆分（纯函数）
   lib/fnos.ts          飞牛宿主桥接：目录授权（authorizeUserFile）+ 回包归一化（纯函数部分可测）
   assets/claude-code.svg 左侧栏品牌图标
   store/useAppStore.ts zustand 全局状态（只做状态搬运）
@@ -46,10 +47,11 @@ src/
   store/useSkillsStore.ts  设置页技能数据（/api/skills 的列表与正文）
   store/useMcpStore.ts     设置页 MCP 数据（/api/mcp 的列表、探测结果、停用开关）
   store/useSearchStore.ts  内置搜索数据（/api/search 的配置、测试结果、注册状态）
+  store/usePluginStore.ts  设置页插件数据（/api/plugins 的列表/任务轮询/详情）
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
                        / Collapsible（折叠块）/ FileIcon（按扩展名给颜色的文件图标 + 文件夹图标）
   components/layout/   Sidebar（工作区/对话列表）/ ConversationPreview（会话悬浮预览）/ TopBar / TokenGate / SettingsDrawer
-                       / WorkspaceDialog / SkillsSettings / McpSettings / SearchSettings / DeploySettings / HistoryDialog
+                       / WorkspaceDialog / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / DeploySettings / HistoryDialog
                        / ClaudeInstallPrompt
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
                        / UsageStats / ResultBar / WorkspacePicker
@@ -249,7 +251,7 @@ src/
   **宽度必须由「用户偏好 + 当前视口」派生**（`preferredWidth` 存偏好、`useViewportWidth()`
   跟踪 resize、渲染时 `clampWidth(preferredWidth, viewport)`）：只在拖动时 clamp 的话，
   窗口缩小后右侧栏不会自己变窄，会一直把对话挤成一条缝，直到用户拖一下才被纠正。
-- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 技能 / MCP / 代理 / 部署 / 关于」；
+- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 技能 / 插件 / MCP / 代理 / 部署 / 关于」；
   「关于」页只放：一句话特性、版本号（`/api/info` 的 version）、致谢
   （DeepSeek / DeepSeek Harness / dsh-better-sidebar），以及**标题右侧的 GitHub 图标**
   （只有图标不带文字，`aria-label` 说明是仓库链接，`https://github.com/shuangji66/claudecode-webui`，
@@ -260,7 +262,23 @@ src/
   「技能」页读写 SKILL.md（`store/useSkillsStore.ts` 收敛请求）：个人技能对所有会话生效，
   项目技能跟着当前工作区走；claude.ai 同步来的只读。改完 claude 会在当前会话内热加载，
   不要提示用户重启。
-  「MCP」页读写 claude 的两份配置文件（`store/useMcpStore.ts`）：用户级 `.claude.json`
+  「插件」页驱动 `claude plugin`（`store/usePluginStore.ts`）：已安装列表、marketplace 增删改、
+  可用插件浏览、详情（组件清单 + token 成本）。**变更动作是后台任务**：发出请求后轮询
+  `/api/plugins` 的 `job.phase`，期间按钮置灰；装/停用/更新后要重开会话生效。
+  「详情」对已安装插件用 `plugin details`，未安装的只有清单文件里的信息（`inspect`）——
+  文案要区分这两种来源，不要把小标题当成完整清单。
+  **详情是页内视图（列表 ↔ 详情，带「返回」），不要再叠一层 Dialog**：手机上
+  「设置模态 + 底部 sheet」互相盖，清单根本翻不动；页内视图还能整页滚动、直接操作
+  （安装/停用/更新/卸载）。CLI 原文用 `pre` + `whitespace-pre-wrap` 自动换行，
+  不要横向滚动——右侧被切掉会被当成「显示不全」。
+  **「可安装」不能整段铺开**（官方市场实测 3743 条、全量 JSON 1.27 MB）：
+  过滤与分页都在**服务端**（`GET /api/plugins/available`，见 `lib/plugins.ts` 的
+  `availableQuery`），前端只拿一页（`AVAILABLE_PAGE_SIZE` = 20），底部「显示更多」按
+  offset 追加。顶部给搜索框（250ms 防抖，别每敲一个字发一次）、市场筛选下拉、
+  「只看未安装」；计数在过滤时显示「命中 / 总数」。目录缓存由后端落盘，重进设置页
+  直接读缓存——不要在前端再存一份全量列表。
+  插件能声明 hooks / 自带 MCP server（等于执行第三方代码），有条件时必须标红提示。
+- 「MCP」页读写 claude 的两份配置文件（`store/useMcpStore.ts`）：用户级 `.claude.json`
   与项目级 `.mcp.json`，可增删改、停用/启用、探测连通性。**必须提示「重开会话才生效」**
   （MCP server 在会话启动时连接），停用项要标出来并说明「配置已摘到本应用暂存」。
   表单转换在 `lib/mcpForm.ts`（参数一行一个、环境变量 KEY=VALUE），不要塞进组件。
