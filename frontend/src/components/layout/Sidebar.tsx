@@ -378,15 +378,19 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   const onWorkspaceClick = (g: WorkspaceGroup) => {
     if (!g.exists) return;
-    // 工作区行本身就是展开/收起开关；切到别的工作区时顺带打开它最近的对话。
+    // 工作区行本身就是展开/收起开关。
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(g.path)) next.delete(g.path);
       else next.add(g.path);
       return next;
     });
-    if (g.path !== "__other__" && g.path !== currentWorkspace) void switchWorkspace(g.path);
-    onClose?.();
+    // 切到别的工作区时顺带打开它最近的对话；点当前工作区只是展开/收起。
+    const switching = g.path !== OTHER_KEY && g.path !== currentWorkspace;
+    if (switching) void switchWorkspace(g.path);
+    // 只有真的换了工作区（跳到另一个对话）才收起移动端抽屉：展开一组的会话列表
+    // 不是导航，把抽屉关掉等于点了就看不见自己刚展开的东西。
+    if (switching) onClose?.();
   };
 
   const openWsMenu = (e: React.MouseEvent<HTMLButtonElement>, g: WorkspaceGroup) => {
@@ -678,7 +682,11 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                     </button>
                     <button
                       type="button"
-                      onClick={() => void startConversationIn(g.path)}
+                      onClick={() => {
+                        void startConversationIn(g.path);
+                        // 移动端：抽屉里发起的「新建对话」都要让出位置，直接落到新会话上。
+                        onClose?.();
+                      }}
                       className="rounded-md p-1 text-muted transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
                       aria-label={`${t("在该工作区新建对话", "New conversation in this workspace")} ${g.path}`}
                       title={t("新建对话", "New conversation")}

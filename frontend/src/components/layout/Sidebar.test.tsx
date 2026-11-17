@@ -174,3 +174,100 @@ describe("Sidebar 会话悬浮预览", () => {
     vi.useRealTimers();
   });
 });
+
+describe("Sidebar 新建对话后关闭移动端抽屉", () => {
+  const path = "/w/demo";
+
+  beforeEach(() => {
+    localStorage.clear();
+    useAppStore.setState({
+      workspaces: [{ path, name: "demo", last_used: "", exists: true }],
+      currentWorkspace: path,
+      activeId: null,
+      starting: false,
+      conversations: [],
+    });
+  });
+
+  // 抽屉里的「新对话」在手机上必须让出位置，否则点完还挡在对话上面。
+  it("主「新对话」按钮调 onClose", () => {
+    const onClose = vi.fn();
+    const createSession = vi.fn(async () => {});
+    useAppStore.setState({ createSession });
+
+    renderSidebar({ onClose });
+    fireEvent.click(screen.getByRole("button", { name: "新对话" }));
+
+    expect(createSession).toHaveBeenCalledWith(path);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // 工作区行上的「+」也是新建对话的入口，行为必须一致。
+  it("工作区行的「+」新建对话后调 onClose", () => {
+    const onClose = vi.fn();
+    const startConversationIn = vi.fn(async () => {});
+    useAppStore.setState({ startConversationIn });
+
+    renderSidebar({ onClose });
+    fireEvent.click(screen.getByRole("button", { name: `在该工作区新建对话 ${path}` }));
+
+    expect(startConversationIn).toHaveBeenCalledWith(path);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // 桌面侧栏不传 onClose，逻辑不能因此报错。
+  it("没有 onClose 时照常新建", () => {
+    const createSession = vi.fn(async () => {});
+    useAppStore.setState({ createSession });
+
+    renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "新对话" }));
+
+    expect(createSession).toHaveBeenCalledWith(path);
+  });
+});
+
+describe("Sidebar 工作区行与移动端抽屉", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useAppStore.setState({
+      workspaces: [
+        { path: "/w/demo", name: "demo", last_used: "", exists: true },
+        { path: "/w/other", name: "other", last_used: "", exists: true },
+      ],
+      currentWorkspace: "/w/demo",
+      activeId: null,
+      conversations: [],
+    });
+  });
+
+  // 展开/收起一组的会话列表不是导航，抽屉不该被收掉——否则刚展开的就看不见了。
+  it("点当前工作区只切换展开，不关抽屉、不切工作区", () => {
+    const onClose = vi.fn();
+    const switchWorkspace = vi.fn(async () => {});
+    useAppStore.setState({ switchWorkspace });
+
+    renderSidebar({ onClose });
+    const row = screen.getByTitle("/w/demo");
+    const expandedBefore = row.getAttribute("aria-expanded");
+
+    fireEvent.click(row);
+
+    expect(row.getAttribute("aria-expanded")).not.toBe(expandedBefore);
+    expect(switchWorkspace).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // 真的换了工作区（会打开那个目录的最近对话）才是导航，这时收抽屉。
+  it("点别的工作区会切过去并关抽屉", () => {
+    const onClose = vi.fn();
+    const switchWorkspace = vi.fn(async () => {});
+    useAppStore.setState({ switchWorkspace });
+
+    renderSidebar({ onClose });
+    fireEvent.click(screen.getByTitle("/w/other"));
+
+    expect(switchWorkspace).toHaveBeenCalledWith("/w/other");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
