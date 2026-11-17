@@ -62,8 +62,8 @@ export function SearchSettings() {
 
   return (
     <section className="mb-5 rounded-xl border border-line bg-panel/40 p-3">
-      <div className="mb-2 flex items-start justify-between gap-3">
-        <div className="min-w-0">
+      <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-[12rem] flex-1">
           <h3 className="flex items-center gap-1.5 text-[12.5px] font-medium text-ink">
             <IconGlobe size={13} />
             {t("内置搜索（DeepSeek）", "Built-in search (DeepSeek)")}

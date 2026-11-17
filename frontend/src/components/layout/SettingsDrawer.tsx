@@ -482,7 +482,7 @@ function ModelsSettings() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto pb-4 pr-1">
+      <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto pb-4 pr-2">
       <div className="mx-auto max-w-2xl space-y-4">
       <div>
         <h3 className="text-[15px] font-semibold text-ink">{t("模型", "Models")}</h3>

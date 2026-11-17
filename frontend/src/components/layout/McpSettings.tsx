@@ -204,9 +204,14 @@ export function McpSettings({ cwd }: { cwd: string }) {
     });
 
   return (
-    <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto pb-[calc(env(safe-area-inset-bottom,0px)+20px)]">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div className="min-w-0">
+    // pr-2 给滚动条留位：macOS / 部分 webview 是覆盖式滚动条，内容会一直画到
+    // 容器右边缘，右对齐的按钮与文字就会被压在滚动条下面。
+    <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pr-2">
+      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        {/* min-w-[12rem] 而不是 min-w-0：中文可以在任意字之间断行，min-content 只有
+            一个字符宽——空间不足时文字会被压成「每行两三个字」，而按钮还在同一行。
+            给说明挤出一个下限，按钮才会整体折到下一行。 */}
+        <div className="min-w-[12rem] flex-1">
           <h2 className="text-[15px] font-semibold text-ink">{t("MCP 服务", "MCP servers")}</h2>
           <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted">
             {t(
