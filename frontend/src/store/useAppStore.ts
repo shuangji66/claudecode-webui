@@ -229,6 +229,7 @@ interface AppState {
   openConversation: (id: string, force?: boolean) => Promise<boolean>;
   renameConversation: (id: string, title: string) => Promise<boolean>;
   archiveConversation: (id: string, archived: boolean) => Promise<boolean>;
+  pinConversation: (id: string, pinned: boolean) => Promise<boolean>;
   deleteConversation: (id: string) => Promise<boolean>;
   closeSession: (id: string) => Promise<void>;
   /** 让切换后的推理等级对已在跑的会话生效（必要时按同一 id 重开进程）。 */
@@ -1262,6 +1263,21 @@ export const useAppStore = create<AppState>()((set, get) => ({
       await apiFetch("/api/conversations", {
         method: "PATCH",
         body: JSON.stringify({ id, title }),
+      });
+      await get().refreshConversations();
+      return true;
+    } catch (e) {
+      set({ error: errText(e) });
+      return false;
+    }
+  },
+
+  /** 置顶/取消置顶：纯列表偏好，不动进程、不动归档状态。 */
+  pinConversation: async (id, pinned) => {
+    try {
+      await apiFetch("/api/conversations", {
+        method: "PATCH",
+        body: JSON.stringify({ id, pinned }),
       });
       await get().refreshConversations();
       return true;

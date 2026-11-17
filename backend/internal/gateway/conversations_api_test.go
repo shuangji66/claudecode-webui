@@ -122,6 +122,60 @@ func TestConversationsListPatchDelete(t *testing.T) {
 	}
 }
 
+func TestConversationPinned(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	store := withConversationStore(t, srv)
+	id := "22222222-3333-4444-8555-666666666666"
+	writeTranscript(t, srv.d.HistoryDir, id, srv.d.ProjectsRoot)
+
+	// 置顶走 PATCH，落到 conversations.json。
+	body := `{"id":"` + id + `","pinned":true}`
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "/api/conversations", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := store.Get(id); !got.Pinned {
+		t.Fatalf("置顶没存下来: %+v", got)
+	}
+
+	// 列表必须把 pinned 带出去：前端靠它排序，缺了就永远排不到最前。
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/conversations", nil))
+	var list struct {
+		Conversations []struct {
+			ID     string `json:"id"`
+			Pinned bool   `json:"pinned"`
+		} `json:"conversations"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, c := range list.Conversations {
+		if c.ID == id {
+			if !c.Pinned {
+				t.Fatal("列表里的 pinned 丢了")
+			}
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatalf("置顶对话不在列表里: %+v", list.Conversations)
+	}
+
+	// 取消置顶
+	body = `{"id":"` + id + `","pinned":false}`
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "/api/conversations", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unpin code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got, _ := store.Get(id); got.Pinned {
+		t.Fatal("取消置顶没生效")
+	}
+}
+
 func TestConversationsRequireAuthAndRejectBadTranscriptID(t *testing.T) {
 	srv, _ := newTestServer(t, "secret")
 	withConversationStore(t, srv)

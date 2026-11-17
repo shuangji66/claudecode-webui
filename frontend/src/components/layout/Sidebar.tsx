@@ -4,7 +4,7 @@ import type { ConversationInfo, HistoryPreview, WorkspaceEntry } from "../../tra
 import { baseName, conversationTitle, relativeTime, stateLabel } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
 import { ConversationPreview } from "./ConversationPreview";
-import { belongs, conversationStatus, sortByRecent } from "../../lib/conversations";
+import { belongs, conversationStatus, pinnedFirst, sortByRecent } from "../../lib/conversations";
 import {
   FLAT_KEY,
   OTHER_KEY,
@@ -38,6 +38,7 @@ import {
   IconMore,
   IconPanel,
   IconPencil,
+  IconPin,
   IconPlus,
   IconSearch,
   IconSettings,
@@ -107,6 +108,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const openWorkspaceInFiles = useAppStore((s) => s.openWorkspaceInFiles);
   const renameConversation = useAppStore((s) => s.renameConversation);
   const archiveConversation = useAppStore((s) => s.archiveConversation);
+  const pinConversation = useAppStore((s) => s.pinConversation);
   const deleteConversation = useAppStore((s) => s.deleteConversation);
 
   const [query, setQuery] = useState("");
@@ -165,8 +167,9 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const groups = useMemo<WorkspaceGroup[]>(() => {
     const visible = conversations.filter((c) => matchArchive(c, view.archive));
     // 手动排序只在 manual 模式生效；其它模式一律按最近更新。
+    // 置顶永远在最前：两种排序都先过 pinnedFirst，组内顺序保持原样。
     const sortList = (list: ConversationInfo[], key: string) =>
-      view.sort === "manual" ? applyOrder(list, order[key] ?? []) : sortByRecent(list);
+      pinnedFirst(view.sort === "manual" ? applyOrder(list, order[key] ?? []) : sortByRecent(list));
 
     const q = query.trim().toLowerCase();
     const matches = (c: ConversationInfo, groupName: string) =>
@@ -287,7 +290,9 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     return (
       <div
         key={c.id}
-        className="group/session flex items-center gap-0.5"
+        className="group/session relative flex items-center gap-0.5"
+        // 右键 = 「管理对话」菜单：桌面端不用先瞄准右上角那个只有在悬停时才出现的按钮。
+        onContextMenu={(e) => openMenuAt(e, c)}
         draggable={manual}
         onDragStart={
           manual
@@ -336,21 +341,61 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             <span className="shrink-0 max-w-[38%] truncate text-[10px] text-faint">{workspaceNameOf(c.cwd)}</span>
           )}
           <span className={`truncate text-[12px] ${active ? "text-ink" : "text-ink-2"}`}>{titleOf(c)}</span>
+          {c.pinned && <IconPin size={11} className="shrink-0 text-brand" />}
           {c.archived && (
             <span className="shrink-0 rounded-full bg-black/[0.06] px-1 text-[9px] text-muted">{t("归档", "Archived")}</span>
           )}
-          <span className="ml-auto shrink-0 text-[10px] text-faint">{relativeTime(c.last_active, Date.now(), locale)}</span>
+          <span
+            className={`ml-auto shrink-0 text-[10px] text-faint ${
+              // 桌面端两套显示（对齐 DSH）：不悬停只露时间，悬停 / 聚焦 / 菜单打开时让位给操作按钮。
+              // `hidden` 而不是 `opacity-0`：悬停后按钮组要真的把时间挤掉，否则三颗按钮会盖在标题上。
+              menu?.id === c.id
+                ? "md:hidden"
+                : "md:group-hover/session:hidden md:group-focus-within/session:hidden"
+            }`}
+          >
+            {relativeTime(c.last_active, Date.now(), locale)}
+          </span>
         </button>
-        <button
-          type="button"
-          onClick={(e) => openMenu(e, c)}
-          className="rounded-md p-1 text-muted opacity-100 transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover/session:opacity-100 md:focus:opacity-100"
-          aria-label={`${t("管理对话", "Manage conversation")} ${titleOf(c)}`}
-          aria-haspopup="menu"
-          title={t("管理对话", "Manage conversation")}
+        {/* 操作组：桌面悬停 / 键盘聚焦 / 本行菜单打开时出现；触屏只留「···」
+            （归档、置顶在菜单里同样能点，触屏没有 hover 也够得着）。 */}
+        <div
+          className={`flex items-center gap-0.5 ${
+            menu?.id === c.id
+              ? "md:flex"
+              : "md:hidden md:group-hover/session:flex md:group-focus-within/session:flex"
+          }`}
         >
-          <IconMore size={14} />
-        </button>
+          <button
+            type="button"
+            onClick={() => void archiveConversation(c.id, !c.archived)}
+            className="hidden rounded-md p-1 text-muted transition hover:bg-black/5 hover:text-ink md:inline-flex"
+            aria-label={`${c.archived ? t("取消归档", "Unarchive") : t("归档", "Archive")} ${titleOf(c)}`}
+            title={c.archived ? t("取消归档", "Unarchive") : t("归档", "Archive")}
+          >
+            <IconArchive size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => void pinConversation(c.id, !c.pinned)}
+            className={`hidden rounded-md p-1 transition hover:bg-black/5 md:inline-flex ${c.pinned ? "text-brand" : "text-muted hover:text-ink"}`}
+            aria-label={`${c.pinned ? t("取消置顶", "Unpin") : t("置顶", "Pin")} ${titleOf(c)}`}
+            aria-pressed={Boolean(c.pinned)}
+            title={c.pinned ? t("取消置顶", "Unpin") : t("置顶", "Pin")}
+          >
+            <IconPin size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => openMenu(e, c)}
+            className="rounded-md p-1 text-muted transition hover:bg-black/5 hover:text-ink"
+            aria-label={`${t("管理对话", "Manage conversation")} ${titleOf(c)}`}
+            aria-haspopup="menu"
+            title={t("管理对话", "Manage conversation")}
+          >
+            <IconMore size={14} />
+          </button>
+        </div>
       </div>
     );
   };
@@ -463,6 +508,14 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   const openMenu = (e: React.MouseEvent<HTMLButtonElement>, c: ConversationInfo) => {
     e.stopPropagation();
+    setMenu({ id: c.id, anchor: e.currentTarget });
+  };
+
+  /** 右键：菜单锚在这一行上（不是那个悬停才出现的按钮），并顺手收掉悬浮预览。 */
+  const openMenuAt = (e: React.MouseEvent<HTMLElement>, c: ConversationInfo) => {
+    e.preventDefault();
+    e.stopPropagation();
+    endHover();
     setMenu({ id: c.id, anchor: e.currentTarget });
   };
 
@@ -846,6 +899,12 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
           menuConv
             ? ([
                 { id: "rename", label: t("重命名", "Rename"), icon: <IconPencil size={13} className="text-muted" />, onSelect: () => void askRename(menuConv) },
+                {
+                  id: "pin",
+                  label: menuConv.pinned ? t("取消置顶", "Unpin") : t("置顶", "Pin"),
+                  icon: <IconPin size={13} className={menuConv.pinned ? "text-brand" : "text-muted"} />,
+                  onSelect: () => void pinConversation(menuConv.id, !menuConv.pinned),
+                },
                 { id: "archive", label: menuConv.archived ? t("取消归档", "Unarchive") : t("归档", "Archive"), icon: <IconArchive size={13} className="text-muted" />, onSelect: () => askArchive(menuConv) },
                 ...(view.sort === "manual" && groupOf(menuConv)
                   ? [

@@ -456,6 +456,15 @@ export function IconSync(props: Props) {
   );
 }
 
+export function IconPin(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M9 4h6l-1 6 3 3v1H7v-1l3-3-1-6z" />
+      <path d="M12 14v6" />
+    </Svg>
+  );
+}
+
 export function IconArchive(props: Props) {
   return (
     <Svg {...props}>

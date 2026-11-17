@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { belongs, conversationStatus, latestConversation, sortByRecent, workspaceFor } from "./conversations";
+import { belongs, conversationStatus, latestConversation, pinnedFirst, sortByRecent, workspaceFor } from "./conversations";
 import type { ConversationInfo, WorkspaceEntry } from "../transport/types";
 
 function conv(id: string, cwd: string, last: string, archived = false): ConversationInfo {
@@ -30,6 +30,18 @@ describe("conversations", () => {
     ] as WorkspaceEntry[];
     expect(workspaceFor("/data/proj/src", ws)).toBe("/data/proj");
     expect(workspaceFor("/other", ws)).toBe("");
+  });
+
+  it("pinnedFirst 把置顶提到最前，组内顺序不变", () => {
+    const list = [conv("a", "/w", "2026-01-03T00:00:00Z"), conv("b", "/w", "2026-01-02T00:00:00Z"), conv("c", "/w", "2026-01-01T00:00:00Z")];
+    list[2].pinned = true;
+    // 最近更新排序后 c 仍会被提到最前；其余保持原相对顺序。
+    expect(pinnedFirst(sortByRecent(list)).map((c) => c.id)).toEqual(["c", "a", "b"]);
+    expect(pinnedFirst(list).map((c) => c.id)).toEqual(["c", "a", "b"]);
+    // 没有置顶时是纯拷贝，不改变顺序也不改原数组。
+    const plain = pinnedFirst([list[0], list[1]]);
+    expect(plain.map((c) => c.id)).toEqual(["a", "b"]);
+    expect(list.map((c) => c.id)).toEqual(["a", "b", "c"]);
   });
 
   it("latestConversation 跳过归档并按最近活跃排序", () => {

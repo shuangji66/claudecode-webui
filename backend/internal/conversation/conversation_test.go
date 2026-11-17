@@ -65,6 +65,45 @@ func TestTouchRenameArchiveDeleteAndReload(t *testing.T) {
 	}
 }
 
+func TestSetPinned(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversations.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Touch("a", "/work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPinned("a", true); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.Get("a"); !rec.Pinned {
+		t.Fatal("置顶没有落库")
+	}
+	// 置顶只是排序偏好：自动恢复（LastFor）不受影响。
+	if rec, ok := s.LastFor("/work"); !ok || rec.ID != "a" {
+		t.Fatalf("LastFor = %+v, %v", rec, ok)
+	}
+	// Ensure 只补空字段，不能把用户状态冲掉。
+	if err := s.Ensure(Record{ID: "a", Cwd: "/work"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := s.Get("a"); !rec.Pinned {
+		t.Fatalf("Ensure 覆盖了置顶: %+v", rec)
+	}
+
+	again, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec, ok := again.Get("a"); !ok || !rec.Pinned {
+		t.Fatalf("置顶没有持久化: %+v, %v", rec, ok)
+	}
+	if err := again.SetPinned("missing", true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetPinned missing = %v", err)
+	}
+}
+
 func TestLastForNestedAndUpdateMeta(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "conversations.json"))
 	if err != nil {

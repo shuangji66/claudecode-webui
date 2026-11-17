@@ -175,6 +175,94 @@ describe("Sidebar 会话悬浮预览", () => {
   });
 });
 
+describe("Sidebar 会话行的管理入口", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useAppStore.setState({
+      workspaces: [{ path: "/w/demo", name: "demo", last_used: "", exists: true }],
+      currentWorkspace: "/w/demo",
+      activeId: null,
+      conversations: [
+        {
+          id: "c-menu",
+          cwd: "/w/demo",
+          title: "会话甲",
+          created_at: "",
+          last_active: "2026-01-02T00:00:00Z",
+          messages: 2,
+          archived: false,
+          live: false,
+        },
+      ],
+    });
+  });
+
+  // 参照 DSH：右键会话行等同于点右上角那个「···」，不用先瞄准只有悬停才出现的按钮。
+  it("右键会话行弹出与管理按钮相同的菜单", () => {
+    const archiveConversation = vi.fn(async () => true);
+    useAppStore.setState({ archiveConversation });
+
+    renderSidebar();
+    const more = screen.getByRole("button", { name: "管理对话 会话甲" });
+    const row = more.parentElement!;
+    // fireEvent 返回 false 表示 preventDefault 被调用过：浏览器原生右键菜单不能同时冒出来。
+    expect(fireEvent.contextMenu(row)).toBe(false);
+
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "归档" }));
+    expect(archiveConversation).toHaveBeenCalledWith("c-menu", true);
+  });
+
+  // 两套显示状态都靠 CSS：桌面默认只露时间，悬停 / 聚焦 / 菜单打开时换成「归档 · 置顶 · ⋯」；
+  // 触屏没有 hover，时间与「⋯」常驻（归档/置顶只能从菜单点）。jsdom 不算媒体查询，
+  // 只能钉住这一组类名，防止被改回「始终显示」或「悬停时按钮盖住标题」。
+  it("桌面默认显示时间、悬停露出操作组；触屏只常驻时间与「⋯」", () => {
+    renderSidebar();
+    const more = screen.getByRole("button", { name: "管理对话 会话甲" });
+    const actions = more.parentElement!;
+    const row = actions.parentElement!;
+    expect(row.className).toContain("group/session");
+    expect(actions).toBe(row.lastElementChild);
+    expect(actions.className).toContain("md:hidden");
+    expect(actions.className).toContain("md:group-hover/session:flex");
+
+    // 归档 / 置顶只在桌面出现（触屏走菜单）。
+    for (const name of ["归档 会话甲", "置顶 会话甲"]) {
+      expect(screen.getByRole("button", { name }).className).toContain("hidden");
+      expect(screen.getByRole("button", { name }).className).toContain("md:inline-flex");
+    }
+
+    const time = row.querySelector("button .ml-auto");
+    expect(time).not.toBeNull();
+    expect(time!.className).toContain("md:group-hover/session:hidden");
+  });
+
+  // 行内按钮即点即生效：归档不动转录（软删除），置顶只是列表偏好。
+  it("行内的归档与置顶按钮直接改对话状态", () => {
+    const archiveConversation = vi.fn(async () => true);
+    const pinConversation = vi.fn(async () => true);
+    useAppStore.setState({ archiveConversation, pinConversation });
+
+    renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "归档 会话甲" }));
+    expect(archiveConversation).toHaveBeenCalledWith("c-menu", true);
+
+    fireEvent.click(screen.getByRole("button", { name: "置顶 会话甲" }));
+    expect(pinConversation).toHaveBeenCalledWith("c-menu", true);
+  });
+
+  // 菜单里也有置顶（触屏唯一入口）。
+  it("菜单里的置顶项可用", () => {
+    const pinConversation = vi.fn(async () => true);
+    useAppStore.setState({ pinConversation });
+
+    renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "管理对话 会话甲" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "置顶" }));
+    expect(pinConversation).toHaveBeenCalledWith("c-menu", true);
+  });
+});
+
 describe("Sidebar 新建对话后关闭移动端抽屉", () => {
   const path = "/w/demo";
 

@@ -509,6 +509,8 @@ export interface ConversationInfo {
   last_active: string;
   messages: number;
   archived: boolean;
+  /** 侧栏置顶：只影响列表排序（置顶的排在同组最前），不是「默认恢复哪一条」。 */
+  pinned?: boolean;
   live: boolean;
   state?: string;
   provider?: string;

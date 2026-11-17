@@ -22,6 +22,16 @@ export function sortByRecent(conversations: ConversationInfo[]): ConversationInf
   return [...conversations].sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""));
 }
 
+/**
+ * 置顶的排在最前，组内保持传入顺序。
+ *
+ * 两种排序模式（最近更新 / 手动）都要先过它：置顶是「钉在上面」的显式意图，
+ * 不该被最近更新或拖拽顺序盖掉。`sort` 是稳定排序，所以组内顺序不会被打乱。
+ */
+export function pinnedFirst(conversations: ConversationInfo[]): ConversationInfo[] {
+  return [...conversations].sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
+}
+
 /** cwd 下最近活跃、未归档的对话；没有返回 null。 */
 export function latestConversation(cwd: string, conversations: ConversationInfo[]): ConversationInfo | null {
   return sortByRecent(conversations.filter((c) => !c.archived && belongs(c.cwd, cwd)))[0] ?? null;

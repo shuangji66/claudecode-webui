@@ -29,8 +29,11 @@ type Record struct {
 	// Cwd 是对话启动时的工作目录；用来按工作区分组与恢复。
 	Cwd string `json:"cwd"`
 	// Title 是用户重命名后的标题；空表示沿用转录里的首条消息。
-	Title     string    `json:"title,omitempty"`
-	Archived  bool      `json:"archived,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Archived bool   `json:"archived,omitempty"`
+	// Pinned 是侧栏的「置顶」：只影响列表排序（置顶的排在同组最前），
+	// 不参与 LastFor 的自动恢复——置顶不是「默认打开哪一条」。
+	Pinned    bool      `json:"pinned,omitempty"`
 	Deleted   bool      `json:"deleted,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	// LastActive 是最后一次打开/发送消息的时间，决定默认恢复哪一条。
@@ -221,6 +224,19 @@ func (s *Store) SetArchived(id string, archived bool) error {
 			return ErrNotFound
 		}
 		rec.Archived = archived
+		f.Records[id] = rec
+		return nil
+	})
+}
+
+// SetPinned 置顶/取消置顶一条对话。只影响列表排序，不动归档与最近活跃时间。
+func (s *Store) SetPinned(id string, pinned bool) error {
+	return s.mutate(func(f *storedFile) error {
+		rec, ok := f.Records[id]
+		if !ok {
+			return ErrNotFound
+		}
+		rec.Pinned = pinned
 		f.Records[id] = rec
 		return nil
 	})
