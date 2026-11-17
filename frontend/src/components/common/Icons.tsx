@@ -510,3 +510,13 @@ export function IconPlugin(props: Props) {
     </Svg>
   );
 }
+
+// 访问入口：挂锁。用来区分「设置 → 访问」（端口 + 密码）与代理页的盾牌。
+export function IconLock(props: Props) {
+  return (
+    <Svg {...props}>
+      <rect x="4" y="10" width="16" height="10" rx="2" />
+      <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+    </Svg>
+  );
+}
