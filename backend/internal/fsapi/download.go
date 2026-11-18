@@ -81,6 +81,10 @@ func (r *Root) ArchiveName(relPath string) string {
 // 三条边界：**不跟随符号链接**（链接可能指向工作区外）、跳过 `.git`（对象库重新压
 // 一遍既慢又没人要）、超出条目/字节预算直接失败而不是悄悄少给几个文件。
 // 读不了的子树跳过（下载是尽力而为），但预算超限必须是错误。
+//
+// **先把清单走完、再开始写**：边遍历边写的话，预算超限时已经吐出去半个 zip，
+// 调用方既改不了状态码也收不回来（客户端只会得到一个「200 + 坏包」）。
+// 清单只存路径与 FileInfo，20000 条是几 MB，换的是「超限时一个字节都不写」。
 func (r *Root) Zip(ctx context.Context, rel string, w io.Writer) (string, error) {
 	_, real, relPath, err := r.Resolve(rel)
 	if err != nil {
@@ -95,20 +99,14 @@ func (r *Root) Zip(ctx context.Context, rel string, w io.Writer) (string, error)
 	}
 	name := r.ArchiveName(relPath)
 	root := strings.TrimSuffix(name, ".zip")
-	zw := zip.NewWriter(w)
-	// 先写一条根目录条目：不少解压工具据此创建顶层文件夹（只有文件路径也能建，
-	// 但多一条不影响，反而更像常见的 zip）。
-	if header, headerErr := zip.FileInfoHeader(info); headerErr == nil {
-		header.Name = root + "/"
-		header.Method = zip.Store
-		if _, err := zw.CreateHeader(header); err != nil {
-			_ = zw.Close()
-			return "", err
-		}
-	}
-	entries := 0
-	var total int64
 
+	type planned struct {
+		abs  string
+		name string
+		info fs.FileInfo
+	}
+	plan := make([]planned, 0, 64)
+	var total, written int64
 	walkErr := filepath.WalkDir(real, func(current string, entry fs.DirEntry, dirErr error) error {
 		// 读不了的子树跳过：其余部分照样能下载。
 		if dirErr != nil {
@@ -117,7 +115,9 @@ func (r *Root) Zip(ctx context.Context, rel string, w io.Writer) (string, error)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entry.Name() == ".git" {
+		// `.git` 只在子树里跳过：直接打包一个 `.git` 目录时，跳过条件会连根一起
+		// 跳过，结果是 200 + 一个只有根条目的空包。
+		if entry.Name() == ".git" && current != real {
 			if entry.IsDir() {
 				return fs.SkipDir
 			}
@@ -138,42 +138,75 @@ func (r *Root) Zip(ctx context.Context, rel string, w io.Writer) (string, error)
 		if !fileInfo.IsDir() && !fileInfo.Mode().IsRegular() {
 			return nil
 		}
-		entries++
-		if entries > MaxArchiveEntries {
+		if len(plan)+1 > MaxArchiveEntries {
 			return ErrArchiveTooLarge
 		}
-		header, headerErr := zip.FileInfoHeader(fileInfo)
-		if headerErr != nil {
-			return nil
+		if !fileInfo.IsDir() {
+			total += fileInfo.Size()
+			if total > MaxArchiveBytes {
+				return ErrArchiveTooLarge
+			}
 		}
-		header.Name = path.Join(root, filepath.ToSlash(relInRoot))
+		entryName := path.Join(root, filepath.ToSlash(relInRoot))
 		if fileInfo.IsDir() {
-			header.Name += "/"
+			entryName += "/"
+		}
+		plan = append(plan, planned{abs: current, name: entryName, info: fileInfo})
+		return nil
+	})
+	if walkErr != nil {
+		return "", walkErr
+	}
+
+	zw := zip.NewWriter(w)
+	// 先写一条根目录条目：不少解压工具据此创建顶层文件夹（只有文件路径也能建，
+	// 但多一条不影响，反而更像常见的 zip）。
+	if header, headerErr := zip.FileInfoHeader(info); headerErr == nil {
+		header.Name = root + "/"
+		header.Method = zip.Store
+		if _, err := zw.CreateHeader(header); err != nil {
+			_ = zw.Close()
+			return "", err
+		}
+	}
+	for _, item := range plan {
+		header, headerErr := zip.FileInfoHeader(item.info)
+		if headerErr != nil {
+			continue
+		}
+		header.Name = item.name
+		if item.info.IsDir() {
 			header.Method = zip.Store
-			_, err := zw.CreateHeader(header)
-			return err
+			if _, err := zw.CreateHeader(header); err != nil {
+				_ = zw.Close()
+				return "", err
+			}
+			continue
 		}
 		header.Method = zip.Deflate
 		dst, createErr := zw.CreateHeader(header)
 		if createErr != nil {
-			return createErr
+			_ = zw.Close()
+			return "", createErr
 		}
-		src, openErr := os.Open(current)
+		src, openErr := os.Open(item.abs)
 		if openErr != nil {
-			return nil
+			// 清单与读取之间文件没了：留一个空条目比整个包失败好。
+			continue
 		}
-		n, copyErr := io.Copy(dst, src)
+		// 清单已经核过预算；这里仍按剩余额度读：清单之后文件可能被写大（claude 正在
+		// 这个目录里干活），超额要报错而不是悄悄把响应撑破。
+		n, copyErr := io.CopyN(dst, src, MaxArchiveBytes-written+1)
 		_ = src.Close()
-		total += n
-		if total > MaxArchiveBytes {
-			return ErrArchiveTooLarge
+		written += n
+		if written > MaxArchiveBytes {
+			_ = zw.Close()
+			return "", ErrArchiveTooLarge
 		}
-		return copyErr
-	})
-	if walkErr != nil {
-		// 已经写出去的部分无法撤回；调用方按「已写字节数」决定还能不能报错。
-		_ = zw.Close()
-		return "", walkErr
+		if copyErr != nil && !errors.Is(copyErr, io.EOF) {
+			_ = zw.Close()
+			return "", copyErr
+		}
 	}
 	if err := zw.Close(); err != nil {
 		return "", err

@@ -26,6 +26,9 @@ const (
 	// completeMaxEntries 是模糊搜索一次最多收集的条目数。工作区可能有几十万文件，
 	// 按预算截断比让一次按键扫完整块盘更实际。
 	completeMaxEntries = 8000
+	// completeMaxQuery 是一次查询的长度上限（按 rune）。路径片段不会这么长，而没有
+	// 上限时服务端要为一个 1 MiB 的查询做 8000 次匹配（浏览器每次按键都会发一次）。
+	completeMaxQuery = 256
 )
 
 // completeSkipDirs 是两种模式都不进入/不展示的目录名。
@@ -64,6 +67,9 @@ func (r *Root) Complete(ctx context.Context, query string, limit int) (Listing, 
 	}
 	// Windows 客户端可能传反斜杠；统一成 POSIX 分隔符后再判断模式。
 	q := strings.ReplaceAll(query, "\\", "/")
+	if runes := []rune(q); len(runes) > completeMaxQuery {
+		q = string(runes[:completeMaxQuery])
+	}
 	if slash := strings.LastIndex(q, "/"); slash >= 0 {
 		return r.completeInDir(q[:slash+1], q[slash+1:], limit), nil
 	}
@@ -75,34 +81,57 @@ func (r *Root) Complete(ctx context.Context, query string, limit int) (Listing, 
 
 // completeInDir 列出 dir 这一层，按 fragment 过滤后排序。
 func (r *Root) completeInDir(dir, fragment string, limit int) Listing {
-	clean := strings.TrimSuffix(dir, "/")
+	clean := cleanRelPath(dir)
 	// 切片的空值必须是 `[]` 而不是 nil：JSON 里是 `null`，前端 `entries.filter`
 	// 会当场 TypeError（与 settings 的「对外切片字段永远不能是 nil」同一条规矩）。
 	empty := Listing{Root: r.Dir, Path: clean, Entries: make([]Entry, 0)}
 	if clean != "" && excludedPath(clean) {
 		return empty
 	}
-	listing, err := r.List(clean, true, 0)
+	// 隐藏项只在查询本身以 `.` 开头时才出现，否则 .env / .gitignore 会挤满菜单。
+	hiddenQuery := strings.HasPrefix(fragment, ".")
+	needle := strings.ToLower(fragment)
+	listing, err := r.listDir(clean, true, 0, func(entry Entry) bool {
+		if entry.Type == "other" {
+			return false
+		}
+		if !hiddenQuery && strings.HasPrefix(entry.Name, ".") {
+			return false
+		}
+		if entry.Type == "dir" && excludedName(entry.Name) {
+			return false
+		}
+		// 这里就要按片段筛一遍：listDir 会在**保留**的条目达到上限时截断，
+		// 留到最后再筛的话，2000 个同目录文件之后的目标永远补不出来。
+		// 判定与 rankEntries 共用 scoreEntry，免得两处口径不同。
+		if needle == "" {
+			return true
+		}
+		_, ok := scoreEntry(entry.Path, entry.Type, needle)
+		return ok
+	})
 	if err != nil {
 		// 目录还不存在（用户正一路敲下去）、越界、没权限：空候选即可。
 		return empty
 	}
-	// 隐藏项只在查询本身以 `.` 开头时才出现，否则 .env / .gitignore 会挤满菜单。
-	hiddenQuery := strings.HasPrefix(fragment, ".")
-	entries := make([]Entry, 0, len(listing.Entries))
-	for _, entry := range listing.Entries {
-		if entry.Type == "other" {
-			continue
-		}
-		if !hiddenQuery && strings.HasPrefix(entry.Name, ".") {
-			continue
-		}
-		if entry.Type == "dir" && excludedName(entry.Name) {
-			continue
-		}
-		entries = append(entries, entry)
+	return Listing{
+		Root:      listing.Root,
+		Path:      listing.Path,
+		Entries:   rankEntries(listing.Entries, fragment, limit),
+		Truncated: listing.Truncated,
 	}
-	return Listing{Root: listing.Root, Path: listing.Path, Entries: rankEntries(entries, fragment, limit)}
+}
+
+// cleanRelPath 把 `a//b/` 这样的输入收成 `a/b`；空串与 "." 都表示工作区根（返回空串）。
+func cleanRelPath(p string) string {
+	if strings.TrimSpace(p) == "" {
+		return ""
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(p))
+	if cleaned == "." {
+		return ""
+	}
+	return cleaned
 }
 
 // completeWorkspace 在工作区内做一次有界遍历，返回模糊匹配的前 limit 条。
@@ -110,7 +139,7 @@ func (r *Root) completeInDir(dir, fragment string, limit int) Listing {
 // 广度优先（目录按名字顺序入队）而不是深度优先：预算被截断时至少先把浅层列全，
 // 深层目录在菜单里本来也很少被选中。
 func (r *Root) completeWorkspace(ctx context.Context, query string, limit int) Listing {
-	hiddenQuery := strings.HasPrefix(query, ".") || strings.Contains(query, "/.")
+	hiddenQuery := strings.HasPrefix(query, ".")
 	type pending struct{ abs, rel string }
 	queue := []pending{{abs: r.Real}}
 	entries := make([]Entry, 0, 256)
@@ -167,14 +196,18 @@ scan:
 //
 // 分数与 DSH 的 scoreCandidate 同一套阈值（目录额外加分），排序的后续键是
 // 「目录优先 → 路径短的优先 → 字典序」，保证同一份输入每次给出同一个顺序。
+//
+// needle 在这里只小写一次再往下传：早先每个候选各 `strings.ToLower(query)` 一次，
+// 一次按键就能按「候选数 × 查询长度」放大分配（8000 条 × 长查询是 GB 级）。
 func rankEntries(entries []Entry, query string, limit int) []Entry {
 	type scored struct {
 		entry Entry
 		score int
 	}
+	needle := strings.ToLower(query)
 	ranked := make([]scored, 0, len(entries))
 	for _, entry := range entries {
-		if score, ok := scoreEntry(entry.Path, entry.Type, query); ok {
+		if score, ok := scoreEntry(entry.Path, entry.Type, needle); ok {
 			ranked = append(ranked, scored{entry: entry, score: score})
 		}
 	}
@@ -201,12 +234,13 @@ func rankEntries(entries []Entry, query string, limit int) []Entry {
 	return out
 }
 
-func scoreEntry(path, kind, query string) (int, bool) {
+// scoreEntry 给一个候选打分。needle 是**已经小写**的查询（见 rankEntries）。
+func scoreEntry(path, kind, needle string) (int, bool) {
 	bonus := 0
 	if kind == "dir" {
 		bonus = 25
 	}
-	if query == "" {
+	if needle == "" {
 		return bonus, true
 	}
 	lowerPath := strings.ToLower(path)
@@ -214,7 +248,6 @@ func scoreEntry(path, kind, query string) (int, bool) {
 	if i := strings.LastIndex(lowerPath, "/"); i >= 0 {
 		name = lowerPath[i+1:]
 	}
-	needle := strings.ToLower(query)
 	switch {
 	case name == needle:
 		return 1000 + bonus, true

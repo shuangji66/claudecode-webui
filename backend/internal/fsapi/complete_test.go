@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -166,6 +168,51 @@ func TestCompleteSkipsSymlinks(t *testing.T) {
 	for _, path := range completePaths(t, r, "secret", 20) {
 		if path == "linkdir/secret-main.go" || path == "linkdir" {
 			t.Fatalf("符号链接不该进入候选: %v", path)
+		}
+	}
+}
+
+// 目录里条目多于 List 的截断上限时，过滤必须发生在截断之前：否则排在后面的文件
+// 永远补不出来（工作区模式的模糊搜索能搜到同一个文件，两种视图就对不上了）。
+func TestCompleteInDirFiltersBeforeTruncation(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "many")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < DefaultEntries+20; i++ {
+		name := filepath.Join(dir, "a"+strconv.Itoa(i)+".txt")
+		if err := os.WriteFile(name, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 名字排在最后（a… 之后）的目标文件。
+	if err := os.WriteFile(filepath.Join(dir, "zebra.go"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := completePaths(t, r, "many/zeb", 20)
+	if len(paths) != 1 || paths[0] != "many/zebra.go" {
+		t.Fatalf("大目录里末尾文件的补全 = %v，期望 many/zebra.go", paths)
+	}
+}
+
+// 空结果的 Path 也要规整：`a//` 与 `a/` 都该是 `a`，前端拿它当面包屑。
+func TestCompleteCleansEmptyPath(t *testing.T) {
+	r, err := OpenRoot(seedCompleteRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"src//nope", "src/nope/"} {
+		listing, err := r.Complete(context.Background(), query, 20)
+		if err != nil {
+			t.Fatalf("Complete(%q) 失败: %v", query, err)
+		}
+		if strings.HasSuffix(listing.Path, "/") {
+			t.Fatalf("Complete(%q) 的 Path = %q，不该以 / 结尾", query, listing.Path)
 		}
 	}
 }

@@ -123,6 +123,15 @@ func (r *Root) Resolve(rel string) (abs, real, relPath string, err error) {
 // 隐藏项（以 "." 开头）默认不显示；.git 即使在 hidden=true 时也不显示，
 // 避免把内部对象库暴露成可浏览的几万个文件。排序为目录优先、名称不区分大小写。
 func (r *Root) List(rel string, hidden bool, limit int) (Listing, error) {
+	return r.listDir(rel, hidden, limit, nil)
+}
+
+// listDir 是 List 的内部形态：keep 非空时只保留它认可的条目。
+//
+// 过滤必须发生在**截断之前**：`@` 补全会给这一层传一个「按输入片段过滤」的 keep，
+// 先按 2000 条截断再过滤的话，大目录里排在后面的文件永远补不出来（工作区模式的
+// 模糊搜索能搜到同一个文件，两种视图就对不上了）。
+func (r *Root) listDir(rel string, hidden bool, limit int, keep func(Entry) bool) (Listing, error) {
 	_, real, relPath, err := r.Resolve(rel)
 	if err != nil {
 		return Listing{}, err
@@ -160,24 +169,23 @@ func (r *Root) List(rel string, hidden bool, limit int) (Listing, error) {
 		}
 		// 解析符号链接，但只接受仍落在工作区内的目标；指向外部的链接标记 other，
 		// 既不隐藏目录内容，也不会让点击预览绕过围栏。
+		var entry Entry
 		target, resolveErr := filepath.EvalSymlinks(filepath.Join(real, name))
-		if resolveErr != nil || !within(r.Real, target) {
-			out.Entries = append(out.Entries, Entry{Name: name, Path: childRel, Type: "other"})
-			continue
-		}
 		info, statErr := os.Stat(target)
-		if statErr != nil {
-			out.Entries = append(out.Entries, Entry{Name: name, Path: childRel, Type: "other"})
+		switch {
+		case resolveErr != nil || !within(r.Real, target) || statErr != nil:
+			entry = Entry{Name: name, Path: childRel, Type: "other"}
+		case info.IsDir():
+			entry = Entry{Name: name, Path: childRel, Type: "dir"}
+		case info.Mode().IsRegular():
+			entry = Entry{Name: name, Path: childRel, Type: "file", Size: info.Size()}
+		default:
+			entry = Entry{Name: name, Path: childRel, Type: "other"}
+		}
+		if keep != nil && !keep(entry) {
 			continue
 		}
-		switch {
-		case info.IsDir():
-			out.Entries = append(out.Entries, Entry{Name: name, Path: childRel, Type: "dir"})
-		case info.Mode().IsRegular():
-			out.Entries = append(out.Entries, Entry{Name: name, Path: childRel, Type: "file", Size: info.Size()})
-		default:
-			out.Entries = append(out.Entries, Entry{Name: name, Path: childRel, Type: "other"})
-		}
+		out.Entries = append(out.Entries, entry)
 	}
 	sort.SliceStable(out.Entries, func(i, j int) bool {
 		a, b := out.Entries[i], out.Entries[j]

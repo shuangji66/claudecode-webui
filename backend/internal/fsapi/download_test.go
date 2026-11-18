@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"testing"
 )
 
@@ -122,5 +123,94 @@ func TestZipRequiresDirectoryAndStaysInside(t *testing.T) {
 	}
 	if _, err := r.Zip(context.Background(), "../", &buf); !errors.Is(err, ErrOutside) {
 		t.Fatalf("越界目录应拒绝: %v", err)
+	}
+}
+
+// 条目数超预算：必须在**写出任何字节之前**失败，否则调用方只能给出一个 200 + 半个 zip。
+func TestZipRejectsTooManyEntriesBeforeWriting(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "many")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i <= MaxArchiveEntries; i++ {
+		if err := os.WriteFile(filepath.Join(dir, "f"+strconv.Itoa(i)), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if _, err := r.Zip(context.Background(), "many", &buf); !errors.Is(err, ErrArchiveTooLarge) {
+		t.Fatalf("超条目预算应返回 ErrArchiveTooLarge，得到 %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("超预算时不该写出任何字节，实际写了 %d", buf.Len())
+	}
+}
+
+// 字节预算：单个大文件同样要挡住（早先是「整份复制完再判」，等于没挡）。
+func TestZipRejectsTooManyBytesBeforeWriting(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "big")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 稀疏文件：内容不重要，只要 Size 超预算，且不真的占 2 GiB 磁盘。
+	f, err := os.Create(filepath.Join(dir, "huge.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(MaxArchiveBytes + 1); err != nil {
+		_ = f.Close()
+		t.Skipf("当前环境不支持稀疏文件: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if _, err := r.Zip(context.Background(), "big", &buf); !errors.Is(err, ErrArchiveTooLarge) {
+		t.Fatalf("超字节预算应返回 ErrArchiveTooLarge，得到 %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("超预算时不该写出任何字节，实际写了 %d", buf.Len())
+	}
+}
+
+// 直接打包 `.git` 不能得到一个空包：跳过规则只对子树生效。
+func TestZipGitRootStillPacks(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git", "objects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if _, err := r.Zip(context.Background(), ".git", &buf); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, f := range reader.File {
+		if f.Name == ".git/HEAD" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("打包 .git 时应当带上它的文件，实际条目: %v", reader.File)
 	}
 }
