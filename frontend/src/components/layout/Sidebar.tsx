@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import type { ConversationInfo, WorkspaceEntry } from "../../transport/types";
 import { baseName, conversationTitle, relativeTime } from "../../lib/labels";
@@ -24,6 +24,7 @@ import {
   type SidebarView,
 } from "../../lib/sidebarView";
 import { clearDragPreview, startDragPreview } from "../../lib/dragImage";
+import { loadHiddenFeatures, saveHiddenFeatures, toggleFeature, type FeatureKey } from "../../lib/sidebarFeatures";
 import { askConfirm, askPrompt } from "../common/SystemDialogs";
 import { copyText } from "../../lib/clipboard";
 import { Menu, type MenuItem } from "../common/Menu";
@@ -41,11 +42,14 @@ import {
   IconFolder,
   IconFolderPlus,
   IconGitBranch,
+  IconGlobe,
+  IconGrid,
   IconHistory,
   IconMore,
   IconPanel,
   IconPencil,
   IconPin,
+  IconPlugin,
   IconPlus,
   IconSearch,
   IconLogout,
@@ -54,6 +58,7 @@ import {
   IconStop,
   IconTerminal,
   IconTrash,
+  IconWrench,
 } from "../common/Icons";
 
 interface Props {
@@ -65,9 +70,21 @@ interface Props {
   /** 直接落到「设置 → 部署」，用于左下角的更新提示。 */
   onOpenDeploy?: () => void;
   onAddWorkspace: () => void;
-  onOpenHistory: () => void;
-  /** 打开「自动化任务」面板（放在历史记录之上）。 */
-  onOpenSchedules: () => void;
+  /**
+   * 打开功能区对应的整页视图（插件 / MCP / 技能中心 / 自动化任务 / 历史记录）。
+   * 同一个入口再点一次由上层切成「回到对话」。
+   */
+  onOpenFeature: (feature: FeatureKey) => void;
+  /** 当前打开的功能页：入口在原地高亮（对齐 DSH）。 */
+  activeFeature?: FeatureKey | null;
+}
+
+/** 功能区的一个入口。图标给成渲染函数：同一份清单要在 15px 的行内与 18px 的收起态各画一次。 */
+interface FeatureEntry {
+  key: FeatureKey;
+  label: string;
+  icon: (size: number) => ReactNode;
+  onClick: () => void;
 }
 
 interface WorkspaceGroup {
@@ -113,7 +130,7 @@ interface DragState {
   over: { id: string; half: DropHalf } | null;
 }
 
-export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onOpenDeploy, onAddWorkspace, onOpenHistory, onOpenSchedules }: Props) {
+export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onOpenDeploy, onAddWorkspace, onOpenFeature, activeFeature = null }: Props) {
   const t = useT();
   const claude = useAppStore((s) => s.claude);
   const authRequired = useAppStore((s) => Boolean(s.info?.auth_required));
@@ -159,10 +176,17 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentWorkspace ? [currentWorkspace] : []));
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [wsMenu, setWsMenu] = useState<WsMenuState | null>(null);
+  /** 功能区里被取消固定的入口（只存本机，见 lib/sidebarFeatures）。 */
+  const [hiddenFeatures, setHiddenFeatures] = useState<Set<FeatureKey>>(loadHiddenFeatures);
+  const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     saveView(view);
   }, [view]);
+
+  useEffect(() => {
+    saveHiddenFeatures(hiddenFeatures);
+  }, [hiddenFeatures]);
 
   useEffect(() => {
     saveOrder(order);
@@ -174,6 +198,40 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   }, [currentWorkspace]);
 
   const archivedCount = conversations.filter((c) => c.archived).length;
+
+  // 功能区入口（对齐 DSH）：插件 / MCP / 技能中心 / 自动化任务 / 历史记录。
+  // 每一项都能从「更多」里取消固定，取消后同时从展开态与收起态消失。
+  const featureEntries: FeatureEntry[] = [
+    { key: "plugins", label: t("插件", "Plugins"), icon: (size) => <IconPlugin size={size} />, onClick: () => onOpenFeature("plugins") },
+    { key: "mcp", label: "MCP", icon: (size) => <IconGlobe size={size} />, onClick: () => onOpenFeature("mcp") },
+    { key: "skills", label: t("技能中心", "Skills"), icon: (size) => <IconWrench size={size} />, onClick: () => onOpenFeature("skills") },
+    { key: "schedules", label: t("自动化任务", "Automations"), icon: (size) => <IconClock size={size} />, onClick: () => onOpenFeature("schedules") },
+    { key: "history", label: t("历史记录", "History"), icon: (size) => <IconHistory size={size} />, onClick: () => onOpenFeature("history") },
+  ];
+  const visibleFeatures = featureEntries.filter((f) => !hiddenFeatures.has(f.key));
+  // 取消固定的入口不会消失，只是从主列表挪进「更多」——那里点一下照样能进，
+  // 行尾那颗图钉把它固定回主列表。
+  const hiddenEntries = featureEntries.filter((f) => hiddenFeatures.has(f.key));
+  const moreItems: MenuItem[] = hiddenEntries.map((f) => ({
+    id: f.key,
+    label: f.label,
+    icon: f.icon(13),
+    onSelect: f.onClick,
+    trailing: {
+      label: t(`固定 ${f.label}`, `Pin ${f.label}`),
+      icon: <IconPin size={13} />,
+      onSelect: () => setHiddenFeatures((prev) => toggleFeature(prev, f.key)),
+    },
+  }));
+  const pin = (key: FeatureKey) => setHiddenFeatures((prev) => toggleFeature(prev, key));
+  /**
+   * 先取出 currentTarget 再 setState：把 `e.currentTarget` 放进 state 的更新函数里，
+   * 等它真正执行时事件已经回收成 null，菜单会「点了没反应」。
+   */
+  const toggleMore = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const anchor = e.currentTarget;
+    setMoreAnchor((prev) => (prev ? null : anchor));
+  };
 
   /** 会话所属工作区的显示名（单列表模式下在行首标出来）。 */
   const workspaceNameOf = (cwd: string): string => {
@@ -614,24 +672,34 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         >
           <IconPlus size={17} />
         </button>
-        <button
-          type="button"
-          onClick={onOpenSchedules}
-          className="mt-2 flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:bg-black/5 hover:text-ink"
-          aria-label={t("自动化任务", "Automations")}
-          title={t("自动化任务", "Automations")}
-        >
-          <IconClock size={18} />
-        </button>
-        <button
-          type="button"
-          onClick={onOpenHistory}
-          className="mt-2 flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:bg-black/5 hover:text-ink"
-          aria-label={t("历史记录", "History")}
-          title={t("历史记录", "History")}
-        >
-          <IconHistory size={18} />
-        </button>
+        {visibleFeatures.map((f) => (
+          <button
+            key={f.key}
+            type="button"
+            onClick={f.onClick}
+            className={`mt-2 flex h-9 w-9 items-center justify-center rounded-lg hover:bg-black/5 ${
+              activeFeature === f.key ? "bg-black/5 text-ink" : "text-muted hover:text-ink"
+            }`}
+            aria-label={f.label}
+            aria-current={activeFeature === f.key ? "page" : undefined}
+            title={f.label}
+          >
+            {f.icon(18)}
+          </button>
+        ))}
+        {hiddenEntries.length > 0 && (
+          <button
+            type="button"
+            onClick={toggleMore}
+            className="mt-2 flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:bg-black/5 hover:text-ink"
+            aria-label={t("更多", "More")}
+            aria-haspopup="menu"
+            aria-expanded={moreAnchor !== null}
+            title={t("更多", "More")}
+          >
+            <IconGrid size={18} />
+          </button>
+        )}
         <div className="flex-1" />
         {updateAvailable && onOpenDeploy && (
           <button
@@ -665,6 +733,14 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         >
           <IconSettings size={18} />
         </button>
+        <Menu
+          open={moreAnchor !== null}
+          anchor={moreAnchor}
+          onClose={() => setMoreAnchor(null)}
+          width={216}
+          align="start"
+          items={moreItems}
+        />
       </aside>
     );
   }
@@ -705,16 +781,48 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         </button>
       </div>
 
-      {/* 功能区：和 DSH 一样放在「新对话」与工作区之间，一行一个入口。 */}
+      {/* 功能区：和 DSH 一样放在「新对话」与工作区之间，一行一个入口。
+          「更多」里可以取消固定，隐藏的入口只留在这里的菜单中。 */}
       <div className="mt-3 px-3">
-        <button type="button" onClick={onOpenSchedules} className="side-row text-ink-2 hover:text-ink">
-          <IconClock size={15} />
-          <span className="text-[12.5px]">{t("自动化任务", "Automations")}</span>
-        </button>
-        <button type="button" onClick={onOpenHistory} className="side-row text-ink-2 hover:text-ink">
-          <IconHistory size={15} />
-          <span className="text-[12.5px]">{t("历史记录", "History")}</span>
-        </button>
+        {visibleFeatures.map((f) => (
+          // 行本身是容器而不是按钮：右侧还要嵌一颗固定按钮（按钮不能嵌套）。
+          <div key={f.key} className="group/feature flex items-center">
+            <button
+              type="button"
+              onClick={f.onClick}
+              data-active={activeFeature === f.key ? "true" : undefined}
+              aria-current={activeFeature === f.key ? "page" : undefined}
+              className={`side-row min-w-0 flex-1 hover:text-ink ${activeFeature === f.key ? "font-medium text-ink" : "text-ink-2"}`}
+            >
+              {f.icon(15)}
+              <span className="truncate text-[12.5px]">{f.label}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => pin(f.key)}
+              aria-pressed={true}
+              aria-label={t(`取消固定 ${f.label}`, `Unpin ${f.label}`)}
+              title={t("取消固定（移入更多）", "Unpin (moves to More)")}
+              className="shrink-0 rounded-md p-1.5 text-faint transition hover:bg-black/5 hover:text-ink md:opacity-0 md:focus-visible:opacity-100 md:group-hover/feature:opacity-100"
+            >
+              <IconPin size={13} className="text-brand" />
+            </button>
+          </div>
+        ))}
+        {hiddenEntries.length > 0 && (
+          <button
+            type="button"
+            onClick={toggleMore}
+            className="side-row text-ink-2 hover:text-ink"
+            aria-label={t("更多", "More")}
+            aria-haspopup="menu"
+            aria-expanded={moreAnchor !== null}
+            title={t("更多", "More")}
+          >
+            <IconGrid size={15} />
+            <span className="text-[12.5px]">{t("更多", "More")}</span>
+          </button>
+        )}
       </div>
 
       <div className="mt-4 flex items-center gap-1 px-3">
@@ -918,6 +1026,15 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
               ] satisfies MenuItem[])
             : []
         }
+      />
+
+      <Menu
+        open={moreAnchor !== null}
+        anchor={moreAnchor}
+        onClose={() => setMoreAnchor(null)}
+        width={216}
+        align="start"
+        items={moreItems}
       />
 
       {hover?.kind === "conv" && (

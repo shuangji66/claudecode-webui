@@ -1,40 +1,32 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { lazy, useEffect, useState, type ReactNode } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import { useT } from "../../lib/i18n";
-import { Dialog } from "../common/Dialog";
 import { Section } from "./settings/Section";
-import { BrandMark, IconDownload, IconFolder, IconGitHub, IconGlobe, IconInfo, IconLock, IconPlugin, IconSettings, IconShield, IconSpark, IconWrench } from "../common/Icons";
+import { SettingsPane, SettingsSurface } from "./settings/SettingsSurface";
+import { BrandMark, IconDownload, IconFolder, IconGitHub, IconInfo, IconLock, IconSettings, IconShield, IconSpark } from "../common/Icons";
 
-type Tab = "general" | "models" | "dirs" | "skills" | "plugins" | "mcp" | "proxy" | "deploy" | "access" | "about";
+// 技能 / 插件 / MCP 三页的入口已移到左侧栏功能区（整页视图，见 FeaturePage），这里只留
+// 应用自身的设置。加页签照旧：类型、nav、Pane 各一行，页面自己 lazy 加载。
+type Tab = "general" | "models" | "dirs" | "proxy" | "deploy" | "access" | "about";
 
 // 每页一个 chunk：打开设置只看得到当前这一页，模型页（含预置提供商目录）
 // 与插件/MCP/技能页都没有理由跟着首开一起下发。
 const GeneralSettings = lazy(() => import("./settings/GeneralSettings").then((m) => ({ default: m.GeneralSettings })));
 const ModelsSettings = lazy(() => import("./settings/ModelsSettings").then((m) => ({ default: m.ModelsSettings })));
 const ProxySettings = lazy(() => import("./settings/ProxySettings").then((m) => ({ default: m.ProxySettings })));
-const SkillsSettings = lazy(() => import("./SkillsSettings").then((m) => ({ default: m.SkillsSettings })));
-const PluginsSettings = lazy(() => import("./PluginsSettings").then((m) => ({ default: m.PluginsSettings })));
-const McpSettings = lazy(() => import("./McpSettings").then((m) => ({ default: m.McpSettings })));
 const DeploySettings = lazy(() => import("./DeploySettings").then((m) => ({ default: m.DeploySettings })));
 const AccessSettings = lazy(() => import("./settings/AccessSettings").then((m) => ({ default: m.AccessSettings })));
 const DirsSettings = lazy(() => import("./settings/DirsSettings").then((m) => ({ default: m.DirsSettings })));
-
-const PANE_SCROLL =
-  "dsh-scroll h-full overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4 md:px-8 md:pb-8 md:pt-6";
-const PANE_FLEX = "flex h-full min-h-0 flex-col px-4 pt-4 md:px-8 md:pt-6";
 
 export function SettingsDrawer({
   open,
   onClose,
   initialTab,
-  cwd,
 }: {
   open: boolean;
   onClose: () => void;
   /** 从侧栏「有更新」等入口直接落到某一页。 */
   initialTab?: Tab;
-  /** 当前工作区，技能页用它读写项目里的 .claude/skills。 */
-  cwd?: string;
 }) {
   const t = useT();
   const [tab, setTab] = useState<Tab>(initialTab ?? "general");
@@ -55,16 +47,7 @@ export function SettingsDrawer({
   if (!open) return null;
 
   return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      label={t("设置", "Settings")}
-      title={t("设置", "Settings")}
-      size="xl"
-      bare
-      fullScreen
-      panelClassName="h-[100dvh] max-h-[100dvh] rounded-none md:h-[82vh] md:max-h-[84vh] md:rounded-2xl md:max-w-[900px]"
-    >
+    <SettingsSurface open={open} onClose={onClose} title={t("设置", "Settings")}>
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {/* 桌面端导航宽 136px（w-34）：192px 时那列文字只占一半、留白过大，
             分隔线离内容太远；标签最长只有两个字（MCP 三个），收窄后仍然一行放得下。 */}
@@ -77,15 +60,6 @@ export function SettingsDrawer({
           </NavItem>
           <NavItem active={tab === "dirs"} icon={<IconFolder size={16} />} onClick={() => setTab("dirs")}>
             {t("目录", "Folders")}
-          </NavItem>
-          <NavItem active={tab === "skills"} icon={<IconWrench size={16} />} onClick={() => setTab("skills")}>
-            {t("技能", "Skills")}
-          </NavItem>
-          <NavItem active={tab === "plugins"} icon={<IconPlugin size={16} />} onClick={() => setTab("plugins")}>
-            {t("插件", "Plugins")}
-          </NavItem>
-          <NavItem active={tab === "mcp"} icon={<IconGlobe size={16} />} onClick={() => setTab("mcp")}>
-            {t("MCP", "MCP")}
           </NavItem>
           <NavItem active={tab === "proxy"} icon={<IconShield size={16} />} onClick={() => setTab("proxy")}>
             {t("代理", "Proxy")}
@@ -102,59 +76,30 @@ export function SettingsDrawer({
         </nav>
 
         <div className="min-h-0 flex-1">
-          <Pane active={tab === "general"} mount={visited.has("general")}>
+          <SettingsPane active={tab === "general"} mount={visited.has("general")}>
             <GeneralSettings />
-          </Pane>
-          <Pane active={tab === "models"} mount={visited.has("models")} flex>
+          </SettingsPane>
+          <SettingsPane active={tab === "models"} mount={visited.has("models")} flex>
             <ModelsSettings />
-          </Pane>
-          <Pane active={tab === "dirs"} mount={visited.has("dirs")}>
+          </SettingsPane>
+          <SettingsPane active={tab === "dirs"} mount={visited.has("dirs")}>
             <DirsSettings />
-          </Pane>
-          <Pane active={tab === "skills"} mount={visited.has("skills")} flex>
-            <SkillsSettings cwd={cwd ?? ""} />
-          </Pane>
-          <Pane active={tab === "plugins"} mount={visited.has("plugins")}>
-            <PluginsSettings cwd={cwd ?? ""} />
-          </Pane>
-          <Pane active={tab === "mcp"} mount={visited.has("mcp")} flex>
-            <McpSettings cwd={cwd ?? ""} />
-          </Pane>
-          <Pane active={tab === "proxy"} mount={visited.has("proxy")}>
+          </SettingsPane>
+          <SettingsPane active={tab === "proxy"} mount={visited.has("proxy")}>
             <ProxySettings />
-          </Pane>
-          <Pane active={tab === "deploy"} mount={visited.has("deploy")}>
+          </SettingsPane>
+          <SettingsPane active={tab === "deploy"} mount={visited.has("deploy")}>
             <DeploySettings />
-          </Pane>
-          <Pane active={tab === "access"} mount={visited.has("access")}>
+          </SettingsPane>
+          <SettingsPane active={tab === "access"} mount={visited.has("access")}>
             <AccessSettings />
-          </Pane>
-          <Pane active={tab === "about"} mount={visited.has("about")}>
+          </SettingsPane>
+          <SettingsPane active={tab === "about"} mount={visited.has("about")}>
             <AboutSettings />
-          </Pane>
+          </SettingsPane>
         </div>
       </div>
-    </Dialog>
-  );
-}
-
-/** 一页内容：没打开过的页不挂载；切走只 hidden，滚动位置与表单状态都留着。 */
-function Pane({
-  active,
-  mount,
-  flex = false,
-  children,
-}: {
-  active: boolean;
-  mount: boolean;
-  flex?: boolean;
-  children: ReactNode;
-}) {
-  if (!mount) return null;
-  return (
-    <div className={active ? (flex ? PANE_FLEX : PANE_SCROLL) : "hidden"}>
-      <Suspense fallback={null}>{children}</Suspense>
-    </div>
+    </SettingsSurface>
   );
 }
 

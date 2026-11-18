@@ -4,23 +4,25 @@ import type { ConversationInfo } from "../../transport/types";
 import { relativeTime } from "../../lib/labels";
 import { authorizeFnosDir } from "../../lib/fnos";
 import { useLocale, useT } from "../../lib/i18n";
-import { Dialog } from "../common/Dialog";
+import { PageShell } from "./FeaturePage";
 import { Menu, type MenuItem } from "../common/Menu";
 import { askConfirm } from "../common/SystemDialogs";
-import { IconArchive, IconFolder, IconHistory, IconSearch, IconTrash } from "../common/Icons";
+import { IconArchive, IconFolder, IconSearch, IconTrash } from "../common/Icons";
 
 interface Props {
-  open: boolean;
+  /** 回到对话（整页视图没有遮罩，关闭就是回对话区）。 */
   onClose: () => void;
+  /** 移动端抽屉入口：整页视图会把对话区的页头一起盖掉。 */
+  onOpenSidebar?: () => void;
 }
 
 /**
- * 历史记录：读 ~/.claude/projects 下各会话的 jsonl 摘要。
+ * 历史记录（侧栏功能区的一整页视图）：读 ~/.claude/projects 下各会话的 jsonl 摘要。
  *
  * 点击条目会用 claude 的 --resume 恢复同一个对话 id，并回放转录；
  * 不再像旧版本那样「切目录开新会话」。
  */
-export function HistoryDialog({ open, onClose }: Props) {
+export function HistoryPage({ onClose, onOpenSidebar }: Props) {
   const t = useT();
   const locale = useLocale();
   const conversations = useAppStore((s) => s.conversations);
@@ -37,13 +39,10 @@ export function HistoryDialog({ open, onClose }: Props) {
   /** 右键菜单：锚在这一行上，选项与右侧那两颗固定按钮一致。 */
   const [menu, setMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
 
+  // 每次进入这一页都现查一次：页面是挂载即进来、离开即卸载，天然没有「关掉再打开」的残留。
   useEffect(() => {
-    if (!open) return;
-    setQuery("");
-    // 关掉再打开时把右键菜单也收掉：锚点是上一次挂载的 DOM 节点，早就没了。
-    setMenu(null);
     void refreshConversations();
-  }, [open, refreshConversations]);
+  }, [refreshConversations]);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -51,8 +50,6 @@ export function HistoryDialog({ open, onClose }: Props) {
       .filter((c) => !q || (c.title || "").toLowerCase().includes(q) || c.cwd.toLowerCase().includes(q))
       .sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""));
   }, [conversations, query]);
-
-  if (!open) return null;
 
   const titleOf = (c: ConversationInfo) => c.title || t("新对话", "New chat");
 
@@ -116,17 +113,13 @@ export function HistoryDialog({ open, onClose }: Props) {
   const menuConv = menu ? conversations.find((c) => c.id === menu.id) : undefined;
 
   return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      label={t("历史记录", "History")}
+    <PageShell
       title={t("历史记录", "History")}
-      icon={<IconHistory size={17} />}
-      sheet
-      bodyScroll={false}
+      onClose={onClose}
+      onOpenSidebar={onOpenSidebar}
       bodyClassName="flex min-h-0 flex-1 flex-col"
     >
-      <div className="border-b border-line px-4 py-2.5">
+      <div className="border-b border-line px-4 py-2.5 md:px-6">
         <div className="flex items-center gap-2 rounded-[10px] border border-line-strong px-2.5 py-1.5 focus-within:border-brand/60">
           <IconSearch size={14} className="text-muted" />
           {/* 不要 autoFocus：手机上打开历史记录会直接弹出键盘，把大半个列表顶走。 */}
@@ -150,7 +143,7 @@ export function HistoryDialog({ open, onClose }: Props) {
 
       {/* 底部没有 footer 了，安全区留白挪到这里：滚动区最后一行的下沿不能让
           iPhone 的 Home Indicator 压住。 */}
-      <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+8px)]">
+      <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] md:px-4">
         {rows.length === 0 && <p className="px-3 py-8 text-center text-[12px] text-muted">{t("没有匹配的历史会话。", "No matching sessions.")}</p>}
         {rows.map((c) => (
           <div
@@ -238,6 +231,6 @@ export function HistoryDialog({ open, onClose }: Props) {
             : []
         }
       />
-    </Dialog>
+    </PageShell>
   );
 }

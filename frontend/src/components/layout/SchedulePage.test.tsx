@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { ScheduleDialog } from "./ScheduleDialog";
+import { SchedulePage } from "./SchedulePage";
 import { useAppStore } from "../../store/useAppStore";
 import { useScheduleStore } from "../../store/useScheduleStore";
 import type { ScheduleTask } from "../../transport/types";
@@ -33,16 +33,16 @@ beforeEach(() => {
   });
 });
 
-describe("ScheduleDialog", () => {
+describe("SchedulePage", () => {
   it("列表显示名称、状态与规则摘要", () => {
-    render(<ScheduleDialog open onClose={() => {}} />);
+    render(<SchedulePage onClose={() => {}} />);
     expect(screen.getByText("每日巡检")).toBeTruthy();
     expect(screen.getByText("已开启")).toBeTruthy();
     expect(screen.getByText("每天 09:00")).toBeTruthy();
   });
 
   it("点任务进入编辑态，点「返回列表」回来", () => {
-    render(<ScheduleDialog open onClose={() => {}} />);
+    render(<SchedulePage onClose={() => {}} />);
     fireEvent.click(screen.getByText("每日巡检"));
     expect(screen.getByText("任务名称")).toBeTruthy();
     expect(screen.getByText("保存修改")).toBeTruthy();
@@ -51,7 +51,7 @@ describe("ScheduleDialog", () => {
   });
 
   it("「新建」打开空白编辑器，创建按钮在", () => {
-    render(<ScheduleDialog open onClose={() => {}} />);
+    render(<SchedulePage onClose={() => {}} />);
     fireEvent.click(screen.getByText("新建"));
     expect(screen.getByText("任务内容")).toBeTruthy();
     expect(screen.getByText("创建")).toBeTruthy();
@@ -61,33 +61,29 @@ describe("ScheduleDialog", () => {
 
   it("列表为空时给一句人话", () => {
     useScheduleStore.setState({ tasks: [] });
-    render(<ScheduleDialog open onClose={() => {}} />);
+    render(<SchedulePage onClose={() => {}} />);
     expect(screen.getByText(/还没有自动化任务/)).toBeTruthy();
   });
 
-  // 回归：面板最初直接用 Dialog 的默认几何（md 居中、无内边距），表现是
-  // ① 列表卡片/输入框的边框正好压在弹窗边框上；② 滚动区贴到页脚分割线，最后一条
-  // 卡片的圆角被切掉、看起来像被页脚盖住。现在复用设置弹窗那套：整屏（移动端）/
-  // 900×82vh（桌面）+ 内容区自带内边距。
-  it("复用设置弹窗的几何与内边距", () => {
-    render(<ScheduleDialog open onClose={() => {}} />);
-    const panel = screen.getByRole("dialog");
-    expect(panel.className).toContain("h-[100dvh]");
-    expect(panel.className).toContain("md:h-[82vh]");
-    expect(panel.className).toContain("md:max-w-[900px]");
+  // 整页视图（不再是弹窗）：页头 h-14 与对话区对齐，动作在页头右侧，
+  // 内容区自己滚动、自己留安全区——「返回列表 / 新建」不再沉在屏幕最下方。
+  it("整页视图：页头动作 + 可滚动内容区", () => {
+    render(<SchedulePage onClose={() => {}} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { name: "自动化任务" })).toBeTruthy();
 
     const body = screen.getByText("每日巡检").closest(".dsh-scroll") as HTMLElement;
     expect(body).toBeTruthy();
     expect(body.className).toContain("overflow-y-auto");
     expect(body.className).toContain("px-4");
-    expect(body.className).toContain("pb-4");
-    // 页脚是滚动区的兄弟节点（不在滚动区里），滚动内容不会从下面穿过去。
-    expect(body.parentElement?.querySelector("footer")).toBeTruthy();
+    expect(body.className).toContain("pb-[calc(env(safe-area-inset-bottom");
   });
 
-  it("关闭时不渲染内容", () => {
-    const { container } = render(<ScheduleDialog open={false} onClose={() => {}} />);
-    expect(container.textContent).toBe("");
+  it("页头的关闭按钮回到对话区", () => {
+    const onClose = vi.fn();
+    render(<SchedulePage onClose={onClose} />);
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -233,6 +233,11 @@ export interface MenuItem {
   checked?: boolean;
   danger?: boolean;
   disabled?: boolean;
+  /**
+   * 行尾的一颗独立图标按钮（例如「更多」里把功能固定回侧栏）。
+   * 它在主按钮之外，所以不会顺带触发 `onSelect`，也不关菜单。
+   */
+  trailing?: { label: string; icon: ReactNode; onSelect: () => void };
   onSelect: () => void;
 }
 
@@ -290,29 +295,48 @@ export function Menu({ open, anchor, items, onClose, width = 176, align = "end" 
             {item.group && item.group !== items[index - 1]?.group && (
               <div className="px-2.5 pb-0.5 pt-1.5 text-[10px] text-faint">{item.group}</div>
             )}
-            <button
-              type="button"
-              role={item.checked === undefined ? "menuitem" : "menuitemradio"}
-              aria-checked={item.checked}
-              disabled={item.disabled}
-              onClick={() => {
-                onClose();
-                item.onSelect();
-              }}
-              className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] disabled:opacity-40 ${
-                item.danger ? "text-danger hover:bg-danger/[0.06]" : "text-ink hover:bg-panel-strong"
-              }`}
-            >
-              {item.icon}
-              <span className="min-w-0 flex-1 truncate">{item.label}</span>
-              {/* 参数提示可能很长（[low|medium|high] [--fix]…）：限宽截断，别把标签挤没。 */}
-              {item.hint && (
-                <span className="max-w-[42%] shrink-0 truncate pl-2 font-mono text-[10px] text-faint" title={typeof item.hint === "string" ? item.hint : undefined}>
-                  {item.hint}
-                </span>
+            <div className="relative">
+              <button
+                type="button"
+                role={item.checked === undefined ? "menuitem" : "menuitemradio"}
+                aria-checked={item.checked}
+                disabled={item.disabled}
+                onClick={() => {
+                  onClose();
+                  item.onSelect();
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] disabled:opacity-40 ${
+                  item.trailing ? "pr-7" : ""
+                } ${
+                  item.danger ? "text-danger hover:bg-danger/[0.06]" : "text-ink hover:bg-panel-strong"
+                }`}
+              >
+                {item.icon}
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                {/* 参数提示可能很长（[low|medium|high] [--fix]…）：限宽截断，别把标签挤没。 */}
+                {item.hint && (
+                  <span className="max-w-[42%] shrink-0 truncate pl-2 font-mono text-[10px] text-faint" title={typeof item.hint === "string" ? item.hint : undefined}>
+                    {item.hint}
+                  </span>
+                )}
+                {item.checked && <IconCheck size={13} className="shrink-0 text-brand" />}
+              </button>
+              {item.trailing && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-label={item.trailing.label}
+                  title={item.trailing.label}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    item.trailing?.onSelect();
+                  }}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1 text-faint hover:bg-black/5 hover:text-ink"
+                >
+                  {item.trailing.icon}
+                </button>
               )}
-              {item.checked && <IconCheck size={13} className="shrink-0 text-brand" />}
-            </button>
+            </div>
           </Fragment>
         ))}
       </div>

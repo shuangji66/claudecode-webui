@@ -65,7 +65,9 @@ src/
                        / Zoomable（ZoomBar + ZoomableImage：图片缩放条与按 zoom 撑开的图）
   components/layout/   Sidebar（工作区/对话列表）/ HoverPreview（悬浮概览外壳）/ ConversationPreview、WorkspacePreview（会话/工作区的概览内容）/ TopBar / TokenGate（访问鉴权页）/ SettingsDrawer（只留导航壳）
                        / AuthCallbackPage（飞牛授权回调页，不挂应用壳层）
-                       / WorkspaceDialog / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / DeploySettings / HistoryDialog
+                       / FeaturePage（功能区整页视图外壳 PageShell + 插件/MCP/技能三页）
+                       / SchedulePage（自动化任务）/ HistoryPage（历史记录）
+                       / WorkspaceDialog / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / DeploySettings
                        / ClaudeInstallPrompt
   components/layout/settings/  设置页分区：GeneralSettings / ModelsSettings / DirsSettings（飞牛已授权目录）/ ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题）
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
@@ -242,17 +244,43 @@ src/
     上限 `MAX_QUEUED`（8 条，附件是 base64 常驻内存），只在内存里、刷新即丢。
     **输入框草稿相反**：正文按对话存 localStorage（见规则 30），重进前端还在。
 25. **首屏只留壳层，重的面板按需加载**：`App.tsx` 对 SettingsDrawer / RightSidebar /
-    WorkspaceDialog / HistoryDialog 一律 `lazy()` + `Suspense`，不要改回静态 import——
+    WorkspaceDialog / FeaturePage 一律 `lazy()` + `Suspense`，不要改回静态 import——
     这几块占了首屏包体的一半（实测主 chunk 604 KB → 382 KB，gzip 173 KB → 118 KB）。
     模态用 `useLazyMount`：**首次打开才挂载，之后保持挂载**，关闭再打开不会丢表单状态。
     **所有 hook 必须在 `if (!open) return null` 之前**：关闭时组件仍挂载、只是早返回 null，
     少渲染一条 hook 就是 React #300（「Rendered fewer hooks than expected」），
     用户看到的是整屏「界面出错了」。`WorkspaceDialog` 踩过一次，有回归用例钉住。
-26. **设置页按页签懒加载**：`SettingsDrawer` 只剩导航壳，每页在自己首次被访问时挂载
-    （`visited` 集合）并动态 import。各页 `useEffect` 一挂载就发请求（技能、插件目录、
-    MCP、搜索），全部常驻会让「打开设置」变成一次并发拉取，插件目录首次还可能联网十几秒。
+26. **设置页按页签懒加载**：`SettingsDrawer` 只剩导航壳（外壳是
+    `settings/SettingsSurface.tsx` 的 `SettingsSurface` + `SettingsPane`），每页在自己首次
+    被访问时挂载（`visited` 集合）并动态 import。各页 `useEffect` 一挂载就发请求，全部常驻
+    会让「打开设置」变成一次并发拉取。
     新增页签照这个模式加，不要写成「全部渲染 + hidden」。
     `Section`（分区标题 + 说明）统一在 `settings/Section.tsx`，不要再在页面里各写一份。
+
+26.1 **侧栏功能区是整页视图，不是弹窗**（对齐 DSH）：插件 / MCP / 技能中心 / 自动化任务 /
+    历史记录这五项从左侧栏「新对话」下面那排入口打开，**接管左侧栏以外的剩余区域**
+    （`App.tsx` 里与 `ChatPane` 二选一，移动端铺满视口），不再用 `Dialog`：
+    - **对话区只是 hidden、不卸载**：输入框草稿、滚动位置与 WS 连接都要留着；
+      右侧栏同样是 `hidden`（卸载等于 SIGHUP 掉里面的终端 shell）。
+    - **入口原地高亮**（`activeFeature`，`aria-current="page"`），再点一次回到对话；
+      点某条对话或「新对话」也会切回来（`App` 里按 `activeId` 复位）。
+    - **页头**是 `PageShell`：`safe-top` + `h-14`（与对话/右侧栏表头对齐）、标题、
+      页面自己的动作、右侧一颗「回到对话」；移动端再给一颗抽屉入口（那时左侧栏是抽屉）。
+    - **懒加载**：`FeaturePage` 自己 `lazy()`，五个页面各自一个 chunk；页面按
+      「挂载即进入、关闭即卸载」组织，不要再套 `open` prop。
+    - **不要再改回「居中弹窗 + 复用设置几何」**：弹窗会盖住对话区，还要先关掉才能接着干活。
+26.2 **功能区的固定 / 取消固定只缓存浏览器**（`lib/sidebarFeatures.ts`，键
+    `ccweb-sidebar-feature-hidden`）：入口清单与顺序在 `FEATURE_KEYS`，存的是**隐藏名单**
+    （新入口默认出现），未知 id 一律忽略。
+    - **图钉就在功能行的右侧**（对齐 DSH）：点它取消固定，该入口从主列表移到「更多」；
+      「更多」不是固定管理面板，它就是被取消固定的入口的落脚处，**点条目照样进入**，
+      条目行尾的图钉把它固定回主列表（`MenuItem.trailing`，不触发进入、也不关菜单）。
+    - 没有任何入口被取消固定时**不渲染「更多」**；展开态与收起态（图示栏）同一套规则。
+    - 行是容器而不是按钮：`side-row` 的外层是 `div.group/feature`，里面才是进入按钮 +
+      图钉按钮（按钮不能嵌套）。图钉在桌面悬停才露出，触屏常显。
+    - **触发元素的 `currentTarget` 要先取出来再 setState**：放进更新函数里等它执行时
+      已经是 `null`，菜单会「点了没反应」。
+    - 设置（`openSettings`）不在这份清单里：它是应用本身的入口，始终留在侧栏底部。
 27. **键盘焦点必须可见**：全局 `:focus-visible` 兜底在 `styles.css` 末尾（无 layer，
     优先于 utilities），所以页面上那 30 多个 `outline-none` 只影响鼠标。新增输入控件
     不需要自己写 focus 样式，也不要用 `!important` 去盖掉那条规则。
@@ -616,7 +644,8 @@ src/
   **宽度必须由「用户偏好 + 当前视口」派生**（`preferredWidth` 存偏好、`useViewportWidth()`
   跟踪 resize、渲染时 `clampWidth(preferredWidth, viewport)`）：只在拖动时 clamp 的话，
   窗口缩小后右侧栏不会自己变窄，会一直把对话挤成一条缝，直到用户拖一下才被纠正。
-- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 目录 / 技能 / 插件 / MCP / 代理 / 部署 / 访问 / 关于」；
+- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 目录 / 代理 / 部署 / 访问 / 关于」
+  ——技能 / 插件 / MCP 三页已移到左侧栏功能区（整页视图，见规则 26.1）；
   「目录」页只列飞牛已授权目录并提供添加/撤销（`DirsSettings` + `useDirsStore`）：
   **不打开目录、不标目录徽章、不写说明**，列表 `w-full` + 路径 `truncate`（完整值进 `title`），
   撤销前 `askConfirm`。后端给 `error` 时说原因（不在统一网关下 / 缺 token / scope 未声明），

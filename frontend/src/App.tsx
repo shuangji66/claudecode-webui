@@ -10,6 +10,7 @@ import { ClaudeInstallPrompt } from "./components/layout/ClaudeInstallPrompt";
 import { TokenGate } from "./components/layout/TokenGate";
 import { SystemDialogs } from "./components/common/SystemDialogs";
 import { BrandMark, IconClose, IconRetry } from "./components/common/Icons";
+import type { FeatureKey } from "./lib/sidebarFeatures";
 
 // 首屏只留壳层。设置抽屉（含全部设置页与提供商目录）、右侧栏（文件/Git/终端）、
 // 两个对话框都在第一次打开时按需拉取——它们加起来占掉首屏包体的大半，
@@ -20,11 +21,10 @@ const SettingsDrawer = lazy(() =>
 const WorkspaceDialog = lazy(() =>
   import("./components/layout/WorkspaceDialog").then((m) => ({ default: m.WorkspaceDialog })),
 );
-const HistoryDialog = lazy(() =>
-  import("./components/layout/HistoryDialog").then((m) => ({ default: m.HistoryDialog })),
-);
-const ScheduleDialog = lazy(() =>
-  import("./components/layout/ScheduleDialog").then((m) => ({ default: m.ScheduleDialog })),
+// 侧栏功能区打开的整页视图（插件 / MCP / 技能中心 / 自动化任务 / 历史记录）：
+// 与对话区二选一渲染，同样按需拉取。
+const FeaturePage = lazy(() =>
+  import("./components/layout/FeaturePage").then((m) => ({ default: m.FeaturePage })),
 );
 const RightSidebar = lazy(() => import("./components/right/RightSidebar").then((m) => ({ default: m.RightSidebar })));
 
@@ -92,8 +92,8 @@ function AppShell() {
   const [settingsTab, setSettingsTab] = useState<"general" | "models" | "proxy" | "deploy" | "access" | undefined>(undefined);
   const [installPromptDismissed, setInstallPromptDismissed] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [scheduleOpen, setScheduleOpen] = useState(false);
+  /** 侧栏功能区当前打开的整页视图；null = 回到对话区。 */
+  const [view, setView] = useState<FeatureKey | null>(null);
   const [tokenEpoch, setTokenEpoch] = useState(0);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [rightOpen, setRightOpen] = useState(readRightOpen);
@@ -102,8 +102,7 @@ function AppShell() {
   // 三个模态首次打开才加载代码；之后保持挂载，行为和以前一致。
   const settingsMounted = useLazyMount(settingsOpen);
   const workspaceMounted = useLazyMount(workspaceOpen);
-  const historyMounted = useLazyMount(historyOpen);
-  const scheduleMounted = useLazyMount(scheduleOpen);
+  const viewMounted = useLazyMount(view !== null);
 
   // 聊天里点「查看对话」：右侧栏可能还没开，这里替用户打开。
   useEffect(() => {
@@ -121,6 +120,13 @@ function AppShell() {
       /* 隐私模式 */
     }
   }, [rightOpen]);
+
+  // 点了某条对话 / 「新对话」就回对话区：整页视图只是改道，不是另一个应用。
+  // 必须和其它 hook 放在一起——跟在 `if (!info) return …` 后面会变成
+  // 「首帧 12 个 hook、下一帧 13 个」，就是 React #310（踩过一次）。
+  useEffect(() => {
+    setView(null);
+  }, [activeId]);
 
   const toggleCollapse = () => {
     setCollapsed((v) => {
@@ -185,9 +191,13 @@ function AppShell() {
     setSidebarOpen(false);
     setWorkspaceOpen(true);
   };
-  const openHistory = () => {
+  /**
+   * 功能区入口：打开对应的整页视图（再点一次回到对话）。移动端先收起抽屉，
+   * 整页视图就铺满屏幕；桌面端左侧栏保留、入口在原地高亮。
+   */
+  const openFeature = (key: FeatureKey) => {
     setSidebarOpen(false);
-    setHistoryOpen(true);
+    setView((prev) => (prev === key ? null : key));
   };
 
   const rightCwd =
@@ -205,8 +215,8 @@ function AppShell() {
           onOpenSettings={openSettings}
           onOpenDeploy={openDeploy}
           onAddWorkspace={openWorkspace}
-          onOpenHistory={openHistory}
-          onOpenSchedules={() => setScheduleOpen(true)}
+          onOpenFeature={openFeature}
+          activeFeature={view}
         />
       </div>
 
@@ -225,36 +235,51 @@ function AppShell() {
               onOpenSettings={openSettings}
               onOpenDeploy={openDeploy}
               onAddWorkspace={openWorkspace}
-              onOpenHistory={openHistory}
-              onOpenSchedules={() => setScheduleOpen(true)}
+              onOpenFeature={openFeature}
+              activeFeature={view}
             />
           </div>
         </div>
       )}
 
       <main className="min-w-0 flex-1">
-        <ChatPane
-          onToggleSidebar={() => setSidebarOpen(true)}
-          onAddWorkspace={openWorkspace}
-          rightOpen={rightOpen}
-          onToggleRight={toggleRight}
-        />
+        {/* 对话区始终挂载（切走只 hidden）：输入框草稿、滚动位置、WS 连接都留着，
+            回到对话时不会重连、也不会被「回放转录」冲掉正在写的内容。 */}
+        <div className={view ? "hidden" : "h-full"}>
+          <ChatPane
+            onToggleSidebar={() => setSidebarOpen(true)}
+            onAddWorkspace={openWorkspace}
+            rightOpen={rightOpen}
+            onToggleRight={toggleRight}
+          />
+        </div>
+        {view && (
+          <div className="h-full">
+            <Suspense fallback={null}>
+              {viewMounted && (
+                <FeaturePage view={view} cwd={rightCwd} onClose={() => setView(null)} onOpenSidebar={() => setSidebarOpen(true)} />
+              )}
+            </Suspense>
+          </div>
+        )}
       </main>
 
-      {/* 标签页由右侧栏自己管：文件 / Git / 每个终端各一个标签，切走不卸载。 */}
+      {/* 标签页由右侧栏自己管：文件 / Git / 每个终端各一个标签，切走不卸载。
+          功能区整页视图打开时只隐藏（`display: none`）不卸载——卸载等于 SIGHUP
+          掉里面的终端 shell。 */}
       {rightOpen && (
-        <Suspense fallback={null}>
-          <RightSidebar cwd={rightCwd} onClose={() => setRightOpen(false)} />
-        </Suspense>
+        <div className={view ? "hidden" : "contents"}>
+          <Suspense fallback={null}>
+            <RightSidebar cwd={rightCwd} onClose={() => setRightOpen(false)} />
+          </Suspense>
+        </div>
       )}
 
       <Suspense fallback={null}>
         {settingsMounted && (
-          <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsTab} cwd={rightCwd} />
+          <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} initialTab={settingsTab} />
         )}
         {workspaceMounted && <WorkspaceDialog open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />}
-        {historyMounted && <HistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} />}
-        {scheduleMounted && <ScheduleDialog open={scheduleOpen} onClose={() => setScheduleOpen(false)} />}
       </Suspense>
       {/* 一个版本都没装：后端能起来，但开不了会话，首屏直接把人送到部署页 */}
       <ClaudeInstallPrompt

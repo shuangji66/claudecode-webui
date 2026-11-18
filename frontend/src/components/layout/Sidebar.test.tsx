@@ -9,8 +9,7 @@ function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {})
       onToggleCollapse={() => {}}
       onOpenSettings={() => {}}
       onAddWorkspace={() => {}}
-      onOpenHistory={() => {}}
-      onOpenSchedules={() => {}}
+      onOpenFeature={() => {}}
       {...over}
     />,
   );
@@ -37,12 +36,12 @@ describe("Sidebar 自动化任务入口", () => {
 
   // 自动化任务是「长期目标」类入口：和 DSH 一样放在历史记录之上（功能区第一行）。
   it("自动化任务排在历史记录之上，点击打开面板", () => {
-    const onOpenSchedules = vi.fn();
-    renderSidebar({ onOpenSchedules });
+    const onOpenFeature = vi.fn();
+    renderSidebar({ onOpenFeature });
 
     const button = screen.getByRole("button", { name: "自动化任务" });
     fireEvent.click(button);
-    expect(onOpenSchedules).toHaveBeenCalled();
+    expect(onOpenFeature).toHaveBeenCalledWith("schedules");
 
     const history = screen.getByRole("button", { name: "历史记录" });
     expect(button.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -56,12 +55,12 @@ describe("Sidebar 历史记录入口", () => {
 
   // 参照 DSH：功能入口在「新对话」与工作区之间的功能区，一行一个。
   it("历史记录在功能区（工作区上方），点击打开历史", () => {
-    const onOpenHistory = vi.fn();
-    renderSidebar({ onOpenHistory });
+    const onOpenFeature = vi.fn();
+    renderSidebar({ onOpenFeature });
 
     const button = screen.getByRole("button", { name: "历史记录" });
     fireEvent.click(button);
-    expect(onOpenHistory).toHaveBeenCalled();
+    expect(onOpenFeature).toHaveBeenCalledWith("history");
 
     // DOM 顺序：历史记录必须排在「工作区」标题之前。
     const workspaces = screen.getByText("工作区");
@@ -632,5 +631,70 @@ describe("Sidebar 手动排序的拖拽（对齐 DSH）", () => {
     expect(orderOf(cwd)).toBeUndefined();
     expect(document.body.contains(ghost)).toBe(false);
     expect(target.querySelector("[data-drop-line]")).toBeNull();
+  });
+});
+
+describe("Sidebar 功能区入口", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useAppStore.setState({ conversations: [], workspaces: [], currentWorkspace: "", activeId: null });
+  });
+
+  // 插件 / MCP / 技能中心原来在「设置」页签里，现在和 DSH 一样摆到侧栏功能区。
+  it("插件 / MCP / 技能中心都在功能区，点击打开对应的整页视图", () => {
+    const onOpenFeature = vi.fn();
+    renderSidebar({ onOpenFeature });
+
+    fireEvent.click(screen.getByRole("button", { name: "插件" }));
+    expect(onOpenFeature).toHaveBeenLastCalledWith("plugins");
+    fireEvent.click(screen.getByRole("button", { name: "MCP" }));
+    expect(onOpenFeature).toHaveBeenLastCalledWith("mcp");
+    fireEvent.click(screen.getByRole("button", { name: "技能中心" }));
+    expect(onOpenFeature).toHaveBeenLastCalledWith("skills");
+
+    // 都在工作区列表之上（功能区在「新对话」与工作区之间）。
+    const workspaces = screen.getByText("工作区");
+    for (const name of ["插件", "MCP", "技能中心", "自动化任务", "历史记录"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button.compareDocumentPosition(workspaces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    // 全部固定着时没有「更多」：它只装被取消固定的入口。
+    expect(screen.queryByRole("button", { name: "更多" })).toBeNull();
+  });
+
+  // 固定按钮就在每一行的右侧（对齐 DSH），取消固定后该行从列表消失、挪进「更多」。
+  it("行尾的图钉取消固定：入口移入「更多」并缓存到浏览器", () => {
+    const { unmount } = renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "取消固定 插件" }));
+
+    expect(screen.queryByRole("button", { name: "插件" })).toBeNull();
+    expect(JSON.parse(localStorage.getItem("ccweb-sidebar-feature-hidden") ?? "[]")).toEqual(["plugins"]);
+    // 「更多」只在有东西被取消固定时出现。
+    expect(screen.getByRole("button", { name: "更多" })).toBeInTheDocument();
+
+    unmount();
+    renderSidebar();
+    expect(screen.queryByRole("button", { name: "插件" })).toBeNull();
+    expect(screen.getByRole("button", { name: "MCP" })).toBeInTheDocument();
+  });
+
+  it("「更多」里的入口照样能进，行尾图钉把它固定回主列表", () => {
+    const onOpenFeature = vi.fn();
+    renderSidebar({ onOpenFeature });
+
+    fireEvent.click(screen.getByRole("button", { name: "取消固定 历史记录" }));
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "历史记录" }));
+    expect(onOpenFeature).toHaveBeenCalledWith("history");
+
+    // 重新固定：菜单里的行尾图钉（点击不关菜单、也不触发进入）。
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "固定 历史记录" }));
+    expect(JSON.parse(localStorage.getItem("ccweb-sidebar-feature-hidden") ?? "[]")).toEqual([]);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByRole("button", { name: "历史记录" })).toBeInTheDocument();
   });
 });

@@ -1,6 +1,6 @@
-// 「自动化任务」面板：列表 + 编辑 + 运行记录。
+// 「自动化任务」页（侧栏功能区的一整页视图）：列表 + 编辑 + 运行记录。
 //
-// 参考 DSH 的自动化任务页，但按本项目的约定收敛：一个模态两态（列表 / 编辑），
+// 参考 DSH 的自动化任务页，但按本项目的约定收敛：一个页面两态（列表 / 编辑），
 // 数据在 useScheduleStore，规则文案在 lib/scheduleRule，组件只管排布与本地草稿。
 // 时间规则走引导式控件 + 自定义 cron；时区固定用浏览器时区（后端按 IANA 解释）。
 import { useEffect, useMemo, useState } from "react";
@@ -20,15 +20,17 @@ import {
   type RuleKind,
 } from "../../lib/scheduleRule";
 import type { ScheduleDelivery, ScheduleRule, ScheduleTask, ScheduleTarget } from "../../transport/types";
-import { Dialog } from "../common/Dialog";
+import { PageShell } from "./FeaturePage";
 import { Button } from "../common/Button";
 import { Select } from "../common/Select";
 import { askConfirm } from "../common/SystemDialogs";
-import { IconClock, IconPlus, IconChevronLeft, IconTrash } from "../common/Icons";
+import { IconPlus, IconChevronLeft, IconTrash } from "../common/Icons";
 
 interface Props {
-  open: boolean;
+  /** 回到对话（整页视图没有遮罩，关闭就是回对话区）。 */
   onClose: () => void;
+  /** 移动端抽屉入口：整页视图会把对话区的页头一起盖掉。 */
+  onOpenSidebar?: () => void;
 }
 
 interface Draft {
@@ -67,7 +69,7 @@ function emptyDraft(workspace: string): Draft {
   };
 }
 
-export function ScheduleDialog({ open, onClose }: Props) {
+export function SchedulePage({ onClose, onOpenSidebar }: Props) {
   const t = useT();
   const locale = useLocale();
   const workspaces = useAppStore((s) => s.workspaces);
@@ -87,13 +89,10 @@ export function ScheduleDialog({ open, onClose }: Props) {
   const [deliveries, setDeliveries] = useState<ScheduleDelivery[]>([]);
   const fetchDeliveries = useScheduleStore((s) => s.deliveries);
 
+  // 页面挂载即进入：每次进来都是一份干净的列表（离开时组件卸载，草稿不跨次残留）。
   useEffect(() => {
-    if (!open) return;
-    setDraft(null);
-    setDeliveries([]);
-    setError(null);
     void load();
-  }, [open, load, setError]);
+  }, [load]);
 
   // 打开一条已有任务时把它的投递记录也取回来（分页在接口里，这里只取最近一批）。
   useEffect(() => {
@@ -115,8 +114,6 @@ export function ScheduleDialog({ open, onClose }: Props) {
     if (list.length === 0) return [{ value: currentWorkspace, label: currentWorkspace }];
     return list.map((w) => ({ value: w.path, label: w.name || w.path }));
   }, [workspaces, currentWorkspace]);
-
-  if (!open) return null;
 
   const startNew = () => {
     const ws = workspaceOptions[0]?.value ?? currentWorkspace;
@@ -177,23 +174,19 @@ export function ScheduleDialog({ open, onClose }: Props) {
     : t("自动化任务", "Automations");
 
   return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      label={t("自动化任务", "Automations")}
+    <PageShell
       title={title}
-      icon={<IconClock size={16} />}
-      // 与设置弹窗同一套几何：移动端整屏、桌面 900×82vh 居中。
-      // 高度固定后列表才有稳定的滚动区域，不会随条数忽高忽低。
-      size="xl"
-      fullScreen
-      panelClassName="h-[100dvh] max-h-[100dvh] rounded-none md:h-[82vh] md:max-h-[84vh] md:rounded-2xl md:max-w-[900px]"
-      // 内容自己带内边距：Dialog 的 body 默认没有 padding，列表卡片/输入框的边框
-      // 会正好压在弹窗边框上（滚动区贴到页脚线，看起来像被页脚盖住）。
-      bodyClassName="px-4 pb-4 pt-4 md:px-8 md:pb-6 md:pt-5"
-      footer={
+      onClose={onClose}
+      onOpenSidebar={onOpenSidebar}
+      // 原来的弹窗页脚改成页头右侧的动作：整页视图没有「页脚」，把唯一的动作
+      // 留在屏幕最下方反而够不着。
+      actions={
         draft ? (
-          <button type="button" onClick={() => setDraft(null)} className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px] text-muted hover:bg-canvas hover:text-ink">
+          <button
+            type="button"
+            onClick={() => setDraft(null)}
+            className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px] text-muted hover:bg-panel-strong hover:text-ink"
+          >
             <IconChevronLeft size={13} />
             {t("返回列表", "Back")}
           </button>
@@ -204,6 +197,7 @@ export function ScheduleDialog({ open, onClose }: Props) {
           </Button>
         )
       }
+      bodyClassName="dsh-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] pt-4 md:px-8 md:pb-6 md:pt-5"
     >
       {error && (
         <p className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-[11.5px] text-danger dark:bg-rose-950/30">{error}</p>
@@ -234,7 +228,7 @@ export function ScheduleDialog({ open, onClose }: Props) {
           nextRunText={(task) => nextRunText(task, locale, t)}
         />
       )}
-    </Dialog>
+    </PageShell>
   );
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { SettingsDrawer } from "./SettingsDrawer";
 import { useAppStore } from "../../store/useAppStore";
 
@@ -101,5 +101,27 @@ describe("设置页凭证输入框的自动填充", () => {
       fireEvent.click(screen.getByRole("button", { name: /my-model/ }));
     });
     expect(screen.getByRole("checkbox", { name: /支持图片输入/ })).toBeChecked();
+  });
+});
+
+describe("设置页签", () => {
+  beforeEach(() => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // 技能 / 插件 / MCP 的入口已挪到左侧栏功能区（FeaturePage 整页视图），设置里不再有这三页。
+  it("不再包含技能 / 插件 / MCP 页签", async () => {
+    await act(async () => {
+      render(<SettingsDrawer open onClose={() => {}} />);
+    });
+    const nav = screen.getByRole("navigation");
+    for (const name of ["技能", "插件", "MCP"]) {
+      expect(within(nav).queryByRole("button", { name })).toBeNull();
+    }
+    expect(within(nav).getByRole("button", { name: "通用" })).toBeInTheDocument();
+    expect(within(nav).getByRole("button", { name: "关于" })).toBeInTheDocument();
   });
 });

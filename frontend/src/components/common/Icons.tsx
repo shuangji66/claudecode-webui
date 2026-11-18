@@ -227,6 +227,18 @@ export function IconMore(props: Props) {
   );
 }
 
+/** 更多：2×2 四宫格（侧栏功能区的「更多」入口），与三点的 IconMore 区分开。 */
+export function IconGrid(props: Props) {
+  return (
+    <Svg {...props}>
+      <rect x="4" y="4" width="6.4" height="6.4" rx="1.6" />
+      <rect x="13.6" y="4" width="6.4" height="6.4" rx="1.6" />
+      <rect x="4" y="13.6" width="6.4" height="6.4" rx="1.6" />
+      <rect x="13.6" y="13.6" width="6.4" height="6.4" rx="1.6" />
+    </Svg>
+  );
+}
+
 export function IconAlert(props: Props) {
   return (
     <Svg {...props}>

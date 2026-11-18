@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { HistoryDialog } from "./HistoryDialog";
+import { HistoryPage } from "./HistoryPage";
 import { useAppStore } from "../../store/useAppStore";
 import { askConfirm } from "../common/SystemDialogs";
 
@@ -8,7 +8,7 @@ vi.mock("../common/SystemDialogs", () => ({ askConfirm: vi.fn(), askPrompt: vi.f
 
 const cwd = "/w/demo";
 
-describe("HistoryDialog", () => {
+describe("HistoryPage", () => {
   beforeEach(() => {
     localStorage.clear();
     useAppStore.setState({
@@ -23,14 +23,14 @@ describe("HistoryDialog", () => {
 
   // 手机上自动聚焦会立刻弹键盘，把大半个列表顶走。
   it("打开时搜索框不自动聚焦", () => {
-    render(<HistoryDialog open onClose={() => {}} />);
+    render(<HistoryPage onClose={() => {}} />);
     const box = screen.getByPlaceholderText("搜索历史会话");
     expect(document.activeElement).not.toBe(box);
   });
 
   // 去掉 autoFocus 不能连带把搜索弄坏：仍然按标题过滤。
   it("搜索仍按标题过滤", () => {
-    render(<HistoryDialog open onClose={() => {}} />);
+    render(<HistoryPage onClose={() => {}} />);
     expect(screen.getByText("会话甲")).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("搜索历史会话"), { target: { value: "乙" } });
@@ -43,7 +43,7 @@ describe("HistoryDialog", () => {
   // 计数随搜索变化没有意义，关闭已有 × / Esc / 遮罩三条路。
   it("底部没有计数与多余的关闭按钮，只剩右上角那颗关闭", () => {
     const onClose = vi.fn();
-    render(<HistoryDialog open onClose={onClose} />);
+    render(<HistoryPage onClose={onClose} />);
 
     expect(screen.queryByText(/共 \d+ 条对话/)).toBeNull();
     // 「关闭」只剩 Dialog 标题栏那颗图标按钮。
@@ -55,7 +55,7 @@ describe("HistoryDialog", () => {
   });
 });
 
-describe("HistoryDialog 行操作", () => {
+describe("HistoryPage 行操作", () => {
   const archiveConversation = vi.fn(async () => true);
   const deleteConversation = vi.fn(async () => true);
   const askConfirmMock = vi.mocked(askConfirm);
@@ -79,7 +79,7 @@ describe("HistoryDialog 行操作", () => {
 
   // 一列 /vol1/@appshare/... 只是噪音：路径留在 title 里悬浮可见就够了。
   it("行里不再显示工作区路径", () => {
-    render(<HistoryDialog open onClose={() => {}} />);
+    render(<HistoryPage onClose={() => {}} />);
     expect(screen.queryByText(cwd)).toBeNull();
     // 但路径仍可通过悬浮提示看到。
     expect(screen.getAllByTitle(cwd)).toHaveLength(2);
@@ -88,7 +88,7 @@ describe("HistoryDialog 行操作", () => {
   // 固定按钮：已归档的行是「取消归档」，未归档的行是「归档」——同一颗按钮两种语义，
   // 给未归档的行摆一颗点了没反应的「取消归档」等于骗人。
   it("右侧有固定的归档 / 删除按钮，按行状态切换语义", () => {
-    render(<HistoryDialog open onClose={() => {}} />);
+    render(<HistoryPage onClose={() => {}} />);
 
     fireEvent.click(screen.getByRole("button", { name: "归档 会话甲" }));
     expect(archiveConversation).toHaveBeenCalledWith("c-1", true);
@@ -101,7 +101,7 @@ describe("HistoryDialog 行操作", () => {
 
   it("删除必须先二次确认", async () => {
     askConfirmMock.mockResolvedValue(false);
-    render(<HistoryDialog open onClose={() => {}} />);
+    render(<HistoryPage onClose={() => {}} />);
 
     fireEvent.click(screen.getByRole("button", { name: "删除 会话甲" }));
     await waitFor(() => expect(askConfirmMock).toHaveBeenCalled());
@@ -114,7 +114,7 @@ describe("HistoryDialog 行操作", () => {
 
   it("右键菜单与行内按钮是同一组选项", async () => {
     askConfirmMock.mockResolvedValue(true);
-    render(<HistoryDialog open onClose={() => {}} />);
+    render(<HistoryPage onClose={() => {}} />);
 
     fireEvent.contextMenu(screen.getAllByTitle(cwd)[1]); // 会话乙（已归档）
     const menu = await screen.findByRole("menu");
