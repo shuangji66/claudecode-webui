@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RightSidebar, clampWidth } from "./RightSidebar";
+import { useSidebarStore } from "../../store/useSidebarStore";
+import { useAppStore } from "../../store/useAppStore";
 
 // 面板本身另有实现细节（文件树 / Git / xterm），这里只验证标签页自己的开合逻辑。
 vi.mock("./FilesPanel", () => ({ FilesPanel: () => <div>FILES</div> }));
 vi.mock("./GitPanel", () => ({ GitPanel: () => <div>GIT</div> }));
 vi.mock("./TerminalView", () => ({ default: () => <div>TERM</div> }));
+vi.mock("./SubagentPanel", () => ({ SubagentPanel: () => <div>SUB</div> }));
 
 beforeEach(() => {
   localStorage.clear();
@@ -154,6 +157,42 @@ describe("RightSidebar 换工作区", () => {
     await waitFor(() => expect(screen.queryByText("TERM")).toBeNull());
     expect(screen.queryByRole("button", { name: /^bash/ })).toBeNull();
     // 回到开始页
+    expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
+  });
+});
+
+describe("RightSidebar 的一次性请求", () => {
+  // 两条请求都在 store 里：右侧栏是「关掉就卸载」的，只靠组件内的 ref 记「已处理」
+  // 会在重新挂载时归零，把上一次的请求重放一遍。
+  beforeEach(() => {
+    // 侧栏本来就在 /w 上（生产中关掉再打开时 store 里的 cwd 没变）：这样首次挂载
+    // 的 setCwd 不会走到「换 cwd 顺手清请求」的分支，重放问题才暴露得出来。
+    useSidebarStore.setState({ openRequest: null, cwd: "/w" });
+    useAppStore.setState({ subagentView: null, activeId: "sess-1" });
+  });
+
+  it("「在右侧栏打开」消费后关掉侧栏再打开，不会又开「文件」标签", () => {
+    useSidebarStore.setState({ openRequest: { path: "probe/quad.png", seq: 1 } });
+    const first = render(<RightSidebar cwd="/w" onClose={() => {}} />);
+    expect(screen.getByText("FILES")).toBeInTheDocument();
+    // 请求已经出队：store 里不再挂着它
+    expect(useSidebarStore.getState().openRequest).toBeNull();
+    first.unmount();
+
+    render(<RightSidebar cwd="/w" onClose={() => {}} />);
+    expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
+    expect(screen.queryByText("FILES")).toBeNull();
+  });
+
+  it("「查看子代理对话」同样只消费一次", () => {
+    useAppStore.setState({ subagentView: { agentId: "agent-1", label: "researcher", nonce: 1 } });
+    const first = render(<RightSidebar cwd="/w" onClose={() => {}} />);
+    expect(screen.getByText("SUB")).toBeInTheDocument();
+    expect(useAppStore.getState().subagentView).toBeNull();
+    first.unmount();
+
+    render(<RightSidebar cwd="/w" onClose={() => {}} />);
+    expect(screen.queryByText("SUB")).toBeNull();
     expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
   });
 });

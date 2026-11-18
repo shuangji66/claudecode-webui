@@ -53,6 +53,14 @@ interface SidebarState {
    */
   openRequest: { path: string; seq: number } | null;
   requestOpenFile: (path: string) => void;
+  /**
+   * 标记这条请求已经处理过（清空 `openRequest`）。
+   *
+   * 请求是一次性的，必须由消费方显式消费掉：留着它的话，右侧栏被关掉再打开、
+   * 或者「文件」标签关掉再打开（组件重新挂载、消费用的 ref 归零）会把上一次的
+   * 请求重放一遍——用户只是关了侧栏，却又被送进一张早就看完的图。
+   */
+  consumeOpenFile: () => void;
 
   loadRepos: () => Promise<void>;
   selectRepo: (root: string) => Promise<void>;
@@ -229,6 +237,11 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     const rel = path.trim();
     if (!rel) return;
     set((s) => ({ openRequest: { path: rel, seq: (s.openRequest?.seq ?? 0) + 1 } }));
+  },
+
+  consumeOpenFile: () => {
+    if (get().openRequest === null) return;
+    set({ openRequest: null });
   },
 
   refreshGit: async () => {

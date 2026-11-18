@@ -86,6 +86,8 @@ export function RightSidebar({ cwd, onClose }: Props) {
   const t = useT();
   const setCwd = useSidebarStore((s) => s.setCwd);
   const openRequest = useSidebarStore((s) => s.openRequest);
+  const consumeOpenFile = useSidebarStore((s) => s.consumeOpenFile);
+  const clearSubagentView = useAppStore((s) => s.clearSubagentView);
   // 存的是用户偏好；实际宽度每次都按当前视口收敛，窗口缩小后立刻跟着变窄。
   const [preferredWidth, setPreferredWidth] = useState(readWidth);
   const viewport = useViewportWidth();
@@ -102,11 +104,15 @@ export function RightSidebar({ cwd, onClose }: Props) {
   const handledSubagent = useRef(0);
 
   // 聊天里的「查看对话」只放一个请求到 store，标签的打开/切换留在这里做。
+  //
+  // 处理完必须把请求清掉：右侧栏关掉再打开会重新挂载，`handledSubagent` 这类 ref
+  // 归零，留着请求就会被重放（用户只是收了侧栏，又被送进一个子代理标签）。
   useEffect(() => {
     if (!subagentView || subagentView.nonce === handledSubagent.current) return;
     handledSubagent.current = subagentView.nonce;
     if (!activeSession) return;
     openSubagentTab(activeSession, subagentView.agentId, subagentView.label);
+    clearSubagentView();
     // openSubagentTab 只依赖 setState，故意不放进依赖数组。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subagentView, activeSession]);
@@ -215,6 +221,9 @@ export function RightSidebar({ cwd, onClose }: Props) {
     handledOpenFile.current = req.seq;
     setPendingOpen(req);
     openTab("files");
+    // 请求只消费一次：**由 store 记「已处理」，不靠组件内的 ref**。关掉侧栏再打开
+    // 会重新挂载，ref 归零，留着请求就会重放（又开一个「文件」标签、又预览那张图）。
+    consumeOpenFile();
     // openTab 只依赖 tabs 与 setState；seq 已保证同一个请求只处理一次，
     // 放进依赖数组反而会在标签变化时重复触发。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -232,6 +241,9 @@ export function RightSidebar({ cwd, onClose }: Props) {
   };
 
   const closeTab = (id: string) => {
+    // 「文件」面板关掉后 pending 就没意义了：再打开标签时面板会重新挂载、
+    // 消费用的 ref 归零，留着它就会自动跳进上次那个文件的预览。
+    if (id === "files") setPendingOpen(null);
     setTabs((prev) => {
       const index = prev.findIndex((tab) => tab.id === id);
       const next = prev.filter((tab) => tab.id !== id);

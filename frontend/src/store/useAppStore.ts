@@ -155,6 +155,9 @@ interface AppState {
   /**
    * 要在右侧栏打开的子代理对话。右侧栏的标签是它自己管的，这里只放一个「请求」，
    * nonce 让重复点同一张卡片也能把标签切回来。
+   *
+   * 请求是一次性的：右侧栏消费完必须 `clearSubagentView`（否则关掉侧栏再打开、
+   * 组件重新挂载时会把上面那条请求重放一遍，用户会莫名其妙落在一个子代理标签上）。
    */
   subagentView: { agentId: string; label: string; nonce: number } | null;
   perms: Record<string, PermissionPayload[]>;
@@ -293,6 +296,8 @@ interface AppState {
   setPermissionMode: (mode: string) => void;
   /** 在右侧栏打开某个子代理的对话。 */
   showSubagent: (agentId: string, label: string) => void;
+  /** 右侧栏消费掉「查看子代理对话」请求后清空它（见 subagentView 注释）。 */
+  clearSubagentView: () => void;
   /** 停止一个后台任务（子代理 / 后台命令）。 */
   stopTask: (taskId: string) => Promise<void>;
   /** 会话的最近几句（侧栏悬浮预览），按 id 缓存。 */
@@ -500,6 +505,14 @@ async function recoverSession(id: string, get: () => AppState): Promise<void> {
     recovering.delete(id);
   }
 }
+
+/**
+ * 「查看子代理对话」请求的序号，跨请求单调递增。
+ *
+ * 放在模块级而不是 state 里：请求消费后 `subagentView` 会清空，若从 state 里
+ * 读上一次的 nonce 就会归零，重复点同一个子代理时 nonce 又回到 1。
+ */
+let subagentViewSeq = 0;
 
 export const useAppStore = create<AppState>()((set, get) => ({
   info: null,
@@ -1717,10 +1730,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   showSubagent: (agentId, label) => {
     if (!agentId) return;
-    set((s) => ({
-      subagentView: { agentId, label: label || "subagent", nonce: (s.subagentView?.nonce ?? 0) + 1 },
-    }));
+    // 序号走模块级计数器：请求被消费后 subagentView 会置空，从 0 重新数的话
+    // 同一个子代理点第二次会拿到和上次相同的 nonce，被右侧栏当成重复请求丢掉。
+    subagentViewSeq += 1;
+    set({ subagentView: { agentId, label: label || "subagent", nonce: subagentViewSeq } });
   },
+
+  clearSubagentView: () => set({ subagentView: null }),
 
   stopTask: async (taskId) => {
     const id = get().activeId;
