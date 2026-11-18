@@ -54,7 +54,10 @@ function prefStore<T extends string>(key: string, values: readonly T[], fallback
 
   const parse = (raw: string | null | undefined): T => {
     if (values.includes(raw as T)) return raw as T;
-    return (raw && legacy?.[raw]) || fallback;
+    // localStorage 是不可信输入：直接 `legacy[raw]` 会让 "__proto__" / "toString"
+    // 命中 Object.prototype，返回值不再是 T（类型上悄悄骗过所有人）。
+    if (raw && legacy && Object.prototype.hasOwnProperty.call(legacy, raw)) return legacy[raw];
+    return fallback;
   };
 
   const read = (): T => {

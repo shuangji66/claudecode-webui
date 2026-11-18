@@ -124,9 +124,14 @@ export function isTurnResult(msg: unknown): boolean {
   return asRecord(msg)?.type === "result";
 }
 
-/** 处理一条 CLI 原始消息，返回新的列表（不修改入参）。
- *  at 用于回放历史转录时保留原始时间，不传则用当前时间。 */
-export function applyCLI(items: Item[], msg: unknown, at = Date.now()): Item[] {
+/**
+ * 处理一条 CLI 原始消息，返回新的列表（不修改入参）。
+ *
+ * `at` 用于回放历史转录时保留原始时间，不传则用当前时间。
+ * `usageHint` 是实时流里已经攒下的用量快照（store 的 `usage[sid]`）：`result` 的整轮
+ * 口径里没有「最近一次请求的生成速度」，tok/s 只能从流式阶段量到的 genMs/genTokens 借。
+ */
+export function applyCLI(items: Item[], msg: unknown, at = Date.now(), usageHint?: UsageSnapshot): Item[] {
   const m = asRecord(msg);
   if (!m) return items;
   switch (m.type) {
@@ -137,7 +142,7 @@ export function applyCLI(items: Item[], msg: unknown, at = Date.now()): Item[] {
     case "user":
       return applyUser(items, m, at);
     case "result":
-      return applyResult(items, m, at);
+      return applyResult(items, m, at, usageHint);
     case "system":
       // 任务事件（子代理 / 后台命令）要先折进对应的工具卡片，再走通用 system 渲染。
       return applyTaskEvent(items, m, at) ?? applySystem(items, m, at);
@@ -767,6 +772,9 @@ function isPromptLine(line: Raw): boolean {
   if (typeof content === "string") return !isLocalCommandEcho(content) && content.trim() !== "";
   if (!Array.isArray(content)) return false;
   if (content.some((b) => asRecord(b)?.type === "tool_result")) return false;
+  // 只发了图片/PDF 的提问没有 text block，但它照样是「一轮的开始」：不认的话这一轮的
+  // 用量会被并进上一轮（lib/usage.ts 的同名判定早已按这个口径，两处必须一致）。
+  if (content.some((b) => ["image", "document"].includes(str(asRecord(b)?.type)))) return true;
   const text = content.map((b) => str(asRecord(b)?.text)).join("");
   return text.trim() !== "" && !isLocalCommandEcho(text);
 }
@@ -838,7 +846,7 @@ function repeatedByApiErrorAnswer(items: Item[], reason: string): boolean {
   return answer !== "" && reason.trim().includes(answer);
 }
 
-function applyResult(items: Item[], m: Raw, at: number): Item[] {
+function applyResult(items: Item[], m: Raw, at: number, usageHint?: UsageSnapshot): Item[] {
   const denials = Array.isArray(m.permission_denials) ? (m.permission_denials as unknown[]) : [];
   const raw = typeof m.result === "string" ? m.result : "";
   const errors = Array.isArray(m.errors)
@@ -862,7 +870,7 @@ function applyResult(items: Item[], m: Raw, at: number): Item[] {
   const userTerminated = diagnosticOnly && /result_type=user\b/.test(shown);
   const interrupted =
     m.is_error === true &&
-    (userTerminated || (/^\[Request interrupted by user/.test(shown) && interruptedThisTurn(items)));
+    (userTerminated || (isInterruptMarker(shown) && interruptedThisTurn(items)));
   const isError = m.is_error === true && !interrupted;
   // 失败原因就在 result / errors 里（API 报错、超出最大轮数…）。成功回合的 result
   // 与最后一条 assistant 正文是同一段话，只在出错时展示，免得同一段出现两遍。
@@ -871,6 +879,13 @@ function applyResult(items: Item[], m: Raw, at: number): Item[] {
   const reason = isError ? stripAnsi(raw || errors.join("\n")) : "";
   const text = reason && !repeatedByApiErrorAnswer(items, reason) ? reason : "";
   const usage = applyUsageMessage(undefined, m);
+  // tok/s 用的是「最近一次请求」的 genMs/genTokens（见 lib/usage 的文件头）：result 的
+  // 整轮累计里没有这一对，只能从流式阶段那份快照借过来。不借的话实时回合的回答下面
+  // 永远少一段「· 210 tok/s」，而重开对话走转录回放反而有。
+  if (usage && usageHint) {
+    if (usageHint.genMs !== undefined) usage.genMs = usageHint.genMs;
+    if (usageHint.genTokens !== undefined) usage.genTokens = usageHint.genTokens;
+  }
   // 回合结束（成功/失败/中断都一样）：悬着的流式气泡必须收尾，否则光标永远在闪。
   const out = stampTurnUsage(settleStreaming(items), {
     durationMs: typeof m.duration_ms === "number" ? m.duration_ms : undefined,

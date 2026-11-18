@@ -22,8 +22,18 @@ function fields(input: unknown): Record<string, unknown> {
   return input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
 }
 
-/** 紧凑模式下工具行标题后面那串摘要。未知工具回落到「第一个字符串参数」。 */
+/**
+ * 紧凑模式下工具行标题后面那串摘要。未知工具回落到「第一个字符串参数」。
+ *
+ * 出口统一截断：`Bash` 的整条命令、`ExitPlanMode` 的计划首行、`Grep` 的模式都是
+ * 用户/模型给的原文，一条 `python -c "…"` 能有几万字符——CSS 的 truncate 只是视觉
+ * 截断，文本照样整段进 DOM 与可访问性树。
+ */
 export function toolSummary(item: ToolItem): string {
+  return clip(rawToolSummary(item));
+}
+
+function rawToolSummary(item: ToolItem): string {
   const input = fields(item.input);
   const path = text(input.file_path) || text(input.path) || text(input.notebook_path);
 

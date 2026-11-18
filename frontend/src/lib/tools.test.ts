@@ -35,6 +35,17 @@ describe("toolSummary", () => {
     expect(toolSummary(tool({ name: "Agent", input: { prompt: "第一行\n第二行" } }))).toBe("第一行");
   });
 
+  // 一条 `python -c "…"` 能有几万字符：CSS 的 truncate 只是视觉截断，
+  // 文本照样整段进 DOM 与可访问性树，所以出口必须统一截断。
+  it("已知工具的长入参同样会截断", () => {
+    const long = "python -c " + "x".repeat(5000);
+    const summary = toolSummary(tool({ input: { command: long } }));
+    expect(summary.length).toBeLessThanOrEqual(161);
+    expect(summary.endsWith("…")).toBe(true);
+    const plan = toolSummary(tool({ name: "ExitPlanMode", input: { plan: "第一步 " + "y".repeat(5000) } }));
+    expect(plan.length).toBeLessThanOrEqual(161);
+  });
+
   it("未知工具回落第一个字符串参数", () => {
     expect(toolSummary(tool({ name: "SomeFutureTool", input: { count: 3, note: "看看这个" } }))).toBe("看看这个");
   });

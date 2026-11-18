@@ -116,8 +116,10 @@ export function taskEntries(items: Item[]): TaskEntry[] {
     if (it.kind !== "tool") continue;
 
     if (it.name === "TodoWrite") {
+      // TodoWrite 是**整份快照**，空数组也是有效输入：模型收尾时就是用它把列表清空的，
+      // 把 [] 当无效会让旧任务一直挂在面板上（任务早就做完了）。
       const snapshot = todoEntries(it);
-      if (snapshot && snapshot.length > 0) list = snapshot;
+      if (snapshot) list = snapshot;
       continue;
     }
 

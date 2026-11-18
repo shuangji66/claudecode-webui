@@ -94,6 +94,19 @@ describe("taskEntries", () => {
     ]);
   });
 
+  // 模型收尾时会用一条 `todos: []` 的 TodoWrite 把列表清空：空数组是有效快照，
+  // 当成无效输入的话，任务早就做完了面板上还挂着旧清单。
+  it("TodoWrite 的空快照会清空列表", () => {
+    const items: Item[] = [
+      t({
+        name: "TodoWrite",
+        input: { todos: [{ content: "读代码", status: "in_progress" }] },
+      }),
+      t({ name: "TodoWrite", input: { todos: [] } }),
+    ];
+    expect(taskEntries(items)).toEqual([]);
+  });
+
   it("幂等：同一条消息重复到达不会多出条目", () => {
     const one = t({ input: { subject: "只建一次" }, result: "Task #3 created successfully" });
     expect(taskEntries([one, one, one])).toHaveLength(1);

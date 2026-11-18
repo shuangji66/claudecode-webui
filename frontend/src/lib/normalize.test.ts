@@ -150,6 +150,28 @@ describe("normalize", () => {
     expect(items.map((i) => i.kind)).toEqual(["assistant", "assistant", "tool", "assistant"]);
   });
 
+  // tok/s 用「最近一次请求」的口径（genMs/genTokens）：result 的整轮累计里没有这一对，
+  // 必须从流式阶段那份快照借过来，否则实时回合的回答下面永远少一段「· N tok/s」。
+  it("result 的用量会带上流式阶段量到的生成速度", () => {
+    let items = applyCLI([], {
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "text", text: "答案" }] },
+    });
+    items = applyCLI(
+      items,
+      {
+        type: "result",
+        subtype: "success",
+        duration_ms: 4000,
+        usage: { input_tokens: 10, output_tokens: 900 },
+      },
+      Date.now(),
+      { contextTokens: 1000, genMs: 2000, genTokens: 400 },
+    );
+    const answer = items.find((i) => i.kind === "assistant") as { turn?: { usage?: Record<string, number> } };
+    expect(answer.turn?.usage).toMatchObject({ genMs: 2000, genTokens: 400, outputTokens: 900 });
+  });
+
   // 「本轮花了多少」挂在回答那一行最顺手：result 来时把用量回填到该回合
   // **最后一条**已完成的 assistant 上，中间过渡正文不挂，免得同一个回合到处是耗时。
   it("result 把本轮用量回填到最后一条回答上", () => {
@@ -977,6 +999,45 @@ describe("转录回放的回合用量", () => {
     expect(turns[0].turn.durationMs).toBe(9000);
   });
 
+  // 只发了图片/PDF 的提问没有 text block，但它照样是「一轮的开始」：
+  // 不认的话这一轮的用量会被并进上一轮（lib/usage.ts 的同名判定早已按这个口径）。
+  it("只发图片的提问也算新的一轮", () => {
+    const turns = turnsFromTranscript([
+      { type: "user", timestamp: "2026-01-02T00:00:00.000Z", message: { role: "user", content: "第一问" } },
+      { type: "api-request", timestamp: "2026-01-02T00:00:01.000Z" },
+      {
+        type: "assistant",
+        timestamp: "2026-01-02T00:00:02.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "第一答" }],
+          usage: { input_tokens: 100, output_tokens: 10 },
+        },
+      },
+      {
+        type: "user",
+        timestamp: "2026-01-02T00:00:10.000Z",
+        message: {
+          role: "user",
+          content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } }],
+        },
+      },
+      { type: "api-request", timestamp: "2026-01-02T00:00:11.000Z" },
+      {
+        type: "assistant",
+        timestamp: "2026-01-02T00:00:13.000Z",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "第二答" }],
+          usage: { input_tokens: 7, output_tokens: 3 },
+        },
+      },
+    ]);
+    expect(turns).toHaveLength(2);
+    // 第二轮只算它自己的用量（1s），不把第一轮的和算进来。
+    expect(turns[1].turn).toMatchObject({ durationMs: 3000, usage: { turnInputTokens: 7, outputTokens: 3 } });
+  });
+
   // 没有 usage 的 assistant 行同样是「这次请求结束了」：不清掉 api-request，
   // 下一个回答的 API 耗时会把两次请求的时间都算进去。
   it("assistant 行没有 usage 时也结束这次请求", () => {
@@ -1109,6 +1170,25 @@ describe("用户中断", () => {
     const result = items.find((i) => i.kind === "result");
     expect(result).toMatchObject({ kind: "result", isError: false, subtype: "interrupt" });
     expect(result?.kind === "result" && result.text).toBeUndefined();
+  });
+
+  // 判据②：本回合收到过中断标记，且 result 的原因就是标记本身。
+  // 会话被结束 / 子代理被中断的标记不是「by user」开头，只认前缀会把它们当成失败。
+  it("会话被结束 / 子代理中断的标记同样不算失败", () => {
+    for (const text of [
+      "[Request interrupted: the session ended before this agent finished.]",
+      "[Agent call interrupted: the process stopped]",
+    ]) {
+      let items = applyCLI([], marker(text));
+      items = applyCLI(items, {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        result: text,
+      });
+      const result = items.find((i) => i.kind === "result");
+      expect(result).toMatchObject({ kind: "result", isError: false, subtype: "interrupt" });
+    }
   });
 
   it("诊断之外还有真实错误时，仍然算失败并显示原因", () => {

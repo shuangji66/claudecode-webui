@@ -36,7 +36,13 @@ export interface UserItem extends BaseItem {
 export interface TurnUsage {
   /** 整个回合的墙钟耗时（result.duration_ms）。 */
   durationMs?: number;
-  /** 最后一次请求的用量快照：输出 token、API 耗时、上下文占用。 */
+  /**
+   * 这一轮的用量快照：`turnInputTokens` + `outputTokens` 是「本轮消耗」（输入含缓存），
+   * `genMs` / `genTokens` 是**最近一次请求**的生成耗时与输出，用来算 tok/s。
+   *
+   * 不是「最后一次请求的上下文占用」——上下文占用归底栏那颗圆环（store 的 `usage`），
+   * 回答下面只报这一轮花了多少。别按旧口径改回去。
+   */
   usage?: UsageSnapshot;
 }
 
@@ -47,7 +53,7 @@ export interface AssistantItem extends BaseItem {
   streaming: boolean;
   /**
    * 本回合结束时由 normalize 从 result 回填：只挂在**该回合最后一条回答**上，
-   * 复制按钮那一行据此显示「耗时 · 输出 tok · tok/s」。中间的过渡正文不带。
+   * 复制按钮那一行据此显示「耗时 · 本轮 tok · tok/s」。中间的过渡正文不带。
    */
   turn?: TurnUsage;
   /**
