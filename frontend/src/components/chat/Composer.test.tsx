@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Composer } from "./Composer";
 import { readDraft, writeDraft } from "../../lib/drafts";
 import { useAppStore } from "../../store/useAppStore";
@@ -625,5 +625,53 @@ describe("Composer 粘贴图片", () => {
 
     expect(screen.queryByText(/^clipboard-/)).toBeNull();
     expect(screen.queryByLabelText(/^移除 /)).toBeNull();
+  });
+});
+
+describe("Composer 附件预览", () => {
+  const pasteImage = async (name: string, type = "image/png") => {
+    const input = screen.getByLabelText("消息输入框");
+    const file = new File([new Uint8Array([137, 80, 78, 71])], name, { type });
+    await act(async () => {
+      fireEvent.paste(input, { clipboardData: { items: [], files: [file] } });
+    });
+  };
+
+  it("点图片缩略图打开大图，关闭后收起", async () => {
+    setup();
+    await pasteImage("shot.png");
+
+    fireEvent.click(await screen.findByRole("button", { name: "预览 shot.png" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.querySelector("img")?.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+    // 文件名在芯片与预览标题里各出现一次，只在弹窗里断言。
+    expect(within(dialog).getByText("shot.png")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /关闭/ }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("删除这条附件时预览跟着关掉", async () => {
+    setup();
+    await pasteImage("shot.png");
+    fireEvent.click(await screen.findByRole("button", { name: "预览 shot.png" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "移除 shot.png" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("非图片附件不给预览按钮", async () => {
+    setup();
+    const input = screen.getByLabelText("消息输入框");
+    const file = new File([new TextEncoder().encode("hello")], "notes.txt", { type: "text/plain" });
+    await act(async () => {
+      fireEvent.paste(input, { clipboardData: { items: [], files: [file] } });
+    });
+
+    expect(await screen.findByText("notes.txt")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /预览/ })).toBeNull();
   });
 });

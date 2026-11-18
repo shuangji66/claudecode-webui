@@ -188,6 +188,11 @@ export function withPastedName(file: File, at: Date = new Date()): File {
   return new File([file], `clipboard-${stamp}.${extForType(file.type)}`, { type: file.type });
 }
 
+/** 附件字节的 data URL：输入框缩略图与放大预览共用同一份拼法。 */
+export function attachmentDataUrl(a: PendingAttachment): string {
+  return `data:${a.mediaType};base64,${a.data}`;
+}
+
 export function toWireAttachment(a: PendingAttachment): WireAttachment {
   return { name: a.name, media_type: a.mediaType, data: a.data };
 }

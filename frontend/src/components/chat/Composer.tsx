@@ -12,6 +12,7 @@ import type { ModelOption } from "../../lib/providerForm";
 import {
   ATTACHMENT_ACCEPT,
   MAX_TOTAL_BYTES,
+  attachmentDataUrl,
   attachmentFromBase64,
   classifyAttachment,
   clipboardFiles,
@@ -28,6 +29,7 @@ import { isDangerousPermissionMode, permissionModeWarning } from "../../lib/perm
 import { Menu, type MenuItem } from "../common/Menu";
 import { IconClock, IconClose, IconFile, IconFolder, IconPlus, IconSend, IconShield, IconStop, IconTrash } from "../common/Icons";
 import { ModelMenu } from "./ModelMenu";
+import { ImageLightbox } from "./ImageLightbox";
 import type { QueuedPrompt } from "../../lib/queue";
 
 interface Props {
@@ -112,6 +114,9 @@ export function Composer({
   // 光标是 `@` 补全的唯一输入：token 从光标往前扫，移动光标就要重新判断。
   const [caret, setCaret] = useState(0);
   const [files, setFiles] = useState<PendingAttachment[]>([]);
+  // 点附件缩略图看大图（只对图片有意义）。存 id 而不是快照：附件被删/被发出去时
+  // `files` 一变，预览会自己关掉。
+  const [previewId, setPreviewId] = useState<string | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   // 待发送的面板里同一时刻只展开一个编辑框（entries 是异步来的，id 对不上就自动收起）。
@@ -184,6 +189,8 @@ export function Composer({
     () => suggestions.map((c) => ({ ...c, desc: commandDescription(c.name, c.description, locale) })),
     [suggestions, locale],
   );
+
+  const preview = files.find((f) => f.id === previewId && f.kind === "image") ?? null;
 
   /** 输入框里有没有东西（正文或附件）：决定进行中时主按钮是「发送」还是「中断」。 */
   const hasDraft = Boolean(text.trim()) || files.length > 0;
@@ -628,11 +635,15 @@ export function Composer({
             {files.map((f) => (
               <div key={f.id} className="flex max-w-full items-center gap-1.5 rounded-lg border border-line bg-panel/60 px-1.5 py-1">
                 {f.kind === "image" ? (
-                  <img
-                    src={`data:${f.mediaType};base64,${f.data}`}
-                    alt=""
-                    className="h-7 w-7 shrink-0 rounded object-cover"
-                  />
+                  <button
+                    type="button"
+                    onClick={() => setPreviewId(f.id)}
+                    className="shrink-0 cursor-zoom-in rounded"
+                    aria-label={t(`预览 ${f.name}`, `Preview ${f.name}`)}
+                    title={t("点开看大图", "Open a larger view")}
+                  >
+                    <img src={attachmentDataUrl(f)} alt="" className="h-7 w-7 rounded object-cover" />
+                  </button>
                 ) : (
                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-canvas text-muted">
                     <IconFile size={15} />
@@ -798,6 +809,16 @@ export function Composer({
       </div>
 
       {footer && <div className="mt-1.5 flex items-center justify-between gap-3 px-1 text-[10px] text-faint">{footer}</div>}
+
+      {/* 附件预览：内联图片没有工作区路径，所以不挂「在右侧栏打开」。key 按附件复位缩放。 */}
+      {preview && (
+        <ImageLightbox
+          key={preview.id}
+          src={attachmentDataUrl(preview)}
+          alt={preview.name}
+          onClose={() => setPreviewId(null)}
+        />
+      )}
     </div>
   );
 }

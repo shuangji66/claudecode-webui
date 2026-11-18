@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  attachmentDataUrl,
   attachmentLimit,
   classifyAttachment,
   clipboardFiles,
@@ -62,5 +63,20 @@ describe("剪贴板粘贴", () => {
     );
     const named = new File([new Uint8Array([1])], "shot.png", { type: "image/png" });
     expect(withPastedName(named, at)).toBe(named);
+  });
+});
+
+describe("附件缩略图地址", () => {
+  it("按 mediaType 拼 data URL（缩略图与预览共用）", () => {
+    expect(
+      attachmentDataUrl({
+        id: "1",
+        name: "shot.png",
+        mediaType: "image/png",
+        data: "AAAA",
+        size: 3,
+        kind: "image",
+      }),
+    ).toBe("data:image/png;base64,AAAA");
   });
 });
