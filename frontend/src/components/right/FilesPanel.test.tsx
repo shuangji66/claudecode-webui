@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { FilesPanel } from "./FilesPanel";
 import { useSidebarStore } from "../../store/useSidebarStore";
 
@@ -61,5 +61,85 @@ describe("FilesPanel 行菜单", () => {
     expect(screen.getByRole("menuitem", { name: /在文件夹显示/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /复制文件路径/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /文件详情/ })).toBeInTheDocument();
+  });
+});
+
+describe("正文图片的「在右侧栏打开」", () => {
+  beforeEach(() => {
+    seed();
+    useSidebarStore.setState({
+      openRequest: null,
+      readFile: async (path: string) => ({ path, size: 3, binary: false, truncated: false, content: "hi" }),
+    });
+  });
+
+  it("透传的路径直接进该文件的预览", async () => {
+    // 树里没有这个文件也能打开：readFile 走独立请求，不依赖展开过的目录
+    render(<FilesPanel cwd={CWD} active pending={{ path: "probe/quad.png", seq: 1 }} />);
+    expect(await screen.findByText("quad.png")).toBeTruthy();
+  });
+
+  it("同一个路径点第二次仍会重新请求（靠 seq 递增）", async () => {
+    const seen: string[] = [];
+    useSidebarStore.setState({
+      readFile: async (path: string) => {
+        seen.push(path);
+        return { path, size: 3, binary: false, truncated: false, content: "hi" };
+      },
+    });
+    const { rerender } = render(
+      <FilesPanel cwd={CWD} active pending={{ path: "probe/quad.png", seq: 1 }} />,
+    );
+    await waitFor(() => expect(seen).toHaveLength(1));
+    rerender(<FilesPanel cwd={CWD} active pending={{ path: "probe/quad.png", seq: 2 }} />);
+    await waitFor(() => expect(seen).toHaveLength(2));
+  });
+
+  // 回归：侧栏是「先开标签、面板才挂载」的，挂载那一刻 store 里的 cwd 可能还没落定。
+  // 之前把请求记在 seq 上就消费，readFile 抛「未选择工作区」，这次点击就白丢了。
+  it("cwd 未就绪时不消费请求，等 cwd 到位再打开", async () => {
+    const seen: string[] = [];
+    useSidebarStore.setState({
+      readFile: async (path: string) => {
+        seen.push(path);
+        return { path, size: 3, binary: false, truncated: false, content: "hi" };
+      },
+    });
+    const { rerender } = render(
+      <FilesPanel cwd="" active pending={{ path: "probe/quad.png", seq: 1 }} />,
+    );
+    expect(seen).toHaveLength(0);
+    rerender(<FilesPanel cwd={CWD} active pending={{ path: "probe/quad.png", seq: 1 }} />);
+    await waitFor(() => expect(seen).toHaveLength(1));
+  });
+});
+
+describe("文件预览的缩放", () => {
+  beforeEach(() => {
+    seed();
+    useSidebarStore.setState({
+      openRequest: null,
+      readFile: async (path: string) => ({
+        path,
+        size: 3,
+        // 图片一律按二进制回来（后端 raw 走的是另一条路），这里只关心预览分支
+        binary: path.endsWith(".png"),
+        truncated: false,
+        content: "# hi",
+      }),
+    });
+  });
+
+  it("图片预览底部有缩放条", async () => {
+    render(<FilesPanel cwd={CWD} active pending={{ path: "probe/quad.png", seq: 1 }} />);
+    expect(await screen.findByText("100%")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /放大|Zoom in/ })).toBeTruthy();
+  });
+
+  it("markdown / 文本预览没有缩放条", async () => {
+    render(<FilesPanel cwd={CWD} active pending={{ path: "README.md", seq: 1 }} />);
+    // 树里也有 README.md，等预览区渲染出正文内容再断言
+    expect(await screen.findByText("hi")).toBeTruthy();
+    expect(screen.queryByText("100%")).toBeNull();
   });
 });

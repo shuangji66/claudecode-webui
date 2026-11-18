@@ -83,3 +83,29 @@ describe("Dialog 叠加", () => {
     expect(document.body.style.overflow).toBe("hidden");
   });
 });
+
+describe("Dialog 的居中模式", () => {
+  it("centered 时移动端也居中、四角圆角（不再从底部升起）", () => {
+    const { container } = render(
+      <Dialog open onClose={() => {}} label="图" centered>
+        <img src="/a.png" alt="图" />
+      </Dialog>,
+    );
+    const overlay = container.querySelector(".fixed") as HTMLElement;
+    expect(overlay.className).toContain("items-center");
+    expect(overlay.className).not.toContain("items-end");
+    // 四角圆角：不能是只圆上面两角
+    expect(overlay.querySelector("[role=dialog]")?.className).toContain("rounded-2xl");
+    expect(overlay.querySelector("[role=dialog]")?.className).not.toContain("rounded-t-2xl");
+  });
+
+  it("默认（表单类）仍是底部 sheet", () => {
+    const { container } = render(
+      <Dialog open onClose={() => {}} label="表单">
+        <p>内容</p>
+      </Dialog>,
+    );
+    const overlay = container.querySelector(".fixed") as HTMLElement;
+    expect(overlay.className).toContain("items-end");
+  });
+});

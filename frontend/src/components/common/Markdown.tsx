@@ -1,10 +1,32 @@
-import { useMemo, type ReactNode } from "react";
+import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { isPreviewableImage, resolveMedia } from "../../lib/markdownMedia";
+import { rawFileUrl } from "../../lib/runtime";
 
 interface Segment {
   type: "text" | "code";
   lang?: string;
   content: string;
 }
+
+/**
+ * 正文里的图片要能落到工作区文件上，需要两样东西：解析基准（会话 cwd）和
+ * 「点开看大图」的回调。用 context 而不是逐层传参：MessageList 是 memo 化的，
+ * 多一个对象 prop 会让每条例消息都跟着重渲染。
+ *
+ * 没有 provider 时（FilesPanel 的 md 预览、单测）图片语法退回「! 加死链」的旧行为。
+ */
+export interface MarkdownMedia {
+  /** 会话工作目录的绝对路径；相对地址按它解析。 */
+  cwd: string;
+  /**
+   * 打开大图。
+   * `src` 是已经可以直接给 <img> 的地址；`rel` 只在来源是工作区文件时存在，
+   * 有它才能在右侧栏按路径打开预览（data URI 没有对应文件）。
+   */
+  open: (image: { src: string; alt: string; rel?: string | undefined }) => void;
+}
+
+export const MarkdownMediaContext = createContext<MarkdownMedia | null>(null);
 
 /** 按 ``` 围栏切分文本；未闭合的围栏按普通文本处理，避免整段丢失。 */
 export function splitFences(text: string): Segment[] {
@@ -31,14 +53,98 @@ function safeHref(raw: string): string | undefined {
   return undefined;
 }
 
-// 行内标记：代码 > 链接 > 粗体 > 删除线 > 斜体。
+// 行内标记：代码 > 图片 > 链接 > 粗体 > 删除线 > 斜体。
 // 代码排在最前，里面的 * 和 _ 才不会被当成标记；下划线强调要求词边界，
 // 否则 my_file_name.txt 这种文件名会被拆成斜体。
+// 图片必须排在链接之前：`![alt](src)` 里的 `[alt](src)` 也是合法链接写法，
+// 顺序反了就会渲染成「一个感叹号 + 一条链接」。
 const INLINE_RE =
-  /(`[^`]+`)|(\[[^\]\n]+\]\([^)\s]+\))|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(~~[^~\n]+~~)|((?<![\w*])\*[^*\n]+\*(?![\w*]))|((?<![\w_])_[^_\n]+_(?![\w_]))/g;
+  /(`[^`]+`)|(!\[[^\]\n]*\]\([^)\s]+\))|(\[[^\]\n]+\]\([^)\s]+\))|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(~~[^~\n]+~~)|((?<![\w*])\*[^*\n]+\*(?![\w*]))|((?<![\w_])_[^_\n]+_(?![\w_]))/g;
 
-/** 行内 `code`、**bold**、*italic*、~~del~~、[链接](url)，不做 HTML 注入。 */
-export function renderInline(s: string, keyPrefix = "i"): ReactNode[] {
+const IMAGE_RE = /^!\[([^\]]*)\]\(([^)\s]+)\)$/;
+
+/**
+ * 正文图片：加载失败时退回字面语法。
+ *
+ * 地址是模型写的，文件可能根本不存在、也可能不在 /api/fs/raw 的白名单里。
+ * 破图（浏览器默认的缺省图标）会被当成「界面坏了」，所以失败就退回原文，
+ * 让人一眼看出是路径写错了而不是应用出了问题。
+ */
+function MarkdownImage({ src, alt, raw, onOpen }: {
+  src: string;
+  alt: string;
+  raw: string;
+  onOpen?: (() => void) | undefined;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <span className="text-muted">{raw}</span>;
+  return (
+    <img
+      src={src}
+      alt={alt}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      onClick={onOpen}
+      className="my-1 block max-h-80 w-auto max-w-full cursor-zoom-in rounded-lg border border-line"
+    />
+  );
+}
+
+/**
+ * 渲染一张正文图片。
+ *
+ * 只内联两种来源：工作区内的位图（走 /api/fs/raw，后端有围栏与类型白名单）
+ * 与位图 data URI。http(s) 不内联——自动加载会向第三方暴露「这条消息被看了」，
+ * 交给链接让用户自己决定。
+ */
+function renderImage(alt: string, src: string, media: MarkdownMedia | null, key: string): ReactNode {
+  const target = resolveMedia(src, media?.cwd ?? "");
+  const raw = `![${alt}](${src})`;
+  if (target.kind === "inline") {
+    return (
+      <MarkdownImage
+        key={key}
+        src={target.url}
+        alt={alt}
+        raw={raw}
+        onOpen={() => media?.open({ src: target.url, alt })}
+      />
+    );
+  }
+  if (target.kind === "workspace" && isPreviewableImage(target.rel)) {
+    const url = rawFileUrl(media?.cwd ?? "", target.rel);
+    return (
+      <MarkdownImage
+        key={key}
+        src={url}
+        alt={alt || target.rel}
+        raw={raw}
+        onOpen={() => media?.open({ src: url, alt: alt || target.rel, rel: target.rel })}
+      />
+    );
+  }
+  if (target.kind === "remote" || target.kind === "workspace") {
+    // 远程图片、非位图文件：给一个普通链接，别假装能内联。
+    const href = target.kind === "remote" ? target.url : undefined;
+    if (!href) return <span key={key}>{raw}</span>;
+    return (
+      <a
+        key={key}
+        href={href}
+        target="_blank"
+        rel="noreferrer noopener"
+        className="text-brand underline decoration-brand/40 underline-offset-2 hover:decoration-brand"
+      >
+        {alt || src}
+      </a>
+    );
+  }
+  // 解析不了就退回字面文本：宁可显示原文，也不要生成一个点开 404 的链接。
+  return <span key={key}>{raw}</span>;
+}
+
+/** 行内 `code`、图片、**bold**、*italic*、~~del~~、[链接](url)，不做 HTML 注入。 */
+export function renderInline(s: string, keyPrefix = "i", media: MarkdownMedia | null = null): ReactNode[] {
   const out: ReactNode[] = [];
   let last = 0;
   let idx = 0;
@@ -59,6 +165,10 @@ export function renderInline(s: string, keyPrefix = "i"): ReactNode[] {
         </code>,
       );
     } else if (m[2]) {
+      const img = IMAGE_RE.exec(token);
+      if (img) out.push(renderImage(img[1], img[2], media, key));
+      else out.push(<span key={key}>{token}</span>);
+    } else if (m[3]) {
       const link = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(token);
       const href = link ? safeHref(link[2]) : undefined;
       if (link && href) {
@@ -70,19 +180,19 @@ export function renderInline(s: string, keyPrefix = "i"): ReactNode[] {
             rel="noreferrer noopener"
             className="text-brand underline decoration-brand/40 underline-offset-2 hover:decoration-brand"
           >
-            {renderInline(link[1], key)}
+            {renderInline(link[1], key, media)}
           </a>,
         );
       } else {
         out.push(<span key={key}>{token}</span>);
       }
-    } else if (m[3] || m[4]) {
+    } else if (m[4] || m[5]) {
       out.push(
         <strong key={key} className="font-semibold text-ink">
           {token.slice(2, -2)}
         </strong>,
       );
-    } else if (m[5]) {
+    } else if (m[6]) {
       out.push(
         <del key={key} className="text-muted">
           {token.slice(2, -2)}
@@ -245,7 +355,7 @@ const HEADING_SIZE = [
   "text-[12.5px]",
 ];
 
-function renderBlock(b: Block, key: number): ReactNode {
+function renderBlock(b: Block, key: number, media: MarkdownMedia | null): ReactNode {
   switch (b.type) {
     case "code":
       return (
@@ -258,7 +368,7 @@ function renderBlock(b: Block, key: number): ReactNode {
       );
     case "heading": {
       const cls = `font-semibold text-ink ${HEADING_SIZE[Math.min(Math.max(b.level, 1), 6) - 1]}`;
-      const children = renderInline(b.text, `h${key}`);
+      const children = renderInline(b.text, `h${key}`, media);
       const Tag = (`h${b.level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
       return (
         <Tag key={key} className={cls}>
@@ -272,7 +382,7 @@ function renderBlock(b: Block, key: number): ReactNode {
         <Tag key={key} className={`${b.ordered ? "list-decimal" : "list-disc"} space-y-1 pl-5`}>
           {b.items.map((it, j) => (
             <li key={j} style={it.indent > 0 ? { marginLeft: it.indent * 12 } : undefined}>
-              {renderInline(it.text, `l${key}-${j}`)}
+              {renderInline(it.text, `l${key}-${j}`, media)}
             </li>
           ))}
         </Tag>
@@ -281,7 +391,7 @@ function renderBlock(b: Block, key: number): ReactNode {
     case "quote":
       return (
         <blockquote key={key} className="border-l-2 border-line pl-3 text-muted">
-          <p className="whitespace-pre-wrap break-words">{renderInline(b.text, `q${key}`)}</p>
+          <p className="whitespace-pre-wrap break-words">{renderInline(b.text, `q${key}`, media)}</p>
         </blockquote>
       );
     case "table":
@@ -295,7 +405,7 @@ function renderBlock(b: Block, key: number): ReactNode {
                     key={j}
                     className="border border-line bg-panel px-2 py-1 text-left font-semibold text-ink"
                   >
-                    {renderInline(cell, `th${key}-${j}`)}
+                    {renderInline(cell, `th${key}-${j}`, media)}
                   </th>
                 ))}
               </tr>
@@ -305,7 +415,7 @@ function renderBlock(b: Block, key: number): ReactNode {
                 <tr key={j}>
                   {row.map((cell, k) => (
                     <td key={k} className="border border-line px-2 py-1 align-top text-ink-2">
-                      {renderInline(cell, `td${key}-${j}-${k}`)}
+                      {renderInline(cell, `td${key}-${j}-${k}`, media)}
                     </td>
                   ))}
                 </tr>
@@ -319,7 +429,7 @@ function renderBlock(b: Block, key: number): ReactNode {
     case "para":
       return (
         <p key={key} className="whitespace-pre-wrap break-words">
-          {renderInline(b.text, `p${key}`)}
+          {renderInline(b.text, `p${key}`, media)}
         </p>
       );
     default:
@@ -329,6 +439,7 @@ function renderBlock(b: Block, key: number): ReactNode {
 
 /** 极简 Markdown：块级结构 + 行内标记，全部走 React 节点，不碰 dangerouslySetInnerHTML。 */
 export function Markdown({ text }: { text: string }) {
+  const media = useContext(MarkdownMediaContext);
   const blocks = useMemo(() => {
     const out: Block[] = [];
     for (const seg of splitFences(text)) {
@@ -338,5 +449,5 @@ export function Markdown({ text }: { text: string }) {
     return out;
   }, [text]);
 
-  return <div className="chat-text space-y-3">{blocks.map((b, i) => renderBlock(b, i))}</div>;
+  return <div className="chat-text space-y-3">{blocks.map((b, i) => renderBlock(b, i, media))}</div>;
 }

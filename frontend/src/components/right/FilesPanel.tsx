@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { useT } from "../../lib/i18n";
 import { copyText } from "../../lib/clipboard";
 import { rawFileUrl } from "../../lib/runtime";
@@ -6,6 +6,7 @@ import { formatBytes, previewKind } from "../../lib/workspace";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import type { FsEntry, FsFile } from "../../transport/types";
 import { Markdown } from "../common/Markdown";
+import { ZoomBar, ZoomableImage } from "../common/Zoomable";
 import {
   IconChevronDown,
   IconChevronLeft,
@@ -25,6 +26,11 @@ import { fnosHostAvailable, openFnosFileManager, showFnosFileDetails } from "../
 interface Props {
   cwd: string;
   active: boolean;
+  /**
+   * 正文灯箱「在右侧栏打开」透传过来的路径（由 RightSidebar 消费 store 的请求）。
+   * 用 `seq` 去重：同一张图点第二次时 path 没变，effect 不该重跑。
+   */
+  pending?: { path: string; seq: number } | null;
 }
 
 function baseName(path: string): string {
@@ -38,7 +44,7 @@ function dirName(path: string): string {
 }
 
 /** 工作区文件树 + 简单预览。树按目录懒加载；预览替换树的显示但保留展开状态。 */
-export function FilesPanel({ cwd, active }: Props) {
+export function FilesPanel({ cwd, active, pending = null }: Props) {
   const t = useT();
   const levels = useSidebarStore((s) => s.levels);
   const loading = useSidebarStore((s) => s.loading);
@@ -81,16 +87,16 @@ export function FilesPanel({ cwd, active }: Props) {
     if (active && cwd && levels[""] === undefined && !loading[""] && !errors[""]) void loadDir("");
   }, [active, cwd, levels, loading, errors, loadDir]);
 
-  const openFile = async (entry: FsEntry) => {
-    if (entry.type !== "file") return;
+  /** 按路径打开预览。树点击与正文「在右侧栏打开」共用这一段。 */
+  const openPath = useCallback(async (path: string) => {
     const seq = requestSeq.current + 1;
     requestSeq.current = seq;
-    setSelected(entry.path);
+    setSelected(path);
     setFile(null);
     setFileError("");
     setFileLoading(true);
     try {
-      const next = await readFile(entry.path);
+      const next = await readFile(path);
       if (requestSeq.current !== seq) return;
       setFile(next);
     } catch (reason) {
@@ -99,7 +105,27 @@ export function FilesPanel({ cwd, active }: Props) {
     } finally {
       if (requestSeq.current === seq) setFileLoading(false);
     }
+  }, [readFile]);
+
+  const openFile = (entry: FsEntry) => {
+    if (entry.type !== "file") return;
+    void openPath(entry.path);
   };
+
+  // 正文灯箱里点「在右侧栏打开」：由 RightSidebar 透传进来，这里只管打开。
+  //
+  // 请求不在本组件里订阅 store：侧栏是「先开标签、面板才挂载」的，两个组件各自
+  // 消费同一个 seq 时，先挂载的那个会把请求吞掉，另一个永远等不到（曾经的表现：
+  // 首次点击只开了「文件」标签，不进预览）。cwd 未就绪时**不消费**——
+  // 留着等下一轮 effect，`readFile` 才不会因为「未选择工作区」白丢一次请求。
+  const consumedPending = useRef(0);
+  useEffect(() => {
+    if (pending === null || pending.seq <= consumedPending.current) return;
+    if (!cwd) return;
+    consumedPending.current = pending.seq;
+    void openPath(pending.path);
+  }, [pending, cwd, openPath]);
+
 
   const back = () => {
     requestSeq.current += 1;
@@ -256,6 +282,7 @@ export function FilesPanel({ cwd, active }: Props) {
 
       {selected && (
         <FilePreview
+          key={selected}
           cwd={cwd}
           path={selected}
           file={file}
@@ -389,6 +416,8 @@ const MAX_PREVIEW_LINES = 3000;
 
 function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }: PreviewProps) {
   const t = useT();
+  // 缩放只对图片有意义；调用方用 key={path} 保证换文件时复位。
+  const [zoom, setZoom] = useState(1);
   const name = baseName(path);
   const dir = dirName(path);
   const kind = previewKind(name);
@@ -460,9 +489,12 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
                 </p>
               </div>
             ) : kind === "image" ? (
-              <div className="flex min-h-full items-center justify-center p-3">
-                <img src={rawUrl} alt={name} className="max-w-full rounded-lg border border-line" />
-              </div>
+              <ZoomableImage
+                src={rawUrl}
+                alt={name}
+                zoom={zoom}
+                imgClassName="rounded-lg border border-line"
+              />
             ) : kind === "pdf" ? (
               <iframe src={rawUrl} title={name} className="h-full min-h-[420px] w-full border-0 bg-panel" />
             ) : kind === "markdown" ? (
@@ -492,6 +524,9 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
           </>
         )}
       </div>
+      {kind === "image" && file !== null && !loading && !error && (
+        <ZoomBar zoom={zoom} onChange={setZoom} />
+      )}
     </div>
   );
 }

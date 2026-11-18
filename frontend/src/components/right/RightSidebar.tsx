@@ -85,6 +85,7 @@ const KIND_ICON = { files: IconFolder, git: IconGitBranch, terminal: IconTermina
 export function RightSidebar({ cwd, onClose }: Props) {
   const t = useT();
   const setCwd = useSidebarStore((s) => s.setCwd);
+  const openRequest = useSidebarStore((s) => s.openRequest);
   // 存的是用户偏好；实际宽度每次都按当前视口收敛，窗口缩小后立刻跟着变窄。
   const [preferredWidth, setPreferredWidth] = useState(readWidth);
   const viewport = useViewportWidth();
@@ -198,6 +199,26 @@ export function RightSidebar({ cwd, onClose }: Props) {
     setTabs((prev) => [...prev, { id, kind: "terminal", label: n === 1 ? "bash" : `bash ${n}` }]);
     setActive(id);
   };
+
+  const handledOpenFile = useRef(0);
+  /**
+   * 正文灯箱「在右侧栏打开」的目标路径。
+   *
+   * 这里是**唯一**的消费者：往下透传给 FilesPanel。让 FilesPanel 自己订阅 store
+   * 会踩到「先开标签、面板后挂载」的时序——两个消费方各读一个 seq，先挂载的那个
+   * 把它用掉，后挂载的就永远看不到请求（首次进入前端时只开标签、不进预览）。
+   */
+  const [pendingOpen, setPendingOpen] = useState<{ path: string; seq: number } | null>(null);
+  useEffect(() => {
+    const req = openRequest;
+    if (!req || req.seq <= handledOpenFile.current) return;
+    handledOpenFile.current = req.seq;
+    setPendingOpen(req);
+    openTab("files");
+    // openTab 只依赖 tabs 与 setState；seq 已保证同一个请求只处理一次，
+    // 放进依赖数组反而会在标签变化时重复触发。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRequest]);
 
   /** 打开某个子代理的对话：同一个 agent 只占一个标签。 */
   const openSubagentTab = (sessionId: string, agentId: string, label: string) => {
@@ -399,7 +420,7 @@ export function RightSidebar({ cwd, onClose }: Props) {
             {/* 标签切走只隐藏：终端里挂着 PTY，卸载等于杀 shell。 */}
             {tabs.map((tab) => (
               <div key={tab.id} className={tab.id === active ? "absolute inset-0" : "hidden"}>
-                {tab.kind === "files" && <FilesPanel cwd={cwd} active={tab.id === active} />}
+                {tab.kind === "files" && <FilesPanel cwd={cwd} active={tab.id === active} pending={pendingOpen} />}
                 {tab.kind === "git" && <GitPanel cwd={cwd} active={tab.id === active} />}
                 {tab.kind === "subagent" && tab.agentId && (
                   <SubagentPanel sessionId={tab.sessionId ?? ""} agentId={tab.agentId} />

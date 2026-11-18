@@ -45,6 +45,15 @@ interface SidebarState {
   reloadTree: () => Promise<void>;
   readFile: (path: string) => Promise<FsFile>;
 
+  /**
+   * 正文里点「在右侧栏打开」的请求。
+   *
+   * `seq` 单调递增而不是直接存路径：同一个文件被点第二次时值没变化，
+   * 消费方（RightSidebar）的 effect 就不会再跑一次。
+   */
+  openRequest: { path: string; seq: number } | null;
+  requestOpenFile: (path: string) => void;
+
   loadRepos: () => Promise<void>;
   selectRepo: (root: string) => Promise<void>;
   refreshGit: () => Promise<void>;
@@ -100,12 +109,13 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   logLoading: false,
   logError: "",
   actionError: "",
+  openRequest: null,
 
   setCwd: async (cwd) => {
     if (!cwd) {
       epoch += 1;
       treeEpoch += 1;
-      set({ cwd: "", levels: {}, loading: {}, truncated: {}, errors: {}, repos: [], repo: "", git: null, branches: null, log: [] });
+      set({ cwd: "", levels: {}, loading: {}, truncated: {}, errors: {}, repos: [], repo: "", git: null, branches: null, log: [], openRequest: null });
       return;
     }
     if (cwd === get().cwd) {
@@ -133,6 +143,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
       logLoading: false,
       logError: "",
       actionError: "",
+      openRequest: null,
     });
     // 先扫仓库再拉状态：状态要打在选中的那个仓库上，顺序反了会先请求工作区根。
     await get().loadDir("");
@@ -212,6 +223,12 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     if (!cwd) throw new Error("未选择工作区");
     const query = new URLSearchParams({ cwd, path });
     return apiFetch<FsFile>(`/api/fs/file?${query.toString()}`);
+  },
+
+  requestOpenFile: (path) => {
+    const rel = path.trim();
+    if (!rel) return;
+    set((s) => ({ openRequest: { path: rel, seq: (s.openRequest?.seq ?? 0) + 1 } }));
   },
 
   refreshGit: async () => {

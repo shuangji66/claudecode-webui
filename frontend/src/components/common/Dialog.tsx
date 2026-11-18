@@ -33,6 +33,12 @@ interface Props {
   panelClassName?: string;
   /** 移动端铺满整个视口（设置页这类全屏模态），桌面端仍由 panelClassName 控制。 */
   fullScreen?: boolean;
+  /**
+   * 移动端也在视口里居中（四周留边、四角圆角），而不是从底部升起。
+   * 给纯展示类模态用（图片灯箱）：从底部升起会贴着屏幕下沿，图片看不清全貌，
+   * 也不符合「看一张图」的预期。表单类模态仍然用默认的底部 sheet。
+   */
+  centered?: boolean;
   closeOnBackdrop?: boolean;
   hideClose?: boolean;
 }
@@ -82,6 +88,7 @@ export function Dialog({
   bare = false,
   panelClassName = "",
   fullScreen = false,
+  centered = false,
   closeOnBackdrop = true,
   hideClose = false,
 }: Props) {
@@ -122,14 +129,23 @@ export function Dialog({
   // 否则 max-h-[88dvh] 会把 h-[100dvh] 截短，移动端顶部留出一条未覆盖的区域。
   const sizing = fullScreen
     ? ""
-    : sheet
-      ? "h-[90dvh] md:h-auto md:max-h-[84vh]"
-      : "max-h-[88dvh] md:max-h-[84vh]";
-  const rounding = fullScreen ? "" : "rounded-t-2xl md:rounded-2xl";
+    : centered
+      // 85dvh 而不是「100dvh 减 padding」：留出的 7.5% 上下空间同时兜住
+      // 刘海与 Home Indicator，不必再逐个算 env()。
+      ? "max-h-[85dvh] md:max-h-[84vh]"
+      : sheet
+        ? "h-[90dvh] md:h-auto md:max-h-[84vh]"
+        : "max-h-[88dvh] md:max-h-[84vh]";
+  const rounding = fullScreen ? "" : centered ? "rounded-2xl" : "rounded-t-2xl md:rounded-2xl";
+  const placement = fullScreen
+    ? "items-stretch"
+    : centered
+      ? "items-center p-4 md:p-6"
+      : "items-end md:items-center md:p-6";
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 md:items-center md:p-6"
+      className={`fixed inset-0 z-50 flex justify-center bg-black/35 ${placement}`}
       onMouseDown={(e) => {
         if (!closeOnBackdrop) return;
         if (panelRef.current?.contains(e.target as Node)) return;

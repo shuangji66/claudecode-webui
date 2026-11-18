@@ -39,6 +39,7 @@ src/
   lib/turns.ts         「轮」的切分与视口所在轮（对话区刻度跳转，纯函数）
   lib/usage.ts         用量换算：上下文/缓存命中/tok/s（只从 CLI 的 usage 派生）
   lib/workspace.ts     文件路径/porcelain 分组/unified diff 解析（纯函数）
+  lib/markdownMedia.ts 正文媒体地址解析：`![](路径)` 归一化成工作区相对路径（纯函数）
   lib/conversations.ts 对话归属/最近对话排序（纯函数）
   lib/labels.ts        界面词汇表 / claude 指令中文说明（conversationTitle 等）
   lib/mcpForm.ts       MCP 表单转换：参数/环境变量的文本互转、校验、一行摘要
@@ -54,11 +55,13 @@ src/
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
                        / Collapsible（折叠块）/ FileIcon（按扩展名给颜色的文件图标 + 文件夹图标）
                        / ErrorBoundary（渲染异常兜底，挂在 main.tsx 最外层）
+                       / Zoomable（ZoomBar + ZoomableImage：图片缩放条与按 zoom 撑开的图）
   components/layout/   Sidebar（工作区/对话列表）/ ConversationPreview（会话悬浮预览）/ TopBar / TokenGate（访问鉴权页）/ SettingsDrawer（只留导航壳）
                        / WorkspaceDialog / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / DeploySettings / HistoryDialog
                        / ClaudeInstallPrompt
   components/layout/settings/  设置页分区：GeneralSettings / ModelsSettings / ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题）
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
+                       / ImageLightbox（正文图片放大）
                        / UsageStats / ResultBar / WorkspacePicker
   components/tools/    ToolCardHost（注册表）/ AgentCard / BashCard / EditCard / GenericCard（兜底）
   components/permission/ PermissionPanel（按钮由 permission_suggestions 决定）
@@ -195,6 +198,46 @@ src/
 28. **会话起不来 ≠ 历史读不到**：`openConversation` 在 `POST /api/session` 失败
     （claude 未安装 / 版本被删 / 409 并发冲突）时仍然要 `loadTranscript()` 回放转录，
     然后再报错。少了这一步，界面会显示「开始新的对话」，看起来像整段对话被弄丢。
+29. **正文图片走 `![]()` → `/api/fs/raw`，不做「裸路径自动变链接」**：`lib/markdownMedia.ts`
+    是唯一解析入口。相对路径按**会话 cwd** 解析（实测：模型在 cwd 等于工作区时写
+    `probe/x.png`，cwd 在工作区外时写绝对路径），绝对路径必须先确认落在 cwd 内、再换算成
+    相对写法（后端 `fsapi.cleanRel` 明确拒绝绝对路径）。只内联位图：SVG 的 data URI 一律
+    拒绝（同源页面里 SVG 能带脚本），http(s) 图片不自动加载（会向第三方暴露「这条消息被
+    看了」），降级成链接；加载失败退回字面语法，宁可显示原文也不要破图。
+    **不做裸路径识别**：正文里「我改了 `README.md`」和「点开 README.md」长得一模一样，
+    自动 linkify 会把每一处文件提及都变成按钮。图片语法是明确意图，裸路径不是。
+    `MarkdownMediaContext` 只在 `ChatPane` 提供；`FilesPanel` 的 md 预览不提供，退回旧行为
+    （图片语法显示成字面文本）——那里的相对基准是文件所在目录而不是工作区根，
+    要支持得先给 `resolveMedia` 加 base 前缀。
+    **放大弹窗顶部的「在右侧栏打开」**（`ImageLightbox` 自绘的顶部栏）走
+    `useSidebarStore.openRequest`，请求里带**单调递增的 `seq`**（只存路径的话，同一张图
+    点第二次值没变，effect 不会重跑）。
+    **消费者只能有一个**：`RightSidebar` 读 store → `openTab("files")` + 把请求存进自己的
+    state → 作为 `pending` prop 透传给 `FilesPanel`（后者按 `seq` 去重并调 `openPath`）。
+    曾经让两个组件各自订阅 store，结果是「先开标签、面板才挂载」，先挂载的那个把 seq 用掉、
+    后挂载的永远看不到请求——首次进入前端时只开了「文件」标签、不进预览。
+    `FilesPanel` 在 `cwd` 为空时**必须不消费**（留着等下一轮），否则 `readFile` 抛
+    「未选择工作区」，这次点击照样白丢。data URI 的内联图片没有相对路径，因此不显示这个按钮。
+    **灯箱自身是三段布局**（顶部栏 / `flex-1 min-h-0` 的图片区 / 缩放栏），移动端走
+    `Dialog` 的 `centered`（视口居中 + 四角圆角），不要退回底部 sheet：贴底会把图片压在
+    屏幕下沿，`76dvh` 的图加上下两条栏还会顶出 `max-h`。`key={src}` 让换图时缩放复位——
+    `src` 为空时组件只是 return null，state 还留着。
+    **缩放控件只有一份**（`common/Zoomable.tsx`：`ZoomBar` + `ZoomableImage` + `stepZoom`），
+    正文灯箱与右侧栏文件预览共用；缩放状态由调用方持有，因为复位时机不同——
+    灯箱按 `src`（`key={src}`），侧栏按选中的路径（`<FilePreview key={path}>`）。
+    只有图片给缩放条：PDF 走 `<iframe>` 自带控件，文本/markdown 没有缩放的概念。
+    **显示尺寸由 `fitSize()` 算，不是纯 CSS**：基准是 `min(原始像素, 适应窗口)`
+    ——小图按原样显示（放大只会糊），大图按长边缩进窗口；`zoom` 再在这个基准上等比放大。
+    `object-fit: scale-down` 看着像，但它在 zoom>1 时会把尺寸锁死在原始像素，缩放直接失效；
+    `h-full w-full object-contain` 又会把小图拉到窗口大小。所以 `ZoomableImage` 用
+    `ResizeObserver` 量窗口、用 `onLoad` 量原图，把结果写进 img 的 `width/height`。
+    根节点固定 `h-full w-full` 供测量，滚动交给调用方（灯箱的正方形、侧栏的 `dsh-scroll`）。
+    **预览窗口固定 1:1**：边长取容器的短边（`width: min(100cqw, 100cqh)` + `aspect-ratio: 1`），
+    图片区那一层挂 `container-type: size`。所以 `panelClassName` 必须把高度定下来
+    （移动 `h-full` 吃 Dialog 的 `max-h-[85dvh]`，桌面 `md:h-[82vh]`）——高度是 auto 时
+    size containment 会让容器塌成 0，正方形直接消失。桌面尺寸与「设置」弹窗对齐
+    （`md:h-[82vh] md:max-w-[900px]`）。缩放发生在正方形**内部**（内层 `overflow-auto`），
+    放大后仍在这块窗口里滚，不会把弹窗撑大。
 
 ## 3. 状态管理（zustand）
 
@@ -421,6 +464,8 @@ src/
 - **不许用浏览器原生控件承载 UI**：
   - 模态统一 `components/common/Dialog.tsx`（遮罩、标题区、滚动体、底部栏、Esc/遮罩关闭、
     背景滚动锁、移动端底部安全区都在里面）。不要再手写 `fixed inset-0 … rounded-t-2xl`。
+    默认移动端是底部 sheet（表单类）；纯展示类（图片灯箱）传 `centered` 改成视口居中 +
+    四角圆角，此时 `max-h` 用 85dvh——留出的上下空间同时兜住刘海与 Home Indicator。
   - 下拉统一 `components/common/Select.tsx`（自绘 listbox + 键盘 ↑↓/Enter/Esc），
     **禁止 `<select>`**——原生展开面板由系统绘制，深浅色/字号/圆角都不受主题控制。
   - 弹出菜单统一 `components/common/Menu.tsx`（Portal + 视口夹取 + 下方放不下时向上翻 +

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { Markdown, parseBlocks, renderInline, splitFences } from "../common/Markdown";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { Markdown, MarkdownMediaContext, parseBlocks, renderInline, splitFences } from "../common/Markdown";
 
 describe("splitFences", () => {
   it("分隔代码块与正文", () => {
@@ -71,5 +71,92 @@ describe("Markdown 块级结构", () => {
   it("parseBlocks 识别分割线与引用", () => {
     const blocks = parseBlocks("前\n\n---\n\n> 引用");
     expect(blocks.map((b) => b.type)).toEqual(["para", "hr", "quote"]);
+  });
+});
+
+describe("Markdown 正文图片", () => {
+  const CWD = "/vol1/@appshare/ClaudeCode";
+  const PNG = "data:image/png;base64,iVBORw0KGgo=";
+
+  function withMedia(node: React.ReactNode, open: (image: { src: string; alt: string; rel?: string }) => void = () => {}) {
+    return render(
+      <MarkdownMediaContext.Provider value={{ cwd: CWD, open }}>{node}</MarkdownMediaContext.Provider>,
+    );
+  }
+
+  it("相对路径渲染成 /api/fs/raw 的 img", () => {
+    const { container } = withMedia(<Markdown text={"![四色](probe/quad.png)"} />);
+    const img = container.querySelector("img");
+    expect(img?.getAttribute("src")).toContain("/api/fs/raw");
+    expect(img?.getAttribute("src")).toContain(encodeURIComponent("probe/quad.png"));
+    expect(img?.getAttribute("alt")).toBe("四色");
+    // 不能把 ! 和链接留成残渣
+    expect(container.textContent).toBe("");
+  });
+
+  it("工作区内的绝对路径换算成相对路径后请求", () => {
+    const { container } = withMedia(<Markdown text={`![](${CWD}/probe/quad.png)`} />);
+    const src = container.querySelector("img")?.getAttribute("src") ?? "";
+    const path = new URL(src, "http://x").searchParams.get("path");
+    // 后端拒绝绝对路径，必须是相对 cwd 的写法
+    expect(path).toBe("probe/quad.png");
+  });
+
+  it("位图 data URI 直接内联", () => {
+    const { container } = withMedia(<Markdown text={`![红](${PNG})`} />);
+    expect(container.querySelector("img")?.getAttribute("src")).toBe(PNG);
+  });
+
+  it("SVG data URI 不内联，退回字面文本", () => {
+    const src = "data:image/svg+xml,%3Csvg%3E%3C/svg%3E";
+    const { container } = withMedia(<Markdown text={`![图](${src})`} />);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toBe(`![图](${src})`);
+  });
+
+  it("远程图片不自动加载，只给链接", () => {
+    const { container } = withMedia(<Markdown text={"![x](https://example.com/a.png)"} />);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("https://example.com/a.png");
+  });
+
+  it("工作区外的绝对路径退回字面文本", () => {
+    const { container } = withMedia(<Markdown text={"![x](/etc/passwd)"} />);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toBe("![x](/etc/passwd)");
+  });
+
+  it("没有 provider 时保持旧行为（不渲染 img）", () => {
+    const { container } = render(<Markdown text={"![x](probe/quad.png)"} />);
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("图片加载失败时退回字面语法，不显示破图", () => {
+    const { container } = withMedia(<Markdown text={"![x](probe/missing.png)"} />);
+    fireEvent.error(container.querySelector("img")!);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.textContent).toBe("![x](probe/missing.png)");
+  });
+
+  it("工作区图片把相对路径一起交给 open（右侧栏要靠它打开）", () => {
+    const seen: { src: string; rel?: string }[] = [];
+    const { container } = withMedia(<Markdown text={"![四色](probe/quad.png)"} />, (image) => seen.push(image));
+    fireEvent.click(container.querySelector("img")!);
+    expect(seen[0]?.rel).toBe("probe/quad.png");
+  });
+
+  it("内联 data URI 不带 rel：没有可打开的文件", () => {
+    const seen: { src: string; rel?: string }[] = [];
+    const { container } = withMedia(<Markdown text={`![红](${PNG})`} />, (image) => seen.push(image));
+    fireEvent.click(container.querySelector("img")!);
+    expect(seen[0]?.rel).toBeUndefined();
+  });
+
+  it("点击图片调用 open 传可用的 src", () => {
+    const seen: string[] = [];
+    const { container } = withMedia(<Markdown text={"![四色](probe/quad.png)"} />, (image) => seen.push(image.src));
+    fireEvent.click(container.querySelector("img")!);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("/api/fs/raw");
   });
 });

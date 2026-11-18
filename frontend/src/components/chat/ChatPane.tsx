@@ -1,5 +1,6 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
+import { useSidebarStore } from "../../store/useSidebarStore";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
 import { TurnTimer } from "./TurnTimer";
@@ -17,6 +18,8 @@ import { downloadFile, sessionLogName } from "../../lib/download";
 import { useLocale, useT } from "../../lib/i18n";
 import { BrandMark, IconAlert, IconRetry } from "../common/Icons";
 import { subagentEntries } from "../../lib/subagents";
+import { MarkdownMediaContext, type MarkdownMedia } from "../common/Markdown";
+import { ImageLightbox } from "./ImageLightbox";
 
 interface Props {
   onToggleSidebar: () => void;
@@ -75,6 +78,16 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
     };
   }, [liveSession, conversation]);
   const itemList = activeId ? (items[activeId] ?? []) : [];
+  // 正文图片的放大查看：会话 cwd 决定相对路径的解析基准，图片本体走 /api/fs/raw。
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string; rel?: string } | null>(null);
+  const requestOpenFile = useSidebarStore((s) => s.requestOpenFile);
+  const media = useMemo<MarkdownMedia | null>(() => {
+    const cwd = session?.cwd;
+    if (!cwd) return null;
+    return { cwd, open: (image) => setLightbox(image) };
+  }, [session?.cwd]);
+  // 切对话时收起灯箱：它是"上一个对话里那张图"的临时状态，留着会盖住新对话。
+  useEffect(() => setLightbox(null), [activeId]);
   // 待发送队列跟着对话走：换对话就换一批（后端在回合结束时自动发队首）。
   const queued = activeId ? (queuedMap[activeId] ?? []) : [];
   // 页头「子智能体 N」：从消息流里现算，不额外存一份状态。
@@ -233,6 +246,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
   };
 
   return (
+    <MarkdownMediaContext.Provider value={media}>
     <div className="flex h-full min-h-0 flex-col bg-canvas">
       <TopBar
         session={session}
@@ -375,5 +389,20 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
         </div>
       </div>
     </div>
+    <ImageLightbox
+      // 换图/重开时重置缩放：组件在 src 为空时只 return null，state 还留着
+      key={lightbox?.src ?? ""}
+      src={lightbox?.src ?? null}
+      alt={lightbox?.alt ?? ""}
+      rel={lightbox?.rel}
+      onClose={() => setLightbox(null)}
+      onOpenSidebar={lightbox?.rel === undefined ? undefined : () => {
+        // 先登记请求再开侧栏：RightSidebar 挂载后读 store，标签才开得出来。
+        requestOpenFile(lightbox.rel as string);
+        setLightbox(null);
+        if (!rightOpen) onToggleRight();
+      }}
+    />
+    </MarkdownMediaContext.Provider>
   );
 }
