@@ -185,8 +185,8 @@ export function UsageStats({ snap, turns, tools, events }: StatsProps) {
             {(cacheRead || cacheWrite || cacheHit !== undefined) && (
               <>
                 <div className="my-1.5 h-px bg-line" />
+                {/* 这三行就是最近一次请求的缓存明细，不再单独挂标题（占一行又没信息量）。 */}
                 <div className="space-y-1 text-[11px]">
-                  <div className="text-[10.5px] text-faint">{t("缓存（最近一次请求）", "Cache (last request)")}</div>
                   {cacheRead ? <Row label={t("缓存读取", "From cache")}>{formatTokens(cacheRead)}</Row> : null}
                   {cacheWrite ? <Row label={t("缓存写入", "Cache write")}>{formatTokens(cacheWrite)}</Row> : null}
                   {cacheHit !== undefined && (

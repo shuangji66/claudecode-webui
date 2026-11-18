@@ -68,8 +68,8 @@ describe("ContextUsage", () => {
     expect(panel).toHaveTextContent("会话累计消耗");
     expect(panel).toHaveTextContent("合计2M tok");
     expect(panel).toHaveTextContent("输入 / 输出2M / 20K");
-    // 缓存是最近一次请求的数，单独一段
-    expect(panel).toHaveTextContent("缓存（最近一次请求）");
+    // 缓存三项是最近一次请求的数（不再挂分组标题）
+    expect(panel).not.toHaveTextContent("缓存（最近一次请求）");
     expect(panel).toHaveTextContent("缓存读取8.8K");
     expect(panel).toHaveTextContent("缓存写入300");
     expect(panel).toHaveTextContent("缓存命中97%");
