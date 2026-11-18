@@ -433,6 +433,9 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
   const [view, setView] = useState<"render" | "source">("source");
   const showSource = !togglable || view === "source";
   const textLike = kind !== "image" && kind !== "pdf";
+  // 源码行按面板宽度折行（下面用 whitespace-pre-wrap + overflow-wrap:anywhere）：
+  // 右侧栏宽度是拖出来的，窄栏里的横向滚动条基本没法用。只写 break-words 不够，
+  // 它在无空格的长串（base64 / 长路径 / 长 URL）上不给断点。
   const lines = file && !file.binary && textLike ? file.content.split("\n") : [];
   const shown = lines.slice(0, MAX_PREVIEW_LINES);
 
@@ -535,11 +538,11 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
                 className="h-full min-h-[420px] w-full border-0 bg-white"
               />
             ) : (
-              <div className="min-w-max py-1 font-mono text-[11.5px] leading-[1.55]">
+              <div className="py-1 font-mono text-[11.5px] leading-[1.55]">
                 {shown.map((line, i) => (
                   <div key={i} className="flex hover:bg-black/[0.025]">
                     <span className="w-10 shrink-0 select-none pr-2 text-right text-faint">{i + 1}</span>
-                    <span className="whitespace-pre pr-3 text-ink-2">{line || " "}</span>
+                    <span className="min-w-0 flex-1 whitespace-pre-wrap pr-3 text-ink-2 [overflow-wrap:anywhere]">{line || " "}</span>
                   </div>
                 ))}
               </div>

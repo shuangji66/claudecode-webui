@@ -308,6 +308,10 @@ src/
    `/api/fs/raw`**——那条路的后端白名单只有图片/PDF，也不该为了预览把 `text/html` 变成一个
    同源 URL。不要改用 `dangerouslySetInnerHTML`（规则 6）。源码视图复用行号渲染，
    「仅渲染前 3000 行」的提示只在真的显示源码时出现。
+   **源码行的长行按面板宽度折行**（`whitespace-pre-wrap` + `[overflow-wrap:anywhere]`，
+   容器不要 `min-w-max`）：右侧栏宽度是拖出来的，窄栏里横向滚动条基本没法用；
+   只写 `break-words` 不够——无空格的长串（base64 / 长路径 / 长 URL）不会断。
+   Git 面板的 diff 仍是横向滚动，那是另一块面板，别顺手改。
 
 ## 3. 状态管理（zustand）
 
