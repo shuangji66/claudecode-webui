@@ -537,6 +537,14 @@ let subagentViewSeq = 0;
  */
 let mentionRequestSeq = 0;
 
+/**
+ * 对话列表请求的序号：`refreshConversations` 只认最后一次发出去的结果。
+ *
+ * 它被系统通道、`conversations.changed` 推送、WS 重连一起调用，并发很常见——
+ * 先发的那次（比如删除前）晚回来，会把已经删掉的对话又摆回侧栏。
+ */
+let conversationsSeq = 0;
+
 export const useAppStore = create<AppState>()((set, get) => ({
   info: null,
   settings: null,
@@ -947,10 +955,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   refreshConversations: async () => {
+    // 每次请求带一个单调序号，只认最后一次发出去的结果。
+    // 这个函数现在被系统通道、`conversations.changed`、WS 重连一起调用，很容易并发：
+    // 先发的那次（比如删除前）晚回来，就会把已经删掉的对话又摆回侧栏。
+    const seq = ++conversationsSeq;
     try {
       const r = await apiFetch<{ conversations: ConversationInfo[] }>("/api/conversations");
+      if (seq !== conversationsSeq) return;
       set({ conversations: r.conversations ?? [] });
     } catch (e) {
+      if (seq !== conversationsSeq) return;
       set({ error: errText(e) });
     }
   },
@@ -1920,8 +1934,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // usage 只在 CLI 真的给出数字时更新（stream_event 的 message_start/delta、
         // 以及 result）；不认识的形状保持原样。
         const usage = applyUsageMessage(get().usage[sid], ev.data);
+        // 把这一路攒下的用量快照带进 applyCLI：result 的整轮口径里没有「最近一次请求」
+        // 的生成耗时，回答下面那行 tok/s 只能从流式阶段借（否则实时回合永远少这一段）。
+        const hint = get().usage[sid];
         set((s) => ({
-          items: { ...s.items, [sid]: applyCLI(s.items[sid] ?? [], ev.data) },
+          items: { ...s.items, [sid]: applyCLI(s.items[sid] ?? [], ev.data, Date.now(), hint) },
           ...(finished ? { doneIds: { ...s.doneIds, [sid]: true } } : {}),
           ...(usage ? { usage: { ...s.usage, [sid]: usage } } : {}),
         }));
