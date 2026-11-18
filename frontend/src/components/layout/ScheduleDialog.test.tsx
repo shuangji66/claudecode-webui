@@ -65,6 +65,26 @@ describe("ScheduleDialog", () => {
     expect(screen.getByText(/还没有自动化任务/)).toBeTruthy();
   });
 
+  // 回归：面板最初直接用 Dialog 的默认几何（md 居中、无内边距），表现是
+  // ① 列表卡片/输入框的边框正好压在弹窗边框上；② 滚动区贴到页脚分割线，最后一条
+  // 卡片的圆角被切掉、看起来像被页脚盖住。现在复用设置弹窗那套：整屏（移动端）/
+  // 900×82vh（桌面）+ 内容区自带内边距。
+  it("复用设置弹窗的几何与内边距", () => {
+    render(<ScheduleDialog open onClose={() => {}} />);
+    const panel = screen.getByRole("dialog");
+    expect(panel.className).toContain("h-[100dvh]");
+    expect(panel.className).toContain("md:h-[82vh]");
+    expect(panel.className).toContain("md:max-w-[900px]");
+
+    const body = screen.getByText("每日巡检").closest(".dsh-scroll") as HTMLElement;
+    expect(body).toBeTruthy();
+    expect(body.className).toContain("overflow-y-auto");
+    expect(body.className).toContain("px-4");
+    expect(body.className).toContain("pb-4");
+    // 页脚是滚动区的兄弟节点（不在滚动区里），滚动内容不会从下面穿过去。
+    expect(body.parentElement?.querySelector("footer")).toBeTruthy();
+  });
+
   it("关闭时不渲染内容", () => {
     const { container } = render(<ScheduleDialog open={false} onClose={() => {}} />);
     expect(container.textContent).toBe("");

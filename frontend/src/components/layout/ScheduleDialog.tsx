@@ -183,6 +183,14 @@ export function ScheduleDialog({ open, onClose }: Props) {
       label={t("自动化任务", "Automations")}
       title={title}
       icon={<IconClock size={16} />}
+      // 与设置弹窗同一套几何：移动端整屏、桌面 900×82vh 居中。
+      // 高度固定后列表才有稳定的滚动区域，不会随条数忽高忽低。
+      size="xl"
+      fullScreen
+      panelClassName="h-[100dvh] max-h-[100dvh] rounded-none md:h-[82vh] md:max-h-[84vh] md:rounded-2xl md:max-w-[900px]"
+      // 内容自己带内边距：Dialog 的 body 默认没有 padding，列表卡片/输入框的边框
+      // 会正好压在弹窗边框上（滚动区贴到页脚线，看起来像被页脚盖住）。
+      bodyClassName="px-4 pb-4 pt-4 md:px-8 md:pb-6 md:pt-5"
       footer={
         draft ? (
           <button type="button" onClick={() => setDraft(null)} className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px] text-muted hover:bg-canvas hover:text-ink">
