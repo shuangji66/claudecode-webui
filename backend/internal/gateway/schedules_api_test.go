@@ -310,6 +310,11 @@ func TestDeliverScheduledTaskRejects(t *testing.T) {
 	if err := f.conv.Ensure(conversation.Record{ID: "archived-1", Cwd: f.root, Archived: true}); err != nil {
 		t.Fatal(err)
 	}
+	// 任务改过「关联工作区」、而对话属于另一个目录：`--resume` 按 cwd 找转录，
+	// 必然报 No conversation found，要在起进程之前挡掉。
+	if err := f.conv.Ensure(conversation.Record{ID: "other-cwd", Cwd: filepath.Join(f.root, "sub")}); err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
 		name string
 		task schedule.Task
@@ -327,6 +332,14 @@ func TestDeliverScheduledTaskRejects(t *testing.T) {
 				Target: schedule.Target{Kind: schedule.TargetConversation, ConversationID: "archived-1"},
 			},
 			want: "已归档",
+		},
+		{
+			name: "对话属于其它目录",
+			task: schedule.Task{
+				Workspace: f.root, Prompt: "x",
+				Target: schedule.Target{Kind: schedule.TargetConversation, ConversationID: "other-cwd"},
+			},
+			want: "其它工作目录",
 		},
 		{
 			name: "投现有对话但没 id",

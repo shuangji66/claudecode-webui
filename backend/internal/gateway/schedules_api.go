@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -114,12 +115,6 @@ func sameEnv(a, b map[string]string) bool {
 	return true
 }
 
-// 任务字段上限：和 DSH 的编辑器同量级，太长的指令塞进对话只会挤占上下文。
-const (
-	maxScheduleName   = 120
-	maxSchedulePrompt = 4000
-)
-
 // SetScheduleRunner 接上调度循环（装配层创建后调用）。
 //
 // runner 只用于「立即执行」：常规投递由它自己的循环驱动，网关不主动 tick。
@@ -167,7 +162,12 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := s.d.Schedules.Create(task)
 	if err != nil {
-		writeErr(w, err.Error(), http.StatusInternalServerError)
+		// 达到条数上限是「你不能再建了」，不是服务器出错。
+		code := http.StatusInternalServerError
+		if errors.Is(err, schedule.ErrTooMany) {
+			code = http.StatusBadRequest
+		}
+		writeErr(w, err.Error(), code)
 		return
 	}
 	writeJSON(w, created)
@@ -195,7 +195,7 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	// 乐观并发：界面上带的是它读到的那一版；对不上说明这条任务在别处改过，
 	// 直接覆盖会把对方的修改静默抹掉。
-	if req.ExpectedUpdatedAt != "" && !strings.EqualFold(req.ExpectedUpdatedAt, prev.UpdatedAt.Format(time.RFC3339Nano)) {
+	if req.ExpectedUpdatedAt != "" && !sameInstant(req.ExpectedUpdatedAt, prev.UpdatedAt) {
 		writeErr(w, "这条任务已被修改，请刷新后重试", http.StatusConflict)
 		return
 	}
@@ -227,6 +227,19 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, saved)
+}
+
+// sameInstant 报告客户端带回的时间戳是否就是这一版（乐观并发用）。
+//
+// 比解析后的时刻而不是字符串：客户端原样带回来时写法本应一致，但 `Z` 与 `+00:00`、
+// 带不带纳秒小数、末尾多个空格都会让字符串比较把「同一版」误判成「改过了」，
+// 用户看到的是「请刷新后重试」，而其实什么都没变。
+func sameInstant(raw string, at time.Time) bool {
+	got, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	return got.Equal(at)
 }
 
 func (s *Server) handleDeleteSchedule(w http.ResponseWriter, r *http.Request) {
@@ -341,24 +354,29 @@ func (s *Server) handleScheduleDeliveries(w http.ResponseWriter, r *http.Request
 //
 // 第二个返回值是给 HTTP 用的状态码：工作区没授权是 403（与 /api/session 一致），
 // 其余校验失败都是 400。
+//
+// 字段级规则（名称/内容长度、投递目标）走 schedule.Task.Validate：模型那条路
+// （`ccweb mcp-schedule`）用的是同一份，两边各写一套必然漂移。
 func (s *Server) buildSchedule(req scheduleReq, prev *schedule.Task) (schedule.Task, int, error) {
 	task := schedule.Task{}
 	if prev != nil {
 		task = prev.Clone()
 	}
 	task.Name = strings.TrimSpace(req.Name)
-	if task.Name == "" {
-		return task, http.StatusBadRequest, errors.New("任务名称不能为空")
-	}
-	if len([]rune(task.Name)) > maxScheduleName {
-		return task, http.StatusBadRequest, errors.New("任务名称太长")
-	}
 	task.Prompt = strings.TrimSpace(req.Prompt)
-	if task.Prompt == "" {
-		return task, http.StatusBadRequest, errors.New("任务内容不能为空")
+	// 目标：new-reuse 已经绑过对话的（界面只改名字/规则时不会回传 id）要保留。
+	target := schedule.Target{Kind: req.Target.Kind, ConversationID: strings.TrimSpace(req.Target.ConversationID)}
+	if req.Target.Kind == schedule.TargetNewReuse && target.ConversationID == "" &&
+		prev != nil && prev.Target.Kind == schedule.TargetNewReuse {
+		target.ConversationID = prev.Target.ConversationID
 	}
-	if len([]rune(task.Prompt)) > maxSchedulePrompt {
-		return task, http.StatusBadRequest, errors.New("任务内容太长")
+	if req.Target.Kind == schedule.TargetNewEach {
+		target.ConversationID = ""
+	}
+	task.Target = target
+	task.Rule = req.Rule
+	if err := task.Validate(); err != nil {
+		return task, http.StatusBadRequest, err
 	}
 
 	cwd := strings.TrimSpace(req.Workspace)
@@ -374,29 +392,6 @@ func (s *Server) buildSchedule(req scheduleReq, prev *schedule.Task) (schedule.T
 	}
 	task.Workspace = abs
 
-	switch req.Target.Kind {
-	case schedule.TargetConversation:
-		if strings.TrimSpace(req.Target.ConversationID) == "" {
-			return task, http.StatusBadRequest, errors.New("投递到现有对话时必须有对话 id")
-		}
-		task.Target = schedule.Target{Kind: req.Target.Kind, ConversationID: strings.TrimSpace(req.Target.ConversationID)}
-	case schedule.TargetNewReuse:
-		// 首次投递前没有对话 id；已经建过的那种（界面只改名字/规则）要保留。
-		id := strings.TrimSpace(req.Target.ConversationID)
-		if id == "" && prev != nil && prev.Target.Kind == schedule.TargetNewReuse {
-			id = prev.Target.ConversationID
-		}
-		task.Target = schedule.Target{Kind: req.Target.Kind, ConversationID: id}
-	case schedule.TargetNewEach:
-		task.Target = schedule.Target{Kind: req.Target.Kind}
-	default:
-		return task, http.StatusBadRequest, errors.New("未知的投递目标")
-	}
-
-	if err := req.Rule.Validate(); err != nil {
-		return task, http.StatusBadRequest, err
-	}
-	task.Rule = req.Rule
 	// 一次性任务的绝对时间必须是未来：改成过去的时间点等于「保存后立刻触发」，
 	// 用户通常不是这个意思。
 	now := time.Now()
@@ -463,6 +458,11 @@ func (s *Server) DeliverScheduledTask(ctx context.Context, t schedule.Task, fire
 		schedTitle = t.Name + " · " + fire.In(t.Rule.Location()).Format("01-02 15:04")
 	} else {
 		// 归档/删除的对话不能投递：消息会落进一个用户打开不了的对话。
+		//
+		// 同时要核对目录：任务的「关联工作区」是可改的，而对话属于它自己那个目录。
+		// 两边不一致时 CLI 的 `--resume` 按 cwd 编码找转录，必然回
+		// 「No conversation found with session ID: …」——投递每轮失败一次、原因还看不出
+		// 是目录对不上（与 POST /api/session {resume} 的 409 同一条判断）。
 		if s.d.Conversations != nil {
 			if rec, ok := s.d.Conversations.Get(id); ok {
 				if rec.Deleted {
@@ -470,6 +470,9 @@ func (s *Server) DeliverScheduledTask(ctx context.Context, t schedule.Task, fire
 				}
 				if rec.Archived {
 					return "", errors.New("关联对话已归档，恢复后才能接收任务")
+				}
+				if rec.Cwd != "" && filepath.Clean(rec.Cwd) != cwd {
+					return "", errors.New("关联对话属于其它工作目录（" + rec.Cwd + "），请把任务的关联工作区改成它")
 				}
 			}
 		}
