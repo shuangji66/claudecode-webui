@@ -844,17 +844,25 @@ function applyResult(items: Item[], m: Raw, at: number): Item[] {
   const errors = Array.isArray(m.errors)
     ? m.errors.filter((e): e is string => typeof e === "string")
     : [];
-  // 用户中断时 CLI 会把这一轮判成失败（subtype=error_during_execution），result 里只塞一段
-  // 内部诊断（`[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null`：
-  // 「最后一条消息是 user、stop_reason 是 null」，正是中断的形态）。**这不是失败，是用户按了停止**：
-  // 还原成正常结束，界面上就不弹「本轮出错」，也不再露一段谁也读不懂的诊断。
-  // 只在本回合确实收到过中断标记、且文本就是这段诊断（或中断标记本身）时才这么做——
-  // 真正的 API 报错照旧显示。
-  const rawText = raw.trim();
+  // 用户中断时 CLI 会把这一轮判成失败（subtype=error_during_execution），**而且不写
+  // result.result**——诊断只在 errors 数组里：
+  //   `[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null`
+  // （「最后一条消息是 user、stop_reason 是 null / tool_use」正是中断的形态）。
+  // 只看 result.result 会漏掉整类（界面上照样弹「本轮出错 + 诊断」，踩过）。
+  //
+  // 判据有两条，任一成立即视为中断：
+  //   ① 错误文本全部是这段诊断，且 result_type=user —— 标记可能和 tool_result 合并、
+  //      也可能晚到，靠诊断本身也能认出来；
+  //   ② 本回合收到过中断标记，且 result 的原因就是标记本身。
+  // 真正的 API 报错一定还会带自己的原因（「API Error: …」），不会被吞。
+  const shown = stripAnsi(raw || errors.join("\n")).trim();
+  const diagnosticOnly =
+    shown !== "" &&
+    shown.split("\n").every((line) => !line.trim() || line.trim().startsWith("[ede_diagnostic]"));
+  const userTerminated = diagnosticOnly && /result_type=user\b/.test(shown);
   const interrupted =
     m.is_error === true &&
-    (/^\[ede_diagnostic\]/.test(rawText) || /^\[Request interrupted by user/.test(rawText)) &&
-    interruptedThisTurn(items);
+    (userTerminated || (/^\[Request interrupted by user/.test(shown) && interruptedThisTurn(items)));
   const isError = m.is_error === true && !interrupted;
   // 失败原因就在 result / errors 里（API 报错、超出最大轮数…）。成功回合的 result
   // 与最后一条 assistant 正文是同一段话，只在出错时展示，免得同一段出现两遍。

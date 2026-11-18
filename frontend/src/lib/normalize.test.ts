@@ -1097,8 +1097,43 @@ describe("用户中断", () => {
     expect(result?.kind === "result" && result.text).toBeUndefined();
   });
 
-  it("没有中断标记时，同样的诊断仍然算失败", () => {
-    const items = applyCLI([], interruptedResult);
+  // 真实形态：中断时 CLI **不写 result.result**，诊断只在 errors 数组里（2.1.327）。
+  // 只查 result.result 会漏掉一整类——界面上照旧弹「本轮出错 + 诊断」。
+  it("诊断只在 errors 里（没有 result 字段）也能认出中断", () => {
+    const items = applyCLI([], {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use"],
+    });
+    const result = items.find((i) => i.kind === "result");
+    expect(result).toMatchObject({ kind: "result", isError: false, subtype: "interrupt" });
+    expect(result?.kind === "result" && result.text).toBeUndefined();
+  });
+
+  it("诊断之外还有真实错误时，仍然算失败并显示原因", () => {
+    const items = applyCLI([], {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: [
+        "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null",
+        "API Error: 500 internal server error",
+      ],
+    });
+    const result = items.find((i) => i.kind === "result");
+    expect(result).toMatchObject({ kind: "result", isError: true, subtype: "error_during_execution" });
+    expect(result?.kind === "result" && result.text).toContain("API Error: 500");
+  });
+
+  // 诊断里 result_type 不是 user（例如 assistant 收尾）说明不是中断，不能吞。
+  it("诊断不是「user 收尾」时仍算失败", () => {
+    const items = applyCLI([], {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: ["[ede_diagnostic] result_type=assistant last_content_type=none stop_reason=end_turn"],
+    });
     expect(items[0]).toMatchObject({ kind: "result", isError: true, subtype: "error_during_execution" });
   });
 

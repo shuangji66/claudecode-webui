@@ -338,13 +338,18 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **中断不是失败，中断标记也不是用户消息**：用户按停止时 CLI 会往流里写一条合成的 user 消息
   `[Request interrupted by user]`（工具执行中是 `… for tool use`；进程/会话被结束时是
   `[Request interrupted: …]` / `[Agent call interrupted: …]`），随后把这一轮判成
-  `error_during_execution`，`result.result` 只有一段内部诊断
-  `[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null`。
+  `error_during_execution`，**而且不写 `result.result`**——内部诊断只在 `errors` 数组里：
+  `[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null`（中断
+  工具调用时 `stop_reason=tool_use`）。**只查 `result.result` 会漏掉一整类**：界面上
+  照旧弹「本轮出错 + 诊断」（第一版就踩了，截图复现）。判定看「界面上会显示的文本」
+  （`result` 或 `errors.join`）：
+  ① 文本全是这段诊断且 `result_type=user`，或 ② 本回合有中断标记且原因就是标记本身。
+  真正的 API 报错还会带自己的原因（`API Error: …`），不会被吞。
   以前这两条被原样渲染：气泡里多出一条「用户发的话」，下面再挂「本轮出错 + 诊断」。
   现在 `lib/normalize.ts` 把标记认成 `interrupt` item（一句「已中断」），
   把**紧跟其后的那段诊断 result 还原成正常结束**（`subtype: "interrupt"`、`is_error` 置 false、
-  丢掉诊断文本）。判定要同时满足「本回合收到过中断标记」+「文本是诊断/中断标记」，
-  真正的 API 报错照旧显示。后端 `history`（列表标题、消息数、preview）也跳过这条合成行。
+  丢掉诊断文本）。真正的 API 报错照旧显示。后端 `history`（列表标题、消息数、preview）
+  也跳过这条合成行。
   标记按来源分三类（`InterruptItem.reason`）：`user` =「已中断」、`session` =
   「会话已结束，本轮未完成」（重启/回收/删版本时恢复对话，CLI 补写
   `[Request interrupted: …]`，**没人要求停**，不能说成用户中断）、`agent` =「子代理被中断」。

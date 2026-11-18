@@ -86,10 +86,19 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 export function shouldFlushAfter(result: unknown): boolean {
   if (!isRecord(result) || result.type !== "result") return false;
   if (result.is_error === true) return false;
-  // 中断时 CLI 会在 result 里塞一段内部诊断（见 lib/normalize.ts 的同一判定）：
-  // 有的版本此时不把 is_error 置 true，只靠 subtype 可能漏掉，所以再看一眼文本——
-  // 用户按 Esc 是「停手」，绝不能替他把排队的消息发出去。
-  if (typeof result.result === "string" && result.result.trimStart().startsWith("[ede_diagnostic]")) return false;
+  // 中断时 CLI 只往 errors 数组里塞一段内部诊断（result.result 根本没有，见
+  // lib/normalize.ts 的同一判定）：有的版本此时不把 is_error 置 true，只靠 subtype
+  // 也可能漏掉，所以再看一眼文本——用户按 Esc 是「停手」，绝不能替他把排队的消息发出去。
+  const texts = [result.result, ...(Array.isArray(result.errors) ? result.errors : [])];
+  if (
+    texts.some(
+      (t) =>
+        typeof t === "string" &&
+        (t.trimStart().startsWith("[ede_diagnostic]") || t.trimStart().startsWith("[Request interrupted by user")),
+    )
+  ) {
+    return false;
+  }
   const sub = typeof result.subtype === "string" ? result.subtype.toLowerCase() : "";
   return !sub.includes("interrupt") && !sub.includes("abort") && !sub.includes("cancel");
 }
