@@ -117,7 +117,7 @@ func (r *Runner) deliverOne(ctx context.Context, t Task, fire time.Time, advance
 	defer r.mu.Unlock()
 
 	convID, err := r.deliver(ctx, t, fire)
-	_, updateErr := r.store.Update(t.ID, func(x *Task) error {
+	_, updateErr := r.store.UpdateRun(t.ID, func(x *Task) error {
 		now := r.now()
 		at := now
 		x.LastDeliveredAt = &at

@@ -18,6 +18,52 @@ func newTestStore(t *testing.T) *Store {
 	return st
 }
 
+// 调度器的记账（投递时间 / 下一次 / 投递记录）不能推进 UpdatedAt：
+// 它同时是界面的乐观并发标记，一条每分钟任务会让用户在面板里永远存不进去。
+func TestUpdateRunKeepsUpdatedAt(t *testing.T) {
+	st := newTestStore(t)
+	next := time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC)
+	task, err := st.Create(Task{
+		Name:    "每分钟",
+		Prompt:  "x",
+		Target:  Target{Kind: TargetNewEach},
+		Rule:    Rule{Kind: KindMinutes, Interval: 1},
+		NextRun: &next,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// 用户编辑会推进它。
+	edited, err := st.Update(task.ID, func(x *Task) error {
+		x.Name = "改过名"
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if !edited.UpdatedAt.After(task.UpdatedAt) {
+		t.Fatalf("Update 应当推进 UpdatedAt: %v -> %v", task.UpdatedAt, edited.UpdatedAt)
+	}
+
+	// 调度器记账不会。
+	at := next
+	if _, err := st.UpdateRun(task.ID, func(x *Task) error {
+		x.LastDeliveredAt = &at
+		x.Deliveries = append(x.Deliveries, Delivery{At: at})
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateRun: %v", err)
+	}
+	got, _ := st.Get(task.ID)
+	if !got.UpdatedAt.Equal(edited.UpdatedAt) {
+		t.Fatalf("UpdateRun 不该改 UpdatedAt: %v -> %v", edited.UpdatedAt, got.UpdatedAt)
+	}
+	if len(got.Deliveries) != 1 || got.LastDeliveredAt == nil {
+		t.Fatalf("UpdateRun 的改动没落盘: %+v", got)
+	}
+}
+
 func TestStorePersists(t *testing.T) {
 	dir := t.TempDir()
 	st, err := Open(filepath.Join(dir, "schedules.json"))

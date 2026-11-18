@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -43,6 +44,52 @@ const MaxDeliveries = 50
 
 // ErrNotFound 表示任务不存在。
 var ErrNotFound = errors.New("schedule: 任务不存在")
+
+// ErrTooMany 表示任务数已达 MaxTasks。
+var ErrTooMany = fmt.Errorf("schedule: 任务数已达上限 %d 条", MaxTasks)
+
+// 字段上限：面板（HTTP 接口）与模型（`ccweb mcp-schedule`）共用同一套。
+//
+// 两处各写一份迟早漂移：面板挡住了超长内容、模型那条路照样能写进 10 MB 的指令，
+// 而这条指令会在到点那一刻原样塞进对话上下文。
+const (
+	MaxNameLen   = 120
+	MaxPromptLen = 4000
+	// MaxTasks 是任务总数上限。模型能自己建任务，没有上限就等于给它一个把调度表
+	// 撑爆的入口：每条任务每次 tick 都要算一次下一次、每写一次都是整份文件。
+	MaxTasks = 100
+)
+
+// Validate 检查任务本身是否自洽（名称 / 内容 / 规则 / 投递目标）。
+//
+// 只覆盖与外部状态无关的规则：工作区是否授权、目标对话是否存在由调用方判断
+// （schedule 包不认识工作区与会话）。错误文案直接进界面与工具结果，所以不加包名前缀。
+func (t Task) Validate() error {
+	name := strings.TrimSpace(t.Name)
+	if name == "" {
+		return errors.New("任务名称不能为空")
+	}
+	if len([]rune(name)) > MaxNameLen {
+		return fmt.Errorf("任务名称最多 %d 个字符", MaxNameLen)
+	}
+	prompt := strings.TrimSpace(t.Prompt)
+	if prompt == "" {
+		return errors.New("任务内容不能为空")
+	}
+	if len([]rune(prompt)) > MaxPromptLen {
+		return fmt.Errorf("任务内容最多 %d 个字符", MaxPromptLen)
+	}
+	switch t.Target.Kind {
+	case TargetConversation:
+		if strings.TrimSpace(t.Target.ConversationID) == "" {
+			return errors.New("投递到现有对话时必须有对话 id")
+		}
+	case TargetNewReuse, TargetNewEach:
+	default:
+		return fmt.Errorf("未知的投递目标 %q", t.Target.Kind)
+	}
+	return t.Rule.Validate()
+}
 
 // Target 是投递目标。
 type Target struct {
@@ -211,11 +258,17 @@ func (s *Store) Get(id string) (Task, bool) {
 }
 
 // Create 追加一条任务并落盘（ID / CreatedAt / UpdatedAt 由这里补齐）。
+//
+// 上限在 Store 里挡，而不是各个入口各挡一次：模型那条路（MCP 子命令）与面板
+// 写的是同一份文件，只在一边挡等于没挡。
 func (s *Store) Create(t Task) (Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.reloadLocked(); err != nil {
 		return Task{}, err
+	}
+	if len(s.data.Tasks) >= MaxTasks {
+		return Task{}, ErrTooMany
 	}
 	if t.ID == "" {
 		id, err := newID()
@@ -241,8 +294,25 @@ func (s *Store) Create(t Task) (Task, error) {
 	return t.Clone(), nil
 }
 
-// Update 就地修改一条任务；fn 返回错误时不落盘。
+// Update 就地修改一条任务（用户编辑）；fn 返回错误时不落盘。
+//
+// 会推进 UpdatedAt，它同时是界面的乐观并发标记：用户在面板里保存时带着读到的那一版，
+// 对不上就说明这条任务在别处被改过。
 func (s *Store) Update(id string, fn func(*Task) error) (Task, error) {
+	return s.update(id, fn, true)
+}
+
+// UpdateRun 就地修改一条任务（调度器自己的记账：投递时间、下一次、投递记录）。
+//
+// **不推进 UpdatedAt**：那条时间戳只表示「用户可见的字段变过」。投递也算一次改动的话，
+// 一条每分钟任务会让用户在面板里永远存不进去（打开编辑器到点一次，保存就 409）。
+// 调度器要改的字段（NextRun/LastDeliveredAt/LastError/Deliveries/Target.ConversationID）
+// 都不是用户在编辑器里能改的，所以跳过这个标记是安全的。
+func (s *Store) UpdateRun(id string, fn func(*Task) error) (Task, error) {
+	return s.update(id, fn, false)
+}
+
+func (s *Store) update(id string, fn func(*Task) error, bump bool) (Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.reloadLocked(); err != nil {
@@ -257,7 +327,9 @@ func (s *Store) Update(id string, fn func(*Task) error) (Task, error) {
 			s.data.Tasks[i] = prev
 			return prev, err
 		}
-		s.data.Tasks[i].UpdatedAt = time.Now()
+		if bump {
+			s.data.Tasks[i].UpdatedAt = time.Now()
+		}
 		if err := s.save(); err != nil {
 			s.data.Tasks[i] = prev
 			return prev, err
