@@ -138,7 +138,10 @@ export function Dialog({
         : "max-h-[88dvh] md:max-h-[84vh]";
   const rounding = fullScreen ? "" : centered ? "rounded-2xl" : "rounded-t-2xl md:rounded-2xl";
   const placement = fullScreen
-    ? "items-stretch"
+    // 移动端铺满（面板 h-[100dvh]），桌面端面板有确定高度（md:h-[82vh]）：
+    // 继续用 items-stretch 时，stretch 对确定高度会退化成 flex-start，
+    // 面板被顶在容器上沿（顶部贴边、底部留一大块），必须在 md 上换成居中。
+    ? "items-stretch md:items-center"
     : centered
       ? "items-center p-4 md:p-6"
       : "items-end md:items-center md:p-6";

@@ -108,4 +108,17 @@ describe("Dialog 的居中模式", () => {
     const overlay = container.querySelector(".fixed") as HTMLElement;
     expect(overlay.className).toContain("items-end");
   });
+
+  // 设置页这类 fullScreen 面板在桌面端有确定高度（md:h-[82vh]）：
+  // 只用 items-stretch 会让它退化成 flex-start，面板顶在上沿、纵向不居中。
+  it("fullScreen 移动端铺满、桌面端纵向居中", () => {
+    const { container } = render(
+      <Dialog open onClose={() => {}} label="设置" fullScreen panelClassName="h-[100dvh] md:h-[82vh]">
+        <p>内容</p>
+      </Dialog>,
+    );
+    const overlay = container.querySelector(".fixed") as HTMLElement;
+    expect(overlay.className).toContain("items-stretch");
+    expect(overlay.className).toContain("md:items-center");
+  });
 });
