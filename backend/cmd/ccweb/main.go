@@ -48,6 +48,10 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "mcp-web" {
 		os.Exit(runMCPWeb())
 	}
+	// `ccweb mcp-schedule` 是自动化任务的模型入口（schema 与建/改逻辑都在子命令里）。
+	if len(os.Args) > 1 && os.Args[1] == "mcp-schedule" {
+		os.Exit(runMCPSchedule())
+	}
 
 	logger := log.New(os.Stdout, "[ccweb] ", log.LstdFlags)
 
@@ -130,19 +134,26 @@ func main() {
 	// 内置搜索的会话规则：只有「用户启用了搜索」且「这条 MCP 服务真的注册了」才生效。
 	// 否则会把内置 WebSearch/WebFetch 挡掉却换不上任何搜索工具——比原来更糟。
 	mgr.SetToolRules(func() (allow, deny []string) {
-		if !store.Get().SearchEnabled {
-			return nil, nil
-		}
 		payload, err := mcpMgr.List("")
 		if err != nil {
 			return nil, nil
 		}
 		for _, srv := range payload.User {
-			if srv.Name == gateway.SearchMCPServer {
-				return gateway.SearchToolRules()
+			switch srv.Name {
+			case gateway.SearchMCPServer:
+				// 只有用户真的启用了搜索才放行、才禁内置的两个：否则会把
+				// WebSearch/WebFetch 挡掉却换不上任何东西。
+				if store.Get().SearchEnabled {
+					a, d := gateway.SearchToolRules()
+					allow = append(allow, a...)
+					deny = append(deny, d...)
+				}
+			case gateway.ScheduleMCPServer:
+				// 自动化任务的三个工具：注册了才放行（同样是为了不每建一条弹一次审批）。
+				allow = append(allow, gateway.ScheduleToolRules()...)
 			}
 		}
-		return nil, nil
+		return allow, deny
 	})
 
 	historyDir := filepath.Join(cfg.ClaudeHome, ".claude", "projects")
@@ -173,6 +184,12 @@ func main() {
 		TerminalShell: cfg.TerminalShell,
 		StartedAt:     time.Now(),
 	}, logger)
+
+	// 自动化任务的模型入口：注册成用户级 MCP 服务（幂等，配置没变就不动 .claude.json）。
+	// 失败只记日志：注册不上不影响面板自己用，最多是模型看不到那几个工具。
+	if err := srv.EnsureScheduleMCP(); err != nil {
+		logger.Printf("注册自动化任务 MCP 失败: %v", err)
+	}
 
 	// 自动化任务的调度循环：到期投递由 gateway 实现（它才有 manager / 对话元数据 /
 	// 工作区围栏）。启动时先跑一次，补投停机期间到期的一次性任务。

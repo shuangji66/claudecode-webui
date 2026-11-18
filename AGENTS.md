@@ -74,6 +74,7 @@ hub ── manager ── session ── process ── claude (NDJSON)
 | `agent/process` | 标准库 | 启动会话、解析 NDJSON |
 | `claudebin` | 标准库 | 启动 claude、决定会话参数 |
 | `trimapi` | 标准库 | 知道 HTTP 路由 / 前端协议（只经飞牛 apiscope socket 出站） |
+| `schedule` | 标准库 | 起会话 / 发消息 / 建对话（只算时间、存任务、调 deliver 回调） |
 | `agent/protocol` | 标准库 | I/O、状态机 |
 
 `gateway` 对 manager 只依赖 `SessionManager` 接口（见 `gateway.go`），
@@ -745,6 +746,45 @@ hub ── manager ── session ── process ── claude (NDJSON)
   （`{type:"attachment", attachment:{type:"goal_status", met, sentinel, condition}}`），
   达成时的条目另带 `iterations`/`durationMs`/`tokens`。要接得先确认 stream-json 会不会
   把这条 attachment 转发给客户端——没验证过之前不要凭 `/goal` 的用户消息猜状态。
+
+### 4.18 自动化任务（`internal/schedule` + `/api/schedules` + `ccweb mcp-schedule`）
+
+- **宿主级，不是 claude 的 cron**：claude 自己的 `CronCreate` / `ScheduleWakeup` / `/loop`
+  是 **session-scoped**（二进制里 SDK 字段的原话：`cron tasks … that will wake this session
+  later`），只能在原会话被唤醒，没有跨会话列表、暂停/恢复、运行记录，也不能新建对话。
+  所以调度、存储、投递目标都由宿主负责；claude 只负责收到消息后干活。
+- **一份文件 `schedules.json`**（`CCWEB_SCHEDULES_FILE`，默认在数据目录）。`Store` 每次操作前
+  按 `mtime`/`size` 重新加载——主进程与 `ccweb mcp-schedule` 子命令是两个进程，只读一次
+  启动快照会互相覆盖。写盘仍是 tmp + rename；`Update` 在落盘失败时回滚内存。
+- **规则 7 种 + cron**：once / minutes / hours / daily / weekdays / weekly / monthly / cron
+  （5 字段，支持 `*/n`、区间、列表；日与周同时受限时按标准 cron 取「或」）。**刻意不引
+  RRULE 库**：零依赖是本项目的硬约定，引导式 + cron 覆盖实际用法。时区是 IANA 名，
+  空表示服务器本地时区；`Next(after)` 是纯函数，永远从「现在」往后算——
+  停机错过的时段不逐条补投，一次性任务照投那一次，重复任务只算下一次。
+- **投递目标三种**：`conversation`（指定对话）、`new-reuse`（首次新建后一直复用）、
+  `new-each`（每次新建，标题 `任务名 · MM-DD HH:MM`，时区取规则的）。归档或删除的对话
+  拒绝投递；已在跑的会话直接复用，没有转录的走 `StartFresh`，工作区必须过
+  `ensureCwdAuthorizedReal`。新建对话后往系统通道推 `conversations.changed`，
+  前端收到就刷新列表（定时任务常常在没有任何面板打开时建对话）。
+- **同一条任务两次投递至少间隔 1 分钟**（`schedule.MinDeliveryGap`），「立即执行」只是
+  额外投一次，**不改计划时间**；投递失败也推进下一次并记原因——否则工作区被删这类
+  永久失败会每 30 秒刷一次。每条任务保留最近 `MaxDeliveries`（50）条投递记录，
+  它只确认「消息进了对话」，不代表模型做完。
+- **路由**：`GET/POST/PATCH/DELETE /api/schedules`、`POST /api/schedules/action`
+  （pause / resume / run）、`GET /api/schedules/deliveries`，全部 `s.authed`。
+  工作区没授权回 403（与 `/api/session` 一致），修改带 `expected_updated_at` 做乐观并发。
+  「立即执行」在 goroutine 里跑并**立即返回**：投递要起会话、写 stdin，不能挂在 HTTP 请求上。
+- **模型入口是 MCP**（`ccweb mcp-schedule`，工具 `schedule_create` / `schedule_list` /
+  `schedule_edit`），不是 plugin。启动时 `EnsureScheduleMCP` 幂等注册到用户级
+  `mcpServers`（配置没变就不写 `.claude.json`），带 `alwaysLoad`（延迟加载只发裸名字，
+  模型认不出这是「建提醒」），并在 `SetToolRules` 里放行这三个工具——否则每建一条
+  弹一次审批，模型很快就学会不碰它。工作区默认取子进程 cwd（会话就在用户的工作区里）。
+- **界面**：侧栏「自动化任务」入口在**「历史记录」之上**（展开态与收起态都有），
+  面板是列表 + 编辑两态：列表按计划时间排序、带状态与规则摘要；编辑页有名称/内容/
+  执行位置/关联工作区/运行时间（引导式控件 + cron 文本框）、保存/暂停恢复/立即执行/删除、
+  最近投递记录。时间规则文案与本地时间换算在 `lib/scheduleRule.ts`（纯函数、有单测）。
+- **没做的**：一条任务的投递如果正赶上目标会话在跑，就是普通写入 stdin（并入下一轮）；
+  没有 DSH 那种「排队中禁用编辑」的会话级锁。运行时长的统计、跨设备通知也都没有。
 
 ## 5. 命令速查
 

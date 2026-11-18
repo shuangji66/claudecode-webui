@@ -646,3 +646,61 @@ export interface SkillsPayload {
   /** 个人技能目录的绝对路径（接口原样给出，排错时用；界面不展示）。 */
   personal_root: string;
 }
+
+/** 自动化任务的时间规则（字段组合由 kind 决定，与后端 schedule.Rule 一致）。 */
+export interface ScheduleRule {
+  kind: "once" | "minutes" | "hours" | "daily" | "weekdays" | "weekly" | "monthly" | "cron";
+  /** minutes/hours 的间隔。 */
+  interval?: number;
+  /** HH:MM，用于 daily/weekdays/weekly/monthly。 */
+  time?: string;
+  /** weekly 的星期集合（0=周日 … 6=周六）。 */
+  weekdays?: number[];
+  /** monthly 的日期（1..31，该月没有这一天就落在月末）。 */
+  day?: number;
+  /** once 的绝对时间（RFC3339）。 */
+  at?: string;
+  /** 5 字段 cron：分 时 日 月 周。 */
+  cron?: string;
+  /** IANA 时区；空表示服务器本地时区。 */
+  timezone?: string;
+}
+
+/** 投递目标：指定对话 / 首次新建后复用 / 每次新建。 */
+export interface ScheduleTarget {
+  kind: "conversation" | "new-reuse" | "new-each";
+  conversation_id?: string;
+}
+
+/** 一次投递记录（只确认消息投进了对话，不代表模型执行成功）。 */
+export interface ScheduleDelivery {
+  at: string;
+  conversation_id?: string;
+  prompt: string;
+  /** 非空表示这次没投出去（工作区失效、会话起不来等）。 */
+  error?: string;
+}
+
+/** 一条自动化任务。 */
+export interface ScheduleTask {
+  id: string;
+  name: string;
+  prompt: string;
+  target: ScheduleTarget;
+  workspace: string;
+  rule: ScheduleRule;
+  status: "active" | "paused" | "ended";
+  /** 下一次计划投递时间（RFC3339，UTC）；已结束的任务没有。 */
+  next_run?: string;
+  updated_at: string;
+  created_at: string;
+  last_delivered_at?: string;
+  last_error?: string;
+  deliveries?: ScheduleDelivery[];
+}
+
+/** /api/schedules 的返回。 */
+export interface SchedulesPayload {
+  tasks: ScheduleTask[];
+  limits?: { min_gap_seconds?: number; max_deliveries?: number };
+}

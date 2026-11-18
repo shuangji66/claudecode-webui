@@ -106,10 +106,16 @@ type file struct {
 }
 
 // Store 是 schedules.json 的读写入口。
+//
+// 每次操作前先看文件的 mtime/size，变了就重新读一遍再改。这样两个进程能共用
+// 同一份任务：主进程在用，`ccweb mcp-schedule` 子命令（模型创建提醒）也直接写
+// 这个文件；只靠启动时读一次的话，一边写完另一边会把旧内容覆盖回去。
 type Store struct {
-	mu   sync.Mutex
-	path string
-	data file
+	mu      sync.Mutex
+	path    string
+	data    file
+	modTime time.Time
+	size    int64
 }
 
 // Open 打开（或创建）任务文件。文件不存在时按空列表处理，不报错。
@@ -131,7 +137,39 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("schedule: 解析 %s: %w", path, err)
 		}
 	}
+	if st, err := os.Stat(path); err == nil {
+		s.modTime, s.size = st.ModTime(), st.Size()
+	}
 	return s, nil
+}
+
+// reloadLocked 在文件被别的进程改过时重新加载。调用方必须持锁。
+func (s *Store) reloadLocked() error {
+	st, err := os.Stat(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		s.data = file{Version: 1}
+		s.modTime, s.size = time.Time{}, 0
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("schedule: 读取 %s 的状态: %w", s.path, err)
+	}
+	if st.ModTime().Equal(s.modTime) && st.Size() == s.size {
+		return nil
+	}
+	raw, err := os.ReadFile(s.path)
+	if err != nil {
+		return fmt.Errorf("schedule: 读取 %s: %w", s.path, err)
+	}
+	var next file
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &next); err != nil {
+			return fmt.Errorf("schedule: 解析 %s: %w", s.path, err)
+		}
+	}
+	s.data = next
+	s.modTime, s.size = st.ModTime(), st.Size()
+	return nil
 }
 
 // Path 返回任务文件路径（MCP 子命令与界面都靠它定位同一份数据）。
@@ -141,6 +179,7 @@ func (s *Store) Path() string { return s.path }
 func (s *Store) List() []Task {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	_ = s.reloadLocked() // 读失败就用手上这份，不把界面打成报错
 	out := make([]Task, 0, len(s.data.Tasks))
 	for _, t := range s.data.Tasks {
 		out = append(out, t.Clone())
@@ -162,6 +201,7 @@ func (s *Store) List() []Task {
 func (s *Store) Get(id string) (Task, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	_ = s.reloadLocked()
 	for _, t := range s.data.Tasks {
 		if t.ID == id {
 			return t.Clone(), true
@@ -174,6 +214,9 @@ func (s *Store) Get(id string) (Task, bool) {
 func (s *Store) Create(t Task) (Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.reloadLocked(); err != nil {
+		return Task{}, err
+	}
 	if t.ID == "" {
 		id, err := newID()
 		if err != nil {
@@ -202,6 +245,9 @@ func (s *Store) Create(t Task) (Task, error) {
 func (s *Store) Update(id string, fn func(*Task) error) (Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.reloadLocked(); err != nil {
+		return Task{}, err
+	}
 	for i := range s.data.Tasks {
 		if s.data.Tasks[i].ID != id {
 			continue
@@ -225,6 +271,9 @@ func (s *Store) Update(id string, fn func(*Task) error) (Task, error) {
 func (s *Store) Delete(id string) (Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.reloadLocked(); err != nil {
+		return Task{}, err
+	}
 	for i := range s.data.Tasks {
 		if s.data.Tasks[i].ID != id {
 			continue
@@ -264,6 +313,12 @@ func (s *Store) save() error {
 	}
 	if err := os.Rename(name, s.path); err != nil {
 		return fmt.Errorf("schedule: 替换 %s: %w", s.path, err)
+	}
+	// 记下新文件的指纹，免得下一次操作把「自己刚写的」当成别人改的再读一遍。
+	if st, err := os.Stat(s.path); err == nil {
+		s.modTime, s.size = st.ModTime(), st.Size()
+	} else {
+		s.modTime, s.size = time.Time{}, 0
 	}
 	return nil
 }

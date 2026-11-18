@@ -16,9 +16,89 @@ import (
 
 	"ccweb/backend/internal/agent/manager"
 	"ccweb/backend/internal/conversation"
+	"ccweb/backend/internal/mcp"
 	"ccweb/backend/internal/project"
 	"ccweb/backend/internal/schedule"
 )
+
+// mcpScheduleServer 是写进 claude 的 mcpServers 的键名。
+const mcpScheduleServer = "ccweb-schedule"
+
+// ScheduleMCPServer 是对外暴露的服务名（装配层用它判断「自动化任务工具是否已注册」）。
+const ScheduleMCPServer = mcpScheduleServer
+
+// 自动化任务的三个模型工具（`ccweb mcp-schedule` 暴露）。
+var scheduleAllowedTools = []string{
+	"mcp__" + mcpScheduleServer + "__schedule_create",
+	"mcp__" + mcpScheduleServer + "__schedule_list",
+	"mcp__" + mcpScheduleServer + "__schedule_edit",
+}
+
+// ScheduleToolRules 返回注册后该预先放行的工具名。
+//
+// 和内置搜索同一个理由：MCP 工具默认要过 can_use_tool，每建一条提醒弹一次审批，
+// 模型很快就学会不碰它。它们只写数据目录下的 schedules.json，不碰工作区。
+func ScheduleToolRules() []string { return scheduleAllowedTools }
+
+// EnsureScheduleMCP 把 `ccweb mcp-schedule` 注册成用户级 MCP 服务（幂等）。
+//
+// 这样「帮我每天早上 9 点提醒我」在对话框里就能落地，不用先让用户去设置页点开关。
+// 已经是同一份配置时直接跳过，避免每次启动都重写 .claude.json（那是 claude 自己的
+// 状态文件，写一次就多一次风险）。
+func (s *Server) EnsureScheduleMCP() error {
+	if s.d.Mcp == nil {
+		return nil
+	}
+	exe := selfPath()
+	if exe == "" {
+		return errors.New("无法确定 ccweb 可执行文件路径")
+	}
+	env := map[string]string{"CCWEB_DATA_DIR": s.d.Cfg.DataDir}
+	if s.d.Cfg.SchedulesFile != "" {
+		env["CCWEB_SCHEDULES_FILE"] = s.d.Cfg.SchedulesFile
+	}
+	want := mcp.Server{
+		Name:    mcpScheduleServer,
+		Scope:   mcp.ScopeUser,
+		Type:    mcp.TypeStdio,
+		Command: exe,
+		Args:    []string{"mcp-schedule"},
+		Env:     env,
+		// 与内置搜索同一处理：延迟加载只把裸名字发给模型，模型认不出这是「建提醒」。
+		AlwaysLoad: true,
+	}
+	if cur, err := s.d.Mcp.Find("", mcp.ScopeUser, mcpScheduleServer); err == nil {
+		if cur.Command == want.Command && sameStrings(cur.Args, want.Args) && sameEnv(cur.Env, want.Env) {
+			return nil
+		}
+	}
+	_, err := s.d.Mcp.Save("", want)
+	return err
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func sameEnv(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
 
 // 任务字段上限：和 DSH 的编辑器同量级，太长的指令塞进对话只会挤占上下文。
 const (

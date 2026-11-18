@@ -389,14 +389,17 @@ function token(): string {
   }
 }
 
-/** 打开系统通道（幂等）。系统通道只收 claude 更新提示，事件交给 applyEvent 统一处理。 */
+/** 打开系统通道（幂等）。系统通道只收应用级事件（claude 更新、对话列表变化），事件交给 applyEvent 统一处理。 */
 function openSystemChannel(): void {
   if (systemClient) return;
   let firstOpen = true;
   const client = new ClaudeClient("", token(), {
     // 只放行应用级事件：别的 kind 落到 applyEvent 会带着空 sid 写进各会话的桶里。
     onEvent: (ev) => {
-      if (ev.kind === "claude.update") useAppStore.getState().applyEvent("", ev);
+      // 自动化任务可能在没人看屏幕时新建对话，这里收到就刷新列表。
+      if (ev.kind === "claude.update" || ev.kind === "conversations.changed") {
+        useAppStore.getState().applyEvent("", ev);
+      }
     },
     onStatus: (status) => {
       if (status !== "open") return;
@@ -1778,6 +1781,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // /api/claude/status（已安装列表、生效版本、安装进度都在那里），
         // 免得两处各维护一份解析。
         void get().loadClaudeStatus();
+        return;
+      }
+      case "conversations.changed": {
+        // 定时任务在后台新建/改动了对话：拉一次列表，别让侧栏停在旧状态。
+        void get().refreshConversations();
         return;
       }
       case "session.snapshot": {

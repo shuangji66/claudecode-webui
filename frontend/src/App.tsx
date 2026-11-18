@@ -23,6 +23,9 @@ const WorkspaceDialog = lazy(() =>
 const HistoryDialog = lazy(() =>
   import("./components/layout/HistoryDialog").then((m) => ({ default: m.HistoryDialog })),
 );
+const ScheduleDialog = lazy(() =>
+  import("./components/layout/ScheduleDialog").then((m) => ({ default: m.ScheduleDialog })),
+);
 const RightSidebar = lazy(() => import("./components/right/RightSidebar").then((m) => ({ default: m.RightSidebar })));
 
 /** 首次打开后才挂载，之后保持挂载：配合 lazy，关闭再打开不会丢表单状态。 */
@@ -90,6 +93,7 @@ function AppShell() {
   const [installPromptDismissed, setInstallPromptDismissed] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
   const [tokenEpoch, setTokenEpoch] = useState(0);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [rightOpen, setRightOpen] = useState(readRightOpen);
@@ -99,6 +103,7 @@ function AppShell() {
   const settingsMounted = useLazyMount(settingsOpen);
   const workspaceMounted = useLazyMount(workspaceOpen);
   const historyMounted = useLazyMount(historyOpen);
+  const scheduleMounted = useLazyMount(scheduleOpen);
 
   // 聊天里点「查看对话」：右侧栏可能还没开，这里替用户打开。
   useEffect(() => {
@@ -201,6 +206,7 @@ function AppShell() {
           onOpenDeploy={openDeploy}
           onAddWorkspace={openWorkspace}
           onOpenHistory={openHistory}
+          onOpenSchedules={() => setScheduleOpen(true)}
         />
       </div>
 
@@ -220,6 +226,7 @@ function AppShell() {
               onOpenDeploy={openDeploy}
               onAddWorkspace={openWorkspace}
               onOpenHistory={openHistory}
+              onOpenSchedules={() => setScheduleOpen(true)}
             />
           </div>
         </div>
@@ -247,6 +254,7 @@ function AppShell() {
         )}
         {workspaceMounted && <WorkspaceDialog open={workspaceOpen} onClose={() => setWorkspaceOpen(false)} />}
         {historyMounted && <HistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} />}
+        {scheduleMounted && <ScheduleDialog open={scheduleOpen} onClose={() => setScheduleOpen(false)} />}
       </Suspense>
       {/* 一个版本都没装：后端能起来，但开不了会话，首屏直接把人送到部署页 */}
       <ClaudeInstallPrompt

@@ -87,6 +87,39 @@ func TestStorePersists(t *testing.T) {
 	}
 }
 
+// 两个进程共用一份文件：一边写完，另一边下一次操作必须看得见。
+// （`ccweb mcp-schedule` 子命令就是这么和主进程共存的。）
+func TestStoreSeesOtherWriter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "schedules.json")
+	a, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open a: %v", err)
+	}
+	b, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open b: %v", err)
+	}
+	next := time.Now().Add(time.Hour)
+	created, err := a.Create(Task{Name: "模型建的", Prompt: "x", Workspace: "/w", Rule: Rule{Kind: KindDaily, Time: "09:00"}, NextRun: &next})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, ok := b.Get(created.ID); !ok {
+		t.Fatal("另一个 Store 看不到新任务（没有按 mtime 重新加载）")
+	}
+	// b 改完之后 a 也要看得见。
+	if _, err := b.Update(created.ID, func(x *Task) error {
+		x.Status = StatusPaused
+		return nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got, _ := a.Get(created.ID); got.Status != StatusPaused {
+		t.Fatalf("a 看不到 b 的修改: %q", got.Status)
+	}
+}
+
 func TestStoreRejectsBrokenFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "schedules.json")

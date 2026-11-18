@@ -66,6 +66,8 @@ interface Props {
   onOpenDeploy?: () => void;
   onAddWorkspace: () => void;
   onOpenHistory: () => void;
+  /** 打开「自动化任务」面板（放在历史记录之上）。 */
+  onOpenSchedules: () => void;
 }
 
 interface WorkspaceGroup {
@@ -111,7 +113,7 @@ interface DragState {
   over: { id: string; half: DropHalf } | null;
 }
 
-export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onOpenDeploy, onAddWorkspace, onOpenHistory }: Props) {
+export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onOpenDeploy, onAddWorkspace, onOpenHistory, onOpenSchedules }: Props) {
   const t = useT();
   const claude = useAppStore((s) => s.claude);
   const authRequired = useAppStore((s) => Boolean(s.info?.auth_required));
@@ -614,6 +616,15 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         </button>
         <button
           type="button"
+          onClick={onOpenSchedules}
+          className="mt-2 flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:bg-black/5 hover:text-ink"
+          aria-label={t("自动化任务", "Automations")}
+          title={t("自动化任务", "Automations")}
+        >
+          <IconClock size={18} />
+        </button>
+        <button
+          type="button"
           onClick={onOpenHistory}
           className="mt-2 flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:bg-black/5 hover:text-ink"
           aria-label={t("历史记录", "History")}
@@ -696,6 +707,10 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
       {/* 功能区：和 DSH 一样放在「新对话」与工作区之间，一行一个入口。 */}
       <div className="mt-3 px-3">
+        <button type="button" onClick={onOpenSchedules} className="side-row text-ink-2 hover:text-ink">
+          <IconClock size={15} />
+          <span className="text-[12.5px]">{t("自动化任务", "Automations")}</span>
+        </button>
         <button type="button" onClick={onOpenHistory} className="side-row text-ink-2 hover:text-ink">
           <IconHistory size={15} />
           <span className="text-[12.5px]">{t("历史记录", "History")}</span>

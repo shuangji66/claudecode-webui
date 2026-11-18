@@ -10,6 +10,7 @@ function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {})
       onOpenSettings={() => {}}
       onAddWorkspace={() => {}}
       onOpenHistory={() => {}}
+      onOpenSchedules={() => {}}
       {...over}
     />,
   );
@@ -26,6 +27,25 @@ describe("Sidebar 品牌区", () => {
     const brand = screen.getByText("Claude Code");
     expect(brand.closest("button")).toBeNull();
     expect(screen.queryByText("CONSOLE")).toBeNull();
+  });
+});
+
+describe("Sidebar 自动化任务入口", () => {
+  beforeEach(() => {
+    useAppStore.setState({ conversations: [], workspaces: [], currentWorkspace: "", activeId: null });
+  });
+
+  // 自动化任务是「长期目标」类入口：和 DSH 一样放在历史记录之上（功能区第一行）。
+  it("自动化任务排在历史记录之上，点击打开面板", () => {
+    const onOpenSchedules = vi.fn();
+    renderSidebar({ onOpenSchedules });
+
+    const button = screen.getByRole("button", { name: "自动化任务" });
+    fireEvent.click(button);
+    expect(onOpenSchedules).toHaveBeenCalled();
+
+    const history = screen.getByRole("button", { name: "历史记录" });
+    expect(button.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 
