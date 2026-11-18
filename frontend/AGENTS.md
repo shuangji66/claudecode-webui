@@ -69,7 +69,7 @@ src/
   components/layout/settings/  设置页分区：GeneralSettings / ModelsSettings / DirsSettings（飞牛已授权目录）/ ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题）
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
                        / ImageLightbox（正文图片放大）
-                       / UsageStats / ResultBar / WorkspacePicker
+                       / UsageStats（ContextUsage / UsageSummary）/ TokenUsage / ResultBar / WorkspacePicker
   components/tools/    ToolCardHost（注册表）/ AgentCard / BashCard / EditCard / GenericCard（兜底）
   components/permission/ PermissionPanel（按钮由 permission_suggestions 决定）
   components/right/    RightSidebar（标签页）/ FilesPanel / GitPanel / TerminalView / SubagentPanel
@@ -411,8 +411,14 @@ src/
   「步骤数」「实时 tok/s」「官方上下文百分比」——步数用工具调用次数、tok/s 用上面那对原始
   数据换算、上下文用 (input+cache_read+cache_creation) ÷ contextWindow，都是同一套数据的
   换算，不要在界面上编造。
-  上下文占用显示成一个小圆环（`UsageStats` 里的 `UsageRing`，≥70% 转琥珀、≥85% 转红），
-  旁边跟百分比；点开的详情里按「占用 / 本轮消耗 / 速度与耗时 / 会话累计」分段列。
+  **两个入口分开放（对齐 DSH 底栏）**：
+  - 上下文占用在底栏右侧，是小圆环 + 百分比（`UsageStats.tsx` 的 `ContextUsage`，
+    ≥70% 转琥珀、≥85% 转红），点开只讲「窗口还剩多少」（已用 / 新输入 / 缓存读取 / 缓存写入 /
+    缓存命中）；
+  - token 消耗在输入框下方**居中**一颗「数据库图标 + 总量」的胶囊（`TokenUsage.tsx`），
+    图标与数字是同一个按钮，点开是「本轮消耗 / 会话累计 / 生成速度 / 本回合 API 耗时 / 累计」。
+    数字优先用会话累计，还没跑完第一轮时退回落本轮消耗，两者都没有就整颗不渲染（不摆 0）。
+  `UsageSummary` 只是那行文字（轮数 / 工具 / tok/s），不要往它上面挂交互。
 - **用量要跟着对话持久化**：每回合结束（`result`）把快照 `PATCH /api/conversations {id, usage}`
   存进 `conversations.json`（内容没变就不发）。重开对话时：转录里的 `assistant.message.usage`
   给出最新的 token 数（更准），持久化那份补上转录里没有的 `apiMs` / `contextWindow`

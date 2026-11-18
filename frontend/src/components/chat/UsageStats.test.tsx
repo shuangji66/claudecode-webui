@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { UsageStats } from "./UsageStats";
+import { ContextUsage, UsageSummary } from "./UsageStats";
 
 // 真实帧算出来的快照（见 lib/usage.test.ts）。
 const SNAP = {
@@ -20,10 +20,28 @@ const SNAP = {
   apiMs: 22,
 };
 
-describe("UsageStats", () => {
-  it("有 usage 时显示轮数 / 工具 / tok/s，上下文单独用圈 + 百分比", () => {
-    const { container } = render(<UsageStats snap={SNAP} turns={3} tools={12} events={40} />);
+describe("UsageSummary", () => {
+  it("显示轮数 / 工具 / tok/s（tok/s 取最近一次请求）", () => {
+    render(<UsageSummary snap={SNAP} turns={3} tools={12} events={40} />);
+    // 840 tok ÷ 4s = 210 tok/s；不是整轮输出 ÷ 整轮 API 耗时。
     expect(screen.getByText("3 轮 · 12 工具 · 210 tok/s")).toBeInTheDocument();
+  });
+
+  it("没有 usage 时退回事件计数，不编造 token 数", () => {
+    render(<UsageSummary snap={undefined} turns={0} tools={2} events={5} />);
+    expect(screen.getByText("共 5 条事件 · 2 次工具")).toBeInTheDocument();
+    expect(screen.queryByText(/tok\/s/)).toBeNull();
+  });
+
+  it("什么都没有时渲染空串", () => {
+    const { container } = render(<UsageSummary snap={undefined} turns={0} tools={0} events={0} />);
+    expect(container.textContent).toBe("");
+  });
+});
+
+describe("ContextUsage", () => {
+  it("上下文用圈 + 百分比，点开只讲占用", () => {
+    const { container } = render(<ContextUsage snap={SNAP} />);
     expect(screen.getByLabelText("上下文占用 5%")).toBeInTheDocument();
     // 圈是两段圆：底环 + 按比例画弧（5% → dashoffset 接近满周长）
     const arcs = container.querySelectorAll("svg circle");
@@ -34,38 +52,28 @@ describe("UsageStats", () => {
     expect(offset).toBeCloseTo(dash * 0.95, 3);
   });
 
-  it("点上下文圈弹出详情：占用 / 本轮消耗 / 会话累计分开列", () => {
-    render(<UsageStats snap={SNAP} turns={1} tools={0} events={9} />);
+  it("点开详情：只有占用与输入侧分项，消耗不在这里", () => {
+    render(<ContextUsage snap={SNAP} />);
     // 关着的时候不渲染，也不再往 title 里塞长文（触屏拿不到悬停）。
     expect(screen.queryByRole("dialog")).toBeNull();
 
     const trigger = screen.getByRole("button", { name: "上下文占用 5%" });
     fireEvent.click(trigger);
 
-    const panel = screen.getByRole("dialog", { name: "用量详情" });
+    const panel = screen.getByRole("dialog", { name: "上下文占用" });
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    expect(panel).toHaveTextContent("上下文占用");
     expect(panel).toHaveTextContent("9.1K / 195.3K");
-    // 输入侧摊开创：新输入 / 缓存读取 / 缓存写入，加起来就是「已用」。
     expect(panel).toHaveTextContent("新输入12");
     expect(panel).toHaveTextContent("缓存读取8.8K");
     expect(panel).toHaveTextContent("缓存写入300");
     expect(panel).toHaveTextContent("缓存命中97%");
-    // 消耗与占用分开：本轮输入含缓存，输出单独一行，合计是两者之和。
-    expect(panel).toHaveTextContent("本轮消耗");
-    expect(panel).toHaveTextContent("输入（含缓存）976.6K");
-    expect(panel).toHaveTextContent("输出6.8K");
-    expect(panel).toHaveTextContent("合计983.4K tok");
-    expect(panel).toHaveTextContent("其中思考3.9K tok");
-    expect(panel).toHaveTextContent("生成速度210 tok/s");
-    expect(panel).toHaveTextContent("本回合 API 耗时0.02s");
-    expect(panel).toHaveTextContent("会话累计消耗2M tok");
-    expect(panel).toHaveTextContent("输入 / 输出2M / 20K");
-    expect(panel).toHaveTextContent("累计1 轮 · 9 条事件");
+    // token 消耗与速度搬到 TokenUsage 那颗胶囊里了。
+    expect(panel).not.toHaveTextContent("本轮消耗");
+    expect(panel).not.toHaveTextContent("生成速度");
   });
 
   it("再点一次、按 Esc、点外部都会关闭详情", () => {
-    render(<UsageStats snap={SNAP} turns={1} tools={0} events={9} />);
+    render(<ContextUsage snap={SNAP} />);
     const trigger = screen.getByRole("button", { name: "上下文占用 5%" });
 
     fireEvent.click(trigger);
@@ -82,14 +90,9 @@ describe("UsageStats", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("没有 usage 时退回事件计数，不编造 token 数", () => {
-    render(<UsageStats snap={undefined} turns={0} tools={2} events={5} />);
-    expect(screen.getByText("共 5 条事件 · 2 次工具")).toBeInTheDocument();
-    expect(screen.queryByText(/tok\/s/)).toBeNull();
-  });
-
-  it("什么都没有时渲染空串", () => {
-    const { container } = render(<UsageStats snap={undefined} turns={0} tools={0} events={0} />);
+  it("没有窗口或占用时不出圈（宁可不显示，也不画 0%）", () => {
+    const { container } = render(<ContextUsage snap={{ contextTokens: 9312 }} />);
     expect(container.textContent).toBe("");
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });

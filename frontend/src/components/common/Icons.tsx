@@ -171,6 +171,17 @@ export function IconClock(props: Props) {
   );
 }
 
+/** 数据库/账本：token 消耗的入口图标（对齐 DSH 那颗 pill 的语义，图形自绘）。 */
+export function IconDatabase(props: Props) {
+  return (
+    <Svg {...props}>
+      <ellipse cx="12" cy="6" rx="7" ry="3" />
+      <path d="M5 6v6c0 1.66 3.13 3 7 3s7-1.34 7-3V6" />
+      <path d="M5 12v6c0 1.66 3.13 3 7 3s7-1.34 7-3v-6" />
+    </Svg>
+  );
+}
+
 export function IconTrash(props: Props) {
   return (
     <Svg {...props}>
