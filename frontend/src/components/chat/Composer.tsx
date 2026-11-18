@@ -3,6 +3,7 @@ import type { CommandInfo, WireAttachment } from "../../transport/types";
 import { useAppStore } from "../../store/useAppStore";
 import { commandDescription, permissionLabel } from "../../lib/labels";
 import { pickFnosFiles } from "../../lib/fnos";
+import { readDraft, writeDraft } from "../../lib/drafts";
 import { useLocale, useT } from "../../lib/i18n";
 import type { ModelOption } from "../../lib/providerForm";
 import {
@@ -34,6 +35,11 @@ interface Props {
   /** 待发送队列（回合进行中提交的消息），显示在输入框上方，可改可删。 */
   queued: QueuedPrompt[];
   placeholder?: string;
+  /**
+   * 草稿的键（`lib/drafts.ts` 的 `draftKeyFor(activeId, workspace)`）。
+   * 每次改动都按它落盘，重进前端（页面重载 / APP 被杀）之后还能捡回来。
+   */
+  draftKey: string;
   modelOptions: ModelOption[];
   selectedKey: string;
   selectedEffort: string;
@@ -72,6 +78,7 @@ export function Composer({
   busy,
   queued,
   placeholder,
+  draftKey,
   modelOptions,
   selectedKey,
   selectedEffort,
@@ -102,6 +109,23 @@ export function Composer({
   const editRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const readHostFile = useAppStore((s) => s.readHostFile);
+  // 落盘用的是「当前这一格属于哪条对话」：切对话的瞬间 text 还是旧内容，
+  // 必须靠 ref 而不是 state 拼 key，否则会把 A 的草稿写进 B。
+  const draftKeyRef = useRef(draftKey);
+
+  // 重进前端 / 切对话：把输入框换成这条对话自己的草稿。写盘在 updateText 里，
+  // 每次改动立刻落盘（localStorage 同步写，几 KB 的 JSON 可以忽略），
+  // 不用防抖——webview 被系统直接杀掉时防抖会丢掉最后几个字。
+  useEffect(() => {
+    draftKeyRef.current = draftKey;
+    setText(draftKey ? readDraft(draftKey) : "");
+  }, [draftKey]);
+
+  /** 唯一的改文本入口：写 state + 落盘（空正文会被 drafts 当成删除）。 */
+  const updateText = (next: string) => {
+    setText(next);
+    writeDraft(draftKeyRef.current, next);
+  };
 
   useEffect(() => {
     const el = ref.current;
@@ -147,6 +171,9 @@ export function Composer({
 
   const submit = async (immediate = false) => {
     const value = text.trim();
+    // 发送期间用户可能切到别的对话：草稿要清的永远是「发出这条」的对话，
+    // 输入框要不要清则要看它是否还是当前这条（否则会抹掉别人刚恢复的草稿）。
+    const sendKey = draftKeyRef.current;
     // sendBlocked = 会话还没就绪 / WS 未打开。按钮的 disabled 里本来就有它，
     // 但 Enter 直接走 submit，不在这里拦一道就会出现「按了没反应还把草稿清了」。
     if ((!value && files.length === 0) || disabled || sendBlocked) return;
@@ -159,7 +186,8 @@ export function Composer({
     } else if (!(await onSend(value, wire, immediate && busy ? { priority: "now" } : undefined))) {
       return; // 失败：草稿与已读入内存的附件原样保留
     }
-    setText("");
+    writeDraft(sendKey, "");
+    if (draftKeyRef.current === sendKey) setText("");
     setFiles([]);
     setFileError(null);
     const el = ref.current;
@@ -239,7 +267,7 @@ export function Composer({
     const el = ref.current;
     const start = el?.selectionStart ?? text.length;
     const end = el?.selectionEnd ?? text.length;
-    setText(`${text.slice(0, start)}${snippet}${text.slice(end)}`);
+    updateText(`${text.slice(0, start)}${snippet}${text.slice(end)}`);
     requestAnimationFrame(() => {
       const pos = start + snippet.length;
       el?.focus();
@@ -472,7 +500,7 @@ export function Composer({
               key={c.name}
               type="button"
               onClick={() => {
-                setText(`/${c.name} `);
+                updateText(`/${c.name} `);
                 ref.current?.focus();
               }}
               className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] hover:bg-panel-strong"
@@ -553,7 +581,7 @@ export function Composer({
           rows={1}
           value={text}
           disabled={disabled}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => updateText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();

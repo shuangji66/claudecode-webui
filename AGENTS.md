@@ -520,7 +520,9 @@ hub ── manager ── session ── process ── claude (NDJSON)
   切对话去触发**：状态事件在 `result` 之前到达，分不清是正常结束还是中断，会把用户按 Esc 时
   暂停的队列偷偷放出去。
 - **队列跟着对话走**：`queued[sid]`，`activeId` 不是它时不发（切回来再看）。上限 8 条、只在内存里
-  （刷新页面会丢，和草稿一致）。删对话时 `purgeSession` 一并清掉。
+  （刷新页面会丢）。删对话时 `purgeSession` 一并清掉。**输入框正文相反**：按对话存 localStorage
+  （`lib/drafts.ts`，只存正文；附件与队列不落盘），重进前端还在——会话建好时把「新对话页」
+  按工作区存的那份迁到新 id 下，删对话时一并清掉。
 - **后端要认「result 之后的 init」**：那条 init 意味着 CLI 自己在跑新一轮，`session` 里
   `protocol.IsTurnInit` + `resultAt`（`TurnHandoffWindow`）把它标回 busy。不认的话界面会在整轮里
   显示空闲（发送按钮而不是中断按钮），待发送队列也会被提前放出去。

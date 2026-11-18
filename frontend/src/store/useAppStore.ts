@@ -24,6 +24,7 @@ import { applyUsageMessage, mergeUsage, usageFromTranscript, type UsageSnapshot 
 import { effortApply } from "../lib/providerForm";
 import { isNewChat } from "../lib/newChat";
 import { openFnosFileManager } from "../lib/fnos";
+import { draftKeyFor, dropDraft, moveDraft } from "../lib/drafts";
 import type { Item } from "../lib/model";
 import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
 import type {
@@ -1161,6 +1162,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
           body: JSON.stringify({ cwd: dir }),
         });
         await Promise.all([get().refreshSessions(), get().refreshConversations()]);
+        // 「新对话页」的草稿是按工作区存的（那时还没有 id）：会话一建好就把它
+        // 迁到新 id 下，否则键一换、输入框里的字就被新 id 的空草稿顶掉了。
+        moveDraft(draftKeyFor(null, dir), info.id);
         get().setActive(info.id);
         get().connect(info.id);
         // 上一个对话还是空白壳（没发过消息）时顺手结束它，避免点几次「新对话」
@@ -1375,6 +1379,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     try {
       await apiFetch(`/api/conversations?id=${encodeURIComponent(id)}`, { method: "DELETE" });
       get().disconnect(id);
+      // 对话没了，草稿也别留在 localStorage 里（它按会话 id 存）。
+      dropDraft(id);
       set((s) => {
         const buckets = {
           items: { ...s.items },
@@ -1463,6 +1469,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
           body: JSON.stringify({ cwd }),
         });
         await Promise.all([get().refreshSessions(), get().refreshConversations()]);
+        // 换 id 但对话还是同一条（本来就没有上下文）：输入框里的草稿跟着过去。
+        moveDraft(id, info.id);
         get().setActive(info.id);
         get().connect(info.id);
         return true;

@@ -32,6 +32,7 @@ src/
   lib/access.ts        端口访问的端口范围校验（1025–65535，与后端 settings 一致）
   lib/download.ts      带鉴权的文件下载（fetch → blob → <a download>，token 走头）
   lib/newChat.ts       「新对话」判定（按对话元数据，不是 items 是否为空）
+  lib/drafts.ts        输入框草稿（按对话存 localStorage，重进前端不丢；只存正文）
   lib/permissionModes.ts 权限模式判定与危险模式标记（唯一入口）
   lib/sessionExport.ts 会话导出 Markdown（右上角「更多」菜单）
   lib/sidebarView.ts   左侧栏视图偏好：分组/排序/归档筛选 + 手动顺序（纯函数 + localStorage）
@@ -182,7 +183,8 @@ src/
     投递时机由 store 决定：**只有「本轮正常结束的 `result`」发队首**（判定在
     `lib/queue.shouldFlushAfter`），被中断/出错时留在队列里；`session.state ready`、切对话、
     重连都**不**触发——那会在用户按 Esc 之后偷偷把消息发出去。队列跟着对话走（`queued[sid]`），
-    上限 `MAX_QUEUED`（8 条，附件是 base64 常驻内存），只在内存里、刷新即丢（与草稿一致）。
+    上限 `MAX_QUEUED`（8 条，附件是 base64 常驻内存），只在内存里、刷新即丢。
+    **输入框草稿相反**：正文按对话存 localStorage（见规则 30），重进前端还在。
 25. **首屏只留壳层，重的面板按需加载**：`App.tsx` 对 SettingsDrawer / RightSidebar /
     WorkspaceDialog / HistoryDialog 一律 `lazy()` + `Suspense`，不要改回静态 import——
     这几块占了首屏包体的一半（实测主 chunk 604 KB → 382 KB，gzip 173 KB → 118 KB）。
@@ -238,6 +240,19 @@ src/
     size containment 会让容器塌成 0，正方形直接消失。桌面尺寸与「设置」弹窗对齐
     （`md:h-[82vh] md:max-w-[900px]`）。缩放发生在正方形**内部**（内层 `overflow-auto`），
     放大后仍在这块窗口里滚，不会把弹窗撑大。
+30. **输入框草稿按对话存浏览器本地（`lib/drafts.ts`）**：APP 被杀 / webview 被回收 / 页面
+    重载都会把 React 状态清掉，打了半天的提示词不能就这么没了。`Composer` 的 `draftKey`
+    由 `draftKeyFor(activeId, currentWorkspace)` 给出（有会话用会话 id，还没有会话就按
+    工作区分桶），**每次改动立刻落盘、不做防抖**：localStorage 同步写，几 KB 的 JSON 可以
+    忽略，而防抖会在 webview 被直接杀掉时丢掉最后几个字。三条边界：
+    - **只存正文**。附件是 `File` / blob，序列化不了；把 base64 塞进 localStorage 既顶满配额、
+      又会让整张草稿表写失败。附件与待发送队列仍然只在内存里。
+    - **键换了不能把字弄丢**：会话一建好就把「新对话页」那份（`ws:<工作区>`）用 `moveDraft`
+      迁到新 id 下（`createSession` 与 `restartSession` 的空对话分支里做），否则切键的一瞬间
+      输入框会被新 id 的空草稿顶掉；删对话时 `dropDraft(id)` 一并清掉。
+    - **有界**：单条 ≤ `MAX_DRAFT_CHARS`（超长不落盘，别连累别人）、最多
+      `MAX_DRAFT_ENTRIES` 条、30 天没动过的自动淘汰；读不出来（隐私模式 / 坏 JSON / 配额满）
+      就当没有草稿，绝不能让输入框报错。
 
 ## 3. 状态管理（zustand）
 
@@ -502,7 +517,8 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
   `queue`（入队/上限/删除/编辑保序/中断或出错不自动发）、
   `autofill`、`providerCatalog`、`subagents`、`usage`、`fnos`（宿主判定三条件/回包归一化）、
   `password`（访问密码复杂度：长度/字母/数字/控制字符）、
-  `access`（端口范围 1025–65535）。
+  `access`（端口范围 1025–65535）、
+  `drafts`（按键存取 / 空正文即删除 / 超长不落盘 / 过期与溢出淘汰 / 搬迁与删除 / 坏 JSON 不抛错）。
 - 右侧栏纯函数（`workspace`）覆盖 statusOfXY、MM 双分组、unified diff 行号、预览类型、
   `pickRepo` 默认选中。
 - 对话纯函数（`conversations`）覆盖工作区归属/最长匹配/归档跳过；`labels` 覆盖

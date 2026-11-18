@@ -18,6 +18,7 @@ import { downloadFile, sessionLogName } from "../../lib/download";
 import { useLocale, useT } from "../../lib/i18n";
 import { BrandMark, IconAlert, IconRetry } from "../common/Icons";
 import { subagentEntries } from "../../lib/subagents";
+import { draftKeyFor } from "../../lib/drafts";
 import { MarkdownMediaContext, type MarkdownMedia } from "../common/Markdown";
 import { ImageLightbox } from "./ImageLightbox";
 
@@ -364,6 +365,7 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
             busy={busy}
             queued={queued}
             placeholder={placeholder}
+            draftKey={draftKeyFor(activeId, currentWorkspace)}
             modelOptions={modelOptions}
             selectedKey={selectedKey}
             selectedEffort={selectedEffort}

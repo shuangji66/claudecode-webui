@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Composer } from "./Composer";
+import { readDraft, writeDraft } from "../../lib/drafts";
 import { useAppStore } from "../../store/useAppStore";
 import { SystemDialogs } from "../common/SystemDialogs";
 
@@ -16,9 +17,11 @@ const COMMANDS = [
   { name: "model", description: "选择本会话使用的模型", argumentHint: "[model]" },
 ];
 
-function setup(overrides: Partial<React.ComponentProps<typeof Composer>> = {}) {
-  const onSend = vi.fn();
-  render(
+type ComposerProps = React.ComponentProps<typeof Composer>;
+
+/** 一份完整的 props（测试只关心自己那几个），rebuild 时用来换 draftKey。 */
+function composerEl(overrides: Partial<ComposerProps> = {}, onSend = vi.fn()) {
+  return (
     <Composer
       disabled={false}
       sendBlocked={false}
@@ -40,10 +43,16 @@ function setup(overrides: Partial<React.ComponentProps<typeof Composer>> = {}) {
       onEditingQueued={vi.fn()}
       onSteerQueued={vi.fn()}
       onInterrupt={vi.fn()}
+      draftKey=""
       {...overrides}
-    />,
+    />
   );
-  return { onSend };
+}
+
+function setup(overrides: Partial<ComposerProps> = {}) {
+  const onSend = vi.fn();
+  const utils = render(composerEl(overrides, onSend));
+  return { onSend, ...utils };
 }
 
 const openMenu = () => fireEvent.click(screen.getByRole("button", { name: "添加" }));
@@ -151,6 +160,7 @@ describe("Composer 权限模式", () => {
           commands={COMMANDS}
           busy={false}
           queued={[]}
+          draftKey=""
           modelOptions={[]}
           selectedKey=""
           selectedEffort=""
@@ -200,6 +210,54 @@ describe("Composer 权限模式", () => {
     fireEvent.click(screen.getByRole("option", { name: "计划模式" }));
     expect(onPermissionMode).toHaveBeenCalledWith("plan");
     expect(screen.queryByText(/切换到「/)).toBeNull();
+  });
+});
+
+
+describe("Composer 草稿", () => {
+  const textarea = () => screen.getByLabelText("消息输入框") as HTMLTextAreaElement;
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("重进前端（组件重新挂载）后草稿还在", () => {
+    const first = setup({ draftKey: "s1" });
+    fireEvent.change(textarea(), { target: { value: "打了半天的提示词" } });
+    expect(readDraft("s1")).toBe("打了半天的提示词");
+    first.unmount();
+
+    setup({ draftKey: "s1" });
+    expect(textarea().value).toBe("打了半天的提示词");
+  });
+
+  it("发送成功后草稿一并清掉，不留空壳", async () => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    setup({ onSend, draftKey: "s1" });
+    fireEvent.change(textarea(), { target: { value: "你好" } });
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+
+    await waitFor(() => expect(textarea().value).toBe(""));
+    expect(readDraft("s1")).toBe("");
+  });
+
+  it("每个对话一份：切过去看到它自己的草稿，切回来还在", () => {
+    writeDraft("s1", "属于 s1");
+    writeDraft("s2", "属于 s2");
+    const { rerender } = render(composerEl({ draftKey: "s1" }));
+    expect(textarea().value).toBe("属于 s1");
+
+    rerender(composerEl({ draftKey: "s2" }));
+    expect(textarea().value).toBe("属于 s2");
+
+    rerender(composerEl({ draftKey: "s1" }));
+    expect(textarea().value).toBe("属于 s1");
+  });
+
+  it("还没建会话（按工作区存的草稿）也照样恢复", () => {
+    writeDraft("ws:/work", "新对话页打的字");
+    setup({ draftKey: "ws:/work" });
+    expect(textarea().value).toBe("新对话页打的字");
   });
 });
 
