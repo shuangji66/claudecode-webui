@@ -12,6 +12,10 @@
 //   - onComplete（完成时收起，默认）：回答一出现就把过程折回一行；
 //   - onNextSend（下次发送时收起）：最新一轮的过程在回答出现后仍然展开（详细模式保持平铺），
 //     等你发出下一条消息才收起。
+//
+// 第三条轴是「收起后显示的回复」（DSH 的 `foldedReplies`）：
+//   - all（全部回复，默认）：阶段回复与最终答案都保留，只收起过程；
+//   - final（仅最终回答）：被折叠的轮次只留最后一条回答，阶段回复随过程一起隐藏。
 import { useSyncExternalStore } from "react";
 
 export const PROCESS_VIEWS = ["concise", "standard", "detailed"] as const;
@@ -20,13 +24,19 @@ export type ProcessView = (typeof PROCESS_VIEWS)[number];
 export const COLLAPSE_TIMINGS = ["onComplete", "onNextSend"] as const;
 export type CollapseTiming = (typeof COLLAPSE_TIMINGS)[number];
 
+export const FOLDED_REPLIES = ["all", "final"] as const;
+export type FoldedReplies = (typeof FOLDED_REPLIES)[number];
+
 const VIEW_KEY = "ccweb-process-view";
 const TIMING_KEY = "ccweb-collapse-timing";
+const REPLIES_KEY = "ccweb-folded-replies";
 
 /** 默认「标准」：过程收成一行组头，仍能看到正在做什么（对齐 DSH 的桌面默认值）。 */
 export const DEFAULT_PROCESS_VIEW: ProcessView = "standard";
 /** 默认「完成时收起」。 */
 export const DEFAULT_COLLAPSE_TIMING: CollapseTiming = "onComplete";
+/** 默认「全部回复」：只收起过程，阶段回复照常可见。 */
+export const DEFAULT_FOLDED_REPLIES: FoldedReplies = "all";
 
 /** 旧版本写下的值：`compact`/`grouped` 都按「标准」显示，磁盘上的值不改写。 */
 const LEGACY_VIEWS: Record<string, ProcessView> = {
@@ -81,6 +91,7 @@ function prefStore<T extends string>(key: string, values: readonly T[], fallback
 
 const views = prefStore<ProcessView>(VIEW_KEY, PROCESS_VIEWS, DEFAULT_PROCESS_VIEW, LEGACY_VIEWS);
 const timings = prefStore<CollapseTiming>(TIMING_KEY, COLLAPSE_TIMINGS, DEFAULT_COLLAPSE_TIMING);
+const replies = prefStore<FoldedReplies>(REPLIES_KEY, FOLDED_REPLIES, DEFAULT_FOLDED_REPLIES);
 
 export const parseProcessView = views.parse;
 export const processView = views.read;
@@ -96,10 +107,21 @@ export const subscribeCollapseTiming = timings.subscribe;
 /** 仅测试用：清掉模块缓存。 */
 export const resetCollapseTimingCache = timings.reset;
 
+export const parseFoldedReplies = replies.parse;
+export const foldedReplies = replies.read;
+export const setFoldedReplies = replies.set;
+export const subscribeFoldedReplies = replies.subscribe;
+/** 仅测试用：清掉模块缓存。 */
+export const resetFoldedRepliesCache = replies.reset;
+
 export function useProcessView(): ProcessView {
   return useSyncExternalStore(views.subscribe, views.read, views.read);
 }
 
 export function useCollapseTiming(): CollapseTiming {
   return useSyncExternalStore(timings.subscribe, timings.read, timings.read);
+}
+
+export function useFoldedReplies(): FoldedReplies {
+  return useSyncExternalStore(replies.subscribe, replies.read, replies.read);
 }

@@ -220,6 +220,37 @@ function joinDone(parts: string[], locale: Locale | string): string {
   return parts.join("，");
 }
 
+/**
+ * 「仅最终回答」时该隐藏哪些 Assistant 回复。
+ *
+ * 按用户消息切轮；被折叠的轮次只留**最后一条**有正文的回复，阶段回复随过程一起收起。
+ * `keepTail` 表示最新一轮的过程仍展开（运行中 / 「下次发送时收起」的保留期），这时它的
+ * 回复全部保留——过程都没收，回复先消失会让人以为消息丢了。
+ * 返回 Item id 集合，渲染层据此跳过整行（不是把它塞进过程组）。
+ */
+export function hiddenReplyIds(items: Item[], keepTail: boolean): Set<string> {
+  const hidden = new Set<string>();
+  const starts: number[] = [];
+  items.forEach((item, index) => {
+    if (item.kind === "user" && index > 0) starts.push(index);
+  });
+  const bounds = [0, ...starts];
+  if (bounds.length === 0) return hidden;
+
+  bounds.forEach((start, turn) => {
+    const end = turn + 1 < bounds.length ? bounds[turn + 1] : items.length;
+    const isTail = turn === bounds.length - 1;
+    if (isTail && keepTail) return;
+    const replies: Item[] = [];
+    for (let i = start; i < end; i += 1) {
+      const item = items[i];
+      if (item.kind === "assistant" && item.text.trim()) replies.push(item);
+    }
+    for (const reply of replies.slice(0, -1)) hidden.add(reply.id);
+  });
+  return hidden;
+}
+
 /** 组头在「标准」模式追加的实时详情：正在跑的工具摘要，没有就用思考首行。 */
 export function liveDetail(items: Item[]): string {
   const running = runningTool(items);

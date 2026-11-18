@@ -2,6 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   COLLAPSE_TIMINGS,
   DEFAULT_COLLAPSE_TIMING,
+  DEFAULT_FOLDED_REPLIES,
+  FOLDED_REPLIES,
+  foldedReplies,
+  parseFoldedReplies,
+  resetFoldedRepliesCache,
+  setFoldedReplies,
   DEFAULT_PROCESS_VIEW,
   collapseTiming,
   parseCollapseTiming,
@@ -90,5 +96,23 @@ describe("收起时机", () => {
     setCollapseTiming("onNextSend");
     expect(fn).toHaveBeenCalledTimes(1);
     off();
+  });
+});
+
+describe("收起后的回复", () => {
+  it("两档：全部回复（默认）/ 仅最终回答", () => {
+    expect(FOLDED_REPLIES).toEqual(["all", "final"]);
+    expect(DEFAULT_FOLDED_REPLIES).toBe("all");
+    expect(parseFoldedReplies("final")).toBe("final");
+    expect(parseFoldedReplies("nope")).toBe("all");
+  });
+
+  it("独立存储，不影响另外两条轴", () => {
+    localStorage.clear();
+    resetFoldedRepliesCache();
+    setFoldedReplies("final");
+    expect(localStorage.getItem("ccweb-folded-replies")).toBe("final");
+    resetFoldedRepliesCache();
+    expect(foldedReplies()).toBe("final");
   });
 });

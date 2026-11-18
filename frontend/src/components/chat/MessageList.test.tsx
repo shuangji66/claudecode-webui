@@ -4,7 +4,9 @@ import { MessageList } from "./MessageList";
 import type { Item } from "../../lib/model";
 import {
   resetCollapseTimingCache,
+  resetFoldedRepliesCache,
   resetProcessViewCache,
+  setFoldedReplies,
   setCollapseTiming,
   setProcessView,
 } from "../../lib/viewMode";
@@ -15,6 +17,8 @@ beforeEach(() => {
   setProcessView("standard");
   resetCollapseTimingCache();
   setCollapseTiming("onComplete");
+  resetFoldedRepliesCache();
+  setFoldedReplies("all");
 });
 
 function userItem(i: number): Item {
@@ -306,5 +310,75 @@ describe("MessageList 收起时机", () => {
     render(<MessageList items={[thinking(), read(), bash(), answer]} />);
     expect(screen.queryByText("ls -la")).toBeNull();
     expect(screen.getByText("已读取文件并执行了命令")).toBeInTheDocument();
+  });
+});
+
+describe("MessageList 收起后的回复", () => {
+  const user = (): Item => ({ id: "u1", seq: 0, ts: 0, kind: "user", text: "问题" });
+  const stage: Item = { id: "a1", seq: 0, ts: 0, kind: "assistant", text: "阶段回复", streaming: false };
+  const read: Item = {
+    id: "t1",
+    seq: 0,
+    ts: 0,
+    kind: "tool",
+    toolUseId: "tu1",
+    name: "Read",
+    input: { file_path: "/w/a.md" },
+    result: "x",
+  };
+  const final: Item = { id: "a2", seq: 0, ts: 0, kind: "assistant", text: "最终答案", streaming: false };
+  const bash: Item = {
+    id: "t2",
+    seq: 0,
+    ts: 0,
+    kind: "tool",
+    toolUseId: "tu2",
+    name: "Bash",
+    input: { command: "ls" },
+    result: "y",
+  };
+  const result: Item = { id: "r1", seq: 0, ts: 0, kind: "result", durationMs: 9000 };
+
+  it("仅最终回答：已结束的轮次只留最后一条回答", () => {
+    setFoldedReplies("final");
+    render(<MessageList items={[user(), stage, read, bash, final, result]} />);
+    expect(screen.queryByText("阶段回复")).toBeNull();
+    expect(screen.getByText("最终答案")).toBeInTheDocument();
+  });
+
+  it("全部回复：阶段回复照常可见（默认）", () => {
+    render(<MessageList items={[user(), stage, read, bash, final, result]} />);
+    expect(screen.getByText("阶段回复")).toBeInTheDocument();
+    expect(screen.getByText("最终答案")).toBeInTheDocument();
+  });
+
+  it("仍有过程在跑时，阶段回复不消失", () => {
+    setFoldedReplies("final");
+    render(<MessageList items={[user(), stage, read, bash]} />);
+    expect(screen.getByText("阶段回复")).toBeInTheDocument();
+  });
+
+  it("下次发送时收起：最新一轮完成后阶段回复仍然保留，发下一条才隐去", () => {
+    setFoldedReplies("final");
+    setCollapseTiming("onNextSend");
+    const items = [user(), stage, read, bash, final, result];
+    const { rerender } = render(<MessageList items={items} />);
+    expect(screen.getByText("阶段回复")).toBeInTheDocument();
+
+    rerender(<MessageList items={[...items, { id: "u2", seq: 0, ts: 0, kind: "user", text: "下一问" }]} />);
+    expect(screen.queryByText("阶段回复")).toBeNull();
+    expect(screen.getByText("最终答案")).toBeInTheDocument();
+  });
+});
+
+describe("成功回合的结尾", () => {
+  it("不再单独挂一个耗时胶囊（耗时已经在回答下面那一行）", () => {
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "问题" },
+      { id: "a1", seq: 0, ts: 0, kind: "assistant", text: "答案", streaming: false },
+      { id: "r1", seq: 0, ts: 0, kind: "result", durationMs: 9000 },
+    ];
+    const { container } = render(<MessageList items={items} />);
+    expect(container.textContent).not.toContain("9.0s");
   });
 });

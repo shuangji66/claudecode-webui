@@ -7,10 +7,13 @@ import { permissionLabel } from "../../../lib/labels";
 import { setThemePreference, themePreference } from "../../../lib/theme";
 import {
   COLLAPSE_TIMINGS,
+  FOLDED_REPLIES,
   PROCESS_VIEWS,
   setCollapseTiming,
+  setFoldedReplies,
   setProcessView,
   useCollapseTiming,
+  useFoldedReplies,
   useProcessView,
 } from "../../../lib/viewMode";
 import { isDangerousPermissionMode, permissionModeWarning } from "../../../lib/permissionModes";
@@ -44,6 +47,7 @@ export function GeneralSettings() {
   // 过程展示只存本设备（和主题同理）：手机要挤、桌面可以宽松。
   const view = useProcessView();
   const timing = useCollapseTiming();
+  const replies = useFoldedReplies();
 
   /** 默认权限里的危险模式同样要二次确认：这里保存的是「以后新会话」的默认值。 */
   const changeDefaultMode = async (next: string) => {
@@ -243,6 +247,36 @@ export function GeneralSettings() {
                 "回复出现后过程仍然展开，等你发出下一条消息再收起。",
                 "The process stays expanded after the reply until you send the next message.",
               )}
+        </p>
+      </Section>
+
+      <Section
+        title={t("收起后的回复", "Replies after folding")}
+        desc={t("过程收起时保留哪些回答。只保存在本设备。", "Which replies stay visible when the process folds. Saved on this device only.")}
+      >
+        <div className="inline-flex rounded-lg border border-line-strong p-0.5">
+          {FOLDED_REPLIES.map((item) => {
+            const active = replies === item;
+            const label = item === "all" ? t("全部回复", "All replies") : t("仅最终回答", "Final answer only");
+            return (
+              <button
+                key={item}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setFoldedReplies(item)}
+                className={`rounded-md px-3 py-1.5 text-[12px] ${
+                  active ? "bg-panel-strong font-medium text-ink" : "text-muted hover:text-ink"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-[11px] leading-relaxed text-faint">
+          {replies === "all"
+            ? t("阶段回复与最终答案都保留，只收起过程。", "Intermediate replies and the final answer both stay; only the process folds.")
+            : t("被折叠的轮次只留最后一条回答，阶段回复随过程一起收起。", "Folded turns keep only their last reply; intermediate replies hide with the process.")}
         </p>
       </Section>
 

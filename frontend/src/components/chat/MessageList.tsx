@@ -8,8 +8,8 @@ import { ToolCardHost } from "../tools/ToolCardHost";
 import { IconAlert, IconChevronDown, IconSpark } from "../common/Icons";
 import { useT } from "../../lib/i18n";
 import { activeTurnIndex, turnsOf, type Turn } from "../../lib/turns";
-import { buildProcessRows, isProcessItem } from "../../lib/process";
-import { useCollapseTiming, useProcessView } from "../../lib/viewMode";
+import { buildProcessRows, hiddenReplyIds, isProcessItem } from "../../lib/process";
+import { useCollapseTiming, useFoldedReplies, useProcessView } from "../../lib/viewMode";
 import { ProcessGroup } from "./ProcessGroup";
 
 /**
@@ -30,25 +30,15 @@ const VISIBLE_STEP = 80;
 const OFFSCREEN_TEXT = { contentVisibility: "auto", containIntrinsicSize: "auto 120px" } as const;
 const OFFSCREEN_ROW = { contentVisibility: "auto", containIntrinsicSize: "auto 32px" } as const;
 
-/**
- * 上一轮结束的 result 条要不要省掉时长：normalize 已经把 duration_ms 回填到
- * 该回合最后一条回答上（复制按钮那一行），这里不再重复一遍。
- */
-function durationShownOnAnswer(prev: Item | undefined): boolean {
-  return prev?.kind === "assistant" && prev.turn?.durationMs !== undefined;
-}
-
 /** 单条消息。memo 化：流式追加时只有最后一个气泡需要重渲染。 */
 const MessageRow = memo(function MessageRow({
   item,
-  hideDuration = false,
   dense = false,
   preview = true,
   live = false,
   offscreen = true,
 }: {
   item: Item;
-  hideDuration?: boolean;
   /** 紧凑模式：思考与工具压成一行，正文/用户消息不受影响。 */
   dense?: boolean;
   /** 是否显示思考首行预览（「简洁」不显示）。 */
@@ -91,7 +81,7 @@ const MessageRow = memo(function MessageRow({
         </div>
       );
     case "result":
-      return <ResultBar item={item} hideDuration={hideDuration} />;
+      return <ResultBar item={item} />;
     case "system":
       return (
         <pre
@@ -182,6 +172,17 @@ export function MessageList({
     }
     return -1;
   }, [shown]);
+  /**
+   * 「仅最终回答」：只有**最新一轮**在过程仍展开时才保留全部回复；
+   * 其余轮次（以及已完成的最新一轮）只留最后一条回答。
+   */
+  const folded = useFoldedReplies();
+  const keepTail =
+    timing === "onNextSend" || !shown.slice(Math.max(0, lastUserIndex)).some((i) => i.kind === "result");
+  const hiddenReplies = useMemo(
+    () => (folded === "final" ? hiddenReplyIds(shown, keepTail) : null),
+    [folded, shown, keepTail],
+  );
   const rows = useMemo(() => buildProcessRows(shown), [shown]);
 
   /**
@@ -395,7 +396,8 @@ export function MessageList({
               </div>
             )}
             {rows.map((entry) => {
-              const hideDuration = durationShownOnAnswer(shown[entry.start - 1]);
+              // 「仅最终回答」：阶段回复整行跳过，不缩成一行占位。
+              if (entry.type === "item" && hiddenReplies?.has(entry.item.id)) return null;
               if (entry.type === "process") {
                 return (
                   <div key={entry.key} className={dense ? "mt-1" : undefined}>
@@ -440,7 +442,6 @@ export function MessageList({
                 >
                   <MessageRow
                     item={entry.item}
-                    hideDuration={hideDuration}
                     dense={dense}
                     preview={view !== "concise"}
                     live={live}

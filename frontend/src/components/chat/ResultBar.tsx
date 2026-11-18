@@ -8,17 +8,22 @@ const errorSubtypes: Record<string, [string, string]> = {
   error_max_budget_usd: ["超出预算上限", "Budget limit reached"],
 };
 
-/** hideDuration：时长已经写在回答那一行（复制按钮旁）时不再重复一次。 */
-export function ResultBar({ item, hideDuration = false }: { item: ResultItem; hideDuration?: boolean }) {
+/**
+ * 一轮结束时的提示条。
+ *
+ * **成功回合什么都不显示**：耗时/token/tok/s 已经写在最后一条回答下面的那一行
+ * （`AssistantBubble` 的用量行），再挂一个「9.0s」胶囊只是重复。这里只在真的有事要说
+ * 时渲染：本轮出错（含 CLI 给的 subtype 与原文）、有工具调用被拒绝。
+ */
+export function ResultBar({ item }: { item: ResultItem }) {
   const t = useT();
   const denials = item.denials ?? [];
   const known = item.subtype ? errorSubtypes[item.subtype] : undefined;
+  if (!item.isError && denials.length === 0) return null;
+
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-center gap-1.5 text-[10.5px] text-muted">
-        {!hideDuration && typeof item.durationMs === "number" && (
-          <span className="rounded-full bg-panel-strong px-2 py-0.5">{(item.durationMs / 1000).toFixed(1)}s</span>
-        )}
         {item.isError && (
           <span className="rounded-full bg-rose-50 px-2 py-0.5 text-danger dark:bg-rose-950/40">{t("本轮出错", "Turn failed")}</span>
         )}

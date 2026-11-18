@@ -22,11 +22,17 @@ describe("ResultBar", () => {
     expect(screen.getByText("本轮出错")).toBeTruthy();
   });
 
-  it("成功回合只显示耗时", () => {
+  it("成功回合什么都不显示：耗时已经在回答下面那一行，不再重复一个胶囊", () => {
     const { container } = render(
       <ResultBar item={{ id: "r2", seq: 0, ts: 0, kind: "result", durationMs: 2500 }} />,
     );
-    expect(container.textContent).toContain("2.5s");
-    expect(container.querySelector("pre")).toBeNull();
+    expect(container.textContent).toBe("");
+  });
+
+  it("被拒绝的工具调用仍然要说出来", () => {
+    render(
+      <ResultBar item={{ id: "r3", seq: 0, ts: 0, kind: "result", denials: [{ tool_name: "Bash" }] }} />,
+    );
+    expect(screen.getByText("1 次工具调用被拒绝")).toBeTruthy();
   });
 });

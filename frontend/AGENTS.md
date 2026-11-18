@@ -424,7 +424,7 @@ src/
 | `assistant` | `assistant.content[].text`（一条消息可有多个 text 块，各自成段）或 `stream_event` 增量 | 左对齐气泡 + Markdown（标题/列表/表格/引用/链接/代码块），`streaming` 时显示光标 |
 | `thinking` | `assistant.content[].thinking` | 折叠块 |
 | `tool` | `assistant.content[].tool_use` + `user.content[].tool_result` | 按工具名分派卡片（Agent/Task 用 `AgentCard`，带子代理状态与「查看对话」） |
-| `result` | `result` 消息 | 耗时/被拒数（不显示费用）；出错时显示 `result.result` 里的原因与 subtype |
+| `result` | `result` 消息 | **成功回合不渲染**（耗时/token 已经在回答下面那一行）；出错时显示原因、subtype 与被拒次数，不显示费用 |
 | `system` | `system`（非 init/status） | 等宽小字，需清洗 ANSI |
 | `error` | 后端 `error` 事件 / 连接关闭 | 红色提示 |
 
@@ -487,6 +487,11 @@ src/
     收起时机；模式切换不改动用户手动开合过的组（`touched`），已经收起的历史组再点开保持打开
     ——`live` 只从 true 变一次 false，不要写成「每次渲染都重置」。
     偏好同样只存 localStorage（`ccweb-collapse-timing`）。
+  - **收起后显示的回复也是两档**（`foldedReplies`：`all` 全部回复 / `final` 仅最终回答）：
+    `final` 时被折叠的轮次只留**最后一条有正文的** Assistant 回复（`lib/process` 的
+    `hiddenReplyIds`，按用户消息切轮），阶段回复整行跳过、不缩成占位。**最新一轮在过程仍展开时
+    （运行中 / 「下次发送时收起」的保留期）一条都不隐藏**——过程都没收，回复先消失会像丢消息。
+    偏好存 `ccweb-folded-replies`，默认 `all`。
   - **偏好只存 localStorage（`ccweb-process-view`）**，不进 `settings.json`；旧值
     `compact`/`grouped` 按「标准」读，不改写磁盘上的值。
   - **行内摘要必须 `min-w-0 truncate`，不能 `shrink-0`**：思考行的预览是一整行英文时，

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Item, ThinkingItem, ToolItem } from "./model";
 import {
   buildProcessRows,
+  hiddenReplyIds,
   dominantCategory,
   groupCategories,
   groupTitle,
@@ -141,5 +142,40 @@ describe("组头详情与推理预览", () => {
     expect(liveDetail([thinking("首行"), tool("a", "Read")])).toBe("/w/a.md");
     expect(liveDetail([thinking("首行"), tool("a", "Read", "done")])).toBe("首行");
     expect(runningTool([tool("a", "Read", "done")])).toBeUndefined();
+  });
+});
+
+describe("hiddenReplyIds（仅最终回答）", () => {
+  const user = (id: string): Item => ({ id, seq: 0, ts: 0, kind: "user", text: id });
+  const say = (id: string, text = id): Item => ({ id, seq: 0, ts: 0, kind: "assistant", text, streaming: false });
+
+  it("同一轮只留最后一条回答", () => {
+    const items = [user("u1"), say("a1"), tool("t1"), say("a2")];
+    expect([...hiddenReplyIds(items, false)]).toEqual(["a1"]);
+  });
+
+  it("最新一轮仍在展开时一条都不隐藏（过程都没收，回复先消失会像丢消息）", () => {
+    const items = [user("u1"), say("a1"), tool("t1"), say("a2")];
+    expect(hiddenReplyIds(items, true).size).toBe(0);
+  });
+
+  it("每一轮各自只留最后一条", () => {
+    const items = [user("u1"), say("a1"), say("a2"), user("u2"), say("b1"), say("b2")];
+    expect([...hiddenReplyIds(items, false)].sort()).toEqual(["a1", "b1"]);
+  });
+
+  it("没有用户消息（窗口被截断）时整段当一轮", () => {
+    const items = [say("a1"), tool("t1"), say("a2")];
+    expect([...hiddenReplyIds(items, false)]).toEqual(["a1"]);
+  });
+
+  it("空白回答不参与：只有一条有正文时不会被隐藏", () => {
+    const items = [user("u1"), say("a0", "   "), say("a1")];
+    expect(hiddenReplyIds(items, false).size).toBe(0);
+  });
+
+  it("只有一条回答的轮次不动", () => {
+    const items = [user("u1"), say("a1")];
+    expect(hiddenReplyIds(items, false).size).toBe(0);
   });
 });
