@@ -43,6 +43,8 @@ type conversationEntry struct {
 func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request) {
 	byID := make(map[string]*conversationEntry)
 	deleted := make(map[string]bool)
+	// withTranscript 记住哪些 id 是 claude 真的写过转录的（第 1 步扫出来的）。
+	withTranscript := make(map[string]bool)
 	ensure := func(id string) *conversationEntry {
 		if e, ok := byID[id]; ok {
 			return e
@@ -61,6 +63,7 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 			e.Messages = h.Messages
 			e.CreatedAt = h.UpdatedAt
 			e.LastActive = h.UpdatedAt
+			withTranscript[h.ID] = true
 		}
 	}
 
@@ -123,6 +126,15 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 
 	out := make([]conversationEntry, 0, len(byID))
 	for _, e := range byID {
+		// 4) 不展示「幽灵条目」：既没有转录、也没有标题、还没有活进程的空对话，
+		// 又没有任何用户状态（置顶/归档都算用户动过它）。
+		// 这类条目是历史上 resume 时 touch 出来的（空对话没有 jsonl），永远
+		// --resume 不起来——留在侧栏里就是点一次报一次「No conversation found」。
+		// 只是不展示：记录本身还在，真写了转录或改了名就会自己回来。
+		if !e.Live && !withTranscript[e.ID] && e.Messages == 0 &&
+			strings.TrimSpace(e.Title) == "" && !e.Pinned && !e.Archived {
+			continue
+		}
 		if e.CreatedAt.IsZero() {
 			e.CreatedAt = e.LastActive
 		}

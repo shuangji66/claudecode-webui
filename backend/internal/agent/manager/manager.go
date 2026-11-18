@@ -193,6 +193,38 @@ func (m *Manager) Resume(id, cwd, model, permissionMode string) (Info, error) {
 	})
 }
 
+// StartFresh 用**指定 id** 起一个全新的 claude 会话（`--session-id <id>`）。
+//
+// 给「claude 那边根本没有转录的对话」用（刚点「新对话」还没发过消息就退出、
+// 转录被删）：`--resume` 会让 CLI 直接退出（stderr: No conversation found with
+// session ID: …），而对话 id 不能换——转录文件名、conversations.json、前端
+// activeId 都按它对齐（见根 AGENTS.md「对话 id 必须稳定」）。同 id 新建之后，
+// 首条消息照旧写进这个 id 的转录，界面也不用重新指向另一个会话。
+func (m *Manager) StartFresh(id, cwd, model, permissionMode string) (Info, error) {
+	id = strings.TrimSpace(id)
+	if !validUUID(id) {
+		return Info{}, errors.New("manager: 非法的对话 id")
+	}
+	abs, err := normalizeCwd(cwd)
+	if err != nil {
+		return Info{}, err
+	}
+	// key 与 Resume 相同：同一个 id 的并发请求共享一次创建结果，不会起两个进程。
+	return m.createOnce("id:"+id, func() (Info, error) {
+		m.waitClosed(id)
+		// 进程已经在跑就直接复用：fork 之后转录可能还没落盘，此时按「没有转录」
+		// 走到这里，但那个进程正拿着同一份历史在跑——再起一个会把两份输出写进
+		// 同一份转录。
+		if info, ok := m.infoByID(id); ok {
+			if filepath.Clean(info.Cwd) != abs {
+				return Info{}, errors.New("manager: 该对话属于其它工作目录")
+			}
+			return info, nil
+		}
+		return m.create(abs, id, "", model, permissionMode)
+	})
+}
+
 // ErrForkUnsupported 表示当前 claude 二进制不认识 --fork-session。
 var ErrForkUnsupported = errors.New("manager: 当前 claude 版本不支持分叉会话（需要 --fork-session），请先在「设置 → 部署」升级")
 

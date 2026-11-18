@@ -48,6 +48,9 @@ type SessionManager interface {
 	InUse(bin string) bool
 	Create(cwd, model, permissionMode string) (manager.Info, error)
 	Resume(id, cwd, model, permissionMode string) (manager.Info, error)
+	// StartFresh 用同一个 id 起全新会话（--session-id）：给「claude 那边没有转录」
+	// 的对话用，此时 --resume 必然让 CLI 退出，而 id 又不能换。
+	StartFresh(id, cwd, model, permissionMode string) (manager.Info, error)
 	// Fork 从已有对话复制出一个新会话（新 id 由 manager 生成），原会话不受影响。
 	Fork(oldID, cwd, model, permissionMode string) (manager.Info, error)
 	Ensure(cwd, model, permissionMode string) (manager.Info, error)

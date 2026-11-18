@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"ccweb/backend/internal/agent/manager"
 	"ccweb/backend/internal/history"
@@ -94,8 +95,15 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err.Error(), http.StatusForbidden)
 		return
 	}
-	if req.Resume != "" && s.d.Conversations != nil {
-		if rec, ok := s.d.Conversations.Get(req.Resume); ok {
+	// resume 的两种走法：claude 那边有转录才真 `--resume`；没有（还没发过消息的
+	// 空对话、转录被删）就同 id 新建，否则 CLI 直接退出
+	// （stderr: No conversation found with session ID: …），界面上就是一个永远
+	// 起不来的对话，而 id 又不能换。
+	resume := strings.TrimSpace(req.Resume)
+	hasTranscript := resume == "" || s.hasTranscript(resume)
+	hasRecord := false
+	if resume != "" && s.d.Conversations != nil {
+		if rec, ok := s.d.Conversations.Get(resume); ok {
 			if rec.Deleted {
 				writeErr(w, "该对话已删除", http.StatusConflict)
 				return
@@ -104,24 +112,41 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, "该对话属于其它工作目录", http.StatusConflict)
 				return
 			}
+			hasRecord = true
 		}
 	}
 	var info manager.Info
-	if req.Resume != "" {
-		info, err = s.d.Manager.Resume(req.Resume, abs, req.Model, req.PermissionMode)
-	} else {
+	switch {
+	case resume == "":
 		info, err = s.d.Manager.Create(abs, req.Model, req.PermissionMode)
+	case hasTranscript:
+		info, err = s.d.Manager.Resume(resume, abs, req.Model, req.PermissionMode)
+	default:
+		info, err = s.d.Manager.StartFresh(resume, abs, req.Model, req.PermissionMode)
 	}
 	if err != nil {
 		writeErr(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if req.Resume != "" {
-		// 打开已有对话 = 一次「最近活跃」；新建的空对话等首条消息再落元数据。
+	if resume != "" && (hasTranscript || hasRecord) {
+		// 打开已有对话 = 一次「最近活跃」。**没转录又没有记录的**就是「刚点完
+		// 新对话」：那一步绝不能落元数据，落下去就是一条没有转录、重启后
+		// --resume 不起来的幽灵条目（见根 AGENTS.md「空对话不要落元数据」）。
 		s.touchConversation(info)
 	}
 	s.touchWorkspace(abs)
 	writeJSON(w, info)
+}
+
+// hasTranscript 报告 claude 是否已经为这条对话写过转录。
+//
+// HistoryDir 未配置（或 id 为空）时按「有」处理：宁可让 --resume 按老行为报错，
+// 也不要把一条有历史的对话当新的起（那会丢掉上下文）。
+func (s *Server) hasTranscript(id string) bool {
+	if id == "" || s.d.HistoryDir == "" {
+		return true
+	}
+	return history.TranscriptExists(s.d.HistoryDir, id)
 }
 
 // handleEnsureSession 兼容旧客户端：同目录已有存活会话则返回，没有则新建。

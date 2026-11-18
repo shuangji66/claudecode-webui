@@ -79,3 +79,19 @@ func TestForkRejectsInvalidID(t *testing.T) {
 		t.Fatal("非法 id 应报错")
 	}
 }
+
+// StartFresh 用同一个 id 新建（对话在 claude 那边没有转录时的退路）：
+// 校验同样必须在起进程之前完成，否则会留下一个来路不明的 id。
+func TestStartFreshRejectsInvalidInput(t *testing.T) {
+	m := &Manager{}
+	if _, err := m.StartFresh("not-a-uuid", "/tmp", "", ""); err == nil {
+		t.Fatal("非法 id 应报错")
+	}
+	id, err := newUUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.StartFresh(id, "/definitely/not/here", "", ""); err == nil {
+		t.Fatal("不存在的目录应报错")
+	}
+}

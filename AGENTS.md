@@ -99,6 +99,8 @@ hub ── manager ── session ── process ── claude (NDJSON)
     `workspace.Allows`；`CCWEB_PROJECTS_ROOT` 是默认授权目录，不是任意路径的通行证。
 12. **恢复对话用 `manager.Resume`**（同一 id 去重），不要用 `Ensure`/`Create` 造新会话；
     `Ensure` 只保留给旧客户端按目录兜底。后端预热与前端同时恢复时必须靠 createMu 去重。
+    唯一的例外是**新建后还没发过消息、claude 那边没有转录**的对话：它走
+    `manager.StartFresh`（同一个 UUID 作 `--session-id`），id 不变、`--resume` 不参与。
 13. **右侧栏的所有路径都必须过授权**。`/api/fs/*`、`/api/git/*`、`/ws/terminal` 都先校验
     `cwd` 在授权目录内；相对路径解析符号链接后仍要留在工作区内。原始字节预览只放行
     图片/PDF 白名单，并带 `CSP: sandbox`——不要让工作区的 HTML/SVG 以同源页面执行脚本。
@@ -164,6 +166,15 @@ hub ── manager ── session ── process ── claude (NDJSON)
   不传则用 `Date.now()`，会让所有旧消息显示成“刚刚”。
 - **空对话不要落元数据**：新建后还没首条消息时，后端只在 manager 列表里展示；
   首条 prompt 成功才 `conversation.Touch`。否则后端重启后会出现无法 `--resume` 的幽灵条目。
+  **恢复（`POST /api/session {resume}`）也不例外**：以前只要带 `resume` 就 touch，于是
+  「重进一次空对话」（页面刷新后 bootstrap 会恢复 active id）就把幽灵条目写进了
+  `conversations.json`——APP 重启后前端按它 resume，CLI 回
+  `No conversation found with session ID: …`，界面上只有一个永远起不来的对话。
+  现在的三段防线：① **没有转录的 id 不走 `--resume`**，改用 `manager.StartFresh`
+  （同一个 UUID 作 `--session-id` 新建：id 不变、转录照旧按这个 id 落盘）；
+  ② 只有真有转录才 `touchConversation`；③ `GET /api/conversations` 不展示
+  「没有转录 + 没有标题 + 没在跑」的条目（记录保留，转录真出现时会自己回来），
+  启动预热也先 `history.TranscriptExists` 再 Resume。
 - **删除是软删除**：`conversation.Delete` 写 `deleted` 墓碑并保留 jsonl；列表/自动恢复都要
   跳过 deleted/archived。不要把「删除」实现成直接 `os.Remove` 转录。
 - **自动预热不是新建**：`CCWEB_AUTO_START` 只恢复 `LastFor` 或最近转录；没有对话就什么都不做，

@@ -222,10 +222,18 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   fork 之后网关只等**旧转录所在 project 目录**里的新文件（`history.TranscriptPath`），
   不要每 50ms 重扫整个 projects 树。
 - 新会话在首条 prompt 成功后才 `Touch` 元数据；否则后端重启后会出现没有转录、无法 resume 的条目。
+  **`POST /api/session {resume}` 也一样**：以前只要带 resume 就 touch，「重进一次空对话」
+  就会把幽灵条目写进 `conversations.json`（APP 重启后 CLI 回
+  `No conversation found with session ID: …`）。现在 ① 没有转录的 id 走
+  `Manager.StartFresh`（同 id `--session-id` 新建，fork 与并发由 createMu 的 `id:` key 去重，
+  已在跑就复用）② 只有 `history.TranscriptExists` 为真才 touch
+  ③ `GET /api/conversations` 不展示「没有转录 + 没有标题 + 没在跑」的条目（记录保留）。
 - `--resume` 不会回放 transcript；`GET /api/history/transcript` 返回原始事件行，
   前端用 `applyCLI` 回放并保留 `timestamp`。`history.LoadTranscript` 过滤
   `isSidechain`/`isMeta` 与 queue-operation 等非消息类型，最多保留最近 20k 行/16MB。
 - `CCWEB_AUTO_START` 预热只做 Resume，不新建；没有对话时留给前端创建。
+  选中的记录必须先过 `history.TranscriptExists`：元数据里可能留着没有转录的条目，
+  拿它去 resume 只会让 CLI 退出，还白起一个进程。
 
 ## 5.3 右侧栏后端（`fsapi` / `gitctl` / `terminal`）
 
@@ -330,7 +338,8 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 子代理路由：`GET /api/history/subagent?id=&agent=`（读旁路转录）、
   `POST /api/session/task`（`stop_task` / `background_tasks`）。两者都要挂 `s.authed`；
   agent id 走 `[A-Za-z0-9_-]` 白名单，会话 id 走 `validSessionID`，不能拼路径。
-  `POST /api/session` 带 `resume` 时走 `manager.Resume`，不带才新建。
+  `POST /api/session` 带 `resume` 时：有转录走 `manager.Resume`，没有转录走
+  `manager.StartFresh`（同 id `--session-id`），不带 `resume` 才 `Create`。
 - 右侧栏路由：`GET /api/fs/tree|file|raw`、`GET /api/git/repos|status|diff|show|log|branches`、
   `POST /api/git/stage|unstage|discard|commit|checkout|pull`、`GET /ws/terminal`。
   全部先过 `authorizedCwd`（`project.Validate` + `workspace.Allows`），再做路径围栏；

@@ -177,6 +177,71 @@ func TestConversationPinned(t *testing.T) {
 	}
 }
 
+// 回归：没有转录的空对话（幽灵条目）不进列表；活着的空对话与改过名的空对话照旧显示。
+//
+// 幽灵条目的来历是「resume 时落元数据」——空对话没有 jsonl，写进去之后永远
+// --resume 不起来（CLI: No conversation found with session ID），留在侧栏里
+// 就是点一次报一次错，重启后还会被当成「上次打开的对话」自动恢复。
+func TestListHidesTranscriptLessGhostConversation(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	store := withConversationStore(t, srv)
+	root := srv.d.ProjectsRoot
+
+	ghost := "88888888-1111-4222-8333-444444444444"
+	if err := store.Touch(ghost, root); err != nil { // 有元数据、没有转录
+		t.Fatal(err)
+	}
+	titled := "88888888-2222-4333-8444-555555555555"
+	if err := store.Touch(titled, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Rename(titled, "起过名的空对话"); err != nil {
+		t.Fatal(err)
+	}
+	pinned := "88888888-4444-4555-8666-777777777777"
+	if err := store.Touch(pinned, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetPinned(pinned, true); err != nil {
+		t.Fatal(err)
+	}
+	real := "88888888-3333-4444-8555-666666666666"
+	writeTranscript(t, srv.d.HistoryDir, real, root)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/conversations", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Conversations []struct {
+			ID   string `json:"id"`
+			Live bool   `json:"live"`
+		} `json:"conversations"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool, len(body.Conversations))
+	for _, c := range body.Conversations {
+		seen[c.ID] = true
+	}
+	if seen[ghost] {
+		t.Fatalf("幽灵条目不该出现在列表里: %+v", body.Conversations)
+	}
+	if !seen[titled] || !seen[real] {
+		t.Fatalf("有名字的空对话与有转录的对话都必须保留: %+v", body.Conversations)
+	}
+	// 用户动过的（置顶/归档）也要保留：那是明确意图，不是历史遗留的垃圾。
+	if !seen[pinned] {
+		t.Fatalf("置顶过的空对话不该被隐藏: %+v", body.Conversations)
+	}
+	// 但记录本身不能删：转录真出现时它要能自己回到列表。
+	if _, ok := store.Get(ghost); !ok {
+		t.Fatal("不该顺手删掉元数据")
+	}
+}
+
 func TestForkConversation(t *testing.T) {
 	srv, _ := newTestServer(t, "")
 	store := withConversationStore(t, srv)
@@ -319,11 +384,51 @@ func TestConversationsRequireAuthAndRejectBadTranscriptID(t *testing.T) {
 	}
 }
 
+// 回归：空对话（新建后还没发过消息、claude 那边没有转录）被 resume 时，
+// 必须用同一个 id **新建**，且不能落元数据。
+//
+// 旧行为是「一律 --resume + touch」，两个后果叠在一起就是 APP 重启后的
+// `No conversation found with session ID: <id>`：
+//  1. `--resume` 找不到转录，CLI 直接退出，initialize 失败 → 界面弹红条；
+//  2. touch 把这条空对话写进 conversations.json，于是后端重启、进程没了之后，
+//     AutoStart 与前端仍然会按这个 id 去 resume——永远起不来。
+func TestResumeEmptyConversationStartsFreshWithSameID(t *testing.T) {
+	srv, mgr := newTestServer(t, "")
+	store := withConversationStore(t, srv)
+	root := srv.d.ProjectsRoot
+	id := "77777777-1111-4222-8333-444444444444" // 没有转录
+	body := `{"cwd":"` + root + `","resume":"` + id + `"}`
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/session", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	var info struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &info)
+	if info.ID != id {
+		t.Fatalf("同 id 新建返回 id = %q, want %q", info.ID, id)
+	}
+	if len(mgr.resumed) != 0 {
+		t.Fatalf("没有转录时不该走 --resume: %v", mgr.resumed)
+	}
+	if len(mgr.fresh) != 1 || mgr.fresh[0] != id {
+		t.Fatalf("fresh = %v, want [%s]", mgr.fresh, id)
+	}
+	if _, ok := store.Get(id); ok {
+		t.Fatal("空对话不该落元数据（否则重启后会出现 resume 不了的幽灵条目）")
+	}
+}
+
 func TestResumeConversationUsesStableID(t *testing.T) {
 	srv, mgr := newTestServer(t, "")
 	store := withConversationStore(t, srv)
 	root := srv.d.ProjectsRoot
 	id := "33333333-4444-4555-8666-777777777777"
+	// 有转录才算「恢复」：没有转录的 id 走同 id 新建（见上一个用例）。
+	writeTranscript(t, srv.d.HistoryDir, id, root)
 	if err := store.Touch(id, root); err != nil {
 		t.Fatal(err)
 	}

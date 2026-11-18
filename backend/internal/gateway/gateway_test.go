@@ -27,6 +27,7 @@ import (
 type fakeMgr struct {
 	created []string
 	resumed []string
+	fresh   []string
 	forked  []string
 	closed  []string
 	failOn  string
@@ -56,6 +57,12 @@ func (f *fakeMgr) Create(cwd, model, mode string) (manager.Info, error) {
 
 func (f *fakeMgr) Resume(id, cwd, model, mode string) (manager.Info, error) {
 	f.resumed = append(f.resumed, id)
+	return manager.Info{ID: id, Cwd: cwd, State: "ready"}, nil
+}
+
+// StartFresh 用同一个 id 起全新会话（对话在 claude 那边没有转录时用）。
+func (f *fakeMgr) StartFresh(id, cwd, model, mode string) (manager.Info, error) {
+	f.fresh = append(f.fresh, id)
 	return manager.Info{ID: id, Cwd: cwd, State: "ready"}, nil
 }
 

@@ -168,7 +168,10 @@ func main() {
 				return
 			}
 			id, resumeCwd := "", ""
-			if rec, ok := convStore.LastFor(cwd); ok {
+			// 只预热真的有转录的对话：元数据可能留着一份没有 jsonl 的条目
+			// （历史上 resume 时会 touch，见「空对话不要落元数据」），拿它去
+			// --resume 只会让 CLI 退出，还白起一个进程。
+			if rec, ok := convStore.LastFor(cwd); ok && history.TranscriptExists(historyDir, rec.ID) {
 				id = rec.ID
 				resumeCwd = rec.Cwd
 			} else if latest, ok := latestTranscript(historyDir, cwd, func(id string) bool {
