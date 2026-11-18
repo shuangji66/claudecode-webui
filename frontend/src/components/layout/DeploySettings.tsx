@@ -94,12 +94,21 @@ export function DeploySettings() {
   };
 
   const removeVersion = async (v: ClaudeVersion) => {
+    // 还有会话在这个二进制上跑时，删除会先把它们结束掉（后端会等进程退出再删目录），
+    // 所以确认框必须把这个影响说清楚：那是用户正在跑的对话。
+    const inUse = v.in_use ?? 0;
     const ok = await askConfirm({
       title: t("删除 claude 版本", "Delete claude version"),
-      message: t(
-        `删除 ${v.version}？该版本目录会被移除；正在使用的版本和仍被会话使用的版本不能删。`,
-        `Delete ${v.version}? Its version directory is removed; the active version and versions still used by running sessions cannot be deleted.`,
-      ),
+      message:
+        inUse > 0
+          ? t(
+              `删除 ${v.version}？有 ${inUse} 个对话正在使用该版本，它们会先被结束，然后移除该版本目录。`,
+              `Delete ${v.version}? ${inUse} conversation(s) are still using it — they will be ended first, then the version directory is removed.`,
+            )
+          : t(
+              `删除 ${v.version}？该版本目录会被移除；当前生效的版本不能删。`,
+              `Delete ${v.version}? Its version directory is removed; the active version cannot be deleted.`,
+            ),
       danger: true,
       confirmText: t("删除", "Delete"),
     });
@@ -154,6 +163,11 @@ export function DeploySettings() {
                   )}
                   {v.version === latest && !isActive && (
                     <span className="rounded-full border border-line px-1.5 py-0.5 text-[10px] text-muted">{t("最新", "Latest")}</span>
+                  )}
+                  {(v.in_use ?? 0) > 0 && (
+                    <span className="rounded-full border border-line px-1.5 py-0.5 text-[10px] text-muted">
+                      {t(`${v.in_use} 个对话使用中`, `${v.in_use} in use`)}
+                    </span>
                   )}
                   <span className="ml-auto text-[10.5px] text-faint">{formatBytes(v.size)}</span>
                   <Button

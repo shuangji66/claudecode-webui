@@ -31,7 +31,11 @@ type fakeMgr struct {
 	forked  []string
 	closed  []string
 	failOn  string
-	inUse   map[string]bool
+	// using 记录「哪些会话从某个二进制启动」（键是二进制路径）；部署页的
+	// in_use 与删除版本时先结束进程都走它。
+	using map[string][]string
+	// closedUsing 记录被 CloseSessionsUsing 结束的二进制路径。
+	closedUsing []string
 	// subdirCwd 非空时 List/Get 用它在根目录下再套一层，模拟「子目录里的会话」。
 	subdirCwd string
 }
@@ -45,7 +49,18 @@ func (f *fakeMgr) cwd() string {
 
 func (f *fakeMgr) Binary() string { return "/opt/cc/claude" }
 
-func (f *fakeMgr) InUse(bin string) bool { return f.inUse[bin] }
+func (f *fakeMgr) SessionsUsing(bin string) []string {
+	return append([]string(nil), f.using[bin]...)
+}
+
+func (f *fakeMgr) CloseSessionsUsing(bin string) []string {
+	ids := f.SessionsUsing(bin)
+	f.closedUsing = append(f.closedUsing, bin)
+	for _, id := range ids {
+		_ = f.Close(id)
+	}
+	return ids
+}
 
 func (f *fakeMgr) Create(cwd, model, mode string) (manager.Info, error) {
 	if f.failOn == "create" {

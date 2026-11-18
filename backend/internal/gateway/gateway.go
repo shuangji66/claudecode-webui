@@ -45,7 +45,11 @@ type WireEvent struct {
 // 抽成接口是为了让网关可以脱离真实 claude 二进制做单元测试。
 type SessionManager interface {
 	Binary() string
-	InUse(bin string) bool
+	// SessionsUsing 返回从该二进制启动、仍在运行的会话 id；部署页据此显示
+	// 「几个对话正在用这个版本」。
+	SessionsUsing(bin string) []string
+	// CloseSessionsUsing 结束这些会话（等进程退出），删除版本目录前用。
+	CloseSessionsUsing(bin string) []string
 	Create(cwd, model, permissionMode string) (manager.Info, error)
 	Resume(id, cwd, model, permissionMode string) (manager.Info, error)
 	// StartFresh 用同一个 id 起全新会话（--session-id）：给「claude 那边没有转录」

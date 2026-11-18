@@ -22,6 +22,8 @@ type fakeDeploy struct {
 	cancelled  int
 	deleted    []string
 	deleteErr  error
+	// onDelete 在真正删除前调用，用来断言「进程已经结束」这个顺序。
+	onDelete func()
 	activated  []string
 	sources    []string
 }
@@ -46,6 +48,9 @@ func (f *fakeDeploy) CancelInstall() error {
 }
 
 func (f *fakeDeploy) Delete(version string) error {
+	if f.onDelete != nil {
+		f.onDelete()
+	}
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
@@ -116,6 +121,7 @@ func TestClaudeStatusShape(t *testing.T) {
 		Source: claudebin.SourceNpmmirror,
 		Latest: "2.1.325",
 	}})
+	srv.d.Manager.(*fakeMgr).using = map[string][]string{"/data/claude/versions/2.1.325/claude": {"sess-1"}}
 
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, authedRequest(http.MethodGet, "/api/claude/status", ""))
@@ -128,6 +134,10 @@ func TestClaudeStatusShape(t *testing.T) {
 	}
 	if got.Platform != "linux-x64" || got.Active != "2.1.325" || len(got.Installed) != 1 {
 		t.Fatalf("状态不符: %+v", got)
+	}
+	// in_use 由网关从 manager 现算：claudebin 不认识会话。
+	if got.Installed[0].InUse != 1 {
+		t.Fatalf("in_use 应为 1，实际 %d", got.Installed[0].InUse)
 	}
 }
 
@@ -194,27 +204,60 @@ func TestClaudeDeleteVersion(t *testing.T) {
 	}
 }
 
-func TestClaudeDeleteVersionInUse(t *testing.T) {
+// 旧版本还有会话在跑时，删除要先把这些进程结束掉，再删二进制：
+// 只删目录会让进程继续跑一份已经不存在的文件。
+func TestClaudeDeleteVersionStopsSessionsFirst(t *testing.T) {
 	f := &fakeDeploy{status: claudebin.Status{Installed: []claudebin.Version{
 		{Version: "2.1.324", Path: "/data/versions/2.1.324/claude"},
 	}}}
 	srv := withDeploy(t, f)
-	srv.d.Manager.(*fakeMgr).inUse = map[string]bool{"/data/versions/2.1.324/claude": true}
+	mgr := srv.d.Manager.(*fakeMgr)
+	mgr.using = map[string][]string{"/data/versions/2.1.324/claude": {"sess-a", "sess-b"}}
+	f.onDelete = func() {
+		if len(mgr.closed) != 2 {
+			t.Fatalf("删二进制时还有 %d 个会话没结束: %v", 2-len(mgr.closed), mgr.closed)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/claude/version?version=2.1.324", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("删除失败: code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(f.deleted) != 1 || f.deleted[0] != "2.1.324" {
+		t.Fatalf("删除请求未透传: %v", f.deleted)
+	}
+	if len(mgr.closed) != 2 || mgr.closed[0] != "sess-a" || mgr.closed[1] != "sess-b" {
+		t.Fatalf("应结束使用该版本的两个会话: %v", mgr.closed)
+	}
+}
+
+// 生效版本不能删。这一步要挡在结束进程之前：注定失败的删除不该打断对话。
+func TestClaudeDeleteActiveDoesNotStopSessions(t *testing.T) {
+	f := &fakeDeploy{status: claudebin.Status{
+		Installed: []claudebin.Version{{Version: "2.1.324", Path: "/data/versions/2.1.324/claude"}},
+		Active:    "2.1.324",
+	}}
+	srv := withDeploy(t, f)
+	mgr := srv.d.Manager.(*fakeMgr)
+	mgr.using = map[string][]string{"/data/versions/2.1.324/claude": {"sess-a"}}
 
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, authedRequest(http.MethodDelete, "/api/claude/version?version=2.1.324", ""))
 	if rec.Code != http.StatusConflict {
-		t.Fatalf("使用中的版本应 409，实际 %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("生效版本应 409，实际 %d: %s", rec.Code, rec.Body.String())
 	}
-	if len(f.deleted) != 0 {
-		t.Fatalf("不应删除: %v", f.deleted)
+	if len(f.deleted) != 0 || len(mgr.closed) != 0 {
+		t.Fatalf("不应删除、也不应结束会话: deleted=%v closed=%v", f.deleted, mgr.closed)
 	}
 }
 
 func TestClaudeDeleteVersionActiveOrMissing(t *testing.T) {
 	f := &fakeDeploy{
-		status:    claudebin.Status{Installed: []claudebin.Version{{Version: "2.1.325", Path: "/data/versions/2.1.325/claude"}}},
-		deleteErr: claudebin.ErrActive,
+		status: claudebin.Status{
+			Installed: []claudebin.Version{{Version: "2.1.325", Path: "/data/versions/2.1.325/claude"}},
+			Active:    "2.1.325",
+		},
 	}
 	srv := withDeploy(t, f)
 

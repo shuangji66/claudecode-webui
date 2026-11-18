@@ -84,6 +84,9 @@ type Version struct {
 	Path        string    `json:"path"`
 	Size        int64     `json:"size"`
 	InstalledAt time.Time `json:"installed_at"`
+	// InUse 是仍从这个二进制跑的会话数。claudebin 不知道会话，这一栏由网关
+	// （gateway.claudeStatus）装配后填充；前端据此在删除前说清会打断几个对话。
+	InUse int `json:"in_use"`
 }
 
 // Job 是一次安装任务的状态快照；前端轮询 /api/claude/status 拿它画进度条。
@@ -335,7 +338,8 @@ func (m *Manager) CancelInstall() error {
 // Delete 删除一个已安装但未生效的版本目录。
 //
 // 生效版本不能删：它可能是下一次新建会话要用的二进制。仍在运行的会话由网关
-// 通过 Manager.InUse 先拦一道（切换版本只影响新会话，旧进程可能还在用旧版本）。
+// 先用 Manager.CloseSessionsUsing 结束掉（切换版本只影响新会话，旧进程可能还在
+// 用旧版本），所以调用到这里时该二进制应当已经没有进程引用。
 func (m *Manager) Delete(version string) error {
 	version = trimVersion(version)
 	if !validVersion(version) {

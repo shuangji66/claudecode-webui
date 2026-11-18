@@ -473,18 +473,43 @@ func (m *Manager) createWith(abs, sessionID, resumeID, model, permissionMode str
 	return info, nil
 }
 
-// InUse 报告是否有正在运行的会话从 bin 启动。
+// SessionsUsing 返回从 bin 启动、仍在运行的会话 id（按字典序，便于比对）。
 //
-// 删除旧版本目录前必须问一次：切换版本只影响新会话，旧进程可能仍在用旧版本。
-func (m *Manager) InUse(bin string) bool {
+// 已经 closed 但还没被 pruneClosed 摘掉的会话不算：它不再持有进程，删掉它的
+// 二进制也不会影响任何东西。
+func (m *Manager) SessionsUsing(bin string) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, proc := range m.procs {
-		if proc.Bin() == bin {
-			return true
+	out := make([]string, 0, 2)
+	for id, proc := range m.procs {
+		if proc.Bin() != bin {
+			continue
 		}
+		if s, ok := m.sessions[id]; ok && s.State() == session.StateClosed {
+			continue
+		}
+		out = append(out, id)
 	}
-	return false
+	sort.Strings(out)
+	return out
+}
+
+// CloseSessionsUsing 结束从 bin 启动的全部会话，返回真正关掉的 id。
+//
+// 删除某个版本目录前必须走这一趟：切换版本只影响新会话，旧进程会把一份已经
+// 被删掉的二进制继续跑在内存里——事后既说不清它跑的是哪个版本，进程本身也可能
+// 因为再也找不到自己的文件而行为异常。Close 内部等进程真正退出（SIGTERM →
+// 2 秒 → SIGKILL → Wait），所以返回之后不会再有进程引用这个二进制。
+func (m *Manager) CloseSessionsUsing(bin string) []string {
+	ids := m.SessionsUsing(bin)
+	closed := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if err := m.Close(id); err != nil {
+			continue
+		}
+		closed = append(closed, id)
+	}
+	return closed
 }
 
 // Get 按 id 取会话。

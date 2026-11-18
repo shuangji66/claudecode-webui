@@ -561,6 +561,8 @@ export interface ClaudeVersion {
   path: string;
   size: number;
   installed_at: string;
+  /** 仍从这个二进制跑的会话数（网关现算）；删除前据此提示会打断几个对话。 */
+  in_use?: number;
 }
 
 /** 安装任务的阶段；字符串由后端定义，不要改成数字。 */

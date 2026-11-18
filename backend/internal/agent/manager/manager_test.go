@@ -1,10 +1,15 @@
 package manager
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"ccweb/backend/internal/agent/process"
+	"ccweb/backend/internal/agent/session"
 )
 
 func TestNewUUIDAndValidation(t *testing.T) {
@@ -93,5 +98,76 @@ func TestStartFreshRejectsInvalidInput(t *testing.T) {
 	}
 	if _, err := m.StartFresh(id, "/definitely/not/here", "", ""); err == nil {
 		t.Fatal("不存在的目录应报错")
+	}
+}
+
+// 删除某个 claude 版本前，要能列出还跑在这个二进制上的会话，并把它们真正结束。
+//
+// 用「复制一份 /bin/sh 到版本目录冒充 claude」的方式造两个不同 bin 的进程：
+// Proc.bin 就是 Spawn 时传的路径，这样才测得到按二进制路径筛选的逻辑。
+func TestSessionsUsingAndClose(t *testing.T) {
+	dir := t.TempDir()
+	fakeBin := func(name string) string {
+		t.Helper()
+		src, err := os.ReadFile("/bin/sh")
+		if err != nil {
+			t.Skipf("没有 /bin/sh，跳过：%v", err)
+		}
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, src, 0o755); err != nil {
+			t.Fatalf("写测试二进制: %v", err)
+		}
+		return p
+	}
+	spawn := func(bin string) *process.Proc {
+		t.Helper()
+		p, err := process.Spawn(bin, []string{"-c", "sleep 30"}, dir, nil)
+		if err != nil {
+			t.Fatalf("Spawn(%s): %v", bin, err)
+		}
+		t.Cleanup(func() { _ = p.Close() })
+		return p
+	}
+
+	binA, binB := fakeBin("claude-a"), fakeBin("claude-b")
+	procA, procB := spawn(binA), spawn(binB)
+
+	m := &Manager{
+		sessions:        map[string]*session.Session{},
+		procs:           map[string]*process.Proc{},
+		metas:           map[string]meta{},
+		closingSessions: map[string]chan struct{}{},
+	}
+	m.sessions["sess-a"] = session.New("sess-a", dir, procA, func(session.Event) {})
+	m.procs["sess-a"] = procA
+	m.sessions["sess-b"] = session.New("sess-b", dir, procB, func(session.Event) {})
+	m.procs["sess-b"] = procB
+	// 已关闭但还没被 pruneClosed 摘掉的会话不再持有进程，不算「使用中」。
+	_ = m.sessions["sess-b"].Close()
+
+	if got := m.SessionsUsing(binA); len(got) != 1 || got[0] != "sess-a" {
+		t.Fatalf("SessionsUsing(binA) = %v, want [sess-a]", got)
+	}
+	if got := m.SessionsUsing(binB); len(got) != 0 {
+		t.Fatalf("已关闭的会话不应算使用中: %v", got)
+	}
+
+	if closed := m.CloseSessionsUsing(binA); len(closed) != 1 || closed[0] != "sess-a" {
+		t.Fatalf("CloseSessionsUsing = %v, want [sess-a]", closed)
+	}
+	if got := m.SessionsUsing(binA); len(got) != 0 {
+		t.Fatalf("结束后不应再列出: %v", got)
+	}
+
+	// 返回时进程必须已经退出：调用方紧接着就要删掉这个二进制。
+	gone := make(chan struct{})
+	go func() {
+		_ = procA.Wait()
+		close(gone)
+	}()
+	select {
+	case <-gone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("CloseSessionsUsing 返回时进程还在跑")
 	}
 }

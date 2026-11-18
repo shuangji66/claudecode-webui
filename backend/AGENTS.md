@@ -354,6 +354,10 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 部署路由：`GET /api/claude/status`、`POST /api/claude/check|install|cancel|active|source`、
   `DELETE /api/claude/version`。安装是后台任务，接口立即返回，进度靠轮询 status，
   `cancel` 幂等取消进行中的安装并清理临时目录；全部挂 `s.authed`。
+  部署状态统一走 `s.claudeStatus()`（在 claudebin 的快照上补 `installed[].in_use`
+  ——运行中会话数只有 manager 答得出来），不要直接 `writeJSON(w, s.d.Claude.Status())`。
+  `DELETE` 的顺序是「挡生效版本 → `Manager.CloseSessionsUsing(bin)` → `claudebin.Delete`」：
+  有会话还在跑的旧版本允许删，但必须先把进程结束掉再删二进制（见根 AGENTS.md 4.9）。
   `Deps.Claude` 为 nil 时返回 503，且 `/api/info` 不带 `claude_installed`。
 - `POST /api/session` 与 `/api/session/ensure` 必须先 `project.Validate`，再
   `s.ensureCwdAuthorized`；移除工作区时若仍有会话在用要返回 409。

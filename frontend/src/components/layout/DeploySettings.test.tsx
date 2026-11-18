@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../common/SystemDialogs", () => ({ askConfirm: vi.fn().mockResolvedValue(true) }));
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { askConfirm } from "../common/SystemDialogs";
 import { DeploySettings } from "./DeploySettings";
 import { ClaudeInstallPrompt } from "./ClaudeInstallPrompt";
 import { useAppStore } from "../../store/useAppStore";
@@ -86,6 +87,35 @@ describe("DeploySettings", () => {
     expect(screen.queryByRole("button", { name: "删除版本 2.1.325" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "删除版本 2.1.311" }));
     await waitFor(() => expect(deleteClaudeVersion).toHaveBeenCalledWith("2.1.311"));
+  });
+
+  // 删除会先结束正在使用该版本的会话，确认框必须把这件事说清楚。
+  it("删除仍被会话使用的旧版本时提示会先结束对话", async () => {
+    useAppStore.setState({
+      claude: {
+        ...STATUS,
+        installed: [
+          { version: "2.1.325", path: "/data/claude/versions/2.1.325/claude", size: 1, installed_at: "", in_use: 1 },
+          { version: "2.1.311", path: "/data/claude/versions/2.1.311/claude", size: 1, installed_at: "", in_use: 2 },
+        ],
+      },
+    });
+    render(<DeploySettings />);
+    expect(screen.getByText("2 个对话使用中")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "删除版本 2.1.311" }));
+    await waitFor(() => expect(deleteClaudeVersion).toHaveBeenCalledWith("2.1.311"));
+    const opts = vi.mocked(askConfirm).mock.calls[0][0];
+    expect(opts.message).toContain("2 个对话正在使用该版本");
+    expect(opts.message).toContain("先被结束");
+  });
+
+  it("删除没有会话在用的旧版本时不说会打断对话", async () => {
+    render(<DeploySettings />);
+    fireEvent.click(screen.getByRole("button", { name: "删除版本 2.1.311" }));
+    await waitFor(() => expect(deleteClaudeVersion).toHaveBeenCalledWith("2.1.311"));
+    const opts = vi.mocked(askConfirm).mock.calls[0][0];
+    expect(opts.message).toContain("该版本目录会被移除");
+    expect(opts.message).not.toContain("先被结束");
   });
 
   it("安装中可取消", async () => {
