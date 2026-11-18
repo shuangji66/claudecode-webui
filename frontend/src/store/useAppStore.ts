@@ -403,12 +403,14 @@ function openSystemChannel(): void {
     },
     onStatus: (status) => {
       if (status !== "open") return;
-      // 首次连接后的状态由 bootstrap 自己拉；重连成功后补一次——断线期间可能有新版。
+      // 首次连接后的状态由 bootstrap 自己拉；重连成功后补一次——断线期间可能有新版，
+      // 也可能有自动化任务新建/跑完了一条对话（不补拉的话侧栏停在「新对话 + 转圈」）。
       if (firstOpen) {
         firstOpen = false;
         return;
       }
       void useAppStore.getState().loadClaudeStatus();
+      void useAppStore.getState().refreshConversations();
     },
   });
   systemClient = client;

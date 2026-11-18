@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -126,8 +127,22 @@ func main() {
 	// 插件与 marketplace：真源是 CLI 自己维护的状态文件，只能 spawn 它来读写。
 	pluginMgr := plugin.New(resolveClaude, cfg.ClaudeHome)
 
+	// 会话事件的唯一出口：先广播给这个会话的观察者，再把「回合结束 / 进程结束」
+	// 转给网关——自动化任务投递的会话没人打开，只有网关知道那一条要刷新面板。
+	// 网关在 manager 之后才建出来（它自己依赖 manager），所以用原子指针接一下。
+	var srvRef atomic.Pointer[gateway.Server]
 	mgr := manager.New(cfg, resolveClaude, store, func(sid string, ev session.Event) {
 		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data})
+		srv := srvRef.Load()
+		if srv == nil {
+			return
+		}
+		switch ev.Kind {
+		case session.KindSessionState:
+			srv.NoteSessionState(sid, ev.Data)
+		case session.KindClosed:
+			srv.NoteSessionClosed(sid)
+		}
 	})
 	defer mgr.CloseAll()
 
@@ -184,6 +199,7 @@ func main() {
 		TerminalShell: cfg.TerminalShell,
 		StartedAt:     time.Now(),
 	}, logger)
+	srvRef.Store(srv)
 
 	// 自动化任务的模型入口：注册成用户级 MCP 服务（幂等，配置没变就不动 .claude.json）。
 	// 失败只记日志：注册不上不影响面板自己用，最多是模型看不到那几个工具。

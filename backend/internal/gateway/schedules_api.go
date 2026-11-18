@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"ccweb/backend/internal/agent/manager"
+	"ccweb/backend/internal/agent/session"
 	"ccweb/backend/internal/conversation"
 	"ccweb/backend/internal/mcp"
 	"ccweb/backend/internal/project"
@@ -431,6 +432,9 @@ func (s *Server) DeliverScheduledTask(ctx context.Context, t schedule.Task, fire
 	}
 
 	var info manager.Info
+	// schedTitle 是「新建的对话本来该叫什么」：投递那一刻转录往往还没落盘，
+	// 落不下元数据，标题要等这一轮结束再补（见 finishScheduledTurn）。
+	schedTitle := ""
 	if createNew {
 		newID, err := manager.NewUUID()
 		if err != nil {
@@ -441,6 +445,9 @@ func (s *Server) DeliverScheduledTask(ctx context.Context, t schedule.Task, fire
 			return "", err
 		}
 		id = newID
+		// 标题带规则时区下的启动时间：每次新建的对话在侧栏里长得一样时，
+		// 只能靠时间区分是哪一次运行。
+		schedTitle = t.Name + " · " + fire.In(t.Rule.Location()).Format("01-02 15:04")
 	} else {
 		// 归档/删除的对话不能投递：消息会落进一个用户打开不了的对话。
 		if s.d.Conversations != nil {
@@ -475,16 +482,16 @@ func (s *Server) DeliverScheduledTask(ctx context.Context, t schedule.Task, fire
 	if err := sess.Prompt(t.Prompt); err != nil {
 		return "", err
 	}
+	// 这条会话的回合结束后要再通知一次面板：它多半没人打开，而标题（转录首条消息）、
+	// live/state 都只在 GET /api/conversations 里现算。见 NoteSessionState。
+	s.watchScheduledTurn(id, scheduledTurn{title: schedTitle, cwd: cwd})
 
 	if createNew && s.d.Conversations != nil {
-		// 标题带规则时区下的启动时间：每次新建的对话在侧栏里长得一样时，
-		// 只能靠时间区分是哪一次运行。
-		title := t.Name + " · " + fire.In(t.Rule.Location()).Format("01-02 15:04")
+		// 转录已经落盘的话，标题现在就能写（多数情况写不上：CLI 还没来得及落盘）。
 		if s.hasTranscript(id) {
-			// 有转录才落元数据（空对话落记录会留下 resume 不起来的幽灵条目）。
 			now := time.Now()
 			_ = s.d.Conversations.Ensure(conversation.Record{
-				ID: id, Cwd: cwd, Title: title, CreatedAt: now, LastActive: now,
+				ID: id, Cwd: cwd, Title: schedTitle, CreatedAt: now, LastActive: now,
 			})
 		}
 		s.broadcastConversationsChanged()
@@ -504,4 +511,93 @@ func (s *Server) broadcastConversationsChanged() {
 		return
 	}
 	s.d.Hub.Broadcast(systemTopic, WireEvent{Kind: "conversations.changed"})
+}
+
+// scheduledTurn 是一条「还没跑完的投递」：回合结束后要用它补写标题并通知面板。
+type scheduledTurn struct {
+	// title 只在「这次投递新建了对话」时非空（比如「每日巡检 · 11-19 09:00」）。
+	// 投递那一刻转录往往还没落盘，元数据写不进去，只能等回合结束再补。
+	title string
+	cwd   string
+}
+
+// watchScheduledTurn 记下「这条会话的回合结束后要再通知一次面板」。
+//
+// 不记的话只能等用户点开这条对话或刷新页面：投递那一刻列表还是「刚新建、还没转录」，
+// 前端拿到的标题是空的（显示「新对话」）、state 是 busy（显示转圈），之后没人再拉列表。
+func (s *Server) watchScheduledTurn(id string, turn scheduledTurn) {
+	if id == "" {
+		return
+	}
+	s.scheduledMu.Lock()
+	defer s.scheduledMu.Unlock()
+	if s.scheduledTurns == nil {
+		s.scheduledTurns = make(map[string]scheduledTurn)
+	}
+	// 同一轮里又投了一次（例如每分钟一次的 new-reuse 任务，这一轮还没跑完）：
+	// 后一次没有待补的标题，别把前一次的抹掉——否则新建的那条对话永远拿不到
+	// 「任务名 · 时间」这个标题。
+	if prev, ok := s.scheduledTurns[id]; ok {
+		if turn.title == "" {
+			turn.title = prev.title
+		}
+		if turn.cwd == "" {
+			turn.cwd = prev.cwd
+		}
+	}
+	s.scheduledTurns[id] = turn
+}
+
+// consumeScheduledTurn 取走这条会话的待通知标记；没有标记返回 false。
+func (s *Server) consumeScheduledTurn(id string) (scheduledTurn, bool) {
+	s.scheduledMu.Lock()
+	defer s.scheduledMu.Unlock()
+	turn, ok := s.scheduledTurns[id]
+	if !ok {
+		return scheduledTurn{}, false
+	}
+	delete(s.scheduledTurns, id)
+	return turn, true
+}
+
+// NoteSessionState 是会话事件的旁路出口（装配层在 manager 的事件回调里调它）。
+//
+// 自动化任务投递的会话多半没人打开：一轮结束（`session.state=ready`）时没有任何
+// 客户端会收到 `result`，而侧栏那一行的标题（转录首条消息）与 live/state 都只在
+// `GET /api/conversations` 里现算。所以这里在回合结束时补写标题并推一条
+// conversations.changed，让面板自己重拉一次——否则那条对话会一直停在「新对话 + 转圈」。
+//
+// 只认记过的会话：普通对话的回合结束时用户正看着它，没必要让每个连接都去重扫一遍转录。
+func (s *Server) NoteSessionState(sid string, data json.RawMessage) {
+	var payload struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || payload.State != session.StateReady {
+		return
+	}
+	s.finishScheduledTurn(sid)
+}
+
+// NoteSessionClosed 同理：进程没了（崩溃 / 空闲回收）时这一轮不会再有 result，
+// 但列表里的 live/state 变了，同样要刷新一次。
+func (s *Server) NoteSessionClosed(sid string) {
+	s.finishScheduledTurn(sid)
+}
+
+// finishScheduledTurn 收尾一次自动化任务投递：补写标题（这时转录肯定有了）、
+// 通知面板重拉列表。没记过的会话什么都不做。
+func (s *Server) finishScheduledTurn(sid string) {
+	turn, ok := s.consumeScheduledTurn(sid)
+	if !ok {
+		return
+	}
+	// 有转录才落元数据：空对话落记录会留下 resume 不起来的幽灵条目
+	// （这里已经是回合结束，正常情况下转录一定在）。
+	if turn.title != "" && s.d.Conversations != nil && s.hasTranscript(sid) {
+		now := time.Now()
+		_ = s.d.Conversations.Ensure(conversation.Record{
+			ID: sid, Cwd: turn.cwd, Title: turn.title, CreatedAt: now, LastActive: now,
+		})
+	}
+	s.broadcastConversationsChanged()
 }

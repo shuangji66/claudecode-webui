@@ -766,6 +766,17 @@ hub ── manager ── session ── process ── claude (NDJSON)
   拒绝投递；已在跑的会话直接复用，没有转录的走 `StartFresh`，工作区必须过
   `ensureCwdAuthorizedReal`。新建对话后往系统通道推 `conversations.changed`，
   前端收到就刷新列表（定时任务常常在没有任何面板打开时建对话）。
+- **投递的会话没人打开，所以回合结束还要再推一次**：投递那一刻列表里是「刚新建、
+  没有转录」（前端显示「新对话」）、state 是 busy（显示转圈）；标题取自转录首条消息、
+  live/state 也只有 `GET /api/conversations` 现算，没人再拉就**永远停在转圈上**
+  （任务其实早跑完了，点开那条对话或刷新页面才恢复）。现在 `DeliverScheduledTask`
+  在 `Prompt` 之后 `watchScheduledTurn`，装配层（`cmd/ccweb` 的事件出口）把
+  `session.state=ready` / `closed` 交给 `Server.NoteSessionState/NoteSessionClosed`：
+  消耗标记 → 补写标题 → 推 `conversations.changed`。只认记过的会话，普通对话的
+  回合结束不会让每个连接去重扫一遍转录。**标题也在这一刻补写**：`StartFresh` 之后
+  `hasTranscript` 往往还是 false（CLI 异步落盘），投递时写不进 `conversations.json`，
+  不补的话每次新建的对话都叫「新对话」、`任务名 · MM-DD HH:MM` 永远落不下。
+  前端系统通道**重连**时也补拉一次列表（断线期间可能正好跑完一条）。
 - **同一条任务两次投递至少间隔 1 分钟**（`schedule.MinDeliveryGap`），「立即执行」只是
   额外投一次，**不改计划时间**；投递失败也推进下一次并记原因——否则工作区被删这类
   永久失败会每 30 秒刷一次。每条任务保留最近 `MaxDeliveries`（50）条投递记录，

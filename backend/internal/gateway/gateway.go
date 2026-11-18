@@ -125,6 +125,13 @@ type Server struct {
 	// 「立即执行」返回 503。
 	runner *schedule.Runner
 
+	// scheduledMu/scheduledTurns 记着「由自动化任务投递过、这一轮还没跑完」的会话。
+	// 这些对话通常没人打开，回合结束时没有任何客户端会收到 result，而侧栏那一行的
+	// 标题（转录首条消息）与 live/state 都只在 GET /api/conversations 里现算——
+	// 不主动说一声，它就一直停在「新对话 + 转圈」（任务其实早就跑完了）。
+	scheduledMu    sync.Mutex
+	scheduledTurns map[string]scheduledTurn
+
 	// tcp 是直连 TCP 端口的监听状态：端口来自设置，保存后可运行期换端口。
 	tcp tcpState
 	// tcpOpMu 串行化「改端口/开关 + 落盘」这一整段：两个标签页同时保存时，
@@ -137,7 +144,13 @@ func New(d Deps, logger *log.Logger) *Server {
 	if logger == nil {
 		logger = log.New(os.Stdout, "[ccweb] ", log.LstdFlags)
 	}
-	s := &Server{d: d, mux: http.NewServeMux(), log: logger, termSlots: make(chan struct{}, maxTerminals)}
+	s := &Server{
+		d:              d,
+		mux:            http.NewServeMux(),
+		log:            logger,
+		termSlots:      make(chan struct{}, maxTerminals),
+		scheduledTurns: make(map[string]scheduledTurn),
+	}
 	// TCP 访问密码存在设置里、可运行期修改，所以把取值函数接到 Guard 上，
 	// 而不是启动时快照一份。unix socket 通道本来就不校验它。
 	if d.Guard != nil && d.Settings != nil {

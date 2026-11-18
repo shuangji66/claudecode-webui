@@ -381,3 +381,105 @@ func TestScheduleRunNowWithoutRunner(t *testing.T) {
 		t.Fatalf("code = %d, want 503", rec.Code)
 	}
 }
+
+// 回归：自动化任务投递出去的对话多半没人打开，投递那一刻列表里还是
+// 「刚新建、没有转录」（前端显示「新对话」）且 state=busy（显示转圈）。
+// 标题取自转录首条消息、live/state 也是列表接口现算的，所以这一轮结束时
+// 必须再推一条 conversations.changed，否则那条对话会一直停在转圈上。
+func TestScheduledTurnEndRefreshesConversationList(t *testing.T) {
+	f := newSchedServer(t)
+	rec := &recClient{}
+	f.srv.d.Hub.Subscribe(systemTopic, rec)
+
+	task := f.createTask(t, nil)
+	id, err := f.srv.DeliverScheduledTask(context.Background(), task, time.Now())
+	if err != nil {
+		t.Fatalf("投递失败: %v", err)
+	}
+	// 新建时就推了一条（列表里要立刻出现这条对话）。
+	if n := len(rec.take()); n != 1 {
+		t.Fatalf("投递时应推 1 次，得到 %d", n)
+	}
+
+	// 与本轮无关的会话：不推。
+	f.srv.NoteSessionState("other-session", json.RawMessage(`{"state":"ready"}`))
+	if n := len(rec.take()); n != 0 {
+		t.Fatalf("没投递过的会话不该触发刷新，得到 %d 次", n)
+	}
+	// 同一会话的中间状态（busy）不算回合结束。
+	f.srv.NoteSessionState(id, json.RawMessage(`{"state":"busy"}`))
+	if n := len(rec.take()); n != 0 {
+		t.Fatalf("busy 不该触发刷新，得到 %d 次", n)
+	}
+
+	f.srv.NoteSessionState(id, json.RawMessage(`{"state":"ready"}`))
+	events := rec.take()
+	if len(events) != 1 || events[0].Kind != "conversations.changed" {
+		t.Fatalf("回合结束应推 1 条 conversations.changed，得到 %+v", events)
+	}
+	// 标记已消耗：同一条会话不会因为后续状态变化再推。
+	f.srv.NoteSessionState(id, json.RawMessage(`{"state":"ready"}`))
+	if n := len(rec.take()); n != 0 {
+		t.Fatalf("同一条会话不该重复推，得到 %d 次", n)
+	}
+}
+
+// 进程在回合结束前就没了（崩溃 / 被关闭）时也要刷新一次：
+// 这一轮不会再有 result，但列表里的 live/state 变了。
+func TestScheduledSessionClosedRefreshesConversationList(t *testing.T) {
+	f := newSchedServer(t)
+	rec := &recClient{}
+	f.srv.d.Hub.Subscribe(systemTopic, rec)
+
+	task := f.createTask(t, nil)
+	id, err := f.srv.DeliverScheduledTask(context.Background(), task, time.Now())
+	if err != nil {
+		t.Fatalf("投递失败: %v", err)
+	}
+	rec.take()
+
+	f.srv.NoteSessionClosed(id)
+	events := rec.take()
+	if len(events) != 1 || events[0].Kind != "conversations.changed" {
+		t.Fatalf("进程结束应推 1 条 conversations.changed，得到 %+v", events)
+	}
+	// 关闭与「回合结束」是同一个标记，先到的那个推完就不再推。
+	f.srv.NoteSessionState(id, json.RawMessage(`{"state":"ready"}`))
+	if n := len(rec.take()); n != 0 {
+		t.Fatalf("标记已消耗，不该再推，得到 %d 次", n)
+	}
+}
+
+// 投递那一刻转录往往还没落盘（CLI 是异步写的），标题写不进元数据；
+// 回合结束时转录肯定有了，这时补写——否则每次新建的对话在侧栏里都叫「新对话」，
+// 「任务名 · 时间」这个用来区分多次运行的标题永远落不下。
+func TestScheduledTurnEndWritesTitle(t *testing.T) {
+	f := newSchedServer(t)
+	task := f.createTask(t, map[string]any{"name": "每日巡检"})
+	id, err := f.srv.DeliverScheduledTask(context.Background(), task, time.Date(2026, 11, 19, 9, 0, 0, 0, time.Local))
+	if err != nil {
+		t.Fatalf("投递失败: %v", err)
+	}
+	if _, ok := f.conv.Get(id); ok {
+		t.Fatal("还没有转录时不该落元数据（会留下 resume 不起来的幽灵条目）")
+	}
+
+	// 这一轮还没跑完时又投了一次（例如每分钟一次的 new-reuse，没有待补标题）：
+	// 不能把前一次记下的标题抹掉。
+	f.srv.watchScheduledTurn(id, scheduledTurn{})
+
+	// 单元测试里没有真的 claude 转录：清掉历史目录即视为「有转录」。
+	f.srv.d.HistoryDir = ""
+	f.srv.NoteSessionState(id, json.RawMessage(`{"state":"ready"}`))
+
+	rec, ok := f.conv.Get(id)
+	if !ok {
+		t.Fatal("回合结束后应当补上对话元数据")
+	}
+	if want := "每日巡检 · 11-19 09:00"; rec.Title != want {
+		t.Fatalf("标题 = %q, want %q", rec.Title, want)
+	}
+	if rec.Cwd != f.root {
+		t.Fatalf("cwd = %q, want %q", rec.Cwd, f.root)
+	}
+}
