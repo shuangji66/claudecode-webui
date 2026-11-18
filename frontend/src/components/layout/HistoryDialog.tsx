@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
+import type { ConversationInfo } from "../../transport/types";
 import { relativeTime } from "../../lib/labels";
 import { authorizeFnosDir } from "../../lib/fnos";
 import { useLocale, useT } from "../../lib/i18n";
 import { Dialog } from "../common/Dialog";
-import { IconFolder, IconHistory, IconSearch } from "../common/Icons";
+import { Menu, type MenuItem } from "../common/Menu";
+import { askConfirm } from "../common/SystemDialogs";
+import { IconArchive, IconFolder, IconHistory, IconSearch, IconTrash } from "../common/Icons";
 
 interface Props {
   open: boolean;
@@ -26,13 +29,19 @@ export function HistoryDialog({ open, onClose }: Props) {
   const probeDir = useAppStore((s) => s.probeDir);
   const refreshConversations = useAppStore((s) => s.refreshConversations);
   const openConversation = useAppStore((s) => s.openConversation);
+  const archiveConversation = useAppStore((s) => s.archiveConversation);
+  const deleteConversation = useAppStore((s) => s.deleteConversation);
   const [query, setQuery] = useState("");
   const [busyCwd, setBusyCwd] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  /** 右键菜单：锚在这一行上，选项与右侧那两颗固定按钮一致。 */
+  const [menu, setMenu] = useState<{ id: string; anchor: HTMLElement } | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setQuery("");
+    // 关掉再打开时把右键菜单也收掉：锚点是上一次挂载的 DOM 节点，早就没了。
+    setMenu(null);
     void refreshConversations();
   }, [open, refreshConversations]);
 
@@ -44,6 +53,24 @@ export function HistoryDialog({ open, onClose }: Props) {
   }, [conversations, query]);
 
   if (!open) return null;
+
+  const titleOf = (c: ConversationInfo) => c.title || t("新对话", "New chat");
+
+  const archiveLabel = (c: ConversationInfo) => (c.archived ? t("取消归档", "Unarchive") : t("归档", "Archive"));
+
+  /** 删除是软删除（转录保留），但会结束进程——先问一句。 */
+  const askDelete = async (c: ConversationInfo) => {
+    const ok = await askConfirm({
+      title: t("删除对话", "Delete conversation"),
+      message: t(
+        `「${titleOf(c)}」会从列表移除并结束运行中的进程，转录文件仍保留。`,
+        `"${titleOf(c)}" is removed from the list and any running process is stopped; the transcript file is kept.`,
+      ),
+      danger: true,
+      confirmText: t("删除", "Delete"),
+    });
+    if (ok) void deleteConversation(c.id);
+  };
 
   const openHistory = async (id: string, cwd: string) => {
     if (busyCwd) return;
@@ -86,6 +113,8 @@ export function HistoryDialog({ open, onClose }: Props) {
     }
   };
 
+  const menuConv = menu ? conversations.find((c) => c.id === menu.id) : undefined;
+
   return (
     <Dialog
       open={open}
@@ -98,55 +127,117 @@ export function HistoryDialog({ open, onClose }: Props) {
       bodyClassName="flex min-h-0 flex-1 flex-col"
     >
       <div className="border-b border-line px-4 py-2.5">
-          <div className="flex items-center gap-2 rounded-[10px] border border-line-strong px-2.5 py-1.5 focus-within:border-brand/60">
-            <IconSearch size={14} className="text-muted" />
-            {/* 不要 autoFocus：手机上打开历史记录会直接弹出键盘，把大半个列表顶走。 */}
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t("搜索历史会话", "Search history")}
-              className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-faint"
-            />
-          </div>
-          {/* 提示行兼作反馈行：切换/报错时替换掉说明文字，不额外占一条底部栏。
-              底部不再有「共 N 条对话」和「关闭」——右上角 × 与 Esc/遮罩都能关。 */}
-          <p className="mt-1.5 text-[10px] leading-relaxed text-faint">
-            {err
-              ? <span className="text-danger">{err}</span>
-              : busyCwd
-                ? t(`正在切换到 ${busyCwd}…`, `Switching to ${busyCwd}…`)
-                : t("点击条目会恢复该对话并回放转录内容；未授权的目录会自动添加授权。", "Clicking an entry resumes the conversation and replays its transcript. Unauthorized directories are added automatically.")}
-          </p>
+        <div className="flex items-center gap-2 rounded-[10px] border border-line-strong px-2.5 py-1.5 focus-within:border-brand/60">
+          <IconSearch size={14} className="text-muted" />
+          {/* 不要 autoFocus：手机上打开历史记录会直接弹出键盘，把大半个列表顶走。 */}
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t("搜索历史会话", "Search history")}
+            className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-faint"
+          />
         </div>
+        {/* 提示行兼作反馈行：切换/报错时替换掉说明文字，不额外占一条底部栏。
+            底部不再有「共 N 条对话」和「关闭」——右上角 × 与 Esc/遮罩都能关。 */}
+        <p className="mt-1.5 text-[10px] leading-relaxed text-faint">
+          {err
+            ? <span className="text-danger">{err}</span>
+            : busyCwd
+              ? t(`正在切换到 ${busyCwd}…`, `Switching to ${busyCwd}…`)
+              : t("点击条目会恢复该对话并回放转录内容；未授权的目录会自动添加授权。", "Clicking an entry resumes the conversation and replays its transcript. Unauthorized directories are added automatically.")}
+        </p>
+      </div>
 
-        {/* 底部没有 footer 了，安全区留白挪到这里：滚动区最后一行的下沿不能让
-            iPhone 的 Home Indicator 压住。 */}
-        <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+8px)]">
-          {rows.length === 0 && <p className="px-3 py-8 text-center text-[12px] text-muted">{t("没有匹配的历史会话。", "No matching sessions.")}</p>}
-          {rows.map((c) => (
+      {/* 底部没有 footer 了，安全区留白挪到这里：滚动区最后一行的下沿不能让
+          iPhone 的 Home Indicator 压住。 */}
+      <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+8px)]">
+        {rows.length === 0 && <p className="px-3 py-8 text-center text-[12px] text-muted">{t("没有匹配的历史会话。", "No matching sessions.")}</p>}
+        {rows.map((c) => (
+          <div
+            key={c.id}
+            // 行本身不再是 <button>：右侧两颗操作按钮嵌不进去（button 不能嵌套）。
+            // 路径仍留在 title 里，悬浮可见，但不再占一行（一堆 /vol1/… 只是噪音）。
+            className="side-row items-start"
+            title={c.cwd}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              if (busyCwd) return;
+              setMenu({ id: c.id, anchor: e.currentTarget });
+            }}
+          >
             <button
-              key={c.id}
               type="button"
               disabled={Boolean(busyCwd)}
               onClick={() => void openHistory(c.id, c.cwd)}
-              className="side-row items-start text-left disabled:opacity-50"
-              title={c.cwd}
+              className="flex min-w-0 flex-1 items-start gap-2 text-left disabled:opacity-50"
             >
               <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-panel-strong text-muted">
                 <IconFolder size={14} />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12.5px] text-ink">{c.title || t("新对话", "New chat")}</span>
-                <span className="mt-0.5 block truncate font-mono text-[10px] text-faint">{c.cwd}</span>
-              </span>
-              <span className="ml-2 shrink-0 text-right text-[10px] text-faint">
-                <span className="block">{relativeTime(c.last_active, Date.now(), locale)}</span>
-                <span className="block">{c.archived ? t("已归档", "Archived") : t(`${c.messages} 条`, `${c.messages} msgs`)}</span>
+                <span className="block truncate text-[12.5px] text-ink">{titleOf(c)}</span>
+                <span className="mt-0.5 block truncate text-[10px] text-faint">
+                  {relativeTime(c.last_active, Date.now(), locale)}
+                  {" · "}
+                  {/* 归档状态原本占右栏一行，现在并进这条元信息里，给操作按钮让位。 */}
+                  {c.archived ? t("已归档", "Archived") : t(`${c.messages} 条`, `${c.messages} msgs`)}
+                </span>
               </span>
             </button>
-          ))}
-        </div>
+            {/* 固定按钮（不靠悬停）：触屏没有 hover，历史记录在手机上用得最多。 */}
+            <span className="ml-1 flex shrink-0 items-center gap-1 self-center">
+              <button
+                type="button"
+                disabled={Boolean(busyCwd)}
+                onClick={() => void archiveConversation(c.id, !c.archived)}
+                className="rounded-md p-1.5 text-muted transition hover:bg-black/5 hover:text-ink disabled:opacity-50"
+                aria-label={`${archiveLabel(c)} ${titleOf(c)}`}
+                title={archiveLabel(c)}
+              >
+                <IconArchive size={15} />
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(busyCwd)}
+                onClick={() => void askDelete(c)}
+                className="rounded-md p-1.5 text-muted transition hover:bg-black/5 hover:text-danger disabled:opacity-50"
+                aria-label={`${t("删除", "Delete")} ${titleOf(c)}`}
+                title={t("删除", "Delete")}
+              >
+                <IconTrash size={15} />
+              </button>
+            </span>
+          </div>
+        ))}
+      </div>
 
+      {/* 右键等同于点行内那两颗按钮：统一的 Menu 原语，不在组件里另写一套监听。 */}
+      <Menu
+        open={Boolean(menuConv)}
+        anchor={menu?.anchor ?? null}
+        onClose={() => setMenu(null)}
+        width={168}
+        items={
+          menuConv
+            ? ([
+                {
+                  id: "archive",
+                  label: archiveLabel(menuConv),
+                  icon: <IconArchive size={13} className="text-muted" />,
+                  onSelect: () => void archiveConversation(menuConv.id, !menuConv.archived),
+                },
+                {
+                  id: "delete",
+                  label: t("删除", "Delete"),
+                  icon: <IconTrash size={13} />,
+                  danger: true,
+                  onSelect: () => void askDelete(menuConv),
+                },
+              ] satisfies MenuItem[])
+            : []
+        }
+      />
     </Dialog>
   );
 }
