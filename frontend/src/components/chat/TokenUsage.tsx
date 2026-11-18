@@ -15,9 +15,6 @@ import { POPUP_PANEL, PORTAL_ATTR, useAnchoredPanel, useDismiss } from "../commo
 
 interface Props {
   snap: UsageSnapshot | undefined;
-  turns: number;
-  tools: number;
-  events: number;
 }
 
 /** 详情里的一行：左边小字标签，右边数字。 */
@@ -30,9 +27,9 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-const PANEL_WIDTH = 264;
-// 本轮 4 行 + 会话 2 行 + 速度/耗时 2 行 + 累计 1 行，三条分隔线。
-const PANEL_HEIGHT = 340;
+const PANEL_WIDTH = 248;
+// 会话 2 行 + 缓存 3 行 + 速度 1 行，两条分隔线。
+const PANEL_HEIGHT = 240;
 
 /**
  * 输入框下方居中那颗「图标 + token 总量」。
@@ -40,7 +37,7 @@ const PANEL_HEIGHT = 340;
  * 数字优先用会话累计（这是「总量」）；还没跑完第一轮时退回落本轮消耗，两者都没有
  * （老转录 / 请求全失败）就整颗不渲染——宁可不给，也不要摆一个 0。
  */
-export function TokenUsage({ snap, turns, tools, events }: Props) {
+export function TokenUsage({ snap }: Props) {
   const t = useT();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -48,23 +45,20 @@ export function TokenUsage({ snap, turns, tools, events }: Props) {
   const pos = useAnchoredPanel(anchor, anchor !== null, PANEL_WIDTH, PANEL_HEIGHT);
   useDismiss(anchor !== null, panelRef, anchor, close);
 
-  const turnInput = snap?.turnInputTokens;
-  const turnTotal = (turnInput ?? 0) + (snap?.outputTokens ?? 0);
   const sessionInput = snap?.sessionInputTokens;
   const sessionOutput = snap?.sessionOutputTokens;
   const sessionTotal = (sessionInput ?? 0) + (sessionOutput ?? 0);
+  // 会话累计还没落（第一轮进行中）时，退回落本轮消耗——弹层里也如实标成「本轮」。
+  const turnInput = snap?.turnInputTokens;
+  const turnTotal = (turnInput ?? 0) + (snap?.outputTokens ?? 0);
   const total = sessionTotal || turnTotal;
   const tps = snap ? tokensPerSecond(snap.genTokens ?? 0, snap.genMs) : undefined;
+  // 缓存三项是「最近一次请求」的数（result 的累计值里没有命中率），单独一段说清楚。
+  const cacheRead = snap?.cacheReadTokens;
+  const cacheWrite = snap?.cacheCreationTokens;
+  const cacheHit = snap?.cacheHitRate;
 
   if (total <= 0) return null;
-
-  const totals = [
-    turns > 0 ? t(`${turns} 轮`, `${turns} turns`) : "",
-    tools > 0 ? t(`${tools} 次工具`, `${tools} tool calls`) : "",
-    events > 0 ? t(`${events} 条事件`, `${events} events`) : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
 
   return (
     <div className="mt-1 flex justify-center">
@@ -99,40 +93,38 @@ export function TokenUsage({ snap, turns, tools, events }: Props) {
             </div>
 
             <div className="space-y-1 text-[11px]">
-              <div className="text-[10.5px] text-faint">{t("本轮消耗", "This turn")}</div>
-              {turnInput !== undefined && (
-                <Row label={t("输入（含缓存）", "Input (cached)")}>{formatTokens(turnInput)}</Row>
-              )}
-              {snap?.outputTokens !== undefined && (
-                <Row label={t("输出", "Output")}>{formatTokens(snap.outputTokens)}</Row>
-              )}
-              {turnTotal > 0 && <Row label={t("合计", "Total")}>{formatTokens(turnTotal)} tok</Row>}
-              {snap?.thinkingTokens !== undefined && (
-                <Row label={t("其中思考", "Thinking")}>{formatTokens(snap.thinkingTokens)} tok</Row>
-              )}
+              <div className="text-[10.5px] text-faint">
+                {sessionTotal > 0 ? t("会话累计消耗", "Session total") : t("本轮消耗", "This turn")}
+              </div>
+              <Row label={t("输入 / 输出", "Input / output")}>
+                {sessionTotal > 0
+                  ? `${formatTokens(sessionInput ?? 0)} / ${formatTokens(sessionOutput ?? 0)}`
+                  : `${formatTokens(turnInput ?? 0)} / ${formatTokens(snap?.outputTokens ?? 0)}`}
+              </Row>
             </div>
 
-            {sessionTotal > 0 && (
+            {(cacheRead || cacheWrite || cacheHit !== undefined) && (
               <>
                 <div className="my-1.5 h-px bg-line" />
                 <div className="space-y-1 text-[11px]">
-                  <div className="text-[10.5px] text-faint">{t("会话累计消耗", "Session total")}</div>
-                  <Row label={t("合计", "Total")}>{formatTokens(sessionTotal)} tok</Row>
-                  <Row label={t("输入 / 输出", "Input / output")}>
-                    {`${formatTokens(sessionInput ?? 0)} / ${formatTokens(sessionOutput ?? 0)}`}
-                  </Row>
+                  <div className="text-[10.5px] text-faint">{t("缓存（最近一次请求）", "Cache (last request)")}</div>
+                  {cacheRead ? <Row label={t("缓存读取", "From cache")}>{formatTokens(cacheRead)}</Row> : null}
+                  {cacheWrite ? <Row label={t("缓存写入", "Cache write")}>{formatTokens(cacheWrite)}</Row> : null}
+                  {cacheHit !== undefined && (
+                    <Row label={t("缓存命中", "Cache hit")}>{Math.round(cacheHit * 100)}%</Row>
+                  )}
                 </div>
               </>
             )}
 
-            <div className="my-1.5 h-px bg-line" />
-            <div className="space-y-1 text-[11px]">
-              {tps !== undefined && <Row label={t("生成速度", "Throughput")}>{Math.round(tps)} tok/s</Row>}
-              {snap?.apiMs !== undefined && (
-                <Row label={t("本回合 API 耗时", "Turn API time")}>{(snap.apiMs / 1000).toFixed(2)}s</Row>
-              )}
-              {totals && <Row label={t("累计", "Totals")}>{totals}</Row>}
-            </div>
+            {tps !== undefined && (
+              <>
+                <div className="my-1.5 h-px bg-line" />
+                <div className="text-[11px]">
+                  <Row label={t("生成速度", "Throughput")}>{Math.round(tps)} tok/s</Row>
+                </div>
+              </>
+            )}
           </div>,
           document.body,
         )}

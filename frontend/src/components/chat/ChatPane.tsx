@@ -224,11 +224,11 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
       </span>
         <span className="flex shrink-0 items-center gap-2">
           <UsageSummary snap={snap} turns={turns} tools={tools} events={itemList.length} />
-          <ContextUsage snap={snap} />
+          <ContextUsage snap={snap} turns={turns} tools={tools} events={itemList.length} />
         </span>
       </div>
       {/* 第二行居中：token 消耗（图标 + 总量，点开是本轮 / 会话的明细）。 */}
-      <TokenUsage snap={snap} turns={turns} tools={tools} events={itemList.length} />
+      <TokenUsage snap={snap} />
     </>
   );
 

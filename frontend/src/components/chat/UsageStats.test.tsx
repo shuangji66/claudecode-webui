@@ -41,7 +41,7 @@ describe("UsageSummary", () => {
 
 describe("ContextUsage", () => {
   it("上下文用圈 + 百分比，点开只讲占用", () => {
-    const { container } = render(<ContextUsage snap={SNAP} />);
+    const { container } = render(<ContextUsage snap={SNAP} turns={3} tools={12} events={40} />);
     expect(screen.getByLabelText("上下文占用 5%")).toBeInTheDocument();
     // 圈是两段圆：底环 + 按比例画弧（5% → dashoffset 接近满周长）
     const arcs = container.querySelectorAll("svg circle");
@@ -52,8 +52,8 @@ describe("ContextUsage", () => {
     expect(offset).toBeCloseTo(dash * 0.95, 3);
   });
 
-  it("点开详情：只有占用与输入侧分项，消耗不在这里", () => {
-    render(<ContextUsage snap={SNAP} />);
+  it("点开详情：占用 + 新输入 + 累计（轮 / 工具 / 事件），缓存与消耗不在这里", () => {
+    render(<ContextUsage snap={SNAP} turns={1} tools={4} events={11} />);
     // 关着的时候不渲染，也不再往 title 里塞长文（触屏拿不到悬停）。
     expect(screen.queryByRole("dialog")).toBeNull();
 
@@ -62,18 +62,20 @@ describe("ContextUsage", () => {
 
     const panel = screen.getByRole("dialog", { name: "上下文占用" });
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    expect(panel).toHaveTextContent("9.1K / 195.3K");
+    expect(panel).toHaveTextContent("已用9.1K / 195.3K");
     expect(panel).toHaveTextContent("新输入12");
-    expect(panel).toHaveTextContent("缓存读取8.8K");
-    expect(panel).toHaveTextContent("缓存写入300");
-    expect(panel).toHaveTextContent("缓存命中97%");
-    // token 消耗与速度搬到 TokenUsage 那颗胶囊里了。
+    // 累计的轮次 / 工具 / 事件放在这里；缓存与消耗在 TokenUsage 那颗胶囊里。
+    expect(panel).toHaveTextContent("累计1 轮 · 4 次工具 · 11 条事件");
+    expect(panel).not.toHaveTextContent("缓存读取");
+    expect(panel).not.toHaveTextContent("缓存命中");
     expect(panel).not.toHaveTextContent("本轮消耗");
     expect(panel).not.toHaveTextContent("生成速度");
+    // 那行解释性小字已删掉：弹层只摆数字。
+    expect(panel).not.toHaveTextContent("下一轮要发的上下文");
   });
 
   it("再点一次、按 Esc、点外部都会关闭详情", () => {
-    render(<ContextUsage snap={SNAP} />);
+    render(<ContextUsage snap={SNAP} turns={1} tools={0} events={9} />);
     const trigger = screen.getByRole("button", { name: "上下文占用 5%" });
 
     fireEvent.click(trigger);
@@ -91,7 +93,7 @@ describe("ContextUsage", () => {
   });
 
   it("没有窗口或占用时不出圈（宁可不显示，也不画 0%）", () => {
-    const { container } = render(<ContextUsage snap={{ contextTokens: 9312 }} />);
+    const { container } = render(<ContextUsage snap={{ contextTokens: 9312 }} turns={0} tools={0} events={0} />);
     expect(container.textContent).toBe("");
     expect(screen.queryByRole("button")).toBeNull();
   });

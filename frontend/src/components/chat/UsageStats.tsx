@@ -89,11 +89,18 @@ export function UsageSummary({ snap, turns, tools, events }: Props) {
 }
 
 const PANEL_WIDTH = 236;
-// 只放占用相关的 5 行（已用 / 新输入 / 缓存读取 / 缓存写入 / 缓存命中）。
-const PANEL_HEIGHT = 220;
+// 占用 2 行 + 累计 1 行（缓存与本轮消耗都在 TokenUsage 的弹层里）。
+const PANEL_HEIGHT = 200;
 
-/** 上下文占用：圆环 + 百分比，点开是「窗口还剩多少」的明细（消耗在 TokenUsage 里）。 */
-export function ContextUsage({ snap }: { snap: UsageSnapshot | undefined }) {
+interface ContextProps {
+  snap: UsageSnapshot | undefined;
+  turns: number;
+  tools: number;
+  events: number;
+}
+
+/** 上下文占用：圆环 + 百分比，点开是「窗口还剩多少」（token 与缓存明细在 TokenUsage 里）。 */
+export function ContextUsage({ snap, turns, tools, events }: ContextProps) {
   const t = useT();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -102,6 +109,13 @@ export function ContextUsage({ snap }: { snap: UsageSnapshot | undefined }) {
   useDismiss(anchor !== null, panelRef, anchor, close);
 
   const pct = snap ? contextPercent(snap.contextTokens, snap.contextWindow) : undefined;
+  const totals = [
+    turns > 0 ? t(`${turns} 轮`, `${turns} turns`) : "",
+    tools > 0 ? t(`${tools} 次工具`, `${tools} tool calls`) : "",
+    events > 0 ? t(`${events} 条事件`, `${events} events`) : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
   if (!snap || pct === undefined) return null;
   const barTone = pct >= 85 ? "bg-danger" : pct >= 70 ? "bg-warn" : "bg-brand";
 
@@ -145,22 +159,15 @@ export function ContextUsage({ snap }: { snap: UsageSnapshot | undefined }) {
               {snap.inputTokens !== undefined && (
                 <Row label={t("新输入", "New input")}>{formatTokens(snap.inputTokens)}</Row>
               )}
-              {snap.cacheReadTokens ? (
-                <Row label={t("缓存读取", "From cache")}>{formatTokens(snap.cacheReadTokens)}</Row>
-              ) : null}
-              {snap.cacheCreationTokens ? (
-                <Row label={t("缓存写入", "Cache write")}>{formatTokens(snap.cacheCreationTokens)}</Row>
-              ) : null}
-              {snap.cacheHitRate !== undefined && (
-                <Row label={t("缓存命中", "Cache hit")}>{Math.round(snap.cacheHitRate * 100)}%</Row>
-              )}
             </div>
-            <div className="mt-2 text-[10.5px] leading-relaxed text-faint">
-              {t(
-                "这是最近一次请求送出去的输入侧 token，也就是下一轮要发的上下文。",
-                "Input side of the latest request — what the next turn sends as context.",
-              )}
-            </div>
+            {totals && (
+              <>
+                <div className="my-1.5 h-px bg-line" />
+                <div className="text-[11px]">
+                  <Row label={t("累计", "Totals")}>{totals}</Row>
+                </div>
+              </>
+            )}
           </div>,
           document.body,
         )}
