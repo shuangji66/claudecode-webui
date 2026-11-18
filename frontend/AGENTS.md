@@ -51,7 +51,7 @@ src/
   lib/plugins.ts       插件响应兜底、目录查询串、id 拆分（纯函数）
   lib/fnos.ts          飞牛宿主桥接：目录授权（authorizeUserFile）+ 回包归一化（纯函数部分可测）
   lib/mention.ts       输入框 `@` 引用语法：token 检测/格式化/替换/面包屑（纯函数，对齐 DSH grammar）
-  assets/claude-code.svg 左侧栏品牌图标
+  assets/claude-code.svg 品牌图标：左侧栏 / 鉴权页品牌标记 + 浏览器标签页图标（index.html 的 favicon）
   store/useAppStore.ts zustand 全局状态（只做状态搬运）
   store/useSidebarStore.ts 右侧栏数据（文件树/Git/预览，所有 fetch 收敛在这里）
   store/useSkillsStore.ts  设置页技能数据（/api/skills 的列表与正文）

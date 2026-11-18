@@ -7,6 +7,10 @@
     <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <!-- 标签页图标复用左侧栏的品牌 logo（同一份 SVG）：不另存一份 favicon，
+         避免两处图标各自漂移。构建后落到 assets/claude-code-<hash>.svg，
+         由后端 rewriteBase 按运行期 baseurl 改写 href。 -->
+    <link rel="icon" type="image/svg+xml" href="./src/assets/claude-code.svg" />
     <title>Claude Code</title>
     <script>
       // 样式加载前先定主题/字号，避免深色模式闪白。设置页同步后会再次覆盖。

@@ -30,7 +30,9 @@
   档位是「默认（不向 API 声明）+ 模型声明的档位」，默认选中「默认」；切换档位会按同一 id
   重开会话让它生效，进行中等这一轮结束）；
 - 左侧栏品牌图标使用 `frontend/src/assets/claude-code.svg`；鉴权页（TokenGate）复用同一个
-  `BrandMark`（不套色块：logo 本身就是陶土色）；前端不允许呼吸灯/无限 pulse 动画。
+  `BrandMark`（不套色块：logo 本身就是陶土色）；浏览器标签页图标（`index.html` 的
+  `<link rel="icon">`）也指向这一份 SVG，不要另放一份 favicon 让两处图标各自漂移；
+  前端不允许呼吸灯/无限 pulse 动画。
 
 部署约定：**只部署 `ccweb` 本身**。`claude` 不随包分发、也不回退 PATH、也不接受环境变量覆盖：
 只能由「设置 → 部署」从 npm 平台包按版本下载到
