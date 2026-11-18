@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"ccweb/backend/internal/authz"
 )
 
 // DirAuth 是飞牛「用户授权目录」的读写入口（scope `trim.file.userAccess`）。
@@ -33,10 +35,17 @@ type dirsPayload struct {
 
 // gatewayUID 从网关转发的 Header 里取当前用户 UID。
 //
-// **只认 `X-Trim-Userid`**：飞牛统一网关校验登录态之后才注入它，客户端自己传的
-// uid 一律不信（AGENTS 里那条「不要信任客户端传入的用户 ID」）。拿不到就说明这次
-// 请求没走网关（TCP 直连 / make dev），而授权是按飞牛用户记账的，这时候没有可查的东西。
+// **只认 `X-Trim-Userid`，而且只认 unix socket 通道上的那一份**：飞牛统一网关
+// 校验登录态之后才注入它，客户端自己传的 uid 一律不信（AGENTS 里那条「不要信任
+// 客户端传入的用户 ID」）。
+//
+// TCP 通道的请求不经过飞牛网关：那个头是浏览器随便写的。认它就等于让任何拿到
+// 访问密码的人带上 `X-Trim-Userid: 1000` 去查、甚至撤销别人的目录授权。
+// 拿不到可信 uid 时授权无从查起（TCP 直连 / make dev），回空列表 + 原因。
 func gatewayUID(r *http.Request) (int, bool) {
+	if channelOf(r) != authz.ChannelUnix {
+		return 0, false
+	}
 	v := strings.TrimSpace(r.Header.Get("X-Trim-Userid"))
 	if v == "" {
 		return 0, false

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ccweb/backend/internal/authz"
 )
 
 type fakeDirs struct {
@@ -257,5 +259,42 @@ func TestProtectedDirsCoversInstallRootAndData(t *testing.T) {
 	exe, err := os.Executable()
 	if err == nil && !has(filepath.Dir(filepath.Dir(exe))) {
 		t.Errorf("缺二进制安装根：%v", got)
+	}
+}
+
+// TCP 通道不经过飞牛网关：`X-Trim-Userid` 是浏览器自己写的，认它等于让任何能
+// 访问端口的人去查、撤销别人的目录授权。列表与撤销都必须按「拿不到用户」处理。
+func TestDirRoutesRejectSpoofedUIDOnTCP(t *testing.T) {
+	dirs := &fakeDirs{dirs: []string{"/vol1/home/user"}}
+	srv := withDirs(t, dirs)
+
+	tcpRequest := func(method, path, body string) *httptest.ResponseRecorder {
+		var r *http.Request
+		if body == "" {
+			r = httptest.NewRequest(method, path, nil)
+		} else {
+			r = httptest.NewRequest(method, path, strings.NewReader(body))
+		}
+		// 客户端伪造的身份头：网关注入时才可信，TCP 直连没有网关。
+		r.Header.Set("X-Trim-Userid", "1000")
+		rec := httptest.NewRecorder()
+		srv.channelHandler(authz.ChannelTCP, "").ServeHTTP(rec, r)
+		return rec
+	}
+
+	p := decodeDirs(t, tcpRequest(http.MethodGet, "/api/dirs", ""))
+	if len(p.Dirs) != 0 || p.UID != 0 {
+		t.Fatalf("TCP 通道不该采信 X-Trim-Userid：dirs=%v uid=%d", p.Dirs, p.UID)
+	}
+	if !strings.Contains(p.Error, "飞牛用户") {
+		t.Errorf("要说清身份不可信：%q", p.Error)
+	}
+
+	rec := tcpRequest(http.MethodPost, "/api/dirs/remove", `{"path":"/vol1/home/user"}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("撤销应 403，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(dirs.removed) != 0 {
+		t.Fatalf("伪造身份的撤销绝不能落到飞牛：%v", dirs.removed)
 	}
 }

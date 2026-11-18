@@ -274,8 +274,11 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `TRIM_API_TOKEN`，应用重新注册/重装后会换；缓存一份就是 401。官方同样要求不落盘。
 - **scope 要声明在包的 `config/resource`**：`{"api-scope": ["trim.file.userAccess"]}`。
   没声明时网关回 `200004`/`1000002`（`internal/trimapi` 把 code/msg 原样带出来，界面直接显示原因）。
-- **uid 只认网关注入的 `X-Trim-Userid`**：授权按飞牛用户记账，应用自己不信客户端传的 uid。
-  拿不到头（TCP 直连 / `make dev`）就回空列表 + 原因——那是「无从查起」，不是「还没授权」。
+- **uid 只认网关注入的 `X-Trim-Userid`，而且只认 unix socket 通道上的那一份**：授权按飞牛
+  用户记账，应用自己不信客户端传的 uid。**TCP 通道必须直接拒收这个头**——那条路上没有网关，
+  头是浏览器随手写的，认它等于让任何拿到访问密码的人带上 `X-Trim-Userid: 1000` 去查、
+  甚至撤销别人的目录授权。拿不到可信 uid（TCP 直连 / `make dev`）就回空列表 + 原因——
+  那是「无从查起」，不是「还没授权」。
 - **添加只能由用户确认**：宿主内 `pickUserFile({directory:true})`（选完即授权）；
   宿主外（独立浏览器）`openAppAuth("pickUserFile", {appName, redirectUri, state})` 打开飞牛
   授权页。**不做 App 版本分流**（那是 dsh 的事）。

@@ -310,8 +310,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 内置搜索路由：`GET /api/search`、`POST /api/search/config|test|attach|detach`。配置走
   `settings.Patch`（校验与密钥语义不重复实现）；`attach` 只写用户级 MCP 配置，命令用
   `os.Executable()` 的绝对路径。细节见根 AGENTS.md 4.12。
-- 飞牛授权目录路由：`GET /api/dirs`（列表）、`POST /api/dirs/remove`（撤销）。uid **只认网关
-  注入的 `X-Trim-Userid`**（不信客户端），拿不到就回空列表 + 原因（TCP 直连无身份）；
+- 飞牛授权目录路由：`GET /api/dirs`（列表）、`POST /api/dirs/remove`（撤销）。uid **只认 unix
+  socket 通道上网关注入的 `X-Trim-Userid`**（不信客户端）：TCP 通道一律拒收这个头（那条路上
+  没有网关，浏览器可以随便写，认它就能查/撤销别人的授权），拿不到就回空列表 + 原因；
   `Deps.Dirs` 为 nil 时同样只报原因。**没有 add 接口**：授权必须由用户在选择器/授权页确认
   （前端 `lib/fnos.ts`）。细节见根 AGENTS.md 4.6.2。
 - 工作区路由：`GET/POST/DELETE /api/workspaces`、`POST /api/workspaces/current`、
