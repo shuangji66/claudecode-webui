@@ -1,0 +1,72 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { GeneralSettings } from "./GeneralSettings";
+import { useAppStore } from "../../../store/useAppStore";
+
+// 通用设置现在是「一行一项」的清单（对齐 DSH 的 Setting-Cell）：左边标题 + 说明、
+// 右边一个控件。这里钉住三件事——行还在（标题与说明都渲染）、枚举项走下拉且写的是
+// 本机偏好、字号按钮落的是 settings 补丁。
+describe("设置 → 通用", () => {
+  const saveSettings = vi.fn(async () => true);
+
+  beforeEach(() => {
+    localStorage.clear();
+    saveSettings.mockClear();
+    useAppStore.setState({
+      settings: {
+        permission_mode: "default",
+        locale: "zh",
+        font_size: 15,
+      } as never,
+      info: null,
+      settingsSaving: false,
+      saveSettings: saveSettings as never,
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("每个设置项都是一行：标题与说明并列出现", () => {
+    render(<GeneralSettings />);
+    for (const title of ["默认权限", "外观", "语言", "字号", "过程展示", "收起时机", "收起后的回复"]) {
+      expect(screen.getByText(title)).toBeInTheDocument();
+    }
+    // 说明跟着当前值走：默认「标准」档的说明文字。
+    expect(screen.getByText("过程收成一行，带上正在做什么与思考首行；点开看每一步。")).toBeInTheDocument();
+  });
+
+  it("过程展示走下拉，选中后写本机偏好并换掉这一行的说明", async () => {
+    render(<GeneralSettings />);
+    await act(async () => {
+      screen.getByRole("button", { name: "过程展示" }).click();
+    });
+    await act(async () => {
+      screen.getByRole("option", { name: "简洁" }).click();
+    });
+    expect(localStorage.getItem("ccweb-process-view")).toBe("concise");
+    expect(screen.getByText("一轮里的思考与工具调用只留一行摘要，点开才看每一步。")).toBeInTheDocument();
+  });
+
+  it("字号用 ± 按钮，落的是 font_size 补丁", async () => {
+    render(<GeneralSettings />);
+    await act(async () => {
+      screen.getByRole("button", { name: "增大字号" }).click();
+    });
+    expect(saveSettings).toHaveBeenCalledWith({ font_size: 16 });
+    await act(async () => {
+      screen.getByRole("button", { name: "减小字号" }).click();
+    });
+    expect(saveSettings).toHaveBeenCalledWith({ font_size: 14 });
+  });
+
+  it("访问令牌只在环境变量令牌模式下出现", () => {
+    const { unmount } = render(<GeneralSettings />);
+    expect(screen.queryByPlaceholderText("CCWEB_AUTH_TOKEN")).toBeNull();
+    unmount();
+
+    useAppStore.setState({ info: { auth_mode: "token" } as never });
+    render(<GeneralSettings />);
+    expect(screen.getByPlaceholderText("CCWEB_AUTH_TOKEN")).toBeInTheDocument();
+  });
+});

@@ -69,7 +69,7 @@ src/
                        / SchedulePage（自动化任务）/ HistoryPage（历史记录）
                        / WorkspaceDialog / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / DeploySettings
                        / ClaudeInstallPrompt
-  components/layout/settings/  设置页分区：GeneralSettings / ModelsSettings / DirsSettings（飞牛已授权目录）/ ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题）
+  components/layout/settings/  设置页分区：GeneralSettings / ModelsSettings / DirsSettings（飞牛已授权目录）/ ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题 + SettingRow/SettingRows 行式设置项）
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
                        / MentionMenu（@ 候选菜单）/ useMention（候选拉取、防抖与键盘仲裁）
                        / ImageLightbox（正文图片放大）
@@ -256,6 +256,11 @@ src/
     会让「打开设置」变成一次并发拉取。
     新增页签照这个模式加，不要写成「全部渲染 + hidden」。
     `Section`（分区标题 + 说明）统一在 `settings/Section.tsx`，不要再在页面里各写一份。
+    **设置项优先用 `SettingRow` 排成一行一项**（对齐 DSH 的 Setting-Cell）：左边标题 + 说明、
+    右边控件，分隔线画在行上（`py-4`，约 73px 一行）；不要把一个设置竖着摞成
+    「标题 / 说明 / 控件」三层——那正是「密度太低」的来源。枚举项用 `Select variant="pill"`
+    （宽度跟着当前值走），两三项用分段控件；说明可以直接跟着当前值变，
+    不要再在控件下面另挂一行解释。
 
 26.1 **侧栏功能区是整页视图，不是弹窗**（对齐 DSH）：插件 / MCP / 技能中心 / 自动化任务 /
     历史记录这五项从左侧栏「新对话」下面那排入口打开，**接管左侧栏以外的剩余区域**

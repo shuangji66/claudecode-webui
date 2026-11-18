@@ -24,8 +24,9 @@ interface Props {
   disabled?: boolean;
   /** 没有选中项时触发器显示的内容。 */
   placeholder?: ReactNode;
-  /** field = 设置页表单样式；ghost = 输入框工具条上的紧凑胶囊。 */
-  variant?: "field" | "ghost";
+  /** field = 设置页表单样式；pill = 设置行右侧的选择胶囊（对齐 DSH 的 selector）；
+   *  ghost = 输入框工具条上的紧凑胶囊。 */
+  variant?: "field" | "pill" | "ghost";
   /** 触发器左侧图标（ghost 变体常用）。 */
   leading?: ReactNode;
   /** 完全覆盖触发器内容（例如右侧还要跟一个「图片」徽标）。 */
@@ -37,6 +38,10 @@ interface Props {
 const TRIGGER_VARIANT: Record<NonNullable<Props["variant"]>, string> = {
   field:
     "flex w-full items-center gap-1.5 rounded-lg border border-line-strong bg-canvas px-2.5 py-1.5 text-left text-[12.5px] text-ink outline-none hover:bg-panel-strong focus-visible:border-brand/60 disabled:cursor-not-allowed disabled:opacity-50",
+  // 宽度跟着当前值走（inline-flex + 内容宽度），所以设置行右侧的控件不会占死半行。
+  // 深色下 bg-panel 只比画布亮一档，再抬一级才看得出这是一颗胶囊。
+  pill:
+    "inline-flex h-8 max-w-full items-center gap-1.5 rounded-lg bg-panel px-2.5 text-left text-[12.5px] text-ink outline-none hover:bg-panel-strong focus-visible:bg-panel-strong disabled:cursor-not-allowed disabled:opacity-50 dark:bg-panel-strong dark:hover:bg-line",
   ghost:
     "flex min-w-0 shrink-0 items-center gap-1 rounded-full px-2 py-1 text-[11px] text-muted outline-none hover:bg-panel-strong hover:text-ink focus-visible:bg-panel-strong disabled:cursor-not-allowed disabled:opacity-40",
 };
@@ -126,8 +131,9 @@ export function Select({
   };
 
   const danger = current?.danger === true;
+  // pill 变体的宽度由内容决定（自动宽度的 flex 容器），`flex-1` 会把文字挤成 0 宽。
   const triggerContent = trigger ?? (
-    <span className="min-w-0 flex-1 truncate">{current?.label ?? placeholder ?? ""}</span>
+    <span className={`min-w-0 truncate ${variant === "pill" ? "" : "flex-1"}`}>{current?.label ?? placeholder ?? ""}</span>
   );
 
   return (
@@ -146,7 +152,7 @@ export function Select({
       >
         {leading}
         {triggerContent}
-        <IconChevronDown size={variant === "field" ? 14 : 11} className="shrink-0 opacity-60" />
+        <IconChevronDown size={variant === "field" ? 14 : variant === "pill" ? 13 : 11} className="shrink-0 opacity-60" />
       </button>
 
       {open$ && pos
