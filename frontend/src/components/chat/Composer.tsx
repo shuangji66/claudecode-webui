@@ -216,8 +216,20 @@ export function Composer({
     } else if (!(await onSend(value, wire, immediate && busy ? { priority: "now" } : undefined))) {
       return; // 失败：草稿与已读入内存的附件原样保留
     }
+    // 发送期间草稿的格子可能已经换了：新对话页的第一条消息会让 store 在 `onSend` 里
+    // 新建会话（`POST /api/session` → `moveDraft(ws:<目录>, 新 id)` → `setActive`），
+    // Composer 换键重读草稿时，这份「已经发出去的正文」就被当成草稿搬到了新 id 下，
+    // 输入框于是残留一串和刚发出的一模一样的消息。
+    // 判据要收紧：发送那一格的草稿已经不在了（被 moveDraft 摘走），且新一格的草稿
+    // 逐字等于这次发出的正文——用户在这期间自己新打的字、别的对话自己的草稿都不会命中。
+    const afterKey = draftKeyRef.current;
+    const movedTo =
+      afterKey && afterKey !== sendKey && readDraft(sendKey) === "" && readDraft(afterKey) === text
+        ? afterKey
+        : "";
     writeDraft(sendKey, "");
-    if (draftKeyRef.current === sendKey) setText("");
+    if (movedTo) writeDraft(movedTo, "");
+    if (!afterKey || afterKey === sendKey || movedTo) setText("");
     setCaret(0);
     setFiles([]);
     setFileError(null);

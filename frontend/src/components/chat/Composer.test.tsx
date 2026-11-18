@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Composer } from "./Composer";
-import { readDraft, writeDraft } from "../../lib/drafts";
+import { moveDraft, readDraft, writeDraft } from "../../lib/drafts";
 import { useAppStore } from "../../store/useAppStore";
 import { SystemDialogs } from "../common/SystemDialogs";
 
@@ -266,6 +266,28 @@ describe("Composer 草稿", () => {
     writeDraft("ws:/work", "新对话页打的字");
     setup({ draftKey: "ws:/work" });
     expect(textarea().value).toBe("新对话页打的字");
+  });
+
+  // 新对话页的第一条消息会让 store 在发送途中新建会话：createSession 调
+  // moveDraft(ws:<目录>, 新 id) 把这串正文搬到刚生成的 id 下，随后 activeId 一变，
+  // Composer 换键重读草稿——那串正文已经不是草稿了，却会被当成草稿放回输入框。
+  it("新对话页发出首条消息时，输入框不残留刚发出的正文", async () => {
+    const text = "这一串已经发出去了";
+    let rerenderWithNewKey: () => void = () => {};
+    const onSend = vi.fn(async () => {
+      moveDraft("ws:/work", "s-new");
+      rerenderWithNewKey();
+      return true;
+    });
+    const { rerender } = render(composerEl({ draftKey: "ws:/work", onSend }, onSend));
+    rerenderWithNewKey = () => rerender(composerEl({ draftKey: "s-new", onSend }, onSend));
+
+    fireEvent.change(textarea(), { target: { value: text } });
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+
+    await waitFor(() => expect(onSend).toHaveBeenCalled());
+    await waitFor(() => expect(textarea().value).toBe(""));
+    expect(readDraft("s-new")).toBe("");
   });
 });
 
