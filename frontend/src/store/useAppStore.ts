@@ -74,6 +74,8 @@ export interface InfoResponse {
   /** 当前生效的托管版本号。 */
   claude_active?: string;
   projects_root: string;
+  /** 本应用在飞牛里的 appname（后端由 TRIM_APPNAME 派生）：打开授权页要带上它。 */
+  trim_app?: string;
   data_dir: string;
   claude_home: string;
   settings_file: string;

@@ -78,7 +78,13 @@ type Deps struct {
 	// 为 nil 时相关路由返回 503。
 	Mcp *mcp.Manager
 	// Plugins 通过 `claude plugin` 管理插件与 marketplace；为 nil 时相关路由返回 503。
-	Plugins       *plugin.Manager
+	Plugins *plugin.Manager
+	// Dirs 读写飞牛「用户授权目录」（scope trim.file.userAccess）；为 nil 时
+	// 「设置 → 目录」显示「本部署没有接飞牛目录接口」。
+	Dirs DirAuth
+	// DirsProtected 是撤销时一律拒绝的路径（应用自己的安装目录 / 数据目录）：
+	// 撤销它们等于让运行中的进程读不到自己的二进制与数据。
+	DirsProtected []string
 	ClaudeVersion string
 	TerminalShell string
 	StartedAt     time.Time
@@ -149,6 +155,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/workspaces", s.authed(s.handleRemoveWorkspace))
 	s.mux.HandleFunc("POST /api/workspaces/current", s.authed(s.handleSetCurrentWorkspace))
 	s.mux.HandleFunc("POST /api/workspaces/rename", s.authed(s.handleRenameWorkspace))
+	// 飞牛「已授权目录」：只查/删，授权由用户在选择器或授权页确认（前端负责）。
+	s.mux.HandleFunc("GET /api/dirs", s.authed(s.handleListDirs))
+	s.mux.HandleFunc("POST /api/dirs/remove", s.authed(s.handleRemoveDir))
 	s.mux.HandleFunc("GET /api/fs/list", s.authed(s.handleBrowseDirs))
 	s.mux.HandleFunc("POST /api/fs/mkdir", s.authed(s.handleMkdir))
 	s.mux.HandleFunc("POST /api/fs/access", s.authed(s.handleFsAccess))

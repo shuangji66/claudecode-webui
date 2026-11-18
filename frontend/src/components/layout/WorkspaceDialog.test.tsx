@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { WorkspaceDialog } from "./WorkspaceDialog";
 import { SystemDialogs } from "../common/SystemDialogs";
 import { useAppStore } from "../../store/useAppStore";
+import { useDirsStore } from "../../store/useDirsStore";
 
 const authorizeFnosDir = vi.fn();
 const pickFnosDir = vi.fn();
@@ -25,7 +26,17 @@ const LISTING = {
   truncated: false,
 };
 
+/** 「已授权目录」芯片的数据源是 GET /api/dirs；默认回空列表。 */
+function stubDirs(dirs: string[]) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ dirs, uid: 1000 }), { status: 200, headers: { "Content-Type": "application/json" } })),
+  );
+}
+
 beforeEach(() => {
+  stubDirs([]);
+  useDirsStore.setState({ dirs: [], protected: [], uid: null, error: null, loading: false, removing: null });
   authorizeFnosDir.mockReset();
   pickFnosDir.mockReset();
   addWorkspace.mockReset().mockResolvedValue(true);
@@ -43,6 +54,10 @@ beforeEach(() => {
     mkdirDir,
     probeDir,
   });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 /** 打开弹窗并等首次目录加载落定（load() 里的 setState 要在 act 内完成）。 */
@@ -185,5 +200,73 @@ describe("WorkspaceDialog", () => {
 
     await waitFor(() => expect(mkdirDir).toHaveBeenCalledWith("/vol1/1000/demo", "新目录"));
     await waitFor(() => expect(browseDirs).toHaveBeenLastCalledWith("/vol1/1000/demo/新目录", false));
+  });
+});
+
+describe("WorkspaceDialog 的已授权目录", () => {
+  // 打开弹窗就现查一次飞牛授权列表：用户可能刚在「设置 → 目录」或飞牛桌面里改过。
+  it("读取飞牛已授权目录，芯片点一下就进入该目录", async () => {
+    stubDirs(["/vol1/1000/other"]);
+    await openDialog();
+
+    const chip = await screen.findByRole("button", { name: "进入 /vol1/1000/other" });
+    await act(async () => {
+      fireEvent.click(chip);
+    });
+    await waitFor(() => expect(browseDirs).toHaveBeenLastCalledWith("/vol1/1000/other", false));
+  });
+
+  // 快捷入口原先和「已授权目录」重复（同一目录两行芯片），现在只剩一行。
+  it("不再单独出现「快捷入口」", async () => {
+    stubDirs(["/vol1/1000/other"]);
+    await openDialog();
+
+    expect(await screen.findByText("已授权目录")).toBeInTheDocument();
+    expect(screen.queryByText("快捷入口")).toBeNull();
+  });
+
+  // 底部那行只读路径与「上一级」右侧的父路径都是重复信息：输入框里已经有当前路径。
+  it("底部与「上一级」行不再显示多余的路径文本", async () => {
+    await openDialog();
+
+    expect(screen.getByRole("textbox", { name: "目录路径" })).toHaveValue("/vol1/1000/demo");
+    expect(screen.queryByText("/vol1/1000/demo")).toBeNull();
+    expect(screen.queryByText("/vol1/1000")).toBeNull();
+  });
+
+  // 这一栏只是跳转入口：撤销授权在「设置 → 目录」做。应用自己的安装目录也在
+  // 列表里（ClaudeCode），在这里顺手删掉等于自断手脚。
+  it("「已授权目录」只有跳转，没有任何删除入口", async () => {
+    stubDirs(["/vol1/1000/other"]);
+    useAppStore.setState({
+      workspaces: [{ path: "/vol1/1000/demo", name: "demo", last_used: "", exists: true }],
+      currentWorkspace: "/vol1/1000/demo",
+    });
+    await openDialog();
+
+    expect(screen.getByRole("button", { name: "进入 /vol1/1000/demo" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "进入 /vol1/1000/other" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /移除/ })).toBeNull();
+  });
+});
+
+// 关闭弹窗时组件仍然挂载（`open=false` 只是早返回 null）。只要有一条 hook 排在
+// `if (!open) return null` 之后，关闭就会「本次渲染的 hook 比上次少」→ React #300，
+// 手机上是整屏「界面出错了」。这条用例把「开 → 关 → 再开」的 hooks 顺序钉住。
+describe("WorkspaceDialog 的 hooks 顺序", () => {
+  it("关闭再打开不报错（React #300 回归）", async () => {
+    const onClose = vi.fn();
+    const { rerender } = render(<WorkspaceDialog open onClose={onClose} />);
+    await screen.findByRole("button", { name: /^添加$/ });
+
+    await act(async () => {
+      rerender(<WorkspaceDialog open={false} onClose={onClose} />);
+    });
+    expect(screen.queryByRole("button", { name: /^添加$/ })).toBeNull();
+
+    await act(async () => {
+      rerender(<WorkspaceDialog open onClose={onClose} />);
+    });
+    expect(await screen.findByRole("button", { name: /^添加$/ })).toBeInTheDocument();
   });
 });

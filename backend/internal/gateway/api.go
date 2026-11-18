@@ -28,11 +28,14 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	body := map[string]any{
 		"version": s.d.Cfg.Version,
 		// base_url 是本次请求的有效前缀：unix 通道是网关前缀，TCP 通道为空。
-		"base_url":           s.baseOf(r),
-		"socket":             s.d.Cfg.AdminSock,
-		"claude_bin":         s.d.Manager.Binary(),
-		"claude_version":     s.d.ClaudeVersion,
-		"projects_root":      s.d.ProjectsRoot,
+		"base_url":       s.baseOf(r),
+		"socket":         s.d.Cfg.AdminSock,
+		"claude_bin":     s.d.Manager.Binary(),
+		"claude_version": s.d.ClaudeVersion,
+		"projects_root":  s.d.ProjectsRoot,
+		// trim_app 是飞牛里的 appname：前端打开授权页（openAppAuth）要带上它，
+		// 后端调用 trim API 用的是同一个值，所以只从配置派生一份。
+		"trim_app":           s.d.Cfg.TrimAppName,
 		"data_dir":           s.d.Cfg.DataDir,
 		"claude_home":        s.d.Cfg.ClaudeHome,
 		"settings_file":      s.d.Cfg.SettingsFile,

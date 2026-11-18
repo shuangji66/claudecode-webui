@@ -58,6 +58,16 @@ type Config struct {
 	// TerminalShell 是右侧栏内置终端使用的 shell（CCWEB_TERMINAL_SHELL）。
 	// 空表示依次尝试 $SHELL / bash / sh。
 	TerminalShell string
+	// TrimSocket 是飞牛应用网关（apiscope）的 unix socket（CCWEB_TRIM_SOCKET）。
+	// 默认是平台固定路径；改它只用于测试与联调。
+	TrimSocket string
+	// TrimAppName 是本应用在飞牛里的 appname（TRIM_APPNAME，飞牛启动 cmd/main 时注入）。
+	TrimAppName string
+	// TrimToken 现读飞牛注入的 API token（TRIM_API_TOKEN）。
+	//
+	// 用函数而不是字符串：飞牛会在应用重新注册/重装后换掉 token，缓存一份就会 401，
+	// 官方文档也明确要求「每次调用现读、不落盘、不下发前端」。
+	TrimToken func() string
 	// Version 由 -ldflags 注入。
 	Version string
 }
@@ -65,6 +75,14 @@ type Config struct {
 // EnvOr 返回环境变量值，为空时返回默认值。
 func EnvOr(key, def string) string {
 	if v := os.Getenv(EnvPrefix + key); v != "" {
+		return v
+	}
+	return def
+}
+
+// trimEnvOr 读飞牛平台注入的环境变量（它们不带 CCWEB_ 前缀）。
+func trimEnvOr(key, def string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
 	}
 	return def
@@ -138,6 +156,9 @@ func Load(version string) Config {
 		PermissionMode:    EnvOr("PERMISSION_MODE", ""),
 		Model:             EnvOr("MODEL", ""),
 		TerminalShell:     EnvOr("TERMINAL_SHELL", ""),
+		TrimSocket:        trimEnvOr("CCWEB_TRIM_SOCKET", "/var/run/trim_open_gateway_apiscope.socket"),
+		TrimAppName:       trimEnvOr("TRIM_APPNAME", "ClaudeCode"),
+		TrimToken:         func() string { return os.Getenv("TRIM_API_TOKEN") },
 		Version:           version,
 	}
 }

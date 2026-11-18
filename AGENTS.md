@@ -21,9 +21,9 @@
   `xterm.js` 只做渲染）；
 - **授权目录 = 工作区**，持久化在 `workspaces.json`；对话列表来自 claude 转录 +
   `conversations.json` 元数据，启动时恢复上次对话（`--resume`）而不是新建；
-- 设置页分「通用 / 模型 / 技能 / 插件 / MCP / 代理 / 部署 / 访问」：默认权限（置顶）、主题、语言、字号、
+- 设置页分「通用 / 模型 / 目录 / 技能 / 插件 / MCP / 代理 / 部署 / 访问」：默认权限（置顶）、主题、语言、字号、
   技能、代理、每个模型的推理强度/图片能力/上下文窗口/最大输出、claude 版本的下载源/安装/切换，
-  以及端口访问开关、TCP 端口与访问密码（单密码，无用户名）；
+  以及飞牛已授权目录的查看/添加/撤销、端口访问开关、TCP 端口与访问密码（单密码，无用户名）；
 - 输入框 `+` 是添加菜单（对齐 DSH）：本地文件/图片、从飞牛选择、以及 claude 的 `/` 指令；
   附件随 prompt 发送。模型与推理等级是 DSH 风格的两级菜单（按提供商分组，不显示图片标记；
   档位是「默认（不向 API 声明）+ 模型声明的档位」，默认选中「默认」；切换档位会按同一 id
@@ -70,6 +70,7 @@ hub ── manager ── session ── process ── claude (NDJSON)
 | `agent/session` | `agent/protocol` | 知道文件系统布局、知道前端协议 |
 | `agent/process` | 标准库 | 启动会话、解析 NDJSON |
 | `claudebin` | 标准库 | 启动 claude、决定会话参数 |
+| `trimapi` | 标准库 | 知道 HTTP 路由 / 前端协议（只经飞牛 apiscope socket 出站） |
 | `agent/protocol` | 标准库 | I/O、状态机 |
 
 `gateway` 对 manager 只依赖 `SessionManager` 接口（见 `gateway.go`），
@@ -239,6 +240,12 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 不做版本分流：dsh 那边按飞牛 App 版本切网页授权页，本应用只跑微应用 iframe，不适用。
 - 「选择飞牛目录」（`pickUserFile`）本身就是授权入口：挑完只在弹窗里**进入该目录**，
   不自动登记、不关弹窗、不进新对话；用户点「添加」时探测已通过，不会再弹一次确认框。
+- 「添加授权目录」弹窗里的**「已授权目录」是唯一的目录入口**：打开时现查飞牛授权列表
+  （`GET /api/dirs`），芯片 = 授权目录 ∪ 已登记工作区（按路径去重）。
+  **这一栏只做跳转，没有任何删除入口**：撤销授权是「设置 → 目录」的事，而应用自己的安装目录
+  （ClaudeCode）就在列表里，在这里顺手删掉等于自断手脚；移除工作区仍走侧栏工作区行的菜单。
+  旧的「快捷入口」已并入这里，不要再单独摆一行；当前路径只认顶部输入框，
+  底部那行只读路径与「上一级」右侧的父路径都已删除（重复信息）。
 - 「新建文件夹」走 `POST /api/fs/mkdir`：只接受**单层目录名**，带分隔符/`.`/`..` 一律 400；
   它是宿主写操作，和浏览接口一样必须挂 `s.authed`。
 - 「重命名工作区」走 `POST /api/workspaces/rename`，**只改显示名**，绝不 `os.Rename` 真目录
@@ -256,6 +263,37 @@ hub ── manager ── session ── process ── claude (NDJSON)
   工作区外）。边界：只放行图片/PDF（扩展名初筛 + `http.DetectContentType` 复核，改名的
   HTML/SVG 会被拒）、必须是普通文件、≤ 8MB、必须挂 `s.authed`。不要在这条路上加
   「顺手读个文本文件」——那等于给前端开了任意宿主文件读取。
+
+### 4.6.2 飞牛「已授权目录」（设置 → 目录）
+
+- **真源在飞牛**：scope `trim.file.userAccess` 管的是「当前飞牛用户授权给本应用的目录」，
+  只能由**服务端**经 unix socket `/var/run/trim_open_gateway_apiscope.socket` 调
+  `POST /api/v1/trimapp`：`{reqId, req, appName, data}` + `Authorization: Bearer $TRIM_API_TOKEN`。
+  连**浏览器**都不要直接调（token 不能下发给前端）。
+- **token 每次现读**（`config.TrimToken` 是个函数）：飞牛在启动 `cmd/main` 时注入
+  `TRIM_API_TOKEN`，应用重新注册/重装后会换；缓存一份就是 401。官方同样要求不落盘。
+- **scope 要声明在包的 `config/resource`**：`{"api-scope": ["trim.file.userAccess"]}`。
+  没声明时网关回 `200004`/`1000002`（`internal/trimapi` 把 code/msg 原样带出来，界面直接显示原因）。
+- **uid 只认网关注入的 `X-Trim-Userid`**：授权按飞牛用户记账，应用自己不信客户端传的 uid。
+  拿不到头（TCP 直连 / `make dev`）就回空列表 + 原因——那是「无从查起」，不是「还没授权」。
+- **添加只能由用户确认**：宿主内 `pickUserFile({directory:true})`（选完即授权）；
+  宿主外（独立浏览器）`openAppAuth("pickUserFile", {appName, redirectUri, state})` 打开飞牛
+  授权页。**不做 App 版本分流**（那是 dsh 的事）。
+- **宿主外必须有回调页**：`redirectUri` = `<baseurl>/callback`。它走 SPA 回退但**不挂应用壳层**
+  （`main.tsx` 用 `isAuthCallbackPath` 分流，见 `AuthCallbackPage`）：不经过令牌门、不建 WS，
+  只把结果 postMessage 给原页面并关闭自己。
+- **state 的比对在发起方**：回调页拿不到发起时生成的随机串，它只转交；原页面用
+  `authSucceeded(result, expectedState)` 判定。少了这一步，任意页面编一条 `?status=success`
+  就能冒充一次授权。
+- **直连端口访问打不开 `/app-auth`**（不在飞牛网关前缀下）：这种情况下按钮只给一句人话，
+  不要跳到一个 404 页面。
+- 这一页**只有列表 / 添加 / 撤销**：不打开目录、不标目录徽章、不写说明——它只回答
+  「claude 现在能碰哪些目录」。撤销是破坏性动作，先 `askConfirm` 再调接口。
+- **应用自己的目录不许撤销**（安装包固有目录，撤了连自己的二进制都读不到）：
+  `gateway.ProtectedDirs(cfg.DataDir, cfg.ClaudeHome)` 取二进制所在目录、安装根、数据目录、
+  claude HOME 的 realpath，`/api/dirs` 的原样回给前端（`protected`，界面据此不给撤销按钮），
+  `POST /api/dirs/remove` 再挡一次——**命中「等于 / 在其上 / 在其内」都拒绝**（撤销父目录同样
+  会让应用的目录失效）。只靠前端隐藏按钮不算数。
 
 ### 4.7 前端侧
 

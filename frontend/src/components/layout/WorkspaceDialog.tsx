@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
+import { useDirsStore } from "../../store/useDirsStore";
 import type { FsPickListing } from "../../transport/types";
 import { baseName } from "../../lib/labels";
 import { authorizeFnosDir, pickFnosDir } from "../../lib/fnos";
 import { useT } from "../../lib/i18n";
 import { Button } from "../common/Button";
 import { Dialog } from "../common/Dialog";
-import { askConfirm, askPrompt } from "../common/SystemDialogs";
-import { IconChevronRight, IconFolder, IconFolderPlus, IconSearch, IconTrash } from "../common/Icons";
+import { askPrompt } from "../common/SystemDialogs";
+import { IconChevronRight, IconFolder, IconFolderPlus, IconSearch } from "../common/Icons";
 
 interface Props {
   open: boolean;
@@ -29,9 +30,11 @@ export function WorkspaceDialog({ open, onClose }: Props) {
   const workspaceBusy = useAppStore((s) => s.workspaceBusy);
   const browseDirs = useAppStore((s) => s.browseDirs);
   const addWorkspace = useAppStore((s) => s.addWorkspace);
-  const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const mkdirDir = useAppStore((s) => s.mkdirDir);
   const probeDir = useAppStore((s) => s.probeDir);
+  // 飞牛那边的「已授权目录」：它就是最准确的快捷入口，打开弹窗时查一次。
+  const fnosDirs = useDirsStore((s) => s.dirs);
+  const loadFnosDirs = useDirsStore((s) => s.load);
 
   const [path, setPath] = useState("");
   const [listing, setListing] = useState<FsPickListing | null>(null);
@@ -61,11 +64,32 @@ export function WorkspaceDialog({ open, onClose }: Props) {
     }
   };
 
+  // 「已授权目录」= 飞牛授权列表 + 已登记的工作区（同一目录只出现一次）。
+  // **这一栏只用于跳转**：撤销授权是「设置 → 目录」的事，这里不放删除按钮——
+  // 应用自己的安装目录也在列表里（ClaudeCode），在这里顺手删掉等于自断手脚。
+  const shortcuts = useMemo(() => {
+    const out: { path: string; name: string }[] = [];
+    const seen = new Set<string>();
+    for (const w of workspaces) {
+      if (seen.has(w.path)) continue;
+      seen.add(w.path);
+      out.push({ path: w.path, name: w.name });
+    }
+    for (const dir of fnosDirs) {
+      if (seen.has(dir)) continue;
+      seen.add(dir);
+      out.push({ path: dir, name: baseName(dir) });
+    }
+    return out;
+  }, [workspaces, fnosDirs]);
+
   useEffect(() => {
     if (!open) return;
     setErr(null);
     setHidden(false);
     void load(currentWorkspace || workspaceRoot || "", false);
+    // 「已授权目录」每次都现查：用户可能在别处（飞牛桌面 / 设置 → 目录）改过授权。
+    void loadFnosDirs();
     // 只在打开时初始化；后续输入由用户控制。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -113,7 +137,10 @@ export function WorkspaceDialog({ open, onClose }: Props) {
         // 不在飞牛宿主里（直连端口 / 本地开发）：按旧行为继续，不阻塞添加目录。
         console.warn("[fnos] 跳过飞牛目录授权:", verdict.reason);
       }
-      if (await addWorkspace(target)) onClose();
+      if (await addWorkspace(target)) {
+        void loadFnosDirs();
+        onClose();
+      }
     } finally {
       setAuthorizing(false);
     }
@@ -143,6 +170,8 @@ export function WorkspaceDialog({ open, onClose }: Props) {
         if (picked.reason === "message") setErr(t(`飞牛目录选择失败：${picked.message}`, `fnOS directory pick failed: ${picked.message}`));
         return;
       }
+      // 选择器本身就是授权入口：挑完刷新一次列表，芯片里马上能看到它。
+      void loadFnosDirs();
       await load(picked.path);
     } finally {
       setAuthorizing(false);
@@ -172,23 +201,10 @@ export function WorkspaceDialog({ open, onClose }: Props) {
     }
   };
 
-  const removeOne = async (w: { path: string; name: string }) => {
-    const ok = await askConfirm({
-      title: t("移除授权目录", "Remove authorized directory"),
-      message: t(`「${w.name}」将不再作为工作区；已存在的对话不受影响。`, `"${w.name}" will no longer be a workspace; existing conversations are kept.`),
-      danger: true,
-      confirmText: t("移除", "Remove"),
-    });
-    if (ok) void removeWorkspace(w.path);
-  };
-
   const toggleHidden = (v: boolean) => {
     setHidden(v);
     void load(path, v);
   };
-
-  const roots = listing?.roots ?? [];
-  const quick = [...new Set([workspaceRoot, ...workspaces.map((w) => w.path), ...roots].filter(Boolean))];
 
   return (
     <Dialog
@@ -214,10 +230,7 @@ export function WorkspaceDialog({ open, onClose }: Props) {
               {t("显示隐藏目录", "Show hidden")}
             </label>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-faint" title={target}>
-              {target || t("未选择目录", "No directory selected")}
-            </span>
+          <div className="flex items-center justify-end gap-2">
             <Button variant="secondary" onClick={onClose}>
               {t("取消", "Cancel")}
             </Button>
@@ -252,25 +265,6 @@ export function WorkspaceDialog({ open, onClose }: Props) {
           </Button>
         </form>
 
-        {quick.length > 0 && (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <span className="text-[10px] text-faint">{t("快捷入口", "Shortcuts")}</span>
-            {quick.slice(0, 6).map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => void load(p)}
-                className={`max-w-[12rem] truncate rounded-full border px-2 py-0.5 text-[10px] ${
-                  p === currentWorkspace ? "border-brand/40 bg-brand-soft text-brand" : "border-line text-muted hover:bg-panel-strong"
-                }`}
-                title={p}
-              >
-                {baseName(p)}
-              </button>
-            ))}
-          </div>
-        )}
-
         {err && <p className="mt-2 rounded-lg bg-rose-50 px-2.5 py-1.5 text-[11px] text-danger dark:bg-rose-950/30">{err}</p>}
       </div>
 
@@ -280,10 +274,10 @@ export function WorkspaceDialog({ open, onClose }: Props) {
             type="button"
             onClick={() => void load(listing.parent)}
             className="side-row mb-0.5 text-muted"
+            title={listing.parent}
           >
             <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-panel-strong text-[13px]">..</span>
             <span className="text-[12px]">{t("上一级", "Parent")}</span>
-            <span className="ml-auto max-w-[50%] truncate font-mono text-[10px] text-faint">{listing.parent}</span>
           </button>
         )}
         {loading && !listing && <p className="px-3 py-6 text-center text-[12px] text-muted">{t("正在读取目录…", "Reading directory…")}</p>}
@@ -308,24 +302,23 @@ export function WorkspaceDialog({ open, onClose }: Props) {
         ))}
       </div>
 
-      {workspaces.length > 0 && (
+      {shortcuts.length > 0 && (
         <div className="shrink-0 border-t border-line px-4 py-2">
           <p className="mb-1 text-[10px] text-faint">{t("已授权目录", "Authorized directories")}</p>
           <div className="dsh-scroll flex max-h-24 flex-wrap gap-1.5 overflow-y-auto">
-            {workspaces.map((w) => (
-              <span key={w.path} className="flex max-w-full items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[10px] text-muted">
-                <span className="max-w-[12rem] truncate" title={w.path}>
-                  {w.name}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => void removeOne(w)}
-                  className="text-faint hover:text-danger"
-                  aria-label={`${t("移除", "Remove")} ${w.path}`}
-                >
-                  <IconTrash size={11} />
-                </button>
-              </span>
+            {shortcuts.map((item) => (
+              <button
+                key={item.path}
+                type="button"
+                onClick={() => void load(item.path)}
+                className={`max-w-[12rem] truncate rounded-full border px-2 py-0.5 text-[10px] ${
+                  item.path === currentWorkspace ? "border-brand/40 bg-brand-soft text-brand" : "border-line text-muted hover:bg-panel-strong"
+                }`}
+                title={item.path}
+                aria-label={t(`进入 ${item.path}`, `Open ${item.path}`)}
+              >
+                {item.name}
+              </button>
             ))}
           </div>
         </div>

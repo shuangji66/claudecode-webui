@@ -317,3 +317,88 @@ export async function openFnosFileManager(path: string): Promise<FnosOpenOutcome
     return { ok: false, reason: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/** 目录授权的入口选择结果。 */
+export type FnosDirAuthOutcome =
+  | { state: "ok"; path: string }
+  /** 宿主外：已在新窗口打开飞牛授权页，结果靠回调页 postMessage 回来。 */
+  | { state: "opened" }
+  | { state: "denied"; reason: "cancel" }
+  | { state: "denied"; reason: "message"; message: string }
+  | { state: "skipped"; reason: FnosAuthSkipReason };
+
+/** 与飞牛选择器一致的分组（不列「他人共享」，避免误授权）。 */
+const DIR_SIDEBAR_GROUPS = ["myFiles", "external", "favorites", "team"] as const;
+
+/**
+ * 取 SDK 实例但不等宿主握手。
+ *
+ * 独立浏览器里没有宿主可握手，`trimReady()` 会白等 10 秒才超时——而宿主外的授权
+ * （openAppAuth）根本不需要宿主，只需要一个 TrimApp 实例来拼 URL。
+ */
+async function sdkInstance(): Promise<TrimApp | null> {
+  try {
+    const mod = await loadSdk();
+    instance ??= new mod.TrimApp();
+    return instance;
+  } catch (e) {
+    console.warn("[fnos] SDK 加载失败", e);
+    return null;
+  }
+}
+
+/**
+ * 「设置 → 目录」的添加动作：让当前用户授权一个目录给本应用。
+ *
+ * 两条通路，**不分飞牛 App 版本**（版本分流是 dsh 的事，本应用一律直调）：
+ *   - 宿主内（桌面微应用 iframe / App WebView）：`pickUserFile({directory:true})`，
+ *     用户选完即授权，直接拿到路径；
+ *   - 独立浏览器：`openAppAuth("pickUserFile", …)` 打开飞牛授权页，用户确认后系统跳回
+ *     `redirectUri`（我们的回调页），由它 postMessage 通知这边刷新。
+ *
+ * 判断走哪条只用宿主探测（`inHost()`），不用 `sdk.isStandaloneWeb`：后者要等初始化
+ * 结束才可信，而独立浏览器里那次初始化会白等 10 秒超时。
+ *
+ * 注意 openAppAuth 必须由用户点击触发（浏览器会拦截非手势窗口），所以这里不开定时器。
+ */
+export async function addFnosDirAuth(opts: {
+  appName: string;
+  state: string;
+  redirectUri: string;
+}): Promise<FnosDirAuthOutcome> {
+  if (!inHost()) {
+    const sdk = await sdkInstance();
+    if (!sdk) return { state: "skipped", reason: "bridge" };
+    try {
+      await sdk.openAppAuth(
+        "pickUserFile",
+        {
+          appName: opts.appName,
+          directory: true,
+          sidebarGroup: [...DIR_SIDEBAR_GROUPS],
+          redirectUri: opts.redirectUri,
+          state: opts.state,
+        },
+        { target: "_blank", features: "width=750,height=630" },
+      );
+      return { state: "opened" };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return { state: "denied", reason: "message", message };
+    }
+  }
+  const sdk = await trimReady();
+  if (!sdk) return { state: "skipped", reason: "bridge" };
+  try {
+    const res = await sdk.pickUserFile({
+      directory: true,
+      title: "选择授权目录",
+      okText: "确认授权",
+      sidebarGroup: [...DIR_SIDEBAR_GROUPS],
+    });
+    return classifyPickResult(res);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return { state: "denied", reason: "message", message };
+  }
+}

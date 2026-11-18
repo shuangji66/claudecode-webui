@@ -33,6 +33,7 @@ import (
 	"ccweb/backend/internal/search"
 	"ccweb/backend/internal/settings"
 	"ccweb/backend/internal/skills"
+	"ccweb/backend/internal/trimapi"
 	"ccweb/backend/internal/workspace"
 )
 
@@ -148,9 +149,15 @@ func main() {
 		Conversations: convStore,
 		// 个人技能挂在 claude 子进程的 HOME 下：process.CleanEnv 会把 HOME 改成
 		// CCWEB_CLAUDE_HOME，所以这里不能用自己的 ~/.claude/skills。
-		Skills:        skills.New(filepath.Join(cfg.ClaudeHome, ".claude", "skills")),
-		Mcp:           mcpMgr,
-		Plugins:       pluginMgr,
+		Skills:  skills.New(filepath.Join(cfg.ClaudeHome, ".claude", "skills")),
+		Mcp:     mcpMgr,
+		Plugins: pluginMgr,
+		// 飞牛「已授权目录」只能由服务端经 apiscope socket 查/删；
+		// token 由飞牛在启动 cmd/main 时注入，这里传函数每次现读。
+		Dirs: trimapi.New(cfg.TrimSocket, cfg.TrimAppName, cfg.TrimToken),
+		// 应用自己的安装目录 / 数据目录不许撤销授权：授权一撤，运行中的进程连
+		// 自己的二进制都读不到（安装包固有目录，界面里也不给撤销按钮）。
+		DirsProtected: gateway.ProtectedDirs(cfg.DataDir, cfg.ClaudeHome),
 		Claude:        claudeMgr,
 		ProjectsRoot:  cfg.ProjectsRoot,
 		ClaudeVersion: probeClaudeVersion(mgr.Binary()),

@@ -3,9 +3,9 @@ import { useAppStore } from "../../store/useAppStore";
 import { useT } from "../../lib/i18n";
 import { Dialog } from "../common/Dialog";
 import { Section } from "./settings/Section";
-import { BrandMark, IconDownload, IconGitHub, IconGlobe, IconInfo, IconLock, IconPlugin, IconSettings, IconShield, IconSpark, IconWrench } from "../common/Icons";
+import { BrandMark, IconDownload, IconFolder, IconGitHub, IconGlobe, IconInfo, IconLock, IconPlugin, IconSettings, IconShield, IconSpark, IconWrench } from "../common/Icons";
 
-type Tab = "general" | "models" | "skills" | "plugins" | "mcp" | "proxy" | "deploy" | "access" | "about";
+type Tab = "general" | "models" | "dirs" | "skills" | "plugins" | "mcp" | "proxy" | "deploy" | "access" | "about";
 
 // 每页一个 chunk：打开设置只看得到当前这一页，模型页（含预置提供商目录）
 // 与插件/MCP/技能页都没有理由跟着首开一起下发。
@@ -17,6 +17,7 @@ const PluginsSettings = lazy(() => import("./PluginsSettings").then((m) => ({ de
 const McpSettings = lazy(() => import("./McpSettings").then((m) => ({ default: m.McpSettings })));
 const DeploySettings = lazy(() => import("./DeploySettings").then((m) => ({ default: m.DeploySettings })));
 const AccessSettings = lazy(() => import("./settings/AccessSettings").then((m) => ({ default: m.AccessSettings })));
+const DirsSettings = lazy(() => import("./settings/DirsSettings").then((m) => ({ default: m.DirsSettings })));
 
 const PANE_SCROLL =
   "dsh-scroll h-full overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4 md:px-8 md:pb-8 md:pt-6";
@@ -72,6 +73,9 @@ export function SettingsDrawer({
           <NavItem active={tab === "models"} icon={<IconSpark size={16} />} onClick={() => setTab("models")}>
             {t("模型", "Models")}
           </NavItem>
+          <NavItem active={tab === "dirs"} icon={<IconFolder size={16} />} onClick={() => setTab("dirs")}>
+            {t("目录", "Folders")}
+          </NavItem>
           <NavItem active={tab === "skills"} icon={<IconWrench size={16} />} onClick={() => setTab("skills")}>
             {t("技能", "Skills")}
           </NavItem>
@@ -101,6 +105,9 @@ export function SettingsDrawer({
           </Pane>
           <Pane active={tab === "models"} mount={visited.has("models")} flex>
             <ModelsSettings />
+          </Pane>
+          <Pane active={tab === "dirs"} mount={visited.has("dirs")}>
+            <DirsSettings />
           </Pane>
           <Pane active={tab === "skills"} mount={visited.has("skills")} flex>
             <SkillsSettings cwd={cwd ?? ""} />

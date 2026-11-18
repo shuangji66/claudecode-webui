@@ -36,6 +36,7 @@ src/
   lib/permissionModes.ts 权限模式判定与危险模式标记（唯一入口）
   lib/sessionExport.ts 会话导出 Markdown（右上角「更多」菜单）
   lib/sidebarView.ts   左侧栏视图偏好：分组/排序/归档筛选 + 手动顺序（纯函数 + localStorage）
+  lib/fnosAuth.ts      飞牛路由授权：回调页路径判定、state、回包解析（纯函数）
   lib/dragImage.ts     手动排序的拖影：自己造一块与行同宽的替身交给 setDragImage
   lib/subagents.ts     从消息流收集子代理（页头计数 / 审批归属，纯函数）
   lib/turns.ts         「轮」的切分与视口所在轮（对话区刻度跳转，纯函数）
@@ -54,14 +55,16 @@ src/
   store/useMcpStore.ts     设置页 MCP 数据（/api/mcp 的列表、探测结果、停用开关）
   store/useSearchStore.ts  内置搜索数据（/api/search 的配置、测试结果、注册状态）
   store/usePluginStore.ts  设置页插件数据（/api/plugins 的列表/任务轮询/详情）
+  store/useDirsStore.ts    设置页「目录」数据（飞牛已授权目录的列表/撤销）
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
                        / Collapsible（折叠块）/ FileIcon（按扩展名给颜色的文件图标 + 文件夹图标）
                        / ErrorBoundary（渲染异常兜底，挂在 main.tsx 最外层）
                        / Zoomable（ZoomBar + ZoomableImage：图片缩放条与按 zoom 撑开的图）
   components/layout/   Sidebar（工作区/对话列表）/ ConversationPreview（会话悬浮预览）/ TopBar / TokenGate（访问鉴权页）/ SettingsDrawer（只留导航壳）
+                       / AuthCallbackPage（飞牛授权回调页，不挂应用壳层）
                        / WorkspaceDialog / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / DeploySettings / HistoryDialog
                        / ClaudeInstallPrompt
-  components/layout/settings/  设置页分区：GeneralSettings / ModelsSettings / ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题）
+  components/layout/settings/  设置页分区：GeneralSettings / ModelsSettings / DirsSettings（飞牛已授权目录）/ ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题）
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
                        / ImageLightbox（正文图片放大）
                        / UsageStats / ResultBar / WorkspacePicker
@@ -145,6 +148,14 @@ src/
     不自动登记 / 关弹窗 / 进新对话，登记仍由用户点「添加」；「新建文件夹」
     走 `mkdirDir` → `POST /api/fs/mkdir`。工作区行的「更多」菜单只有重命名 / 在文件夹显示 /
     删除工作区三项，别把会话菜单的归档/结束进程混进去。
+    **弹窗里的「已授权目录」是唯一入口**：打开时现查一次飞牛授权列表（`useDirsStore.load` →
+    `GET /api/dirs`），把旧「快捷入口」并进来——芯片 = 飞牛授权目录 ∪ 已登记工作区（按路径去重），
+    点一下就是进入该目录。**不要再单独摆一行「快捷入口」**：同一目录会出现两块芯片，
+    用户分不清哪个才是「已授权」。
+    **这一栏只做跳转，没有任何删除入口**：撤销授权是「设置 → 目录」的事；应用自己的安装目录
+    （ClaudeCode）也在列表里，在这里顺手删掉等于自断手脚。移除工作区仍然走侧栏工作区行的菜单。
+    当前路径只认顶部输入框，**底部那行只读路径、以及「上一级」行右侧的父路径都删掉了**
+    （重复信息，完整路径留在 `title` 里悬浮可见）。
 21. **文件图标走 `common/FileIcon`**（`FileIcon` / `FolderIcon` / `classifyFile`）：
     颜色区分语言、形状区分类别（参考 DSH 的 `FileTypeIcon` + `classifyFileType`）。
     文件树、Git 列表、预览标题都用它，不要再退回单一的 `IconFile`；图标一律 `aria-hidden`。
@@ -203,6 +214,9 @@ src/
     WorkspaceDialog / HistoryDialog 一律 `lazy()` + `Suspense`，不要改回静态 import——
     这几块占了首屏包体的一半（实测主 chunk 604 KB → 382 KB，gzip 173 KB → 118 KB）。
     模态用 `useLazyMount`：**首次打开才挂载，之后保持挂载**，关闭再打开不会丢表单状态。
+    **所有 hook 必须在 `if (!open) return null` 之前**：关闭时组件仍挂载、只是早返回 null，
+    少渲染一条 hook 就是 React #300（「Rendered fewer hooks than expected」），
+    用户看到的是整屏「界面出错了」。`WorkspaceDialog` 踩过一次，有回归用例钉住。
 26. **设置页按页签懒加载**：`SettingsDrawer` 只剩导航壳，每页在自己首次被访问时挂载
     （`visited` 集合）并动态 import。各页 `useEffect` 一挂载就发请求（技能、插件目录、
     MCP、搜索），全部常驻会让「打开设置」变成一次并发拉取，插件目录首次还可能联网十几秒。
@@ -267,6 +281,14 @@ src/
     - **有界**：单条 ≤ `MAX_DRAFT_CHARS`（超长不落盘，别连累别人）、最多
       `MAX_DRAFT_ENTRIES` 条、30 天没动过的自动淘汰；读不出来（隐私模式 / 坏 JSON / 配额满）
       就当没有草稿，绝不能让输入框报错。
+
+31. **飞牛「设置 → 目录」只在两端做**：**列表与撤销**走后端（`/api/dirs`、`/api/dirs/remove`，
+   uid 只认网关注入的 `X-Trim-Userid`，见根 AGENTS.md 4.6.2）；**授权（添加）只能在前端**做——
+   宿主内 `pickUserFile({directory:true})`，独立浏览器 `openAppAuth("pickUserFile", …)`。
+   **宿主外的回包必须由回调页接住**：`redirectUri = <baseurl>/callback`，`main.tsx` 用
+   `isAuthCallbackPath` 把它从 `App` 分流成 `AuthCallbackPage`（不经过令牌门、不建 WS），
+   回调页只解析 + postMessage，**state 的比对在发起方**（`authSucceeded`）。
+   直连端口访问（没有 `/app/` 前缀）打不开 `/app-auth`，只给一句人话，不要跳 404。
 
 ## 3. 状态管理（zustand）
 
@@ -422,7 +444,12 @@ src/
   **宽度必须由「用户偏好 + 当前视口」派生**（`preferredWidth` 存偏好、`useViewportWidth()`
   跟踪 resize、渲染时 `clampWidth(preferredWidth, viewport)`）：只在拖动时 clamp 的话，
   窗口缩小后右侧栏不会自己变窄，会一直把对话挤成一条缝，直到用户拖一下才被纠正。
-- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 技能 / 插件 / MCP / 代理 / 部署 / 访问 / 关于」；
+- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 目录 / 技能 / 插件 / MCP / 代理 / 部署 / 访问 / 关于」；
+  「目录」页只列飞牛已授权目录并提供添加/撤销（`DirsSettings` + `useDirsStore`）：
+  **不打开目录、不标目录徽章、不写说明**，列表 `w-full` + 路径 `truncate`（完整值进 `title`），
+  撤销前 `askConfirm`。后端给 `error` 时说原因（不在统一网关下 / 缺 token / scope 未声明），
+  不能当成「还没有授权目录」；**`protected` 里的路径（应用自己的安装目录 / 数据目录）不给撤销按钮**
+  ——后端也会拒绝，见根 AGENTS.md 4.6.2；
   「访问」页管**端口访问开关（默认关闭）**、TCP 端口（默认 3141，保存后立即换监听）与访问密码：
   开启后经 TCP 访问必须用密码登录（单密码、无用户名），unix socket 入口免密；
   密码有基础复杂度（`lib/password.ts`：≥8 位、含字母与数字），只以摘要落在服务端；
@@ -531,6 +558,7 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
   `permissionModes`（危险模式标记）、`sidebarView`（偏好合并/手动顺序）、`clipboard`（回退路径）、
   `queue`（入队/上限/删除/编辑保序/中断或出错不自动发）、
   `autofill`、`providerCatalog`、`subagents`、`usage`、`fnos`（宿主判定三条件/回包归一化）、
+  `fnosAuth`（回调页路径 / state 比对 / 回包解析）、`dragImage`（拖影替身）、
   `password`（访问密码复杂度：长度/字母/数字/控制字符）、
   `access`（端口范围 1025–65535）、
   `drafts`（按键存取 / 空正文即删除 / 超长不落盘 / 过期与溢出淘汰 / 搬迁与删除 / 坏 JSON 不抛错）。
@@ -553,3 +581,4 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
 | 审批按钮点了没反应 | WS 未连接（`conn !== "open"`），或 `request_id` 传丢 |
 | 类型检查报 CSS 导入 | 缺 `src/vite-env.d.ts` |
 | 弹窗/下拉在深色主题下跟页面脱节 | 用了 `window.confirm` / `<select>` 等原生控件 |
+| 关闭弹窗时整屏「界面出错了」（React #300） | 有 hook 排在 `if (!open) return null` 之后 |

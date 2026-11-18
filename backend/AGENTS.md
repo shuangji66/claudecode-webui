@@ -28,6 +28,7 @@ internal/skills      技能管理：SKILL.md 的列出/读写/删除（个人 + 
 internal/mcp         MCP 配置：用户级 .claude.json / 项目级 .mcp.json 的读写、停用暂存、连通性探测
 internal/plugin      插件与 marketplace：驱动 `claude plugin --json`（真源是 CLI，不碰状态文件）
 internal/search      DeepSeek Search / Fetch API 客户端（内置搜索用；一次 HTTP，不花模型回合）
+internal/trimapi     飞牛应用开放 API（apiscope unix socket）：已授权目录的查询/撤销
 internal/webui       go:embed 前端产物
 ```
 
@@ -309,6 +310,10 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 内置搜索路由：`GET /api/search`、`POST /api/search/config|test|attach|detach`。配置走
   `settings.Patch`（校验与密钥语义不重复实现）；`attach` 只写用户级 MCP 配置，命令用
   `os.Executable()` 的绝对路径。细节见根 AGENTS.md 4.12。
+- 飞牛授权目录路由：`GET /api/dirs`（列表）、`POST /api/dirs/remove`（撤销）。uid **只认网关
+  注入的 `X-Trim-Userid`**（不信客户端），拿不到就回空列表 + 原因（TCP 直连无身份）；
+  `Deps.Dirs` 为 nil 时同样只报原因。**没有 add 接口**：授权必须由用户在选择器/授权页确认
+  （前端 `lib/fnos.ts`）。细节见根 AGENTS.md 4.6.2。
 - 工作区路由：`GET/POST/DELETE /api/workspaces`、`POST /api/workspaces/current`、
   `POST /api/workspaces/rename`（只改显示名）、`GET /api/fs/list`、`POST /api/fs/mkdir`
   （只接受单层目录名）、`POST /api/fs/access`（写探测）、`POST /api/fs/host-file`（宿主文件
@@ -367,6 +372,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   假 CLI 按真实协议回包。
 - **网关用 fake manager**：`gateway_test.go` 里的 `fakeMgr` 实现 `SessionManager`
   （含 `Resume`/`Ensure`），这样不依赖 claude 二进制。
+- `trimapi` 用**临时目录里的 unix socket + 假网关**测（`newFakeGateway`）：钉住外壳字段
+  （`reqId`/`req`/`appName`/`data`）、`Authorization: Bearer`、`code != 0` 映射、缺 token、
+  socket 不存在与「token 每次现读」。
 - 附件：`protocol.UserMessage` 负责 image/document/text content block；`gateway/ws.go`
   的 `decodeAttachments` 负责类型/大小/UTF-8 校验。WS 单帧上限 16MB，前端总附件 10MB。
 - `workspace` 的种子、增删、嵌套最长匹配、`Allows/ AutoStartPath` 必须有表驱动测试。
