@@ -542,3 +542,53 @@ func TestTranscriptPathPrefersNewest(t *testing.T) {
 		t.Fatalf("非法 id 应返回 ErrTranscriptNotFound，实际 %v", err)
 	}
 }
+
+// 中断标记是 CLI 写的合成 user 行：既不是用户说的话，也不能当标题
+// （否则「先按 Esc、再发消息」的对话在列表里叫 “[Request interrupted by user]”）。
+func TestListSkipsInterruptMarker(t *testing.T) {
+	root := t.TempDir()
+	writeJSONL(t, filepath.Join(root, "-tmp-work", "it.jsonl"),
+		`{"type":"user","cwd":"/tmp/work","sessionId":"it","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"[Request interrupted by user]"}}`,
+		`{"type":"user","cwd":"/tmp/work","sessionId":"it","timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":"来点新闻"}}`,
+		`{"type":"assistant","cwd":"/tmp/work","sessionId":"it","timestamp":"2026-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"好的"}]}}`,
+	)
+	got, err := List(root)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("应只有一条会话: %v", got)
+	}
+	if got[0].Title != "来点新闻" {
+		t.Fatalf("标题应跳过中断标记，实际 %q", got[0].Title)
+	}
+	if got[0].Messages != 2 {
+		t.Fatalf("消息数应为 2（中断标记不计），实际 %d", got[0].Messages)
+	}
+}
+
+func TestIsInterruptMarker(t *testing.T) {
+	yes := []string{
+		"[Request interrupted by user]",
+		"[Request interrupted by user for tool use]",
+		"[Request interrupted: the session ended before this agent finished.]",
+		"[Agent call interrupted: the process stopped]",
+		"  [Request interrupted by user]  ",
+	}
+	no := []string{
+		"",
+		"[Request interrupted by user] 为什么会出现这句？",
+		"来点新闻",
+		"<local-command-stdout>x</local-command-stdout>",
+	}
+	for _, s := range yes {
+		if !isInterruptMarker(s) {
+			t.Errorf("应识别为中断标记: %q", s)
+		}
+	}
+	for _, s := range no {
+		if isInterruptMarker(s) {
+			t.Errorf("不应识别为中断标记: %q", s)
+		}
+	}
+}

@@ -29,6 +29,41 @@ describe("ResultBar", () => {
     expect(container.textContent).toBe("");
   });
 
+  // 模型拒答时 CLI 给的是 subtype=success + is_error=true，不能把 "success"
+  // 当失败原因摆出来（原因正文在下面那一段里）。
+  it("拒答不显示 success 这个「子类型」", () => {
+    const { container } = render(
+      <ResultBar
+        item={{
+          id: "r4",
+          seq: 0,
+          ts: 0,
+          kind: "result",
+          isError: true,
+          subtype: "success",
+          text: "The user doesn't want to proceed with this tool use.",
+        }}
+      />,
+    );
+    expect(screen.getByText("本轮出错")).toBeTruthy();
+    expect(container.textContent).not.toContain("success");
+    expect(screen.getByText(/doesn't want to proceed/)).toBeTruthy();
+  });
+
+  it("未收录的子类型原样显示（结构化输出重试用尽有中文）", () => {
+    const { container, rerender } = render(
+      <ResultBar item={{ id: "r5", seq: 0, ts: 0, kind: "result", isError: true, subtype: "weird_subtype" }} />,
+    );
+    expect(screen.getByText("weird_subtype")).toBeTruthy();
+    rerender(
+      <ResultBar
+        item={{ id: "r6", seq: 0, ts: 0, kind: "result", isError: true, subtype: "error_max_structured_output_retries" }}
+      />,
+    );
+    expect(screen.getByText("结构化输出重试次数用尽")).toBeTruthy();
+    expect(container.textContent).not.toContain("error_max_structured_output_retries");
+  });
+
   it("被拒绝的工具调用仍然要说出来", () => {
     render(
       <ResultBar item={{ id: "r3", seq: 0, ts: 0, kind: "result", denials: [{ tool_name: "Bash" }] }} />,

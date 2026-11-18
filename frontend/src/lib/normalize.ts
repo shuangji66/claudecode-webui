@@ -15,6 +15,7 @@ import {
   totalsFromUsage,
   type UsageSnapshot,
 } from "./usage";
+import { interruptReason } from "./model";
 import type { Item, SubagentInfo, ToolImage, TurnUsage, UserImage } from "./model";
 
 let idCounter = 0;
@@ -164,6 +165,47 @@ export function isLocalCommandEcho(text: string): boolean {
   return localCommandEchoRE.test(t);
 }
 
+// 回合被中断时，CLI 会往流里写一条**合成的 user 消息**当标记：
+//   `[Request interrupted by user]`（按 Esc）
+//   `[Request interrupted by user for tool use]`（工具执行中被打断）
+//   `[Request interrupted: the session ended …]` / `[Agent call interrupted: …]`（进程/会话结束）
+// 它不是用户说的话：渲染成用户气泡，用户会以为自己发过这句；而且它让 CLI 在这一轮结束时
+// 报 error_during_execution（见 applyResult 里的处理）。判定照 CLI 自己的标记识别
+// （2.1.327 的 `/^(?:\s*<[a-z][\w-]*[\s>]|\[Request interrupted by user[^\]]*\])/`），
+// 只认「整条消息就是标记」的形态，用户正文里顺口提到这句话不会命中。
+const interruptMarkerRE = /^\[(?:Request interrupted|Agent call interrupted)(?: by user|:)[^\]]*\]$/;
+
+/** 判断一条用户文本是否是 CLI 的「本轮被中断」标记。 */
+export function isInterruptMarker(text: string): boolean {
+  return interruptMarkerRE.test(text.trim());
+}
+
+/**
+ * 回合结束或连接断开时，把还挂着的流式气泡收尾。
+ *
+ * 只有完整 assistant 消息到达才会摘掉 `streaming`；一旦这一轮没有完整消息
+ * （用户中断、进程崩溃、结果里只有错误），气泡会一直显示流式光标，看起来像还在写。
+ */
+export function settleStreaming(items: Item[]): Item[] {
+  let changed = false;
+  const out = items.map((it) => {
+    if (it.kind !== "assistant" || !it.streaming) return it;
+    changed = true;
+    return { ...it, streaming: false };
+  });
+  return changed ? out : items;
+}
+
+/** 本回合（最后一条 result 之后）是否出现过中断标记。 */
+function interruptedThisTurn(items: Item[]): boolean {
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const it = items[i];
+    if (it.kind === "result") return false;
+    if (it.kind === "interrupt") return true;
+  }
+  return false;
+}
+
 function applyStreamEvent(items: Item[], m: Raw, at: number): Item[] {
   const ev = asRecord(m.event);
   if (!ev || ev.type !== "content_block_delta") return items;
@@ -191,6 +233,10 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
   const message = asRecord(m.message);
   const content = message?.content;
   const blocks = Array.isArray(content) ? content : [];
+  // 上游报错时 CLI 用一条 assistant 消息包装错误文本（`API Error: …`）。它不是模型的
+  // 回答，result 里还会再给同一段原因——带上标记，result 那边据此不重复。
+  // 线上字段只见 camelCase（2.1.327），snake_case 一并认，省得版本换写法时静默失效。
+  const apiError = m.isApiErrorMessage === true || m.is_api_error_message === true;
 
   // 先把悬着的流式气泡摘掉：完整消息里带着全部内容块，按块顺序重建才能保住 CLI 的
   // 真实顺序（thinking → text → tool_use）。留着它会把正文永远排在思考之前。
@@ -233,7 +279,15 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
       // 一条消息可能有多个 text 块（正文 → tool_use → 正文）：全部保留，各自成段。
       out = [
         ...out,
-        { id: nextId(), seq: seqOf(out), ts: at, kind: "assistant", text, streaming: false },
+        {
+          id: nextId(),
+          seq: seqOf(out),
+          ts: at,
+          kind: "assistant",
+          text,
+          streaming: false,
+          ...(apiError ? { apiError } : {}),
+        },
       ];
     } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
       if (prevKind === "thinking" && prevText === block.thinking) continue;
@@ -277,7 +331,7 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
   if (textCount === 0 && leftover) {
     out = [
       ...out.slice(0, insertAt),
-      { id: nextId(), seq: seqOf(out), ts: at, kind: "assistant", text: leftover, streaming: false },
+      { id: nextId(), seq: seqOf(out), ts: at, kind: "assistant", text: leftover, streaming: false, ...(apiError ? { apiError } : {}) },
       ...out.slice(insertAt),
     ];
   }
@@ -533,6 +587,18 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
   // 它不是用户说的话，也不是模型输出，渲染成气泡只会污染会话。
   if (isLocalCommandEcho(textOfContent(content))) return items;
 
+  // CLI 的中断标记：单独渲染成一句中性的「已中断」，不占用户气泡。
+  // 连续中断（用户连按 Esc）只留一条，否则每按一次多一行。
+  const marker = textOfContent(content).trim();
+  if (isInterruptMarker(marker)) {
+    const last = items[items.length - 1];
+    if (last && last.kind === "interrupt") return items;
+    return [
+      ...items,
+      { id: nextId(), seq: seqOf(items), ts: at, kind: "interrupt", marker, reason: interruptReason(marker) },
+    ];
+  }
+
   // 附件消息会被 CLI 原样回显（图片/PDF 是 image/document block，文本文件是
   // 额外的 text block）。回放历史时没有本地气泡兜底，这里必须自己拼出
   // 「提示词 + 附件名」——否则内联的文件全文会当成用户说的话显示出来。
@@ -759,18 +825,46 @@ function stampTurnUsage(items: Item[], turn: { durationMs?: number; usage?: Usag
   return items;
 }
 
+/**
+ * result 的原因是否已经由那条「API Error」assistant 消息展示过。
+ *
+ * 只认最后一条 assistant 且带 `apiError` 标记：正常回答里恰好包含同样的字时
+ * 不该把 result 的原因吞掉（那是另一件事）。
+ */
+function repeatedByApiErrorAnswer(items: Item[], reason: string): boolean {
+  const last = [...items].reverse().find((it) => it.kind === "assistant");
+  if (!last || last.kind !== "assistant" || !last.apiError) return false;
+  const answer = last.text.trim();
+  return answer !== "" && reason.trim().includes(answer);
+}
+
 function applyResult(items: Item[], m: Raw, at: number): Item[] {
   const denials = Array.isArray(m.permission_denials) ? (m.permission_denials as unknown[]) : [];
-  const isError = m.is_error === true;
   const raw = typeof m.result === "string" ? m.result : "";
   const errors = Array.isArray(m.errors)
     ? m.errors.filter((e): e is string => typeof e === "string")
     : [];
+  // 用户中断时 CLI 会把这一轮判成失败（subtype=error_during_execution），result 里只塞一段
+  // 内部诊断（`[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null`：
+  // 「最后一条消息是 user、stop_reason 是 null」，正是中断的形态）。**这不是失败，是用户按了停止**：
+  // 还原成正常结束，界面上就不弹「本轮出错」，也不再露一段谁也读不懂的诊断。
+  // 只在本回合确实收到过中断标记、且文本就是这段诊断（或中断标记本身）时才这么做——
+  // 真正的 API 报错照旧显示。
+  const rawText = raw.trim();
+  const interrupted =
+    m.is_error === true &&
+    (/^\[ede_diagnostic\]/.test(rawText) || /^\[Request interrupted by user/.test(rawText)) &&
+    interruptedThisTurn(items);
+  const isError = m.is_error === true && !interrupted;
   // 失败原因就在 result / errors 里（API 报错、超出最大轮数…）。成功回合的 result
   // 与最后一条 assistant 正文是同一段话，只在出错时展示，免得同一段出现两遍。
-  const text = isError ? stripAnsi(raw || errors.join("\n")) : "";
+  // 上游 API 报错是同一个道理的第二遍：CLI 先把「API Error: …」作为一条 assistant 消息
+  // 发下来，result 里又给同一段原因。这里只留上面那条消息，不再重复一次。
+  const reason = isError ? stripAnsi(raw || errors.join("\n")) : "";
+  const text = reason && !repeatedByApiErrorAnswer(items, reason) ? reason : "";
   const usage = applyUsageMessage(undefined, m);
-  const out = stampTurnUsage(items, {
+  // 回合结束（成功/失败/中断都一样）：悬着的流式气泡必须收尾，否则光标永远在闪。
+  const out = stampTurnUsage(settleStreaming(items), {
     durationMs: typeof m.duration_ms === "number" ? m.duration_ms : undefined,
     usage,
   });
@@ -784,7 +878,7 @@ function applyResult(items: Item[], m: Raw, at: number): Item[] {
       costUsd: typeof m.total_cost_usd === "number" ? m.total_cost_usd : undefined,
       durationMs: typeof m.duration_ms === "number" ? m.duration_ms : undefined,
       isError,
-      subtype: typeof m.subtype === "string" ? m.subtype : undefined,
+      subtype: interrupted ? "interrupt" : typeof m.subtype === "string" ? m.subtype : undefined,
       text: text || undefined,
       denials,
       usage,

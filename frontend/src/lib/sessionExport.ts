@@ -78,6 +78,16 @@ export function sessionToMarkdown({ title, cwd, items, locale = "zh", now = new 
       case "system":
         lines.push(`> ${item.text}`, "");
         break;
+      case "interrupt":
+        lines.push(
+          `> ${
+            item.reason === "session"
+              ? tr(locale, "会话已结束，本轮未完成", "Session ended before this turn finished")
+              : tr(locale, "已中断", "Interrupted")
+          }`,
+          "",
+        );
+        break;
       case "result":
         // 刻意不导出耗时/费用。
         break;

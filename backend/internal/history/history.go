@@ -131,6 +131,11 @@ func summarize(path, project string) Session {
 			if l.Type == "user" && isLocalCommandEcho(extractText(l.Message.Content)) {
 				return true
 			}
+			// 中断标记同理：它不是用户说的话（「先中断、再发消息」的对话会被命名成
+			// “[Request interrupted by user]”），也不该算一条消息。
+			if l.Type == "user" && isInterruptMarker(extractText(l.Message.Content)) {
+				return true
+			}
 			s.Messages++
 			if l.Type == "user" && !titleDone && lines <= maxTitleScanLines {
 				if txt := extractText(l.Message.Content); txt != "" {
@@ -229,6 +234,20 @@ func isLocalCommandEcho(text string) bool {
 		return false
 	}
 	return localCommandEchoRE.MatchString(t)
+}
+
+// interruptMarkerRE 与前端 lib/normalize.ts 的规则保持一致：回合被中断时 CLI 会往
+// 转录里写一条合成的 user 行（`[Request interrupted by user]`，工具执行中是
+// `[Request interrupted by user for tool use]`，进程/会话被结束时是
+// `[Request interrupted: …]` / `[Agent call interrupted: …]`）。
+var interruptMarkerRE = regexp.MustCompile(`^\[(?:Request interrupted|Agent call interrupted)(?: by user|:)[^\]]*\]$`)
+
+// isInterruptMarker 判断一条 user 文本是否是 CLI 的中断标记。
+//
+// 它不是用户说的话：既不该计入消息数，更不能当会话标题——否则「先中断、再发消息」
+// 的对话在列表里会叫 “[Request interrupted by user]”。
+func isInterruptMarker(text string) bool {
+	return interruptMarkerRE.MatchString(strings.TrimSpace(text))
 }
 
 func truncate(s string, n int) string {

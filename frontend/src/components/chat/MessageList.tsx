@@ -51,6 +51,7 @@ const MessageRow = memo(function MessageRow({
    */
   offscreen?: boolean;
 }) {
+  const t = useT();
   const box = (dense: boolean) => ({
     className: "animate-rise",
     style: offscreen === false ? undefined : dense ? OFFSCREEN_ROW : OFFSCREEN_TEXT,
@@ -82,6 +83,23 @@ const MessageRow = memo(function MessageRow({
       );
     case "result":
       return <ResultBar item={item} />;
+    case "interrupt": {
+      // CLI 的「本轮被中断」标记：一句中性提示，不占用户气泡（见 lib/normalize）。
+      // 三种原因说三句话：把「进程被结束」说成「已中断」，用户会以为是自己停的。
+      const label =
+        item.reason === "session"
+          ? t("会话已结束，本轮未完成", "Session ended before this turn finished")
+          : item.reason === "agent"
+            ? t("子代理被中断", "Subagent interrupted")
+            : t("已中断", "Interrupted");
+      return (
+        <div className="flex justify-center py-0.5">
+          <span className="rounded-full border border-line bg-panel px-2 py-0.5 text-[10.5px] text-muted">
+            {label}
+          </span>
+        </div>
+      );
+    }
     case "system":
       return (
         <pre

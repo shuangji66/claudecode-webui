@@ -65,6 +65,17 @@ describe("回合结束后要不要自动发下一条", () => {
     expect(shouldFlushAfter({ type: "result", subtype: "user_interrupt" })).toBe(false);
   });
 
+  // 有的 CLI 版本中断时 result 仍是 is_error=false，只带一段内部诊断。
+  it("带中断诊断的 result 同样不发", () => {
+    expect(
+      shouldFlushAfter({
+        type: "result",
+        subtype: "success",
+        result: "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null",
+      }),
+    ).toBe(false);
+  });
+
   it("出错不发：再灌消息只会把错误叠起来", () => {
     expect(shouldFlushAfter({ type: "result", subtype: "success", is_error: true })).toBe(false);
   });

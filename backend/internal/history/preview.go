@@ -75,7 +75,8 @@ func LoadPreview(projectsDir, id string) (Preview, error) {
 		switch l.Type {
 		case "user":
 			text := extractText(l.Message.Content)
-			if text == "" || isLocalCommandEcho(text) {
+			// 中断标记也是 CLI 写的合成 user 行，不是用户说的话。
+			if text == "" || isLocalCommandEcho(text) || isInterruptMarker(text) {
 				continue
 			}
 			out.User = truncate(text, previewUserMax)

@@ -405,3 +405,39 @@ describe("成功回合的结尾", () => {
     expect(container.textContent).not.toContain("9.0s");
   });
 });
+
+describe("被中断的回合", () => {
+  it("中断标记渲染成一句「已中断」，不是一条用户消息", () => {
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "来点新闻" },
+      { id: "a1", seq: 1, ts: 0, kind: "assistant", text: "半截回答", streaming: false },
+      { id: "i1", seq: 2, ts: 0, kind: "interrupt", marker: "[Request interrupted by user]", reason: "user" },
+      { id: "r1", seq: 3, ts: 0, kind: "result", isError: false, subtype: "interrupt" },
+    ];
+    const { container } = render(<MessageList items={items} />);
+    expect(screen.getByText("已中断")).toBeInTheDocument();
+    // CLI 的原始标记不露出来，也不再有第二条用户气泡。
+    expect(container.textContent).not.toContain("Request interrupted");
+    expect(screen.getAllByText(/来点新闻/)).toHaveLength(1);
+    // 中断不是失败：不出现「本轮出错」。
+    expect(screen.queryByText("本轮出错")).toBeNull();
+  });
+
+  // 进程/会话被结束（重启、被回收）不是用户按的停止：恢复对话时 CLI 补写另一条标记。
+  it("会话被动结束说「本轮未完成」，不说「已中断」", () => {
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "跑一下测试" },
+      {
+        id: "i1",
+        seq: 1,
+        ts: 0,
+        kind: "interrupt",
+        marker: "[Request interrupted: the session ended before this agent finished.]",
+        reason: "session",
+      },
+    ];
+    render(<MessageList items={items} />);
+    expect(screen.getByText("会话已结束，本轮未完成")).toBeInTheDocument();
+    expect(screen.queryByText("已中断")).toBeNull();
+  });
+});

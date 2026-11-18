@@ -6,6 +6,7 @@ const errorSubtypes: Record<string, [string, string]> = {
   error_max_turns: ["达到最大轮数上限", "Max turns reached"],
   error_during_execution: ["执行中出错", "Error during execution"],
   error_max_budget_usd: ["超出预算上限", "Budget limit reached"],
+  error_max_structured_output_retries: ["结构化输出重试次数用尽", "Structured output retries exhausted"],
 };
 
 /**
@@ -19,6 +20,9 @@ export function ResultBar({ item }: { item: ResultItem }) {
   const t = useT();
   const denials = item.denials ?? [];
   const known = item.subtype ? errorSubtypes[item.subtype] : undefined;
+  // 模型拒答（refusal）时 CLI 给的是 subtype=success + is_error=true：把 "success"
+  // 当作失败原因展示出来等于自相矛盾，原因正文已经在下面那一段里了。
+  const unknown = item.subtype && item.subtype !== "success" ? item.subtype : undefined;
   if (!item.isError && denials.length === 0) return null;
 
   return (
@@ -30,8 +34,8 @@ export function ResultBar({ item }: { item: ResultItem }) {
         {item.isError && known && (
           <span className="rounded-full bg-rose-50 px-2 py-0.5 text-danger dark:bg-rose-950/40">{t(known[0], known[1])}</span>
         )}
-        {item.isError && !known && item.subtype && (
-          <span className="rounded-full bg-rose-50 px-2 py-0.5 font-mono text-danger dark:bg-rose-950/40">{item.subtype}</span>
+        {item.isError && !known && unknown && (
+          <span className="rounded-full bg-rose-50 px-2 py-0.5 font-mono text-danger dark:bg-rose-950/40">{unknown}</span>
         )}
         {denials.length > 0 && (
           <span className="rounded-full bg-amber-50 px-2 py-0.5 text-warn dark:bg-amber-950/30">{t(`${denials.length} 次工具调用被拒绝`, `${denials.length} tool calls denied`)}</span>

@@ -6,6 +6,7 @@ import {
   appendUser,
   __resetIds,
   imagesOfContent,
+  isInterruptMarker,
   isLocalCommandEcho,
   subagentFromResult,
   prependSystem,
@@ -1022,5 +1023,140 @@ describe("转录回放的回合用量", () => {
     expect(answers[0].turn).toBeUndefined();
     expect(answers[1].turn).toMatchObject({ durationMs: 9000 });
     expect(answers[2].turn).toMatchObject({ durationMs: 3000 });
+  });
+});
+
+describe("用户中断", () => {
+  const marker = (text = "[Request interrupted by user]") => ({
+    type: "user",
+    message: { role: "user", content: [{ type: "text", text }] },
+  });
+  const interruptedResult = {
+    type: "result",
+    subtype: "error_during_execution",
+    is_error: true,
+    result: "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null",
+  };
+
+  it("识别 CLI 的三种中断标记形态", () => {
+    expect(isInterruptMarker("[Request interrupted by user]")).toBe(true);
+    expect(isInterruptMarker("[Request interrupted by user for tool use]")).toBe(true);
+    expect(isInterruptMarker("[Request interrupted: the session ended before this agent finished.]")).toBe(true);
+    expect(isInterruptMarker("[Agent call interrupted: the process stopped]")).toBe(true);
+    // 用户正文里提到这句话不是标记。
+    expect(isInterruptMarker("为什么会出现 [Request interrupted by user]？")).toBe(false);
+    expect(isInterruptMarker("普通消息")).toBe(false);
+  });
+
+  // CLI 把中断标记写成一条 user 消息：渲染成气泡等于让用户以为自己发过这句。
+  it("中断标记不生成用户气泡，而是一条中性的「已中断」", () => {
+    const items = applyCLI(applyCLI([], marker()), assistantText("半截回答"));
+    expect(items.filter((i) => i.kind === "user")).toHaveLength(0);
+    expect(items[0]).toMatchObject({
+      kind: "interrupt",
+      marker: "[Request interrupted by user]",
+      reason: "user",
+    });
+  });
+
+  it("连续中断只留一条标记", () => {
+    let items = applyCLI([], marker());
+    items = applyCLI(items, marker("[Request interrupted by user for tool use]"));
+    expect(items.filter((i) => i.kind === "interrupt")).toHaveLength(1);
+  });
+
+  it("标记按来源分类：用户 / 会话被结束 / 子代理", () => {
+    const cases: Array<[string, string]> = [
+      ["[Request interrupted by user]", "user"],
+      ["[Request interrupted by user for tool use]", "user"],
+      ["[Request interrupted: the session ended before this agent finished.]", "session"],
+      ["[Agent call interrupted: the process stopped]", "agent"],
+    ];
+    for (const [text, reason] of cases) {
+      const items = applyCLI([], marker(text));
+      expect(items[0]).toMatchObject({ kind: "interrupt", reason });
+    }
+  });
+
+  // 中断时上一轮的流式气泡通常没有完整 assistant 消息来收尾：光标不能永远在闪。
+  it("中断的回合结束时收起流式光标", () => {
+    let items = applyCLI([], delta("写到一半"));
+    expect(items[0]).toMatchObject({ kind: "assistant", streaming: true });
+    items = applyCLI(items, marker());
+    items = applyCLI(items, interruptedResult);
+    expect(items[0]).toMatchObject({ kind: "assistant", streaming: false });
+  });
+
+  // 中断时 CLI 的 result 是 is_error + error_during_execution，文本只有一段内部诊断。
+  // 这不是失败：界面不该弹「本轮出错」，更不该把诊断糊到用户脸上。
+  it("中断后的 result 不当作错误，也不显示诊断文本", () => {
+    let items = applyCLI([], marker());
+    items = applyCLI(items, interruptedResult);
+    const result = items.find((i) => i.kind === "result");
+    expect(result).toMatchObject({ kind: "result", isError: false, subtype: "interrupt" });
+    expect(result?.kind === "result" && result.text).toBeUndefined();
+  });
+
+  it("没有中断标记时，同样的诊断仍然算失败", () => {
+    const items = applyCLI([], interruptedResult);
+    expect(items[0]).toMatchObject({ kind: "result", isError: true, subtype: "error_during_execution" });
+  });
+
+  it("中断之后的真正报错照旧显示", () => {
+    let items = applyCLI([], marker());
+    items = applyCLI(items, { type: "result", subtype: "error_during_execution", is_error: true, result: "API Error: 500" });
+    expect(items[items.length - 1]).toMatchObject({ kind: "result", isError: true });
+  });
+});
+
+describe("上游 API 错误", () => {
+  // CLI 把「API Error: …」包装成一条 assistant 消息（isApiErrorMessage），
+  // 随后 result 里再给一遍同一段原因。两处都渲染等于同一句话出现两遍。
+  const apiErrorAnswer = (text: string, field = "isApiErrorMessage") => ({
+    type: "assistant",
+    [field]: true,
+    message: { role: "assistant", content: [{ type: "text", text }] },
+  });
+
+  it("API 错误消息带 apiError 标记（camel / snake 两种写法都认）", () => {
+    for (const field of ["isApiErrorMessage", "is_api_error_message"]) {
+      const items = applyCLI([], apiErrorAnswer("API Error: 500 internal server error", field));
+      expect(items[0]).toMatchObject({ kind: "assistant", apiError: true });
+    }
+  });
+
+  it("result 的原因已被上面那条错误消息展示过时不再重复", () => {
+    let items = applyCLI([], apiErrorAnswer("API Error: 500 internal server error"));
+    items = applyCLI(items, {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      result: "API Error: 500 internal server error",
+    });
+    const result = items.find((i) => i.kind === "result");
+    expect(result).toMatchObject({ kind: "result", isError: true });
+    expect(result?.kind === "result" && result.text).toBeUndefined();
+  });
+
+  it("普通回答里恰好有同样的字时，result 的原因照旧显示", () => {
+    let items = applyCLI([], assistantText("API Error: 500 internal server error"));
+    items = applyCLI(items, {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      result: "API Error: 500 internal server error",
+    });
+    const result = items.find((i) => i.kind === "result");
+    expect(result?.kind === "result" && result.text).toBe("API Error: 500 internal server error");
+  });
+
+  it("只有 result 没有上面那条消息时，原因照旧显示", () => {
+    const items = applyCLI([], {
+      type: "result",
+      subtype: "success",
+      is_error: true,
+      result: "API Error: 429 rate limit",
+    });
+    expect(items[0]).toMatchObject({ kind: "result", isError: true, text: "API Error: 429 rate limit" });
   });
 });

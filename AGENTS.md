@@ -335,6 +335,28 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **`result` 的失败原因必须显示**：CLI 把「API Error: 400 …」「达到最大轮数」放在
   `result.result` / `result.errors` 里。成功回合的 `result` 与最后一条 assistant 正文重复，
   只在 `is_error` 时渲染，别整段照抄。
+- **中断不是失败，中断标记也不是用户消息**：用户按停止时 CLI 会往流里写一条合成的 user 消息
+  `[Request interrupted by user]`（工具执行中是 `… for tool use`；进程/会话被结束时是
+  `[Request interrupted: …]` / `[Agent call interrupted: …]`），随后把这一轮判成
+  `error_during_execution`，`result.result` 只有一段内部诊断
+  `[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null`。
+  以前这两条被原样渲染：气泡里多出一条「用户发的话」，下面再挂「本轮出错 + 诊断」。
+  现在 `lib/normalize.ts` 把标记认成 `interrupt` item（一句「已中断」），
+  把**紧跟其后的那段诊断 result 还原成正常结束**（`subtype: "interrupt"`、`is_error` 置 false、
+  丢掉诊断文本）。判定要同时满足「本回合收到过中断标记」+「文本是诊断/中断标记」，
+  真正的 API 报错照旧显示。后端 `history`（列表标题、消息数、preview）也跳过这条合成行。
+  标记按来源分三类（`InterruptItem.reason`）：`user` =「已中断」、`session` =
+  「会话已结束，本轮未完成」（重启/回收/删版本时恢复对话，CLI 补写
+  `[Request interrupted: …]`，**没人要求停**，不能说成用户中断）、`agent` =「子代理被中断」。
+- **其他终止方式同样要收尾**：① 任何 `result`（成功/失败/中断）到达时都要
+  `settleStreaming`，否则没有完整 assistant 消息的回合会留下永远闪的流式光标；
+  WS `closed`（进程没了）时 store 也要收尾。② 上游报错时 CLI 先用一条
+  `isApiErrorMessage`（camelCase，snake 也认）的 assistant 消息包装「API Error: …」，
+  `result` 里再给同一段原因——`applyResult` 若发现最后一条回答带 `apiError` 且已包含
+  该原因，就不再重复。③ 模型拒答（refusal）的 result 是 `subtype:"success" + is_error:true`，
+  `ResultBar` **不能把 "success" 当失败子类型展示**；`error_max_structured_output_retries`
+  已补中文。④ 进程异常退出目前只有「连接已关闭」横幅 + 重连按钮，没有退出原因
+  （`Session` 拿不到退出码，要说得更细得先让 Transport 暴露进程状态）。
 - **tool_result 里的图片不能当文本渲染**：base64 塞进 `<pre>` 会糊满整屏。
   `textOfContent` 只给 `[图片 image/png，约 12 KB]` 占位，图片本体进 `ToolItem.images`
   由卡片画缩略图（只放行 png/jpeg/gif/webp，单张 ≤ 4MB）。

@@ -12,6 +12,7 @@ import { create } from "zustand";
 import { apiFetch, setToken } from "../lib/runtime";
 import {
   appendError,
+  settleStreaming,
   appendUser,
   applyCLI,
   attachTurnUsage,
@@ -1878,13 +1879,19 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return;
       }
       case "closed": {
-        set((s) => ({
-          states: { ...s.states, [sid]: "closed" },
-          conns: { ...s.conns, [sid]: { state: "closed" } },
-          // 进程已退出，挂起的审批永远不可能被批准：留着只会让人点到一条失效回包。
-          perms: { ...s.perms, [sid]: [] },
-          conversations: s.conversations.map((c) => (c.id === sid ? { ...c, live: false, state: "closed" } : c)),
-        }));
+        set((s) => {
+          const cur = s.items[sid];
+          return {
+            // 进程没了，这一轮不会再有 result：悬着的流式气泡必须收尾，
+            // 否则界面会一直显示「还在写」的光标。
+            ...(cur ? { items: { ...s.items, [sid]: settleStreaming(cur) } } : {}),
+            states: { ...s.states, [sid]: "closed" },
+            conns: { ...s.conns, [sid]: { state: "closed" } },
+            // 进程已退出，挂起的审批永远不可能被批准：留着只会让人点到一条失效回包。
+            perms: { ...s.perms, [sid]: [] },
+            conversations: s.conversations.map((c) => (c.id === sid ? { ...c, live: false, state: "closed" } : c)),
+          };
+        });
         // 会话进程已退出，WS 再留着只会让界面显示「已连接」却发不出消息。
         clients.get(sid)?.close();
         clients.delete(sid);

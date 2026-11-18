@@ -50,6 +50,14 @@ export interface AssistantItem extends BaseItem {
    * 复制按钮那一行据此显示「耗时 · 输出 tok · tok/s」。中间的过渡正文不带。
    */
   turn?: TurnUsage;
+  /**
+   * 这条不是模型说的话，而是 CLI 包装的 API 错误（`isApiErrorMessage`）。
+   *
+   * 上游报错时 CLI 会先发一条正文是「API Error: …」的 assistant 消息，随后
+   * result 里再给同一段原因。两条都渲染等于同一句话出现两遍，所以带着这个标记的
+   * 消息在 result 里不再重复原因（见 applyResult）。
+   */
+  apiError?: boolean;
 }
 
 export interface ThinkingItem extends BaseItem {
@@ -106,6 +114,39 @@ export interface SystemItem extends BaseItem {
   text: string;
 }
 
+/**
+ * 「本轮被中断」标记。
+ *
+ * CLI 在回合被中断时会往流里写一条合成 user 消息（`[Request interrupted by user]`）。
+ * 它既不是用户说的话（渲染成气泡会让人以为自己发过这句），也不是普通 system 输出，
+ * 所以单独一种 item，由渲染层给一句中性的提示。
+ */
+export interface InterruptItem extends BaseItem {
+  kind: "interrupt";
+  /** CLI 的标记原文（只用于排查，不展示）。 */
+  marker: string;
+  /**
+   * 谁结束了这一轮：
+   * - `user`：用户自己按了停止；
+   * - `session`：会话/进程被结束（重启、被回收、被删版本），**没人要求停**——
+   *   恢复对话时 CLI 会补写一条说明性的标记；
+   * - `agent`：子代理被中断。
+   *
+   * 三种都要显示不同的话：把「进程被结束」说成「已中断」会让用户以为是自己停的。
+   */
+  reason: InterruptReason;
+}
+
+export type InterruptReason = "user" | "session" | "agent";
+
+/** 把 CLI 的中断标记归到三种原因之一。 */
+export function interruptReason(marker: string): InterruptReason {
+  const t = marker.trim();
+  if (t.startsWith("[Agent call interrupted")) return "agent";
+  if (t.startsWith("[Request interrupted by user")) return "user";
+  return "session";
+}
+
 export interface ResultItem extends BaseItem {
   kind: "result";
   costUsd?: number;
@@ -131,6 +172,7 @@ export type Item =
   | ThinkingItem
   | ToolItem
   | SystemItem
+  | InterruptItem
   | ResultItem
   | ErrorItem;
 
