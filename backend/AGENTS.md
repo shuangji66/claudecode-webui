@@ -227,8 +227,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   就会把幽灵条目写进 `conversations.json`（APP 重启后 CLI 回
   `No conversation found with session ID: …`）。现在 ① 没有转录的 id 走
   `Manager.StartFresh`（同 id `--session-id` 新建，fork 与并发由 createMu 的 `id:` key 去重，
-  已在跑就复用）② 只有 `history.TranscriptExists` 为真才 touch
-  ③ `GET /api/conversations` 不展示「没有转录 + 没有标题 + 没在跑」的条目（记录保留）。
+  已在跑就复用）② 只有「有转录，或已经有元数据」才 `touchConversation`（新建的空对话不落记录，
+  已有记录打开时照常刷新最近活跃）③ `GET /api/conversations` 不展示
+  「没有转录 + 没有标题 + 没在跑」的条目（记录保留）。
 - `--resume` 不会回放 transcript；`GET /api/history/transcript` 返回原始事件行，
   前端用 `applyCLI` 回放并保留 `timestamp`。`history.LoadTranscript` 过滤
   `isSidechain`/`isMeta` 与 queue-operation 等非消息类型，最多保留最近 20k 行/16MB。

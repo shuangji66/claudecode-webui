@@ -173,8 +173,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `No conversation found with session ID: …`，界面上只有一个永远起不来的对话。
   现在的三段防线：① **没有转录的 id 不走 `--resume`**，改用 `manager.StartFresh`
   （同一个 UUID 作 `--session-id` 新建：id 不变、转录照旧按这个 id 落盘）；
-  ② 只有真有转录才 `touchConversation`；③ `GET /api/conversations` 不展示
-  「没有转录 + 没有标题 + 没在跑」的条目（记录保留，转录真出现时会自己回来），
+  ② 只有「有转录，或已经有元数据」才 `touchConversation`——**新建的空对话不能落记录**，
+  但已经存在的记录（例如用户重命名过的空对话）打开时照常刷新最近活跃；
+  ③ `GET /api/conversations` 不展示「没有转录 + 没有标题 + 没在跑」的条目
+  （记录保留，转录真出现时会自己回来），
   启动预热也先 `history.TranscriptExists` 再 Resume。
 - **删除是软删除**：`conversation.Delete` 写 `deleted` 墓碑并保留 jsonl；列表/自动恢复都要
   跳过 deleted/archived。不要把「删除」实现成直接 `os.Remove` 转录。
