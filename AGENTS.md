@@ -330,6 +330,13 @@ hub ── manager ── session ── process ── claude (NDJSON)
   「实时 tok/s」，对应显示的是换算值，不要把它说成官方指标，也不要为此去猜。
   快照随对话存进 `conversations.json`（`PATCH /api/conversations {usage}`），重开对话时
   用转录的 `assistant.message.usage` + 存下的 `apiMs` 还原，别在浏览器里另存一份。
+  **上下文占用只认单次请求**：`stream_event` 的 `message_start/message_delta`（以及转录里的
+  `assistant.message.usage`）才是「这次请求送出去的输入侧 token」。`result.usage` /
+  `result.modelUsage` 是**整轮累计**（SDK 类型写明 usage 是主循环的 per-turn 汇总、modelUsage
+  跨轮累计，与 `duration_api_ms` 同一口径）：长任务一轮几十上百次请求，cache_read 会累加到
+  几百万，拿去当上下文就会得到「已用 9.1M / 窗口 976.6K、进度环顶满 100%」这种数
+  （踩过一次）。`result` 只用来补窗口、本回合输出与 API 耗时；`plausibleContext` 再把
+  「超过窗口」的存量值判为无效（旧版本写进 `conversations.json` 的坏快照也靠它清掉）。
 - 移动端输入框下方必须保留 `env(safe-area-inset-bottom)`，否则 iPhone Home Indicator 会盖住输入区。
 - 界面文案走 `useT()`（中文 / English 两参数），默认中文；新增文案不要再硬编码单语。
 - **UI 原语入库，不要重复造**：模态 `common/Dialog`、确认/输入 `common/SystemDialogs`

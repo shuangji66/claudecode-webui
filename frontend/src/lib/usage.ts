@@ -1,9 +1,11 @@
 // 用量统计：把 claude CLI 真实吐出来的 token 数据折成面板上的几个数。
 //
 // 数据来源（2.1.325 实测，stream-json）：
-//   - `stream_event` 的 `message_start.message.usage` / `message_delta.usage`：每次请求的
-//     input / cache_read / cache_creation / output，流式期间就能拿到；
-//   - `result.usage`：本回合最后一次请求的用量；
+//   - `stream_event` 的 `message_start.message.usage` / `message_delta.usage`：**单次请求**的
+//     input / cache_read / cache_creation / output，流式期间就能拿到 —— 上下文占用只能认它；
+//   - `result.usage` / `result.modelUsage`：**整轮累计**（SDK 类型里写明 usage 是主循环的
+//     per-turn 汇总、modelUsage 更是跨轮累计，和 `duration_api_ms` 同一个口径）。一轮里
+//     几十上百次请求会把 cache_read 加到一起（长任务实测能到 900 万，而窗口只有 100 万）；
 //   - `result.modelUsage.<model>.contextWindow`：模型上下文窗口（init 里没有）。
 //
 // 这里刻意**不做**的事：CLI 不提供「步骤数」「实时 tok/s」「官方上下文百分比」，
@@ -78,6 +80,18 @@ export function inputParts(
   return { inputTokens: u.input, cacheReadTokens: u.cacheRead, cacheCreationTokens: u.cacheCreation };
 }
 
+/**
+ * 上下文数不可能超过窗口：超过的只能是「把一次回合里多次请求加在一起」的数
+ * （`result.usage` / `result.modelUsage` 就是这个口径）。这种数在界面上毫无意义——
+ * 长任务实测 9.1M / 976.6K，进度环直接顶满 100%。所以已知窗口时直接判为无效（返回 0），
+ * 让界面继续用上一次**单次请求**的值，而不是把不可能的数字画出来。
+ */
+export function plausibleContext(context: number, window: number | undefined): number {
+  if (!(context > 0)) return 0;
+  if (window && window > 0 && context > window) return 0;
+  return context;
+}
+
 /** 输出里用于思考的 token；字段缺失或为 0 时返回 undefined（不显示一行 0）。 */
 function thinkingTokensOf(usage: unknown): number | undefined {
   const details = (usage as Record<string, unknown> | undefined)?.output_tokens_details;
@@ -109,8 +123,10 @@ export function formatTokens(n: number): string {
 /**
  * 从一条 CLI 原始消息更新快照。
  *
- * - `stream_event` 的 message_start / message_delta：流式期间就能更新上下文与输出；
- * - `result`：回合结束，补上 modelUsage 里的 contextWindow 与 API 耗时。
+ * - `stream_event` 的 message_start / message_delta：流式期间就能更新上下文与输出
+ *   （**上下文只认这里**，它是单次请求的数）；
+ * - `result`：回合结束，补上 modelUsage 里的 contextWindow 与 API 耗时，以及整轮输出
+ *   ——它的 usage 是整轮累计，不碰上下文。
  * 不认识的形状原样返回，调用方据此决定要不要 set。
  */
 export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown): UsageSnapshot | undefined {
@@ -125,7 +141,9 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
       const totals = totalsFromUsage(usage);
       if (!totals) return undefined;
       // 只有带输入侧时才更新上下文（start 里只有 output 的时候别把已知的上下文抹成 0）。
-      const context = contextTokens(totals);
+      // 已知窗口时再挡一层：超过窗口的数不可能是「这次请求的上下文」（自建中转可能把
+      // 累计值塞进单条 usage），宁可保留上一份也不画不可能的数字。
+      const context = plausibleContext(contextTokens(totals), prev?.contextWindow);
       const next: UsageSnapshot = { ...(prev ?? { contextTokens: 0 }), outputTokens: totals.output };
       if (context > 0) {
         next.contextTokens = context;
@@ -146,7 +164,7 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
       //   有输入侧 → 直接更新上下文与缓存命中；
       //   没有（官方形状）→ 保留上一份上下文，只更新输出。
       // 回合进行中不更新上下文的话，整个回合都显示不出占用，只能等 result。
-      const context = contextTokens(totals);
+      const context = plausibleContext(contextTokens(totals), prev?.contextWindow);
       const next: UsageSnapshot = { ...(prev ?? { contextTokens: 0 }), outputTokens: totals.output };
       if (context > 0) {
         next.contextTokens = context;
@@ -161,6 +179,10 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
   }
 
   if (m.type === "result") {
+    // `result.usage` / `modelUsage` 是**整轮累计**（见文件头）：一轮里几十上百次请求的
+    // 输入侧会加在一起，长任务实测累到 900 万，而窗口只有 100 万。它不是任何一次请求的
+    // 上下文，所以这里只取「整轮」这一层真正成立的三个数：窗口、输出、API 耗时；
+    // 上下文与命中率保持上一次单次请求（message_start / message_delta）的值。
     const totals = totalsFromUsage(m.usage);
     const apiMs = typeof m.duration_api_ms === "number" ? m.duration_api_ms : undefined;
     // modelUsage 是 { 模型名: { contextWindow, ... } }；多模型时取最后一个（本回合实际用的）。
@@ -173,16 +195,24 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
       }
     }
     if (!totals && window === undefined && apiMs === undefined) return undefined;
-    const context = totals ? contextTokens(totals) : 0;
+    const known = window ?? prev?.contextWindow;
+    // 上一份快照可能已经被累计值污染（旧版本就是这么算的）：窗口这一刻已知，顺手把不可能的
+    // 数清掉，否则进度环会一直顶在 100% 上，直到用户刷新页面。
+    const context = plausibleContext(prev?.contextTokens ?? 0, known);
     const next: UsageSnapshot = {
-      // 输入侧缺失（只给 output 的中转）时保留上一份，不要用 0 覆盖已知的上下文。
-      contextTokens: context > 0 ? context : (prev?.contextTokens ?? 0),
-      cacheHitRate: context > 0 && totals ? cacheHitRate(totals) : prev?.cacheHitRate,
-      contextWindow: window ?? prev?.contextWindow,
+      ...(prev ?? { contextTokens: 0 }),
+      contextTokens: context,
+      contextWindow: known,
       outputTokens: totals?.output ?? prev?.outputTokens,
-      apiMs,
+      apiMs: apiMs ?? prev?.apiMs,
     };
-    if (context > 0 && totals) Object.assign(next, inputParts(totals));
+    if (context === 0) {
+      // 明细与命中率都是从那个不可能的上下文算出来的，一起摘掉。
+      delete next.cacheHitRate;
+      delete next.inputTokens;
+      delete next.cacheReadTokens;
+      delete next.cacheCreationTokens;
+    }
     const thinking = thinkingTokensOf(m.usage) ?? prev?.thinkingTokens;
     if (thinking !== undefined) next.thinkingTokens = thinking;
     return next;
@@ -255,6 +285,20 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
 }
 
 /**
+ * 丢掉被判定为「累加值」的上下文与它派生出来的明细，只留下窗口 / 输出 / 耗时
+ * 这些与「单次请求」无关、仍然成立的信息。
+ */
+function withoutContext(snap: UsageSnapshot): UsageSnapshot {
+  return {
+    contextTokens: 0,
+    contextWindow: snap.contextWindow,
+    outputTokens: snap.outputTokens,
+    thinkingTokens: snap.thinkingTokens,
+    apiMs: snap.apiMs,
+  };
+}
+
+/**
  * 合并两份快照：转录回放给的是「最近一次请求」的 token 数（更准），
  * 持久化那份补上转录里没有的 API 耗时与上下文窗口。
  */
@@ -263,16 +307,23 @@ export function mergeUsage(
   live: UsageSnapshot | undefined,
 ): UsageSnapshot | undefined {
   if (!persisted) return live;
-  if (!live) return persisted;
+  // 持久化那份可能是旧版本按 `result.usage`（整轮累计）写下来的，长任务里能到几百万：
+  // 超过窗口就只保留窗口/耗时/输出，别把不可能的数字又画回界面上。
+  const known = live?.contextWindow ?? persisted.contextWindow;
+  const base =
+    plausibleContext(persisted.contextTokens, known) === persisted.contextTokens
+      ? persisted
+      : withoutContext(persisted);
+  if (!live) return base;
   return {
-    contextTokens: live.contextTokens || persisted.contextTokens,
-    cacheHitRate: live.cacheHitRate ?? persisted.cacheHitRate,
-    inputTokens: live.inputTokens ?? persisted.inputTokens,
-    cacheReadTokens: live.cacheReadTokens ?? persisted.cacheReadTokens,
-    cacheCreationTokens: live.cacheCreationTokens ?? persisted.cacheCreationTokens,
-    outputTokens: live.outputTokens ?? persisted.outputTokens,
-    thinkingTokens: live.thinkingTokens ?? persisted.thinkingTokens,
-    apiMs: live.apiMs ?? persisted.apiMs,
-    contextWindow: live.contextWindow ?? persisted.contextWindow,
+    contextTokens: live.contextTokens || base.contextTokens,
+    cacheHitRate: live.cacheHitRate ?? base.cacheHitRate,
+    inputTokens: live.inputTokens ?? base.inputTokens,
+    cacheReadTokens: live.cacheReadTokens ?? base.cacheReadTokens,
+    cacheCreationTokens: live.cacheCreationTokens ?? base.cacheCreationTokens,
+    outputTokens: live.outputTokens ?? base.outputTokens,
+    thinkingTokens: live.thinkingTokens ?? base.thinkingTokens,
+    apiMs: live.apiMs ?? base.apiMs,
+    contextWindow: live.contextWindow ?? base.contextWindow,
   };
 }

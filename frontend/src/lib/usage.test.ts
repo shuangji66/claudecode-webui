@@ -130,6 +130,55 @@ describe("applyUsageMessage", () => {
     expect(snap.contextWindow).toBe(200000);
     expect(snap.apiMs).toBe(22);
     expect(snap.outputTokens).toBe(7);
+    // result 的 usage 是整轮累计，不是任何一次请求的上下文：没有单次请求的数据时宁可不显示。
+    expect(snap.contextTokens).toBe(0);
+  });
+
+  // 长任务实测：一轮 213 次工具调用、3 轮下来 result.usage 累到 9.1M（cache_read 8.9M），
+  // 而窗口只有 976.6K。以前把它当上下文占用，进度环直接顶满 100%。
+  it("result 的整轮累计不覆盖上一次请求的上下文（长任务被 cache_read 挤爆）", () => {
+    const start = applyUsageMessage(undefined, MESSAGE_START)!;
+    const snap = applyUsageMessage(start, {
+      type: "result",
+      subtype: "success",
+      duration_api_ms: 772490,
+      usage: {
+        input_tokens: 144486,
+        cache_read_input_tokens: 8_950_000,
+        cache_creation_input_tokens: 0,
+        output_tokens: 30_600,
+      },
+      modelUsage: { "cn:deepseek-v4.1-flash": { contextWindow: 1_000_000 } },
+    })!;
+    expect(snap.contextTokens).toBe(9312);
+    expect(snap.cacheReadTokens).toBe(9000);
+    expect(snap.cacheHitRate).toBeCloseTo(9000 / 9312, 5);
+    expect(contextPercent(snap.contextTokens, snap.contextWindow)).toBe(1);
+    // 整轮这一层真正成立的数照旧更新：本回合输出、API 耗时、窗口。
+    expect(snap.outputTokens).toBe(30_600);
+    expect(snap.apiMs).toBe(772490);
+    expect(snap.contextWindow).toBe(1_000_000);
+  });
+
+  it("窗口已知时，超过窗口的旧上下文在回合末被清掉", () => {
+    const snap = applyUsageMessage(
+      { contextTokens: 9_100_000, cacheHitRate: 0.98, inputTokens: 141_100, cacheReadTokens: 8_900_000 },
+      { type: "result", duration_api_ms: 1000, usage: { output_tokens: 12 }, modelUsage: { m: { contextWindow: 1_000_000 } } },
+    )!;
+    expect(snap.contextTokens).toBe(0);
+    expect(snap.cacheHitRate).toBeUndefined();
+    expect(snap.inputTokens).toBeUndefined();
+    expect(snap.cacheReadTokens).toBeUndefined();
+  });
+
+  it("已知窗口时，超过窗口的流式上下文不采信（自建中转可能塞累计值）", () => {
+    const prev = { contextTokens: 9312, contextWindow: 200000 };
+    const snap = applyUsageMessage(prev, {
+      type: "stream_event",
+      event: { type: "message_delta", usage: { input_tokens: 12, cache_read_input_tokens: 900_000, output_tokens: 5 } },
+    })!;
+    expect(snap.contextTokens).toBe(9312);
+    expect(snap.outputTokens).toBe(5);
   });
 
   it("result 带 usage 明细与思考 token（0 的不显示）", () => {
@@ -144,9 +193,9 @@ describe("applyUsageMessage", () => {
         output_tokens_details: { thinking_tokens: 1200 },
       },
     })!;
-    expect(snap.inputTokens).toBe(6781);
-    expect(snap.cacheReadTokens).toBe(1792);
-    expect(snap.cacheCreationTokens).toBe(0);
+    // 输入侧三项也是整轮累计，不再摊到面板上；思考 token 是整轮汇总，仍然有意义。
+    expect(snap.inputTokens).toBeUndefined();
+    expect(snap.cacheReadTokens).toBeUndefined();
     expect(snap.thinkingTokens).toBe(1200);
 
     const noThinking = applyUsageMessage(undefined, {
@@ -232,5 +281,25 @@ describe("mergeUsage", () => {
     expect(mergeUsage(undefined, only)).toBe(only);
     expect(mergeUsage(only, undefined)).toBe(only);
     expect(mergeUsage(undefined, undefined)).toBeUndefined();
+  });
+
+  // 旧版本会把 result.usage（整轮累计）写进 conversations.json，重开对话时不能又画回来。
+  it("持久化那份超过了窗口就只留窗口/耗时，不再当成上下文", () => {
+    const persisted = { contextTokens: 9_100_000, contextWindow: 1_000_000, apiMs: 40, outputTokens: 3 };
+    expect(mergeUsage(persisted, undefined)).toEqual({
+      contextTokens: 0,
+      contextWindow: 1_000_000,
+      apiMs: 40,
+      outputTokens: 3,
+    });
+
+    const live = { contextTokens: 151_000, cacheHitRate: 0.98, outputTokens: 7 };
+    expect(mergeUsage(persisted, live)).toEqual({
+      contextTokens: 151_000,
+      cacheHitRate: 0.98,
+      outputTokens: 7,
+      apiMs: 40,
+      contextWindow: 1_000_000,
+    });
   });
 });

@@ -375,7 +375,7 @@ describe("本地命令回显", () => {
 });
 
 describe("result 的用量", () => {
-  it("把 result 的 usage / modelUsage 挂到 Item 上，供回放时显示", () => {
+  it("把 result 的窗口 / 耗时 / 输出挂到 Item 上，供回放时显示", () => {
     const items = applyCLI([], {
       type: "result",
       subtype: "success",
@@ -387,7 +387,9 @@ describe("result 的用量", () => {
     const last = items[items.length - 1];
     expect(last.kind).toBe("result");
     if (last.kind !== "result") return;
-    expect(last.usage?.contextTokens).toBe(9312);
+    // result.usage 是整轮累计，不是任何一次请求的上下文：这里只能挂整轮这一层成立的数。
+    expect(last.usage?.contextTokens).toBe(0);
+    expect(last.usage?.outputTokens).toBe(7);
     expect(last.usage?.contextWindow).toBe(200000);
     expect(last.usage?.apiMs).toBe(22);
   });

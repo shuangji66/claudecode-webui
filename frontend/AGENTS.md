@@ -392,8 +392,13 @@ src/
   没有常驻进程 → 灰点。「完成未看」由 `applyEvent` 在 `result` 到达且该对话不是当前打开的
   那条时置位（`doneIds`），`setActive` 打开即清除——不清就会永远挂着绿点。
 - **用量统计只认 CLI 给的数字**（`lib/usage.ts` + `store.usage`）：`stream_event` 的
-  message_start/message_delta 提供上下文与输出，`result.usage` 是回合末值，
-  `result.modelUsage.<model>.contextWindow` 才是模型窗口（init 里没有）。CLI **不提供**
+  message_start/message_delta 提供上下文与输出，`result.modelUsage.<model>.contextWindow`
+  才是模型窗口（init 里没有）。**上下文只能取单次请求的数**：`result.usage` /
+  `result.modelUsage` 是**整轮累计**（SDK 类型：usage 是主循环的 per-turn 汇总、modelUsage
+  跨轮累计，与 `duration_api_ms` 同口径），长任务一轮几十上百次请求会把 cache_read 累加到
+  几百万——当上下文用就会显示「已用 9.1M / 窗口 976.6K」、进度环顶满（踩过一次）。
+  `result` 只补窗口 / 本回合输出 / API 耗时，`plausibleContext` 再把超过窗口的存量值判废。
+  CLI **不提供**
   「步骤数」「实时 tok/s」「官方上下文百分比」——步数用工具调用次数、tok/s 用输出 ÷ API 耗时、
   上下文用 (input+cache_read+cache_creation) ÷ contextWindow，都是同一套数据的换算，
   不要在界面上编造。
