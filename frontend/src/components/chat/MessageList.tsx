@@ -20,8 +20,15 @@ import { ProcessGroup } from "./ProcessGroup";
  * 也不会破坏浏览器自带的查找、锚点与无障碍树。
  */
 const VISIBLE_STEP = 80;
-/** 离屏行不参与布局/绘制；估算高度给滚动条一个稳定长度。 */
-const OFFSCREEN = { contentVisibility: "auto", containIntrinsicSize: "auto 120px" } as const;
+/**
+ * 离屏行不参与布局/绘制；估算高度给滚动条一个稳定长度。
+ *
+ * **估算值必须贴近真实高度**：估高了，展开一组 80 行时滚动高度会比真实值多出上千像素，
+ * 随着行真正渲染再一路回缩——滚起来就是「内容加载不过来」+ 位置乱跳。紧凑过程行只有
+ * 一行高（~28px），气泡/卡片才接近 120px，所以按行类型分开估。
+ */
+const OFFSCREEN_TEXT = { contentVisibility: "auto", containIntrinsicSize: "auto 120px" } as const;
+const OFFSCREEN_ROW = { contentVisibility: "auto", containIntrinsicSize: "auto 32px" } as const;
 
 /**
  * 上一轮结束的 result 条要不要省掉时长：normalize 已经把 duration_ms 回填到
@@ -38,6 +45,7 @@ const MessageRow = memo(function MessageRow({
   dense = false,
   preview = true,
   live = false,
+  offscreen = true,
 }: {
   item: Item;
   hideDuration?: boolean;
@@ -47,29 +55,38 @@ const MessageRow = memo(function MessageRow({
   preview?: boolean;
   /** 这一条是否属于仍在进行中的尾部（回答一出现就自动折起思考）。 */
   live?: boolean;
+  /**
+   * 是否允许「离屏跳过渲染」。过程组内部一律关掉：那一整块是用户主动展开的，
+   * 里面的行又便宜，跳过只会让展开瞬间的高度估算反复回缩。
+   */
+  offscreen?: boolean;
 }) {
+  const box = (dense: boolean) => ({
+    className: "animate-rise",
+    style: offscreen === false ? undefined : dense ? OFFSCREEN_ROW : OFFSCREEN_TEXT,
+  });
   switch (item.kind) {
     case "user":
       return (
-        <div className="animate-rise" style={OFFSCREEN}>
+        <div {...box(false)}>
           <UserBubble text={item.text} ts={item.ts} />
         </div>
       );
     case "assistant":
       return (
-        <div className="animate-rise" style={OFFSCREEN}>
+        <div {...box(false)}>
           <AssistantBubble text={item.text} streaming={item.streaming} ts={item.ts} turn={item.turn} />
         </div>
       );
     case "thinking":
       return (
-        <div className="animate-rise" style={OFFSCREEN}>
+        <div {...box(dense)}>
           <ThinkingBlock text={item.text} dense={dense} preview={preview} live={live} />
         </div>
       );
     case "tool":
       return (
-        <div className="animate-rise" style={OFFSCREEN}>
+        <div {...box(dense)}>
           <ToolCardHost item={item} dense={dense} />
         </div>
       );
@@ -78,7 +95,7 @@ const MessageRow = memo(function MessageRow({
     case "system":
       return (
         <pre
-          style={OFFSCREEN}
+          style={OFFSCREEN_TEXT}
           className="overflow-x-auto whitespace-pre-wrap break-words rounded-xl border border-line bg-panel px-3 py-2 font-mono text-[11px] leading-relaxed text-muted"
         >
           {item.text}
@@ -87,7 +104,7 @@ const MessageRow = memo(function MessageRow({
     case "error":
       return (
         <div
-          style={OFFSCREEN}
+          style={OFFSCREEN_TEXT}
           className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-danger dark:border-rose-900/60 dark:bg-rose-950/30"
         >
           <IconAlert size={15} className="mt-0.5 shrink-0" />
@@ -373,7 +390,13 @@ export function MessageList({
                   <div key={entry.key} className={dense ? "mt-1" : undefined}>
                     <ProcessGroup items={entry.items} live={entry.live} view={view}>
                       {entry.items.map((item) => (
-                        <MessageRow key={item.id} item={item} dense={dense} preview={view !== "concise"} />
+                        <MessageRow
+                          key={item.id}
+                          item={item}
+                          dense={dense}
+                          preview={view !== "concise"}
+                          offscreen={false}
+                        />
                       ))}
                     </ProcessGroup>
                   </div>

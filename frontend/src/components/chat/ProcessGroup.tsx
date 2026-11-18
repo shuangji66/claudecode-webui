@@ -55,6 +55,11 @@ export function ProcessGroup({
   const locale = useLocale();
   const [open, setOpen] = useState(view === "detailed" && live);
   const touched = useRef(false);
+  /** 正文还能往哪个方向滚：只有真能滚的方向才给渐隐，否则一屏放得下也会糊一条边。 */
+  const body = useRef<HTMLDivElement | null>(null);
+  const [fade, setFade] = useState({ top: false, bottom: false });
+  // 详细模式运行中不设组级限高：卡片本来就要完整铺开；其余情况限高，避免一屏只有过程。
+  const capped = !(view === "detailed" && live);
 
   useEffect(() => {
     if (!live) {
@@ -64,12 +69,28 @@ export function ProcessGroup({
     if (view === "detailed" && !touched.current) setOpen(true);
   }, [live, view]);
 
+  useEffect(() => {
+    const el = body.current;
+    if (!el || !open) return;
+    const update = () => {
+      const top = el.scrollTop > 4;
+      const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 4;
+      setFade((prev) => (prev.top === top && prev.bottom === bottom ? prev : { top, bottom }));
+    };
+    update();
+    el.addEventListener("scroll", update, { passive: true });
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    ro?.observe(el);
+    return () => {
+      el.removeEventListener("scroll", update);
+      ro?.disconnect();
+    };
+  }, [open, capped]);
+
   const phase = live ? "running" : "done";
   const title = groupTitle(items, phase, locale);
   const detail = view === "concise" ? "" : live ? liveDetail(items) : reasoningPreview(items);
   const Icon = ICONS[dominantCategory(items)];
-  // 详细模式运行中不设组级限高：卡片本来就要完整铺开；其余情况限高，避免一屏只有过程。
-  const capped = !(view === "detailed" && live);
 
   if (view === "detailed" && live) {
     return <div className="space-y-2">{children}</div>;
@@ -94,13 +115,17 @@ export function ProcessGroup({
         {live && <span className="shrink-0 text-[10px] text-brand">{t("进行中", "Running")}</span>}
       </button>
       {/* 横向一律不滚：行内文字必须自己省略，绝不能把整组撑出横向滚动条。
-          限高只在 md 以上生效——手机上「页面里再套一个滚动区」很难摸到边界，
-          展开的组直接跟页面一起滚。 */}
+          用 overflow-x-clip 而不是 hidden：hidden 会把元素变成滚动容器（y 轴被算成 auto），
+          手机上又多一层能拦截触摸的滚动区。限高只在 md 以上生效，手机上展开的组
+          跟页面一起滚，只有一个滚动上下文。 */}
       {open && (
         <div
-          className={`dsh-scroll overflow-x-hidden px-1 pb-1 ${
+          ref={body}
+          className={`dsh-scroll overflow-x-clip px-1 pb-1 ${
             capped ? "md:max-h-[min(400px,50vh)] md:overflow-y-auto" : ""
-          } ${view === "detailed" ? "space-y-2" : "space-y-1"}`}
+          } ${view === "detailed" ? "space-y-2" : "space-y-1"} ${
+            fade.top && fade.bottom ? "process-fade-both" : fade.bottom ? "process-fade-bottom" : fade.top ? "process-fade-top" : ""
+          }`}
         >
           {children}
         </div>

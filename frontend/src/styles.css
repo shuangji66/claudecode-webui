@@ -477,3 +477,27 @@ pre {
 .composer-textarea:focus-visible {
   outline: none;
 }
+
+/* 过程组正文的滚动渐隐：只用遮罩（mask）作用在内容上，不叠一层彩色渐变，
+   深浅主题都不需要配色；只在「那个方向还能滚」时出现 12px 的过渡。
+   见 components/chat/ProcessGroup.tsx 的 scroll 边缘跟踪。 */
+.process-fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 12px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 12px);
+}
+
+.process-fade-bottom {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 12px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 12px), transparent 100%);
+}
+
+.process-fade-both {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 12px,
+    #000 calc(100% - 12px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(to bottom, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+}
