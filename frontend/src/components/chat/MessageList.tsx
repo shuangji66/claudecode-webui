@@ -9,7 +9,7 @@ import { IconAlert, IconChevronDown, IconSpark } from "../common/Icons";
 import { useT } from "../../lib/i18n";
 import { activeTurnIndex, turnsOf, type Turn } from "../../lib/turns";
 import { buildProcessRows, isProcessItem } from "../../lib/process";
-import { useProcessView } from "../../lib/viewMode";
+import { useCollapseTiming, useProcessView } from "../../lib/viewMode";
 import { ProcessGroup } from "./ProcessGroup";
 
 /**
@@ -171,6 +171,17 @@ export function MessageList({
   /** 过程展示偏好：detailed 走改造前的完整卡片，另两档压成单行。 */
   const view = useProcessView();
   const dense = view !== "detailed";
+  /**
+   * 「下次发送时收起」：最新一轮的过程在回答出现后仍然展开，等发下一条消息才收。
+   * 这里只算「哪一组属于最新一轮」——最后一条用户消息之后的组。
+   */
+  const timing = useCollapseTiming();
+  const lastUserIndex = useMemo(() => {
+    for (let i = shown.length - 1; i >= 0; i -= 1) {
+      if (shown[i].kind === "user") return i;
+    }
+    return -1;
+  }, [shown]);
   const rows = useMemo(() => buildProcessRows(shown), [shown]);
 
   /**
@@ -388,7 +399,12 @@ export function MessageList({
               if (entry.type === "process") {
                 return (
                   <div key={entry.key} className={dense ? "mt-1" : undefined}>
-                    <ProcessGroup items={entry.items} live={entry.live} view={view}>
+                    <ProcessGroup
+                      items={entry.items}
+                      live={entry.live}
+                      view={view}
+                      keepOpen={timing === "onNextSend" && entry.start > lastUserIndex}
+                    >
                       {entry.items.map((item) => (
                         <MessageRow
                           key={item.id}
@@ -403,7 +419,7 @@ export function MessageList({
                 );
               }
               if (entry.type === "thinking") {
-                const live = entry.start + entry.items.length === shown.length;
+                const live = timing === "onComplete" && entry.start + entry.items.length === shown.length;
                 return (
                   <div key={entry.key} className={dense ? "mt-1" : undefined}>
                     <ThinkingBlock
@@ -415,7 +431,7 @@ export function MessageList({
                   </div>
                 );
               }
-              const live = entry.start === shown.length - 1;
+              const live = timing === "onComplete" && entry.start === shown.length - 1;
               return (
                 <div
                   key={entry.key}

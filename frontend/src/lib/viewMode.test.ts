@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  COLLAPSE_TIMINGS,
+  DEFAULT_COLLAPSE_TIMING,
   DEFAULT_PROCESS_VIEW,
+  collapseTiming,
+  parseCollapseTiming,
+  resetCollapseTimingCache,
+  setCollapseTiming,
+  subscribeCollapseTiming,
   parseProcessView,
   processView,
   resetProcessViewCache,
@@ -54,5 +61,34 @@ describe("过程展示偏好", () => {
     off();
     setProcessView("standard");
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("收起时机", () => {
+  it("两档：完成时收起（默认）/ 下次发送时收起", () => {
+    expect(COLLAPSE_TIMINGS).toEqual(["onComplete", "onNextSend"]);
+    expect(DEFAULT_COLLAPSE_TIMING).toBe("onComplete");
+    expect(parseCollapseTiming("onNextSend")).toBe("onNextSend");
+    expect(parseCollapseTiming("whatever")).toBe("onComplete");
+  });
+
+  it("与展示档位各存各的，互不影响", () => {
+    localStorage.clear();
+    resetProcessViewCache();
+    resetCollapseTimingCache();
+    setProcessView("concise");
+    setCollapseTiming("onNextSend");
+    expect(localStorage.getItem("ccweb-process-view")).toBe("concise");
+    expect(localStorage.getItem("ccweb-collapse-timing")).toBe("onNextSend");
+    resetCollapseTimingCache();
+    expect(collapseTiming()).toBe("onNextSend");
+  });
+
+  it("变更通知订阅者", () => {
+    const fn = vi.fn();
+    const off = subscribeCollapseTiming(fn);
+    setCollapseTiming("onNextSend");
+    expect(fn).toHaveBeenCalledTimes(1);
+    off();
   });
 });

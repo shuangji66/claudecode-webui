@@ -5,7 +5,14 @@ import { getToken, setToken } from "../../../lib/runtime";
 import { useT } from "../../../lib/i18n";
 import { permissionLabel } from "../../../lib/labels";
 import { setThemePreference, themePreference } from "../../../lib/theme";
-import { PROCESS_VIEWS, setProcessView, useProcessView } from "../../../lib/viewMode";
+import {
+  COLLAPSE_TIMINGS,
+  PROCESS_VIEWS,
+  setCollapseTiming,
+  setProcessView,
+  useCollapseTiming,
+  useProcessView,
+} from "../../../lib/viewMode";
 import { isDangerousPermissionMode, permissionModeWarning } from "../../../lib/permissionModes";
 import { Select } from "../../common/Select";
 import { askConfirm } from "../../common/SystemDialogs";
@@ -36,6 +43,7 @@ export function GeneralSettings() {
   const fontSize = settings?.font_size || 15;
   // 过程展示只存本设备（和主题同理）：手机要挤、桌面可以宽松。
   const view = useProcessView();
+  const timing = useCollapseTiming();
 
   /** 默认权限里的危险模式同样要二次确认：这里保存的是「以后新会话」的默认值。 */
   const changeDefaultMode = async (next: string) => {
@@ -201,6 +209,40 @@ export function GeneralSettings() {
                   "运行中直接铺开每一步的卡片，回答一出现就自动收起成一行。",
                   "Each step shows as a full card while running, then folds into one line as soon as the answer arrives.",
                 )}
+        </p>
+      </Section>
+
+      <Section
+        title={t("收起时机", "Collapse timing")}
+        desc={t("过程什么时候折回一行，与上面的档位互不影响。只保存在本设备。", "When the process folds back to one line; independent of the mode above. Saved on this device only.")}
+      >
+        <div className="inline-flex rounded-lg border border-line-strong p-0.5">
+          {COLLAPSE_TIMINGS.map((item) => {
+            const active = timing === item;
+            const label =
+              item === "onComplete" ? t("完成时收起", "On completion") : t("下次发送时收起", "On next message");
+            return (
+              <button
+                key={item}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setCollapseTiming(item)}
+                className={`rounded-md px-3 py-1.5 text-[12px] ${
+                  active ? "bg-panel-strong font-medium text-ink" : "text-muted hover:text-ink"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-[11px] leading-relaxed text-faint">
+          {timing === "onComplete"
+            ? t("回复一出现，这一轮的过程就折回一行。", "The process folds back to one line as soon as the reply arrives.")
+            : t(
+                "回复出现后过程仍然展开，等你发出下一条消息再收起。",
+                "The process stays expanded after the reply until you send the next message.",
+              )}
         </p>
       </Section>
 

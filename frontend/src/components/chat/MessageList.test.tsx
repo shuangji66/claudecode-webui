@@ -2,12 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MessageList } from "./MessageList";
 import type { Item } from "../../lib/model";
-import { resetProcessViewCache, setProcessView } from "../../lib/viewMode";
+import {
+  resetCollapseTimingCache,
+  resetProcessViewCache,
+  setCollapseTiming,
+  setProcessView,
+} from "../../lib/viewMode";
 
 beforeEach(() => {
   // 过程展示偏好存在模块缓存里：每个用例从默认的「标准」开始。
   resetProcessViewCache();
   setProcessView("standard");
+  resetCollapseTimingCache();
+  setCollapseTiming("onComplete");
 });
 
 function userItem(i: number): Item {
@@ -242,5 +249,62 @@ describe("MessageList 过程展示", () => {
     render(<MessageList items={[bash(), answer]} />);
     fireEvent.click(screen.getByRole("button", { expanded: false }));
     expect(screen.getByText("输出")).toBeInTheDocument();
+  });
+});
+
+describe("MessageList 收起时机", () => {
+  const thinking = (): Item => ({ id: "th1", seq: 0, ts: 0, kind: "thinking", text: "思考中" });
+  const read = (): Item => ({
+    id: "t1",
+    seq: 0,
+    ts: 0,
+    kind: "tool",
+    toolUseId: "tu1",
+    name: "Read",
+    input: { file_path: "/w/a.md" },
+    result: "内容",
+  });
+  const bash = (): Item => ({
+    id: "t2",
+    seq: 0,
+    ts: 0,
+    kind: "tool",
+    toolUseId: "tu2",
+    name: "Bash",
+    input: { command: "ls -la" },
+    result: "a",
+  });
+  const answer: Item = { id: "a1", seq: 0, ts: 0, kind: "assistant", text: "答案", streaming: false };
+  const nextUser: Item = { id: "u2", seq: 0, ts: 0, kind: "user", text: "下一条" };
+
+  it("下次发送时收起：回答出现后过程仍然展开", () => {
+    setCollapseTiming("onNextSend");
+    render(<MessageList items={[thinking(), read(), bash(), answer]} />);
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+    expect(screen.getByText("/w/a.md")).toBeInTheDocument();
+  });
+
+  it("下次发送时收起：发出下一条消息才折回一行", () => {
+    setCollapseTiming("onNextSend");
+    const { rerender } = render(<MessageList items={[thinking(), read(), bash(), answer]} />);
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+
+    rerender(<MessageList items={[thinking(), read(), bash(), answer, nextUser]} />);
+    expect(screen.queryByText("ls -la")).toBeNull();
+    expect(screen.getByText("已读取文件并执行了命令")).toBeInTheDocument();
+  });
+
+  it("下次发送时收起：详细模式保留平铺过程行（不冒出组头）", () => {
+    setProcessView("detailed");
+    setCollapseTiming("onNextSend");
+    render(<MessageList items={[thinking(), read(), bash(), answer]} />);
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+    expect(screen.queryByText("已读取文件并执行了命令")).toBeNull();
+  });
+
+  it("完成时收起：回答一到就折回一行（对照）", () => {
+    render(<MessageList items={[thinking(), read(), bash(), answer]} />);
+    expect(screen.queryByText("ls -la")).toBeNull();
+    expect(screen.getByText("已读取文件并执行了命令")).toBeInTheDocument();
   });
 });

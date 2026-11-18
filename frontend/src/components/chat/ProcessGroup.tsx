@@ -36,38 +36,56 @@ const ICONS: Record<ToolCategory, (props: { size?: number; className?: string })
  *   - 标准：组头追加「正在做什么」或思考首行；
  *   - 详细：运行中不显示组头，直接把每一步铺开（卡片），回答一出现就收起。
  *
- * 收起时机是「完成时收起」：这一组后面一出现内容（回答、下一次调用、result），
- * 立刻折回组头。用户手动展开的组在关闭那一刻同样折回——这正是「回答结束时
- * 自动折叠思维过程」；但已经收起的历史组再点开就保持打开，不会被重渲染合上。
+ * 收起时机有两种（对齐 DSH 的「过程收起时机」）：
+ *   - 完成时收起（默认）：这一组后面一出现内容（回答、下一次调用、result）就折回组头；
+ *   - 下次发送时收起：最新一轮的组在回答出现后仍然展开（详细模式保持平铺、不显示组头），
+ *     等用户发出下一条消息才收起。
+ * 用户手动开合过的组不再被自动逻辑改动（`touched`）；自动展开/收起的组由 `auto` 记着，
+ * 只在「自己开过」的情况下才自动收，免得把用户点开的历史组一并合上。
  */
 export function ProcessGroup({
   items,
   live,
   view,
+  keepOpen = false,
   children,
 }: {
   items: Item[];
   live: boolean;
   view: ProcessMode;
+  /** 「下次发送时收起」下，这一组属于最新一轮：回答出现后仍保持展开。 */
+  keepOpen?: boolean;
   children: ReactNode;
 }) {
   const t = useT();
   const locale = useLocale();
   const [open, setOpen] = useState(view === "detailed" && live);
+  /** 用户手动开合过：模式切换不再改它的开合。 */
   const touched = useRef(false);
+  /** 上一次是不是「运行中/保留期」：true→false 就是收起时机（完成 / 下次发送）。 */
+  const active = useRef(live || keepOpen);
   /** 正文还能往哪个方向滚：只有真能滚的方向才给渐隐，否则一屏放得下也会糊一条边。 */
   const body = useRef<HTMLDivElement | null>(null);
   const [fade, setFade] = useState({ top: false, bottom: false });
-  // 详细模式运行中不设组级限高：卡片本来就要完整铺开；其余情况限高，避免一屏只有过程。
-  const capped = !(view === "detailed" && live);
+  // 详细模式在「运行中」与「下次发送时收起」的保留期里都平铺正文、不显示组头。
+  const flat = view === "detailed" && (live || keepOpen);
+  // 平铺时不设组级限高：卡片本来就要完整铺开；其余情况限高，避免一屏只有过程。
+  const capped = !flat;
 
   useEffect(() => {
-    if (!live) {
+    const running = live || keepOpen;
+    // 收起时机：这一段从「进行中/保留期」结束——完成时收起，或用户发出了下一条消息。
+    // 这里连手动展开过的组也一起收：需求就是「回答一到就折叠过程」。
+    if (active.current && !running) {
       setOpen(false);
-      return;
+      touched.current = false;
     }
-    if (view === "detailed" && !touched.current) setOpen(true);
-  }, [live, view]);
+    active.current = running;
+    if (!running || touched.current) return;
+    // 运行中的呈现：详细模式平铺（等价展开），简洁/标准保持收起；
+    // 保留期（下次发送时收起）一律展开，否则「推迟收起」在简洁/标准下看不出区别。
+    setOpen(live ? view === "detailed" : true);
+  }, [live, view, keepOpen]);
 
   useEffect(() => {
     const el = body.current;
@@ -92,7 +110,7 @@ export function ProcessGroup({
   const detail = view === "concise" ? "" : live ? liveDetail(items) : reasoningPreview(items);
   const Icon = ICONS[dominantCategory(items)];
 
-  if (view === "detailed" && live) {
+  if (flat) {
     return <div className="space-y-2">{children}</div>;
   }
 
