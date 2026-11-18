@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -161,18 +162,34 @@ func (s *Server) handleFsDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if info.IsDir() {
-		name := root.ArchiveName(relPath)
+		// 头先摆好（Zip 会直接往 w 写，写之前必须先定好 Content-Type）。
+		// 打包先走完清单再落笔，所以预算超限时一个字节都没出去，头也还没 flush，
+		// 还能把它们撤掉换成一个正常的错误响应。
 		w.Header().Set("Content-Type", "application/zip")
-		w.Header().Set("Content-Disposition", attachmentHeader(name))
+		w.Header().Set("Content-Disposition", attachmentHeader(root.ArchiveName(relPath)))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// 与 /api/fs/raw 一致：下载内容不进任何缓存（共用浏览器/前置代理时那是越权读取面）。
+		w.Header().Set("Cache-Control", "no-store")
 		out := &countingWriter{w: w}
 		if _, err := root.Zip(r.Context(), rel, out); err != nil {
-			// 已经开始写正文就改不了状态码了（客户端可能也已经断开）：只记下原因。
 			if out.n == 0 {
-				w.Header().Del("Content-Disposition")
-				w.Header().Del("Content-Type")
-				writeErr(w, err.Error(), http.StatusBadRequest)
+				for _, key := range []string{"Content-Type", "Content-Disposition", "X-Content-Type-Options", "Cache-Control"} {
+					w.Header().Del(key)
+				}
+				code := http.StatusBadRequest
+				switch {
+				case errors.Is(err, fsapi.ErrArchiveTooLarge):
+					// 「太大」是拒绝，不是请求写错了。
+					code = http.StatusRequestEntityTooLarge
+				case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+					// 浏览器自己取消了请求，没什么可回的。
+					return
+				}
+				writeErr(w, err.Error(), code)
+				return
 			}
+			// 已经开始写正文（磁盘错误、客户端断开）：改不了状态码，至少留下原因。
+			s.log.Printf("打包下载失败（%s，已写 %d 字节）: %v", relPath, out.n, err)
 			return
 		}
 		return
@@ -192,6 +209,7 @@ func (s *Server) handleFsDownload(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", attachmentHeader(name))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
 	// ServeContent 负责 Range / Content-Length；ReadSeeker 就是 *os.File。
 	http.ServeContent(w, r, name, fileInfo.ModTime(), f)
 }

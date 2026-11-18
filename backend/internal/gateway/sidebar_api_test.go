@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -385,5 +386,40 @@ func TestFsDownloadFileAndFolder(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("路径穿越应 403，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 工作区里的软链指向外部：下载同样要 403（fsapi 层已有用例，这里钉住网关这段）。
+	outside = t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.bin"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Skipf("无法创建符号链接: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/fs/download?cwd="+root+"&path=link/secret.bin", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("软链逃逸应 403，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 中文文件名要走 RFC 2231（filename*），否则浏览器只能存成默认名。
+	if err := os.WriteFile(filepath.Join(root, "报告 2026.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/fs/download?cwd="+root+"&path="+url.QueryEscape("报告 2026.txt"), nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("中文文件名下载 code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if disposition := rec.Header().Get("Content-Disposition"); !strings.Contains(disposition, "filename*=") {
+		t.Fatalf("中文文件名应带 filename*，实际 %q", disposition)
+	}
+	// 下载内容不进缓存（与 /api/fs/raw 同一条规矩）。
+	if cache := rec.Header().Get("Cache-Control"); cache != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", cache)
 	}
 }
