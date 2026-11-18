@@ -1,5 +1,5 @@
 // 输入框下方的用量（对齐 DSH 底栏那套）：
-//   - `UsageSummary`：轮数 / 工具数 / tok/s 的纯文字，细节留给点开的弹层；
+//   - `UsageSummary`：轮数 / tok/s 的纯文字（工具数与事件数只在弹层的「累计」里），细节留给弹层；
 //   - `UsageStats`：上下文占用的圆环 + 百分比，点开是**同一个**弹层——占用、会话累计、
 //     缓存与生成速度都在里面。只有一个入口：token 详情不再单独拆一颗按钮（试过，两个
 //     入口互相重复）。本轮消耗只出现在回答下面那行小字里，弹层不重复报。
@@ -13,7 +13,13 @@ import { useT } from "../../lib/i18n";
 import { contextPercent, formatTokens, tokensPerSecond, type UsageSnapshot } from "../../lib/usage";
 import { POPUP_PANEL, PORTAL_ATTR, useAnchoredPanel, useDismiss } from "../common/Menu";
 
-interface Props {
+interface SummaryProps {
+  snap: UsageSnapshot | undefined;
+  turns: number;
+  events: number;
+}
+
+interface StatsProps {
   snap: UsageSnapshot | undefined;
   turns: number;
   tools: number;
@@ -61,22 +67,22 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * 底栏那行文字：轮数 / 工具数 / tok/s。
+ * 底栏那行文字：轮数 / tok/s。
  *
- * 窄屏只留轮数（输入框那一行本来就挤），其余数字在弹层的「累计」里也能看到。
+ * 工具数与事件数不在这里——它们在弹层的「累计」里，底栏只留最短的几项；
+ * 窄屏更只留轮数（输入框那一行本来就挤）。
  */
-export function UsageSummary({ snap, turns, tools, events }: Props) {
+export function UsageSummary({ snap, turns, events }: SummaryProps) {
   const t = useT();
   const tps = snap ? tokensPerSecond(snap.genTokens ?? 0, snap.genMs) : undefined;
 
   const parts: string[] = [];
   if (turns > 0) parts.push(t(`${turns} 轮`, `${turns} turns`));
-  if (tools > 0) parts.push(t(`${tools} 工具`, `${tools} tools`));
   if (tps !== undefined) parts.push(`${Math.round(tps)} tok/s`);
 
-  // 没有 usage 时只报事件/工具数（老转录里没有 usage，别硬凑 token 数字）。
+  // 没有 usage 时只报事件数（老转录里没有 usage，别硬凑 token 数字）。
   if (!snap || parts.length === 0) {
-    const fallback = events > 0 ? t(`共 ${events} 条事件 · ${tools} 次工具`, `${events} events · ${tools} tools`) : "";
+    const fallback = events > 0 ? t(`共 ${events} 条事件`, `${events} events`) : "";
     return <span className="shrink-0 tabular-nums">{fallback}</span>;
   }
 
@@ -164,37 +170,27 @@ export function UsageStats({ snap, turns, tools, events }: StatsProps) {
                 {formatTokens(snap.contextTokens)}
                 {snap.contextWindow ? ` / ${formatTokens(snap.contextWindow)}` : ""}
               </Row>
-              {snap.inputTokens !== undefined && (
-                <Row label={t("新输入", "New input")}>{formatTokens(snap.inputTokens)}</Row>
-              )}
             </div>
 
-            {sessionTotal > 0 && (
-              <>
-                <div className="my-1.5 h-px bg-line" />
-                <div className="space-y-1 text-[11px]">
-                  <div className="text-[10.5px] text-faint">{t("会话累计消耗", "Session total")}</div>
+            {/* 一块整体：上面是会话累计（合计 / 输入 / 输出），下面是最近一次请求的缓存明细
+                （未命中 / 读取 / 写入 / 命中）。中间不切分隔线，也不挂分组标题。 */}
+            <div className="mt-1.5 border-t border-line pt-1.5 space-y-1 text-[11px]">
+              {sessionTotal > 0 && (
+                <>
                   <Row label={t("合计", "Total")}>{formatTokens(sessionTotal)} tok</Row>
-                  <Row label={t("输入 / 输出", "Input / output")}>
-                    {`${formatTokens(sessionInput ?? 0)} / ${formatTokens(sessionOutput ?? 0)}`}
-                  </Row>
-                </div>
-              </>
-            )}
-
-            {(cacheRead || cacheWrite || cacheHit !== undefined) && (
-              <>
-                <div className="my-1.5 h-px bg-line" />
-                {/* 这三行就是最近一次请求的缓存明细，不再单独挂标题（占一行又没信息量）。 */}
-                <div className="space-y-1 text-[11px]">
-                  {cacheRead ? <Row label={t("缓存读取", "From cache")}>{formatTokens(cacheRead)}</Row> : null}
-                  {cacheWrite ? <Row label={t("缓存写入", "Cache write")}>{formatTokens(cacheWrite)}</Row> : null}
-                  {cacheHit !== undefined && (
-                    <Row label={t("缓存命中", "Cache hit")}>{Math.round(cacheHit * 100)}%</Row>
-                  )}
-                </div>
-              </>
-            )}
+                  <Row label={t("输入", "Input")}>{formatTokens(sessionInput ?? 0)}</Row>
+                  <Row label={t("输出", "Output")}>{formatTokens(sessionOutput ?? 0)}</Row>
+                </>
+              )}
+              {snap.inputTokens !== undefined && (
+                <Row label={t("未命中缓存", "Uncached")}>{formatTokens(snap.inputTokens)}</Row>
+              )}
+              {cacheRead ? <Row label={t("缓存读取", "From cache")}>{formatTokens(cacheRead)}</Row> : null}
+              {cacheWrite ? <Row label={t("缓存写入", "Cache write")}>{formatTokens(cacheWrite)}</Row> : null}
+              {cacheHit !== undefined && (
+                <Row label={t("缓存命中", "Cache hit")}>{Math.round(cacheHit * 100)}%</Row>
+              )}
+            </div>
 
             {(tps !== undefined || totals) && (
               <>

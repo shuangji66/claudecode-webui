@@ -21,20 +21,21 @@ const SNAP = {
 };
 
 describe("UsageSummary", () => {
-  it("显示轮数 / 工具 / tok/s（tok/s 取最近一次请求）", () => {
-    render(<UsageSummary snap={SNAP} turns={3} tools={12} events={40} />);
+  it("只显示轮数 / tok/s（工具数在弹层的累计里）", () => {
+    render(<UsageSummary snap={SNAP} turns={3} events={40} />);
     // 840 tok ÷ 4s = 210 tok/s；不是整轮输出 ÷ 整轮 API 耗时。
-    expect(screen.getByText("3 轮 · 12 工具 · 210 tok/s")).toBeInTheDocument();
+    expect(screen.getByText("3 轮 · 210 tok/s")).toBeInTheDocument();
+    expect(screen.queryByText(/工具/)).toBeNull();
   });
 
   it("没有 usage 时退回事件计数，不编造 token 数", () => {
-    render(<UsageSummary snap={undefined} turns={0} tools={2} events={5} />);
-    expect(screen.getByText("共 5 条事件 · 2 次工具")).toBeInTheDocument();
+    render(<UsageSummary snap={undefined} turns={0} events={5} />);
+    expect(screen.getByText("共 5 条事件")).toBeInTheDocument();
     expect(screen.queryByText(/tok\/s/)).toBeNull();
   });
 
   it("什么都没有时渲染空串", () => {
-    const { container } = render(<UsageSummary snap={undefined} turns={0} tools={0} events={0} />);
+    const { container } = render(<UsageSummary snap={undefined} turns={0} events={0} />);
     expect(container.textContent).toBe("");
   });
 });
@@ -63,13 +64,15 @@ describe("ContextUsage", () => {
     const panel = screen.getByRole("dialog", { name: "上下文占用" });
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(panel).toHaveTextContent("已用9.1K / 195.3K");
-    expect(panel).toHaveTextContent("新输入12");
-    // 会话累计（整轮累计口径的输入侧 + 输出之和）
-    expect(panel).toHaveTextContent("会话累计消耗");
-    expect(panel).toHaveTextContent("合计2M tok");
-    expect(panel).toHaveTextContent("输入 / 输出2M / 20K");
-    // 缓存三项是最近一次请求的数（不再挂分组标题）
+    // 会话累计与缓存明细合成一块，不挂分组标题；输入 / 输出各占一行
+    expect(panel).not.toHaveTextContent("会话累计消耗");
     expect(panel).not.toHaveTextContent("缓存（最近一次请求）");
+    expect(panel).toHaveTextContent("合计2M tok");
+    expect(panel).toHaveTextContent("输入2M");
+    expect(panel).toHaveTextContent("输出20K");
+    // 未命中缓存 = 这次请求没吃到缓存的输入侧，排在缓存读取上面
+    expect(panel).toHaveTextContent("未命中缓存12");
+    expect(panel).not.toHaveTextContent("新输入");
     expect(panel).toHaveTextContent("缓存读取8.8K");
     expect(panel).toHaveTextContent("缓存写入300");
     expect(panel).toHaveTextContent("缓存命中97%");

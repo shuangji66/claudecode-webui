@@ -325,7 +325,7 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 强调色固定为陶土色 `#D97757`，用 `bg-brand/text-brand` 等语义类，不要写死 slate/blue。
 - **唯一允许的循环动画**是侧栏对话「进行中」的进度环（`common/StateDot` 的 `ongoing`，
   1.5s 匀速旋转，对齐 DSH），且 `prefers-reduced-motion` 下必须静止；呼吸灯/pulse 仍然禁止。
-- **输入框下方的用量行**（轮数 / 工具数 / tok/s / 上下文%）全部来自 claude CLI 的
+- **输入框下方的用量行**（轮数 / tok/s / 上下文%）全部来自 claude CLI 的
   `usage` 与 `modelUsage.contextWindow`（见 `lib/usage.ts`）；CLI 没有「步骤数」与
   「实时 tok/s」，对应显示的是换算值，不要把它说成官方指标，也不要为此去猜。
   快照随对话存进 `conversations.json`（`PATCH /api/conversations {usage}`），重开对话时
@@ -339,8 +339,8 @@ hub ── manager ── session ── process ── claude (NDJSON)
   消耗」）** 与 API 耗时；`plausibleContext` 再把「超过窗口」的存量值判为无效（旧版本写进
   `conversations.json` 的坏快照也靠它清掉）。
   **占用与消耗是两个数，但在界面上共用一个弹层**：入口只有底栏右侧的圆环 + 百分比
-  （最近一次请求的输入侧 = 窗口还剩多少），点开依次是已用 / 窗口、新输入、会话累计消耗
-  （所有请求之和，含缓存——长任务动辄几百万）、最近一次请求的缓存读取 / 写入 / 命中、生成速度与
+  （最近一次请求的输入侧 = 窗口还剩多少），点开依次是已用 / 窗口，一块合并的整体（会话累计的
+  合计 / 输入 / 输出 + 最近一次请求的未命中缓存 / 读取 / 写入 / 命中）、生成速度与
   「累计 = 轮 · 工具 · 事件」。**弹层不报本轮消耗**（在回答下面那行小字里），也不写解释性
   小字。曾把 token 详情拆成输入框下方一颗居中胶囊，之后又并回来了：两个入口内容互相重复，
   别再加第二颗按钮。

@@ -221,7 +221,7 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
             )}
       </span>
       <span className="flex shrink-0 items-center gap-2">
-        <UsageSummary snap={snap} turns={turns} tools={tools} events={itemList.length} />
+        <UsageSummary snap={snap} turns={turns} events={itemList.length} />
         <UsageStats snap={snap} turns={turns} tools={tools} events={itemList.length} />
       </span>
     </>
