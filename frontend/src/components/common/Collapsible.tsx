@@ -30,8 +30,10 @@ export function Collapsible({ title, defaultOpen = false, summary, children, ton
         >
           <IconChevronRight size={12} className={`shrink-0 text-faint transition-transform ${open ? "rotate-90" : ""}`} />
           {icon && <span className="shrink-0">{icon}</span>}
-          <span className="truncate">{title}</span>
-          {summary && <span className="ml-auto shrink-0 pl-2 text-[10.5px] font-normal text-faint">{summary}</span>}
+          <span className="shrink-0 truncate">{title}</span>
+          {summary && (
+            <span className="ml-auto min-w-0 truncate pl-2 text-[10.5px] font-normal text-faint">{summary}</span>
+          )}
         </button>
         {open && <div className="px-2 pb-1.5 pt-1">{children}</div>}
       </div>
@@ -48,8 +50,8 @@ export function Collapsible({ title, defaultOpen = false, summary, children, ton
       >
         <IconChevronRight size={13} className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
         {icon && <span className="shrink-0">{icon}</span>}
-        <span className="truncate">{title}</span>
-        {summary && <span className="ml-auto truncate text-[10px] font-normal text-faint">{summary}</span>}
+        <span className="shrink-0 truncate">{title}</span>
+        {summary && <span className="ml-auto min-w-0 truncate text-[10px] font-normal text-faint">{summary}</span>}
       </button>
       {open && <div className="border-t border-line px-3 py-2.5">{children}</div>}
     </div>

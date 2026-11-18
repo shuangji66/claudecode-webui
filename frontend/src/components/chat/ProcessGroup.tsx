@@ -93,11 +93,14 @@ export function ProcessGroup({
         {!detail && <span className="flex-1" />}
         {live && <span className="shrink-0 text-[10px] text-brand">{t("进行中", "Running")}</span>}
       </button>
+      {/* 横向一律不滚：行内文字必须自己省略，绝不能把整组撑出横向滚动条。
+          限高只在 md 以上生效——手机上「页面里再套一个滚动区」很难摸到边界，
+          展开的组直接跟页面一起滚。 */}
       {open && (
         <div
-          className={`px-1 pb-1 ${capped ? "max-h-[min(400px,50vh)] overflow-y-auto dsh-scroll" : ""} ${
-            view === "detailed" ? "space-y-2" : "space-y-1"
-          }`}
+          className={`dsh-scroll overflow-x-hidden px-1 pb-1 ${
+            capped ? "md:max-h-[min(400px,50vh)] md:overflow-y-auto" : ""
+          } ${view === "detailed" ? "space-y-2" : "space-y-1"}`}
         >
           {children}
         </div>
