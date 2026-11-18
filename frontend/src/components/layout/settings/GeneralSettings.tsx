@@ -77,6 +77,19 @@ export function GeneralSettings() {
   const [theme, setTheme] = useState(themePreference);
   const locale = settings?.locale || "zh";
   const fontSize = settings?.font_size || 15;
+  /**
+   * 字号按钮的本地递进值：`settings` 要等 PUT 回来才更新，按它算的话连点两次
+   * 「+」都是 15→16（第二次读到的还是 15），用户以为按钮没反应。
+   * 请求回来后清掉，回到 store 的权威值。
+   */
+  const [pendingFontSize, setPendingFontSize] = useState<number | null>(null);
+  const shownFontSize = pendingFontSize ?? fontSize;
+  const bumpFontSize = (delta: number) => {
+    const next = Math.min(20, Math.max(12, shownFontSize + delta));
+    if (next === shownFontSize) return;
+    setPendingFontSize(next);
+    void save({ font_size: next }).then(() => setPendingFontSize(null));
+  };
   // 过程展示只存本设备（和主题同理）：手机要挤、桌面可以宽松。
   const view = useProcessView();
   const timing = useCollapseTiming();
@@ -189,18 +202,18 @@ export function GeneralSettings() {
             <div className="inline-flex items-center rounded-lg bg-panel dark:bg-panel-strong">
               <button
                 type="button"
-                onClick={() => void save({ font_size: Math.max(12, fontSize - 1) })}
-                disabled={fontSize <= 12}
+                onClick={() => bumpFontSize(-1)}
+                disabled={shownFontSize <= 12}
                 className="h-8 w-8 rounded-l-lg text-[13px] text-muted hover:bg-panel-strong hover:text-ink disabled:opacity-30 dark:hover:bg-line disabled:hover:bg-transparent"
                 aria-label={t("减小字号", "Decrease font size")}
               >
                 −
               </button>
-              <span className="w-8 text-center font-mono text-[12.5px] text-ink tabular-nums">{fontSize}</span>
+              <span className="w-8 text-center font-mono text-[12.5px] text-ink tabular-nums">{shownFontSize}</span>
               <button
                 type="button"
-                onClick={() => void save({ font_size: Math.min(20, fontSize + 1) })}
-                disabled={fontSize >= 20}
+                onClick={() => bumpFontSize(1)}
+                disabled={shownFontSize >= 20}
                 className="h-8 w-8 rounded-r-lg text-[13px] text-muted hover:bg-panel-strong hover:text-ink disabled:opacity-30 dark:hover:bg-line disabled:hover:bg-transparent"
                 aria-label={t("增大字号", "Increase font size")}
               >
