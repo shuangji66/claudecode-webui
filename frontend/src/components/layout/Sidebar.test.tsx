@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { Sidebar } from "./Sidebar";
 import { useAppStore } from "../../store/useAppStore";
+import { resetHiddenFeaturesCache } from "../../lib/sidebarFeatures";
 
 function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
   return render(
@@ -105,6 +106,7 @@ describe("Sidebar 分组/排序/筛选菜单", () => {
 
   beforeEach(() => {
     localStorage.clear();
+    resetHiddenFeaturesCache();
     seed();
   });
 
@@ -149,6 +151,7 @@ describe("Sidebar 分组/排序/筛选菜单", () => {
 describe("Sidebar 会话悬浮预览", () => {
   beforeEach(() => {
     localStorage.clear();
+    resetHiddenFeaturesCache();
     useAppStore.setState({
       workspaces: [{ path: "/w/demo", name: "demo", last_used: "", exists: true }],
       currentWorkspace: "/w/demo",
@@ -218,6 +221,7 @@ describe("Sidebar 会话悬浮预览", () => {
 describe("Sidebar 会话行的管理入口", () => {
   beforeEach(() => {
     localStorage.clear();
+    resetHiddenFeaturesCache();
     useAppStore.setState({
       workspaces: [{ path: "/w/demo", name: "demo", last_used: "", exists: true }],
       currentWorkspace: "/w/demo",
@@ -328,6 +332,7 @@ describe("Sidebar 新建对话后关闭移动端抽屉", () => {
 
   beforeEach(() => {
     localStorage.clear();
+    resetHiddenFeaturesCache();
     useAppStore.setState({
       workspaces: [{ path, name: "demo", last_used: "", exists: true }],
       currentWorkspace: path,
@@ -378,6 +383,7 @@ describe("Sidebar 新建对话后关闭移动端抽屉", () => {
 describe("Sidebar 工作区行与移动端抽屉", () => {
   beforeEach(() => {
     localStorage.clear();
+    resetHiddenFeaturesCache();
     useAppStore.setState({
       workspaces: [
         { path: "/w/demo", name: "demo", last_used: "", exists: true },
@@ -438,6 +444,63 @@ describe("Sidebar 工作区行与移动端抽屉", () => {
   });
 });
 
+describe("Sidebar 回对话区", () => {
+  const cwd = "/w/demo";
+
+  beforeEach(() => {
+    localStorage.clear();
+    resetHiddenFeaturesCache();
+    useAppStore.setState({
+      workspaces: [{ path: cwd, name: "demo", last_used: "", exists: true }],
+      currentWorkspace: cwd,
+      activeId: null,
+    });
+  });
+
+  const seedOne = () => {
+    useAppStore.setState({
+      conversations: [
+        {
+          id: "c-1",
+          cwd,
+          title: "会话甲",
+          created_at: "",
+          last_active: "2026-01-02T00:00:00Z",
+          messages: 3,
+          archived: false,
+          live: false,
+        },
+      ],
+    });
+  };
+
+  // 功能页打开时点**已经在用的**那条对话：activeId 没变，靠上层观察状态永远收不到，
+  // 所以「回对话区」必须挂在点击这个动作上。
+  it("点当前这条对话也会回对话区", () => {
+    seedOne();
+    useAppStore.setState({ activeId: "c-1" });
+    const onOpenChat = vi.fn();
+    const openConversation = vi.fn(async () => true);
+    useAppStore.setState({ openConversation });
+
+    renderSidebar({ onOpenChat });
+    fireEvent.click(screen.getByText("会话甲"));
+
+    expect(onOpenChat).toHaveBeenCalledTimes(1);
+    expect(openConversation).toHaveBeenCalledWith("c-1");
+  });
+
+  it("「新对话」同样先回对话区", () => {
+    const onOpenChat = vi.fn();
+    useAppStore.setState({ createSession: vi.fn(async () => {}) });
+
+    renderSidebar({ onOpenChat });
+    fireEvent.click(screen.getByRole("button", { name: "新对话" }));
+
+    expect(onOpenChat).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("Sidebar 退出登录", () => {
   beforeEach(() => {
     useAppStore.setState({
@@ -469,6 +532,7 @@ describe("Sidebar 手动排序的拖拽（对齐 DSH）", () => {
 
   function seed(pinned = false) {
     localStorage.clear();
+    resetHiddenFeaturesCache();
     localStorage.setItem("ccweb-sidebar-view", JSON.stringify({ group: "workspace", sort: "manual", archive: "hide" }));
     useAppStore.setState({
       workspaces: [{ path: cwd, name: "demo", last_used: "", exists: true }],
@@ -637,6 +701,7 @@ describe("Sidebar 手动排序的拖拽（对齐 DSH）", () => {
 describe("Sidebar 功能区入口", () => {
   beforeEach(() => {
     localStorage.clear();
+    resetHiddenFeaturesCache();
     useAppStore.setState({ conversations: [], workspaces: [], currentWorkspace: "", activeId: null });
   });
 

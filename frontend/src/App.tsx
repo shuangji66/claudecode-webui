@@ -121,13 +121,6 @@ function AppShell() {
     }
   }, [rightOpen]);
 
-  // 点了某条对话 / 「新对话」就回对话区：整页视图只是改道，不是另一个应用。
-  // 必须和其它 hook 放在一起——跟在 `if (!info) return …` 后面会变成
-  // 「首帧 12 个 hook、下一帧 13 个」，就是 React #310（踩过一次）。
-  useEffect(() => {
-    setView(null);
-  }, [activeId]);
-
   const toggleCollapse = () => {
     setCollapsed((v) => {
       const next = !v;
@@ -217,6 +210,7 @@ function AppShell() {
           onAddWorkspace={openWorkspace}
           onOpenFeature={openFeature}
           activeFeature={view}
+          onOpenChat={() => setView(null)}
         />
       </div>
 
@@ -237,6 +231,7 @@ function AppShell() {
               onAddWorkspace={openWorkspace}
               onOpenFeature={openFeature}
               activeFeature={view}
+              onOpenChat={() => setView(null)}
             />
           </div>
         </div>

@@ -6,6 +6,7 @@
 //
 // 存的是**隐藏名单**而不是固定名单：以后新增入口默认出现在侧栏上，
 // 而不是让老用户的侧栏永远少几项。
+import { useSyncExternalStore } from "react";
 
 export type FeatureKey = "plugins" | "mcp" | "skills" | "schedules" | "history";
 
@@ -49,4 +50,74 @@ export function toggleFeature(hidden: Iterable<FeatureKey>, key: FeatureKey): Se
   if (next.has(key)) next.delete(key);
   else next.add(key);
   return next;
+}
+
+// ── 模块级共享快照 ────────────────────────────────────────────────────────────
+//
+// 偏好必须放在**组件之外**：侧栏同时存在两个实例（桌面常驻的 + 移动端抽屉里的），
+// 各自 `useState` 一份的话，在抽屉里取消固定「插件」之后，桌面实例手上还是挂载时
+// 那份旧集合，下一次改动会用自己的旧集合整体回写，把抽屉里的选择抹掉。
+//
+// 与 lib/viewMode.ts 同一个做法：缓存快照（getSnapshot 每次返回新对象会无限重渲染）
+// + 订阅者集合 + 跨标签页同步。
+
+let cached: Set<FeatureKey> | null = null;
+const listeners = new Set<() => void>();
+
+function emit(): void {
+  for (const listener of listeners) listener();
+}
+
+/** 当前被取消固定的入口（只读快照，调用方不要就地修改）。 */
+export function hiddenFeaturesSnapshot(): Set<FeatureKey> {
+  if (!cached) cached = loadHiddenFeatures();
+  return cached;
+}
+
+/** 整体替换隐藏名单并落盘。 */
+export function setHiddenFeatures(hidden: Iterable<FeatureKey>): void {
+  cached = new Set(hidden);
+  saveHiddenFeatures(cached);
+  emit();
+}
+
+/** 切换某一项的固定状态。 */
+export function toggleHiddenFeature(key: FeatureKey): void {
+  setHiddenFeatures(toggleFeature(hiddenFeaturesSnapshot(), key));
+}
+
+function subscribeHiddenFeatures(listener: () => void): () => void {
+  listeners.add(listener);
+  // 别的标签页改了偏好：storage 事件只在**其它**标签页触发，正好用来刷新本地缓存。
+  if (typeof window !== "undefined" && listeners.size === 1) {
+    window.addEventListener("storage", onStorage);
+  }
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0 && typeof window !== "undefined") {
+      window.removeEventListener("storage", onStorage);
+    }
+  };
+}
+
+function onStorage(event: StorageEvent): void {
+  if (event.key !== null && event.key !== HIDDEN_KEY) return;
+  cached = loadHiddenFeatures();
+  emit();
+}
+
+/** 组件里读隐藏名单（跨实例、跨标签页一致）。 */
+export function useHiddenFeatures(): Set<FeatureKey> {
+  return useSyncExternalStore(subscribeHiddenFeatures, hiddenFeaturesSnapshot);
+}
+
+/**
+ * 丢掉模块级缓存，下一次读取重新从 localStorage 解析。
+ *
+ * 只给测试用：`localStorage.clear()` 清的是磁盘，清不掉这个模块里的快照，
+ * 上一个用例留下的隐藏名单会带进下一个用例。
+ */
+export function resetHiddenFeaturesCache(): void {
+  cached = null;
+  emit();
 }

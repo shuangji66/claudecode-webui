@@ -24,7 +24,7 @@ import {
   type SidebarView,
 } from "../../lib/sidebarView";
 import { clearDragPreview, startDragPreview } from "../../lib/dragImage";
-import { loadHiddenFeatures, saveHiddenFeatures, toggleFeature, type FeatureKey } from "../../lib/sidebarFeatures";
+import { toggleHiddenFeature, useHiddenFeatures, type FeatureKey } from "../../lib/sidebarFeatures";
 import { askConfirm, askPrompt } from "../common/SystemDialogs";
 import { copyText } from "../../lib/clipboard";
 import { Menu, type MenuItem } from "../common/Menu";
@@ -77,6 +77,14 @@ interface Props {
   onOpenFeature: (feature: FeatureKey) => void;
   /** 当前打开的功能页：入口在原地高亮（对齐 DSH）。 */
   activeFeature?: FeatureKey | null;
+  /**
+   * 「回到对话区」：点某条对话（含**已经在用的那条**）或「新对话」时调。
+   *
+   * 不能靠上层观察 `activeId` 变化来推断：点当前那条时 id 没变，回调不会触发；
+   * 而后台恢复会话（进程没了 → 重连/新建）也会改 `activeId`，那时用户正在插件页
+   * 操作，不该被踢回对话区。所以要挂在动作上，而不是状态上。
+   */
+  onOpenChat?: () => void;
 }
 
 /** 功能区的一个入口。图标给成渲染函数：同一份清单要在 15px 的行内与 18px 的收起态各画一次。 */
@@ -130,7 +138,7 @@ interface DragState {
   over: { id: string; half: DropHalf } | null;
 }
 
-export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onOpenDeploy, onAddWorkspace, onOpenFeature, activeFeature = null }: Props) {
+export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onOpenDeploy, onAddWorkspace, onOpenFeature, activeFeature = null, onOpenChat }: Props) {
   const t = useT();
   const claude = useAppStore((s) => s.claude);
   const authRequired = useAppStore((s) => Boolean(s.info?.auth_required));
@@ -176,17 +184,18 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentWorkspace ? [currentWorkspace] : []));
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [wsMenu, setWsMenu] = useState<WsMenuState | null>(null);
-  /** 功能区里被取消固定的入口（只存本机，见 lib/sidebarFeatures）。 */
-  const [hiddenFeatures, setHiddenFeatures] = useState<Set<FeatureKey>>(loadHiddenFeatures);
+  /**
+   * 功能区里被取消固定的入口（只存本机，见 lib/sidebarFeatures）。
+   *
+   * 走模块级共享快照而不是 useState：侧栏同时有两个实例（桌面常驻 + 移动端抽屉），
+   * 各持一份的话，在抽屉里取消固定后桌面实例会用旧集合整体回写，把选择抹掉。
+   */
+  const hiddenFeatures = useHiddenFeatures();
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     saveView(view);
   }, [view]);
-
-  useEffect(() => {
-    saveHiddenFeatures(hiddenFeatures);
-  }, [hiddenFeatures]);
 
   useEffect(() => {
     saveOrder(order);
@@ -220,10 +229,15 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     trailing: {
       label: t(`固定 ${f.label}`, `Pin ${f.label}`),
       icon: <IconPin size={13} />,
-      onSelect: () => setHiddenFeatures((prev) => toggleFeature(prev, f.key)),
+      // 固定完把菜单也收掉：被取消固定的入口只剩最后一项时，「更多」按钮会随
+      // 列表清空而卸载，锚点却还在——留下一个空浮层要点别处才消失。
+      onSelect: () => {
+        toggleHiddenFeature(f.key);
+        setMoreAnchor(null);
+      },
     },
   }));
-  const pin = (key: FeatureKey) => setHiddenFeatures((prev) => toggleFeature(prev, key));
+  const pin = (key: FeatureKey) => toggleHiddenFeature(key);
   /**
    * 先取出 currentTarget 再 setState：把 `e.currentTarget` 放进 state 的更新函数里，
    * 等它真正执行时事件已经回收成 null，菜单会「点了没反应」。
@@ -338,6 +352,15 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     }
     setHover(null);
   };
+
+  // 卸载（关抽屉、切布局）时把待弹的定时器收掉：220ms 后对已卸载的组件 setState
+  // 会静默留下一个悬空闭包，里面还攥着那张已经脱离文档的行节点。
+  useEffect(() => () => {
+    if (hoverTimer.current) {
+      window.clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+  }, []);
 
   /**
    * 悬停 220ms 才弹卡片：划过列表时不该一路闪卡片。
@@ -538,6 +561,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       onAddWorkspace();
       return;
     }
+    endHover();
+    onOpenChat?.();
     void createSession(currentWorkspace);
     onClose?.();
   };
@@ -589,6 +614,11 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   const openOne = (c: ConversationInfo) => {
     setMenu(null);
+    // 悬浮卡是 pointer-events-none 的 fixed 浮层：不先收掉，它会在新对话左上角
+    // 继续盖着（指针还停在原来那行上，不会触发 pointerleave）。
+    endHover();
+    // 先回对话区再打开：点的是当前这条时 activeId 不变，靠上层观察状态永远收不到。
+    onOpenChat?.();
     void openConversation(c.id);
     onClose?.();
   };
@@ -677,8 +707,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             key={f.key}
             type="button"
             onClick={f.onClick}
-            className={`mt-2 flex h-9 w-9 items-center justify-center rounded-lg hover:bg-black/5 ${
-              activeFeature === f.key ? "bg-black/5 text-ink" : "text-muted hover:text-ink"
+            className={`mt-2 flex h-9 w-9 items-center justify-center rounded-lg hover:bg-panel-strong ${
+              activeFeature === f.key ? "bg-panel-strong text-ink" : "text-muted hover:text-ink"
             }`}
             aria-label={f.label}
             aria-current={activeFeature === f.key ? "page" : undefined}
