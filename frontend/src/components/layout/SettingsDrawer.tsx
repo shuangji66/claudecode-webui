@@ -66,7 +66,9 @@ export function SettingsDrawer({
       panelClassName="h-[100dvh] max-h-[100dvh] rounded-none md:h-[82vh] md:max-h-[84vh] md:rounded-2xl md:max-w-[900px]"
     >
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-        <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-2 py-2 md:w-48 md:flex-col md:border-b-0 md:border-r md:px-2.5 md:py-3">
+        {/* 桌面端导航宽 136px（w-34）：192px 时那列文字只占一半、留白过大，
+            分隔线离内容太远；标签最长只有两个字（MCP 三个），收窄后仍然一行放得下。 */}
+        <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-2 py-2 md:w-34 md:flex-col md:border-b-0 md:border-r md:px-2.5 md:py-3">
           <NavItem active={tab === "general"} icon={<IconSettings size={16} />} onClick={() => setTab("general")}>
             {t("通用", "General")}
           </NavItem>
