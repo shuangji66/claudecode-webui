@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { ContextUsage, UsageSummary } from "./UsageStats";
+import { UsageStats, UsageSummary } from "./UsageStats";
 
 // 真实帧算出来的快照（见 lib/usage.test.ts）。
 const SNAP = {
@@ -41,7 +41,7 @@ describe("UsageSummary", () => {
 
 describe("ContextUsage", () => {
   it("上下文用圈 + 百分比，点开只讲占用", () => {
-    const { container } = render(<ContextUsage snap={SNAP} turns={3} tools={12} events={40} />);
+    const { container } = render(<UsageStats snap={SNAP} turns={3} tools={12} events={40} />);
     expect(screen.getByLabelText("上下文占用 5%")).toBeInTheDocument();
     // 圈是两段圆：底环 + 按比例画弧（5% → dashoffset 接近满周长）
     const arcs = container.querySelectorAll("svg circle");
@@ -52,8 +52,8 @@ describe("ContextUsage", () => {
     expect(offset).toBeCloseTo(dash * 0.95, 3);
   });
 
-  it("点开详情：占用 + 新输入 + 累计（轮 / 工具 / 事件），缓存与消耗不在这里", () => {
-    render(<ContextUsage snap={SNAP} turns={1} tools={4} events={11} />);
+  it("点开详情：占用 / 会话累计 / 缓存 / 速度 / 轮次都在同一个弹层", () => {
+    render(<UsageStats snap={SNAP} turns={1} tools={4} events={11} />);
     // 关着的时候不渲染，也不再往 title 里塞长文（触屏拿不到悬停）。
     expect(screen.queryByRole("dialog")).toBeNull();
 
@@ -64,18 +64,25 @@ describe("ContextUsage", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(panel).toHaveTextContent("已用9.1K / 195.3K");
     expect(panel).toHaveTextContent("新输入12");
-    // 累计的轮次 / 工具 / 事件放在这里；缓存与消耗在 TokenUsage 那颗胶囊里。
+    // 会话累计（整轮累计口径的输入侧 + 输出之和）
+    expect(panel).toHaveTextContent("会话累计消耗");
+    expect(panel).toHaveTextContent("合计2M tok");
+    expect(panel).toHaveTextContent("输入 / 输出2M / 20K");
+    // 缓存是最近一次请求的数，单独一段
+    expect(panel).toHaveTextContent("缓存（最近一次请求）");
+    expect(panel).toHaveTextContent("缓存读取8.8K");
+    expect(panel).toHaveTextContent("缓存写入300");
+    expect(panel).toHaveTextContent("缓存命中97%");
+    // 速度用最近一次请求的输出（840 ÷ 4s），累计行报轮 / 工具 / 事件
+    expect(panel).toHaveTextContent("生成速度210 tok/s");
     expect(panel).toHaveTextContent("累计1 轮 · 4 次工具 · 11 条事件");
-    expect(panel).not.toHaveTextContent("缓存读取");
-    expect(panel).not.toHaveTextContent("缓存命中");
+    // 本轮消耗只出现在回答下面那行小字里，弹层不重复；也没有解释性小字。
     expect(panel).not.toHaveTextContent("本轮消耗");
-    expect(panel).not.toHaveTextContent("生成速度");
-    // 那行解释性小字已删掉：弹层只摆数字。
     expect(panel).not.toHaveTextContent("下一轮要发的上下文");
   });
 
   it("再点一次、按 Esc、点外部都会关闭详情", () => {
-    render(<ContextUsage snap={SNAP} turns={1} tools={0} events={9} />);
+    render(<UsageStats snap={SNAP} turns={1} tools={0} events={9} />);
     const trigger = screen.getByRole("button", { name: "上下文占用 5%" });
 
     fireEvent.click(trigger);
@@ -93,7 +100,7 @@ describe("ContextUsage", () => {
   });
 
   it("没有窗口或占用时不出圈（宁可不显示，也不画 0%）", () => {
-    const { container } = render(<ContextUsage snap={{ contextTokens: 9312 }} turns={0} tools={0} events={0} />);
+    const { container } = render(<UsageStats snap={{ contextTokens: 9312 }} turns={0} tools={0} events={0} />);
     expect(container.textContent).toBe("");
     expect(screen.queryByRole("button")).toBeNull();
   });

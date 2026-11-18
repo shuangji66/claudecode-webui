@@ -1,8 +1,8 @@
-// 输入框下方的统计（对齐 DSH 底栏那套）：
+// 输入框下方的用量（对齐 DSH 底栏那套）：
 //   - `UsageSummary`：轮数 / 工具数 / tok/s 的纯文字，细节留给点开的弹层；
-//   - `ContextUsage`：上下文占用的圆环 + 百分比，点开只看「窗口还剩多少」。
-// token 消耗（本轮 / 会话累计）在 `TokenUsage.tsx`，居中放在输入框下面——
-// 占用是「还剩多少」，消耗是「花了多少」，两个问题的入口不该挤在同一个按钮上。
+//   - `UsageStats`：上下文占用的圆环 + 百分比，点开是**同一个**弹层——占用、会话累计、
+//     缓存与生成速度都在里面。只有一个入口：token 详情不再单独拆一颗按钮（试过，两个
+//     入口互相重复）。本轮消耗只出现在回答下面那行小字里，弹层不重复报。
 //
 // 只显示 claude CLI 真的给出的数字（换算见 lib/usage）：CLI 没有「步骤数」「官方上下文
 // 百分比」，步数用工具调用次数、tok/s 用最近一次请求的输出 ÷ 它自己的生成耗时。
@@ -63,7 +63,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 /**
  * 底栏那行文字：轮数 / 工具数 / tok/s。
  *
- * 窄屏只留轮数（输入框那一行本来就挤），其余数字在 token 详情的「累计」里也能看到。
+ * 窄屏只留轮数（输入框那一行本来就挤），其余数字在弹层的「累计」里也能看到。
  */
 export function UsageSummary({ snap, turns, tools, events }: Props) {
   const t = useT();
@@ -88,19 +88,19 @@ export function UsageSummary({ snap, turns, tools, events }: Props) {
   );
 }
 
-const PANEL_WIDTH = 236;
-// 占用 2 行 + 累计 1 行（缓存与本轮消耗都在 TokenUsage 的弹层里）。
-const PANEL_HEIGHT = 200;
+const PANEL_WIDTH = 264;
+// 占用 2 行 + 会话 2 行 + 缓存 2~3 行 + 速度 1 行 + 累计 1 行，四条分隔线。
+const PANEL_HEIGHT = 360;
 
-interface ContextProps {
+interface StatsProps {
   snap: UsageSnapshot | undefined;
   turns: number;
   tools: number;
   events: number;
 }
 
-/** 上下文占用：圆环 + 百分比，点开是「窗口还剩多少」（token 与缓存明细在 TokenUsage 里）。 */
-export function ContextUsage({ snap, turns, tools, events }: ContextProps) {
+/** 上下文占用的圆环 + 百分比；点开是整份用量明细（占用 / 会话累计 / 缓存 / 速度 / 轮次）。 */
+export function UsageStats({ snap, turns, tools, events }: StatsProps) {
   const t = useT();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -109,6 +109,14 @@ export function ContextUsage({ snap, turns, tools, events }: ContextProps) {
   useDismiss(anchor !== null, panelRef, anchor, close);
 
   const pct = snap ? contextPercent(snap.contextTokens, snap.contextWindow) : undefined;
+  // tok/s 只认「最近一次请求的输出 ÷ 它自己的生成耗时」：整轮平均会把首字延迟摊进分母。
+  const tps = snap ? tokensPerSecond(snap.genTokens ?? 0, snap.genMs) : undefined;
+  const sessionInput = snap?.sessionInputTokens;
+  const sessionOutput = snap?.sessionOutputTokens;
+  const sessionTotal = (sessionInput ?? 0) + (sessionOutput ?? 0);
+  const cacheRead = snap?.cacheReadTokens;
+  const cacheWrite = snap?.cacheCreationTokens;
+  const cacheHit = snap?.cacheHitRate;
   const totals = [
     turns > 0 ? t(`${turns} 轮`, `${turns} turns`) : "",
     tools > 0 ? t(`${tools} 次工具`, `${tools} tool calls`) : "",
@@ -160,11 +168,42 @@ export function ContextUsage({ snap, turns, tools, events }: ContextProps) {
                 <Row label={t("新输入", "New input")}>{formatTokens(snap.inputTokens)}</Row>
               )}
             </div>
-            {totals && (
+
+            {sessionTotal > 0 && (
               <>
                 <div className="my-1.5 h-px bg-line" />
-                <div className="text-[11px]">
-                  <Row label={t("累计", "Totals")}>{totals}</Row>
+                <div className="space-y-1 text-[11px]">
+                  <div className="text-[10.5px] text-faint">{t("会话累计消耗", "Session total")}</div>
+                  <Row label={t("合计", "Total")}>{formatTokens(sessionTotal)} tok</Row>
+                  <Row label={t("输入 / 输出", "Input / output")}>
+                    {`${formatTokens(sessionInput ?? 0)} / ${formatTokens(sessionOutput ?? 0)}`}
+                  </Row>
+                </div>
+              </>
+            )}
+
+            {(cacheRead || cacheWrite || cacheHit !== undefined) && (
+              <>
+                <div className="my-1.5 h-px bg-line" />
+                <div className="space-y-1 text-[11px]">
+                  <div className="text-[10.5px] text-faint">{t("缓存（最近一次请求）", "Cache (last request)")}</div>
+                  {cacheRead ? <Row label={t("缓存读取", "From cache")}>{formatTokens(cacheRead)}</Row> : null}
+                  {cacheWrite ? <Row label={t("缓存写入", "Cache write")}>{formatTokens(cacheWrite)}</Row> : null}
+                  {cacheHit !== undefined && (
+                    <Row label={t("缓存命中", "Cache hit")}>{Math.round(cacheHit * 100)}%</Row>
+                  )}
+                </div>
+              </>
+            )}
+
+            {(tps !== undefined || totals) && (
+              <>
+                <div className="my-1.5 h-px bg-line" />
+                <div className="space-y-1 text-[11px]">
+                  {tps !== undefined && (
+                    <Row label={t("生成速度", "Throughput")}>{Math.round(tps)} tok/s</Row>
+                  )}
+                  {totals && <Row label={t("累计", "Totals")}>{totals}</Row>}
                 </div>
               </>
             )}

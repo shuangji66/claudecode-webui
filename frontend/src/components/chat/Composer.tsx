@@ -686,8 +686,7 @@ export function Composer({
         </div>
       </div>
 
-      {/* 底栏是「块」而不是一行：第二行要给 token 消耗那颗居中的胶囊（对齐 DSH 的 dock）。 */}
-      {footer && <div className="mt-1.5 px-1 text-[10px] text-faint">{footer}</div>}
+      {footer && <div className="mt-1.5 flex items-center justify-between gap-3 px-1 text-[10px] text-faint">{footer}</div>}
     </div>
   );
 }

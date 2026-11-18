@@ -5,8 +5,7 @@ import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
 import { TurnTimer } from "./TurnTimer";
 import { WorkspacePicker } from "./WorkspacePicker";
-import { ContextUsage, UsageSummary } from "./UsageStats";
-import { TokenUsage } from "./TokenUsage";
+import { UsageStats, UsageSummary } from "./UsageStats";
 import { TopBar } from "../layout/TopBar";
 import { PermissionPanel } from "../permission/PermissionPanel";
 import type { PermissionPayload } from "../../transport/types";
@@ -189,46 +188,42 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
 
   const footer = (
     <>
-      <div className="flex items-center justify-between gap-3">
-        <span className="truncate">
-          {starting ? t("正在启动 Claude…", "Starting Claude…")
-            : effortPending
-              ? t("本轮结束后按新的推理等级重开（上下文保留）", "Reopening with the new reasoning level after this turn")
-              : effortMismatch ? t("推理等级将在重开会话后生效", "Reasoning level applies after the session reopens")
-              : busy ? (
-                <>
-                  <span className="hidden sm:inline">
-                    {t(
-                      queued.length > 0
-                        ? `Claude 正在工作 · ${queued.length} 条待发送`
-                        : "Claude 正在工作 · Enter 排队 · Ctrl+Enter 立即插话",
-                      queued.length > 0
-                        ? `Claude is working · ${queued.length} queued`
-                        : "Claude is working · Enter queues · Ctrl+Enter interjects",
-                    )}
-                  </span>
-                  {/* 手机键盘的回车是换行，只能点按钮：提示写清楚按钮的作用。 */}
-                  <span className="sm:hidden">
-                    {t(
-                      queued.length > 0 ? `Claude 正在工作 · ${queued.length} 条待发送` : "Claude 正在工作 · 发送＝排队等本轮结束",
-                      queued.length > 0 ? `Claude is working · ${queued.length} queued` : "Claude is working · send queues for this turn",
-                    )}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <span className="hidden sm:inline">{t("Enter 发送 · Shift+Enter 换行", "Enter to send · Shift+Enter for newline")}</span>
-                  <span className="sm:hidden">{t("点右下角发送 · / 唤起命令", "Tap send · / commands")}</span>
-                </>
-              )}
+      <span className="truncate">
+        {starting ? t("正在启动 Claude…", "Starting Claude…")
+          : effortPending
+            ? t("本轮结束后按新的推理等级重开（上下文保留）", "Reopening with the new reasoning level after this turn")
+            : effortMismatch ? t("推理等级将在重开会话后生效", "Reasoning level applies after the session reopens")
+            : busy ? (
+              <>
+                <span className="hidden sm:inline">
+                  {t(
+                    queued.length > 0
+                      ? `Claude 正在工作 · ${queued.length} 条待发送`
+                      : "Claude 正在工作 · Enter 排队 · Ctrl+Enter 立即插话",
+                    queued.length > 0
+                      ? `Claude is working · ${queued.length} queued`
+                      : "Claude is working · Enter queues · Ctrl+Enter interjects",
+                  )}
+                </span>
+                {/* 手机键盘的回车是换行，只能点按钮：提示写清楚按钮的作用。 */}
+                <span className="sm:hidden">
+                  {t(
+                    queued.length > 0 ? `Claude 正在工作 · ${queued.length} 条待发送` : "Claude 正在工作 · 发送＝排队等本轮结束",
+                    queued.length > 0 ? `Claude is working · ${queued.length} queued` : "Claude is working · send queues for this turn",
+                  )}
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="hidden sm:inline">{t("Enter 发送 · Shift+Enter 换行", "Enter to send · Shift+Enter for newline")}</span>
+                <span className="sm:hidden">{t("点右下角发送 · / 唤起命令", "Tap send · / commands")}</span>
+              </>
+            )}
       </span>
-        <span className="flex shrink-0 items-center gap-2">
-          <UsageSummary snap={snap} turns={turns} tools={tools} events={itemList.length} />
-          <ContextUsage snap={snap} turns={turns} tools={tools} events={itemList.length} />
-        </span>
-      </div>
-      {/* 第二行居中：token 消耗（图标 + 总量，点开是本轮 / 会话的明细）。 */}
-      <TokenUsage snap={snap} />
+      <span className="flex shrink-0 items-center gap-2">
+        <UsageSummary snap={snap} turns={turns} tools={tools} events={itemList.length} />
+        <UsageStats snap={snap} turns={turns} tools={tools} events={itemList.length} />
+      </span>
     </>
   );
 

@@ -69,7 +69,7 @@ src/
   components/layout/settings/  设置页分区：GeneralSettings / ModelsSettings / DirsSettings（飞牛已授权目录）/ ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题）
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
                        / ImageLightbox（正文图片放大）
-                       / UsageStats（ContextUsage / UsageSummary）/ TokenUsage / ResultBar / WorkspacePicker
+                       / UsageStats（环 + 用量弹层，另导出 UsageSummary）/ ResultBar / WorkspacePicker
   components/tools/    ToolCardHost（注册表）/ AgentCard / BashCard / EditCard / GenericCard（兜底）
   components/permission/ PermissionPanel（按钮由 permission_suggestions 决定）
   components/right/    RightSidebar（标签页）/ FilesPanel / GitPanel / TerminalView / SubagentPanel
@@ -399,8 +399,9 @@ src/
   几百万——当上下文用就会显示「已用 9.1M / 窗口 976.6K」、进度环顶满（踩过一次）。
   `result` 只补窗口 / 整轮输出 / 整轮输入（`turnInputTokens`）/ API 耗时，`plausibleContext`
   再把超过窗口的存量值判废。
-  **占用与消耗必须分开放**：占用 = 最近一次请求的输入侧（窗口还剩多少）；
+  **占用与消耗是两个数，别互相覆盖**：占用 = 最近一次请求的输入侧（窗口还剩多少）；
   消耗 = 这一轮/这个会话所有请求之和（`turnInputTokens` / `session*Tokens`，含缓存）。
+  界面上它们是同一个弹层的两段（见下），不是两个入口。
   回答下面那行小字报的是**本轮消耗**（输入含缓存 + 输出），不是「输出 tok」——
   工具回合里输入侧占绝大多数，只报输出会让人以为没花钱。
   **tok/s 用最近一次请求的口径**（`genMs` / `genTokens` = `message_start` → `message_delta`
@@ -411,16 +412,12 @@ src/
   「步骤数」「实时 tok/s」「官方上下文百分比」——步数用工具调用次数、tok/s 用上面那对原始
   数据换算、上下文用 (input+cache_read+cache_creation) ÷ contextWindow，都是同一套数据的
   换算，不要在界面上编造。
-  **两个入口分开放（对齐 DSH 底栏），各管一件事，不要互相重复**：
-  - 上下文占用在底栏右侧，是小圆环 + 百分比（`UsageStats.tsx` 的 `ContextUsage`，
-    ≥70% 转琥珀、≥85% 转红）。弹层只放**已用 / 窗口、新输入**，外加一行
-    「累计 = N 轮 · M 次工具 · K 条事件」；**不放缓存、不放 token 消耗**，也不写解释性小字
-    （弹层只摆数字）。
-  - token 消耗在输入框下方**居中**一颗「数据库图标 + 总量」的胶囊（`TokenUsage.tsx`），
-    图标与数字是同一个按钮。弹层 = **会话累计**（输入 / 输出）+ **缓存（最近一次请求）**
-    （缓存读取 / 缓存写入 / 缓存命中）+ **生成速度**；**不重复报本轮消耗、也不报本回合 API 耗时**。
-    胶囊数字优先用会话累计，还没跑完第一轮时退回落本轮消耗（此时弹层标题如实写「本轮消耗」），
-    两者都没有就整颗不渲染（不摆 0）。
+  **只有一个入口：底栏右侧的圆环 + 百分比**（`UsageStats.tsx` 的 `UsageStats`，≥70% 转琥珀、
+  ≥85% 转红），点开的**同一个弹层**里依次是：已用 / 窗口、新输入、会话累计消耗（合计 + 输入 /
+  输出）、缓存（最近一次请求：读取 / 写入 / 命中）、生成速度，最后一行「累计 = N 轮 · M 次工具 ·
+  K 条事件」。**弹层不报本轮消耗**（它在回答下面那行小字里），也不写解释性小字——只摆数字。
+  曾经把 token 详情拆成输入框下方一颗居中胶囊（`TokenUsage`，图标 + 总量），试过之后又并回来了：
+  两个入口的内容互相重复，用户要点两次才能看全一遍。不要再加第二颗按钮。
   `UsageSummary` 只是那行文字（轮数 / 工具 / tok/s），不要往它上面挂交互。
 - **用量要跟着对话持久化**：每回合结束（`result`）把快照 `PATCH /api/conversations {id, usage}`
   存进 `conversations.json`（内容没变就不发）。重开对话时：转录里的 `assistant.message.usage`
