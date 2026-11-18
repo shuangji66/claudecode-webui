@@ -29,7 +29,6 @@ import type { Item } from "../lib/model";
 import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
 import type {
   ClaudeCheck,
-  HistoryPreview,
   ClaudeStatus,
   ConversationInfo,
   FsAccess,
@@ -230,7 +229,6 @@ interface AppState {
   addWorkspace: (path: string, open?: boolean) => Promise<boolean>;
   removeWorkspace: (path: string) => Promise<boolean>;
   renameWorkspace: (path: string, name: string) => Promise<boolean>;
-  switchWorkspace: (path: string) => Promise<void>;
   /** 在指定工作区里新建一条对话（先切当前工作区，再创建；不打开旧对话）。 */
   startConversationIn: (path: string) => Promise<void>;
   /** 在飞牛文件管理器里显示目录；失败走全局错误条。 */
@@ -300,8 +298,6 @@ interface AppState {
   clearSubagentView: () => void;
   /** 停止一个后台任务（子代理 / 后台命令）。 */
   stopTask: (taskId: string) => Promise<void>;
-  /** 会话的最近几句（侧栏悬浮预览），按 id 缓存。 */
-  loadPreview: (id: string) => Promise<HistoryPreview | null>;
   replyPermission: (
     req: PermissionPayload,
     allow: boolean,
@@ -322,8 +318,6 @@ const clients = new Map<string, ClaudeClient>();
  *  复用 /ws 而不是再加一条 SSE：鉴权（?token=）、心跳、指数重连都已经在这里，
  *  而且 WS 已经过前置网关注入的验证。 */
 let systemClient: ClaudeClient | null = null;
-/** 会话悬浮预览的缓存：一轮结束后清掉，下次 hover 会重新读盘。 */
-const previewCache = new Map<string, HistoryPreview | null>();
 const resumePromises = new Map<string, Promise<boolean>>();
 /** 等这一轮结束后要按新档位重开的会话（`--effort` 只在进程启动时固定）。 */
 const effortRestarts = new Set<string>();
@@ -1084,28 +1078,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
     return r.path;
   },
 
-  switchWorkspace: async (path) => {
-    // 点击当前工作区只负责折叠/展开，不再顺手打开或新建对话。
-    if (!path || path === get().currentWorkspace) return;
-    set({ workspaceBusy: true, error: null });
-    try {
-      const r = await apiFetch<WorkspacesPayload>("/api/workspaces/current", {
-        method: "POST",
-        body: JSON.stringify({ path }),
-      });
-      set({
-        workspaces: r.workspaces ?? [],
-        currentWorkspace: r.current ?? path,
-        workspaceRoot: r.root ?? get().workspaceRoot,
-      });
-      await get().ensureSession(r.current || path, false);
-    } catch (e) {
-      set({ error: errText(e) });
-    } finally {
-      set({ workspaceBusy: false });
-    }
-  },
-
   browseDirs: async (path, hidden) => {
     const q = new URLSearchParams();
     if (path) q.set("path", path);
@@ -1716,18 +1688,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
     void get().saveSettings({ permission_mode: mode });
   },
 
-  loadPreview: async (id) => {
-    if (previewCache.has(id)) return previewCache.get(id) ?? null;
-    try {
-      const p = await apiFetch<HistoryPreview>(`/api/history/preview?id=${encodeURIComponent(id)}`);
-      previewCache.set(id, p);
-      return p;
-    } catch {
-      previewCache.set(id, null);
-      return null;
-    }
-  },
-
   showSubagent: (agentId, label) => {
     if (!agentId) return;
     // 序号走模块级计数器：请求被消费后 subagentView 会置空，从 0 重新数的话
@@ -1918,8 +1878,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
           const cur = get().sessions.find((x) => x.id === sid);
           if (cur && (cur.effort ?? "") !== next) void get().restartSession(sid);
         }
-        // 新回合的回复变了，悬浮预览要重新读。
-        if (isTurnResult(ev.data)) previewCache.delete(sid);
         // 这一轮正常结束：把待发送的队首发出去。被中断 / 出错时留在队列里
         // （shouldFlushAfter 的判定与理由见 lib/queue.ts）。
         if (shouldFlushAfter(ev.data)) void get().flushQueued(sid);

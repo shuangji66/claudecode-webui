@@ -62,7 +62,7 @@ src/
                        / Collapsible（折叠块）/ FileIcon（按扩展名给颜色的文件图标 + 文件夹图标）
                        / ErrorBoundary（渲染异常兜底，挂在 main.tsx 最外层）
                        / Zoomable（ZoomBar + ZoomableImage：图片缩放条与按 zoom 撑开的图）
-  components/layout/   Sidebar（工作区/对话列表）/ ConversationPreview（会话悬浮预览）/ TopBar / TokenGate（访问鉴权页）/ SettingsDrawer（只留导航壳）
+  components/layout/   Sidebar（工作区/对话列表）/ HoverPreview（悬浮概览外壳）/ ConversationPreview、WorkspacePreview（会话/工作区的概览内容）/ TopBar / TokenGate（访问鉴权页）/ SettingsDrawer（只留导航壳）
                        / AuthCallbackPage（飞牛授权回调页，不挂应用壳层）
                        / WorkspaceDialog / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / DeploySettings / HistoryDialog
                        / ClaudeInstallPrompt
@@ -331,8 +331,11 @@ src/
 - **对话列表**存 `conversations`（后端合并转录+元数据+live），`openConversation(id)` 负责
   `--resume`、切换工作区、回放 transcript、连接 WS；组件不要自己调 `/api/session`。
 - 新建对话用 `createSession`；空对话等首条 prompt 才由后端落元数据，前端不要提前 touch。
-- **工作区行本身就是展开/收起开关**，不要再放单独的箭头按钮；点击只切当前工作区，
-  `ensureSession(dir, false)` 在没有对话时保持空态，不自动起 claude。
+- **工作区行本身就是展开/收起开关**，不要再放单独的箭头按钮；点击**只展开/收起**，
+  不切当前工作区、更不替用户打开那个目录的最近一条对话（点一下想看列表却进了旧对话）。
+  换工作区只有两条路：点具体对话（`openConversation` 自己会切）或点行尾「+」新建。
+  **工作区行没有常亮底色**（对齐 DSH）：当前工作区只靠文字色（`text-ink` / `text-ink-2`）
+  区分，悬停才整行高亮——`data-active` 挂在行上会让人以为它是「已选中的导航项」。
 - **已经在一个空的新对话里时，再点「新对话」是 no-op**：否则会新建进程再把旧空壳关掉，
   界面会闪一下。
 - **新建对话页居中**（参照 DSH）：只要当前对话还没开始（`lib/newChat.ts` 的 `isNewChat`：
@@ -346,10 +349,17 @@ src/
 - **Git 多仓库**：`loadRepos()` 拉 `/api/git/repos`，`pickRepo()`（纯函数，`lib/workspace.ts`）
   决定默认选中（保持当前 > 工作区根 > 第一个）；之后所有 git 请求的 cwd 都用
   `repo || cwd`（`gitCwd()`），文件树仍用工作区 `cwd`。
-- **会话悬浮预览**：鼠标在会话行上停 220ms 弹 `ConversationPreview`（标题 + 工作区/时间/条数 +
-  最近一问一答），离开/滚动/点击即收；触屏没有 hover 不显示；卡片 `pointer-events-none`，
-  不挡点击。内容来自 `GET /api/history/preview`（后端只读转录尾部 64KB，不进列表接口），
-  前端按 id 缓存，一轮结束后（`result`）清掉该 id 的缓存。
+- **悬浮概览（工作区与会话共用外壳 `HoverPreview`）**：鼠标在行上停 220ms 弹出，
+  离开/滚动/点击即收；触屏没有 hover 不显示；`pointer-events-none`，不挡点击。
+  **定位从侧栏右沿（`aside`）算起**：卡片整个落在对话区域里、纵向跟着悬停的那一行；
+  用行的右沿加距离会压在分隔线上（行在侧栏里还留着列表 padding），看起来像盖住了左边栏。
+  抽屉模式（`md` 以下）没有并排的对话区域，不弹；对话区域窄于 200px 也不弹。
+  - 会话卡（`ConversationPreview`）：标题 + 完整 cwd + 时间/条数 + **会话状态**。
+    **不显示最近一问一答**（对齐 DSH：概览只回答「哪条、在哪、什么状态」），因此也不再请求
+    `/api/history/preview`。**状态只在卡片里报一次**：行上不挂原生 `title`（它会把 cwd + 状态
+    再弹一次）；文案走 `lib/labels.conversationStatusLabel`，与行上的 `StateDot` 同一口径。
+  - 工作区卡（`WorkspacePreview`）：显示名 + 完整 path + 对话数/最近使用。
+    `workspaces.json` 只有 `last_used`、没有创建时间——**别拿 last_used 冒充「创建于」**。
 - **会话行的两套显示（对齐 DSH）**：桌面（`md` 以上）不悬停只显示相对时间，
   悬停 / 键盘聚焦 / 该行菜单打开时换成操作组「归档 · 置顶 · ⋯」；触屏没有 hover，
   只有时间与「⋯」常驻（归档 / 置顶在菜单里也能点，那是触屏唯一的入口）。

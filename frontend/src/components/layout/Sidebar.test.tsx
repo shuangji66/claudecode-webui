@@ -115,13 +115,13 @@ describe("Sidebar 分组/排序/筛选菜单", () => {
 
   it("切到「单列表」后不再有工作区分组行", () => {
     const { container } = renderSidebar();
-    // 工作区分组行是 title 恰好等于路径的那个按钮；会话行的 title 还带着状态。
-    expect(container.querySelector('button[title="/w/demo"]')).not.toBeNull();
+    // 工作区分组行带着自己的路径（会话行没有这个标记）。
+    expect(container.querySelector('[data-workspace="/w/demo"]')).not.toBeNull();
 
     openView();
     fireEvent.click(screen.getByRole("menuitemradio", { name: "单列表" }));
 
-    expect(container.querySelector('button[title="/w/demo"]')).toBeNull();
+    expect(container.querySelector('[data-workspace="/w/demo"]')).toBeNull();
     expect(screen.getByText("会话甲")).toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem("ccweb-sidebar-view") ?? "{}").group).toBe("flat");
   });
@@ -149,11 +149,8 @@ describe("Sidebar 会话悬浮预览", () => {
     });
   });
 
-  it("鼠标悬停一会儿弹出最近一问一答", async () => {
+  it("鼠标悬停一会儿弹出概览：标题、路径与状态", async () => {
     vi.useFakeTimers();
-    const loadPreview = vi.fn(async () => ({ user: "问一下", assistant: "答一下" }));
-    useAppStore.setState({ loadPreview });
-
     renderSidebar();
     const row = screen.getByText("会话甲").closest("button");
     expect(row).not.toBeNull();
@@ -164,10 +161,34 @@ describe("Sidebar 会话悬浮预览", () => {
       await Promise.resolve();
     });
 
-    expect(loadPreview).toHaveBeenCalledWith("c-hover");
     const tip = screen.getByRole("tooltip");
-    expect(tip).toHaveTextContent("问一下");
-    expect(tip).toHaveTextContent("答一下");
+    expect(tip).toHaveTextContent("会话甲");
+    expect(tip).toHaveTextContent("/w/demo");
+    expect(tip).toHaveTextContent("2 条消息");
+    expect(tip).toHaveTextContent("未运行");
+
+    fireEvent.pointerLeave(row!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    vi.useRealTimers();
+  });
+
+  // 工作区也要有概览（对齐 DSH）：悬停名字弹卡片，内容走 WorkspacePreview。
+  it("悬停工作区弹出工作区概览", async () => {
+    vi.useFakeTimers();
+    const { container } = renderSidebar();
+    const row = container.querySelector('[data-workspace="/w/demo"]');
+    expect(row).not.toBeNull();
+    fireEvent.pointerEnter(row!, { pointerType: "mouse" });
+
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+      await Promise.resolve();
+    });
+
+    const tip = screen.getByRole("tooltip");
+    expect(tip).toHaveTextContent("demo");
+    expect(tip).toHaveTextContent("/w/demo");
+    expect(tip).toHaveTextContent("1 个对话");
 
     fireEvent.pointerLeave(row!);
     expect(screen.queryByRole("tooltip")).toBeNull();
@@ -350,33 +371,51 @@ describe("Sidebar 工作区行与移动端抽屉", () => {
   });
 
   // 展开/收起一组的会话列表不是导航，抽屉不该被收掉——否则刚展开的就看不见了。
-  it("点当前工作区只切换展开，不关抽屉、不切工作区", () => {
+  it("点当前工作区只切换展开，不关抽屉", () => {
     const onClose = vi.fn();
-    const switchWorkspace = vi.fn(async () => {});
-    useAppStore.setState({ switchWorkspace });
 
     renderSidebar({ onClose });
-    const row = screen.getByTitle("/w/demo");
-    const expandedBefore = row.getAttribute("aria-expanded");
+    const row = screen.getByText("demo").closest("button");
+    expect(row).not.toBeNull();
+    const expandedBefore = row!.getAttribute("aria-expanded");
 
-    fireEvent.click(row);
+    fireEvent.click(row!);
 
-    expect(row.getAttribute("aria-expanded")).not.toBe(expandedBefore);
-    expect(switchWorkspace).not.toHaveBeenCalled();
+    expect(row!.getAttribute("aria-expanded")).not.toBe(expandedBefore);
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  // 真的换了工作区（会打开那个目录的最近对话）才是导航，这时收抽屉。
-  it("点别的工作区会切过去并关抽屉", () => {
+  // 展开别的工作区同样只是看一眼列表：不能顺手切过去、更不能替用户打开它最近的对话。
+  it("点别的工作区只展开，不切工作区、不打开它的对话", () => {
     const onClose = vi.fn();
-    const switchWorkspace = vi.fn(async () => {});
-    useAppStore.setState({ switchWorkspace });
+    const openConversation = vi.fn(async () => true);
+    useAppStore.setState({
+      openConversation,
+      conversations: [
+        {
+          id: "c-other",
+          cwd: "/w/other",
+          title: "旧对话",
+          created_at: "",
+          last_active: "2026-01-02T00:00:00Z",
+          messages: 2,
+          archived: false,
+          live: false,
+        },
+      ],
+    });
 
     renderSidebar({ onClose });
-    fireEvent.click(screen.getByTitle("/w/other"));
+    const row = screen.getByText("other").closest("button");
+    expect(row).not.toBeNull();
+    expect(row!.getAttribute("aria-expanded")).toBe("false");
 
-    expect(switchWorkspace).toHaveBeenCalledWith("/w/other");
-    expect(onClose).toHaveBeenCalledTimes(1);
+    fireEvent.click(row!);
+
+    expect(row!.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("旧对话")).toBeInTheDocument();
+    expect(openConversation).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
 

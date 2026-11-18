@@ -336,7 +336,8 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - 对话路由：`GET /api/conversations`、`PATCH /api/conversations`（重命名/归档/置顶/touch/usage）、
   `POST /api/conversations/fork`（复制出新会话，需过 `ensureCwdAuthorizedReal` 与转录存在性检查）、
   `DELETE /api/conversations?id=`（软删除）、`GET /api/history/transcript?id=`（回放）。
-- 预览路由：`GET /api/history/preview?id=` 返回会话最近一问一答（侧栏悬浮预览用）。
+- 预览路由：`GET /api/history/preview?id=` 返回会话最近一问一答（按需接口；前端的概览卡片
+  现在只报标题/路径/状态，不展示正文，这条路由保留给以后或外部调用）。
   `history.LoadPreview` 只读转录尾部 64KB、跳过 sidechain/meta 与本地命令回显，
   不进列表接口——列表要快，预览是按需的。
 - 导出路由：`GET /api/history/export?id=` 把会话原始日志打成 zip（主转录 + 会话目录下的

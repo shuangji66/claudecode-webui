@@ -1,69 +1,51 @@
-import { createPortal } from "react-dom";
-import { PORTAL_ATTR } from "../common/Menu";
+import { StateDot } from "../common/StateDot";
+import type { ConversationStatus } from "../../lib/conversations";
 import { useLocale, useT } from "../../lib/i18n";
-import { relativeTime } from "../../lib/labels";
-import type { ConversationInfo, HistoryPreview } from "../../transport/types";
-
-const WIDTH = 320;
-const HEIGHT_ESTIMATE = 240;
+import { conversationStatusLabel, relativeTime } from "../../lib/labels";
+import type { ConversationInfo } from "../../transport/types";
+import { HoverPreview } from "./HoverPreview";
 
 /**
- * 侧栏会话的悬浮预览：标题 + 工作区/时间/条数 + 最近一问一答。
+ * 侧栏会话的悬浮概览：标题 + 完整路径 + 时间/条数 + 状态。
  *
- * 参照 DSH：鼠标悬停 200ms 左右弹出，放在行的右侧（右侧放不下就贴住视口）。
- * 触屏没有 hover，不显示。卡片 `pointer-events-none`，不会挡住点击。
+ * 参照 DSH：只回答「这是哪条对话、在哪、什么状态」，**不再显示最近一问一答**——
+ * 正文摘要在列表上滑一下就能看出个大概，塞进卡片反而让概览变重、还多打一次接口。
+ *
+ * 状态（空闲 / 运行中 / 待审批 / 已完成 / 未运行）直接写进卡片里，行上因此不再挂
+ * 原生 `title`——否则浏览器提示会和卡片各报一份，两张浮层叠在一起。
  */
 export function ConversationPreview({
   anchor,
   conv,
   title,
-  workspace,
-  preview,
-  loading,
+  path,
+  status,
 }: {
   anchor: HTMLElement;
   conv: ConversationInfo;
   title: string;
-  workspace: string;
-  preview: HistoryPreview | null;
-  loading: boolean;
+  /** 会话 cwd（完整路径）。 */
+  path: string;
+  status: ConversationStatus;
 }) {
   const t = useT();
   const locale = useLocale();
-  const rect = anchor.getBoundingClientRect();
-  const left = Math.max(8, Math.min(rect.right + 10, window.innerWidth - WIDTH - 8));
-  const top = Math.max(8, Math.min(rect.top - 8, window.innerHeight - HEIGHT_ESTIMATE - 8));
+  const dot = status === "approval" || status === "ongoing" || status === "done" ? status : "off";
+  const meta = [relativeTime(conv.last_active, Date.now(), locale), t(`${conv.messages} 条消息`, `${conv.messages} messages`)]
+    .filter(Boolean)
+    .join(" · ");
 
-  return createPortal(
-    <div
-      role="tooltip"
-      {...{ [PORTAL_ATTR]: "" }}
-      style={{ left, top, width: WIDTH }}
-      className="pointer-events-none fixed z-[70] rounded-xl border border-line bg-canvas p-3 shadow-soft"
-    >
+  return (
+    <HoverPreview anchor={anchor}>
       <p className="truncate text-[12.5px] font-medium text-ink">{title}</p>
-      <p className="mt-0.5 truncate text-[10.5px] text-faint">
-        {[workspace, relativeTime(conv.last_active, Date.now(), locale), t(`${conv.messages} 条消息`, `${conv.messages} messages`)]
-          .filter(Boolean)
-          .join(" · ")}
+      <p className="mt-0.5 truncate text-[10.5px] text-faint" title={path}>
+        {path}
       </p>
-      {loading ? (
-        <p className="mt-2 text-[11px] text-faint">{t("正在加载…", "Loading…")}</p>
-      ) : preview?.user || preview?.assistant ? (
-        <>
-          {preview.user && (
-            <p className="mt-2 line-clamp-2 border-l-2 border-line pl-2 text-[11.5px] leading-relaxed text-ink-2">
-              {preview.user}
-            </p>
-          )}
-          {preview.assistant && (
-            <p className="mt-1.5 line-clamp-3 text-[11.5px] leading-relaxed text-muted">{preview.assistant}</p>
-          )}
-        </>
-      ) : (
-        <p className="mt-2 text-[11px] text-faint">{t("还没有内容", "No content yet")}</p>
-      )}
-    </div>,
-    document.body,
+      <p className="mt-0.5 truncate text-[10.5px] text-faint">{meta}</p>
+      <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted">
+        <StateDot state={dot} size={9} />
+        <span>{conversationStatusLabel(status, locale)}</span>
+      </p>
+    </HoverPreview>
   );
 }

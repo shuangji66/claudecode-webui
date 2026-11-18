@@ -1,5 +1,6 @@
 // 展示层的小型纯函数：会话标题、相对时间、模式名。
 import type { Item } from "./model";
+import type { ConversationStatus } from "./conversations";
 import { tr } from "./i18n";
 import type { Locale } from "./i18n";
 
@@ -78,6 +79,26 @@ export function permissionLabel(mode: string | undefined, locale: Locale = "zh")
     return en[key] ?? key;
   }
   return MODE_LABELS[key] ?? key;
+}
+
+/**
+ * 侧栏一行 / 悬浮卡上的会话状态文案（与 `conversationStatus` 的五种状态一一对应）。
+ *
+ * 注意它说的不是进程状态：`active` 是「进程活着但当前空闲」，`off` 是「没有常驻进程」。
+ */
+export function conversationStatusLabel(status: ConversationStatus, locale: Locale = "zh"): string {
+  switch (status) {
+    case "approval":
+      return tr(locale, "待审批", "Waiting for approval");
+    case "ongoing":
+      return tr(locale, "运行中", "Running");
+    case "done":
+      return tr(locale, "已完成", "Done");
+    case "active":
+      return tr(locale, "空闲", "Idle");
+    default:
+      return tr(locale, "未运行", "Not running");
+  }
 }
 
 export function stateLabel(state: string | undefined, locale: Locale = "zh"): string {

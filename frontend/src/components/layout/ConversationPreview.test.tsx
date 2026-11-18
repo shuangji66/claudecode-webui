@@ -17,34 +17,26 @@ const conv: ConversationInfo = {
 const anchor = document.createElement("button");
 
 describe("ConversationPreview", () => {
-  it("显示标题、工作区、时间与最近一问一答", () => {
-    render(
-      <ConversationPreview
-        anchor={anchor}
-        conv={conv}
-        title="标准模式是啥"
-        workspace="demo"
-        preview={{ user: "标准模式是啥，有没有重复", assistant: "「标准模式」是空值，确实重复了" }}
-        loading={false}
-      />,
-    );
+  it("显示标题、路径、时间、条数与状态", () => {
+    render(<ConversationPreview anchor={anchor} conv={conv} title="标准模式是啥" path="/w/demo" status="active" />);
     const tip = screen.getByRole("tooltip");
     expect(tip).toHaveTextContent("标准模式是啥");
-    expect(tip).toHaveTextContent("demo");
+    expect(tip).toHaveTextContent("/w/demo");
     expect(tip).toHaveTextContent("4 条消息");
-    expect(tip).toHaveTextContent("标准模式是啥，有没有重复");
-    expect(tip).toHaveTextContent("确实重复了");
+    // 状态写进卡片里，不再靠行上的原生 title 单独提示。
+    expect(tip).toHaveTextContent("空闲");
+    // 概览只回答「这是哪条对话、在哪、什么状态」：不再展示最近一问一答。
+    expect(tip.querySelector(".line-clamp-2")).toBeNull();
+    expect(tip.querySelector(".line-clamp-3")).toBeNull();
   });
 
-  it("加载中显示占位，没有内容时给提示", () => {
+  it("状态文案跟着会话状态走", () => {
     const { rerender } = render(
-      <ConversationPreview anchor={anchor} conv={conv} title="t" workspace="demo" preview={null} loading />,
+      <ConversationPreview anchor={anchor} conv={conv} title="t" path="/w/demo" status="ongoing" />,
     );
-    expect(screen.getByRole("tooltip")).toHaveTextContent("正在加载…");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("运行中");
 
-    rerender(
-      <ConversationPreview anchor={anchor} conv={conv} title="t" workspace="demo" preview={{}} loading={false} />,
-    );
-    expect(screen.getByRole("tooltip")).toHaveTextContent("还没有内容");
+    rerender(<ConversationPreview anchor={anchor} conv={conv} title="t" path="/w/demo" status="off" />);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("未运行");
   });
 });

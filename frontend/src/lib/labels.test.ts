@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   baseName,
+  conversationStatusLabel,
   conversationTitle,
   permissionLabel,
   relativeTime,
@@ -40,6 +41,14 @@ describe("labels", () => {
     expect(relativeTime("2026-01-01T23:30:00Z", now)).toBe("30 分钟前");
     expect(relativeTime("2026-01-01T21:00:00Z", now)).toBe("3 小时前");
     expect(relativeTime("2025-12-31T00:00:00Z", now)).toBe("2 天前");
+  });
+
+  it("conversationStatusLabel 覆盖五种会话状态", () => {
+    expect(conversationStatusLabel("approval")).toBe("待审批");
+    expect(conversationStatusLabel("ongoing")).toBe("运行中");
+    expect(conversationStatusLabel("done")).toBe("已完成");
+    expect(conversationStatusLabel("active")).toBe("空闲");
+    expect(conversationStatusLabel("off")).toBe("未运行");
   });
 
   it("permissionLabel 映射已知模式", () => {

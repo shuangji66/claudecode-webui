@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useAppStore } from "../../store/useAppStore";
-import type { ConversationInfo, HistoryPreview, WorkspaceEntry } from "../../transport/types";
-import { baseName, conversationTitle, relativeTime, stateLabel } from "../../lib/labels";
+import type { ConversationInfo, WorkspaceEntry } from "../../transport/types";
+import { baseName, conversationTitle, relativeTime } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
 import { ConversationPreview } from "./ConversationPreview";
-import { belongs, conversationStatus, pinnedFirst, sortByRecent } from "../../lib/conversations";
+import { WorkspacePreview } from "./WorkspacePreview";
+import { belongs, conversationStatus, pinnedFirst, sortByRecent, type ConversationStatus } from "../../lib/conversations";
 import {
   FLAT_KEY,
   OTHER_KEY,
@@ -77,6 +78,10 @@ interface WorkspaceGroup {
   depth: number;
 }
 
+/** 悬浮概览的主题：会话或工作区（同一时刻只弹一张卡片）。 */
+type HoverSubject = { kind: "conv"; conv: ConversationInfo } | { kind: "ws"; group: WorkspaceGroup };
+type HoverState = HoverSubject & { anchor: HTMLElement };
+
 /**
  * 「复制 Session ID」暂时下线（**保留实现，不删**，以后再说）。
  *
@@ -125,7 +130,6 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const perms = useAppStore((s) => s.perms);
   const doneIds = useAppStore((s) => s.doneIds);
   const starting = useAppStore((s) => s.starting);
-  const switchWorkspace = useAppStore((s) => s.switchWorkspace);
   const openConversation = useAppStore((s) => s.openConversation);
   const createSession = useAppStore((s) => s.createSession);
   const closeSession = useAppStore((s) => s.closeSession);
@@ -147,12 +151,9 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const [viewAnchor, setViewAnchor] = useState<HTMLElement | null>(null);
   /** 拖拽中的会话与当前吸附位置：手动排序用（对齐 DSH 的 drag marker）。 */
   const [drag, setDrag] = useState<DragState | null>(null);
-  /** 悬浮预览：鼠标停住一会儿才弹，离开/滚动就收。 */
-  const [hover, setHover] = useState<{ conv: ConversationInfo; anchor: HTMLElement } | null>(null);
-  const [hoverPreview, setHoverPreview] = useState<HistoryPreview | null>(null);
-  const [hoverLoading, setHoverLoading] = useState(false);
+  /** 悬浮概览：鼠标停住一会儿才弹，离开/滚动就收。工作区与会话共用一张卡片位。 */
+  const [hover, setHover] = useState<HoverState | null>(null);
   const hoverTimer = useRef<number | null>(null);
-  const loadPreview = useAppStore((s) => s.loadPreview);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentWorkspace ? [currentWorkspace] : []));
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [wsMenu, setWsMenu] = useState<WsMenuState | null>(null);
@@ -178,6 +179,20 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       .filter((w) => belongs(cwd, w.path))
       .sort((a, b) => b.path.length - a.path.length)[0];
     return ws ? ws.name || baseName(ws.path) : baseName(cwd);
+  };
+
+  /**
+   * 一行的状态标记：行上画点、悬浮卡里写文案，两处必须是同一口径。
+   * （卡片在对话区域里，不再让原生的 title 提示单独再报一次状态。）
+   */
+  const statusOf = (c: ConversationInfo): ConversationStatus => {
+    const liveState = c.live ? (states[c.id] ?? c.state ?? "ready") : "";
+    return conversationStatus({
+      pending: perms[c.id]?.length ?? 0,
+      live: c.live,
+      state: liveState,
+      done: Boolean(doneIds[c.id]),
+    });
   };
 
   // 标题只由「自定义标题 + 首条用户消息」决定。流式增量每帧都在改 items，
@@ -264,30 +279,17 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     setHover(null);
   };
 
-  const startHover = (event: ReactPointerEvent<HTMLButtonElement>, conv: ConversationInfo) => {
-    // 触屏没有 hover；只在鼠标上弹。
+  /**
+   * 悬停 220ms 才弹卡片：划过列表时不该一路闪卡片。
+   * 触屏没有 hover；抽屉模式（窄屏）也没有并排的对话区域可放卡片，都不弹。
+   */
+  const armHover = (event: ReactPointerEvent<HTMLElement>, state: HoverSubject) => {
     if (event.pointerType !== "mouse") return;
-    const anchorEl = event.currentTarget;
+    if (window.matchMedia?.("(min-width: 768px)").matches === false) return;
     if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
-    hoverTimer.current = window.setTimeout(() => setHover({ conv, anchor: anchorEl }), 220);
+    const anchor = event.currentTarget;
+    hoverTimer.current = window.setTimeout(() => setHover({ ...state, anchor }), 220);
   };
-
-  useEffect(() => {
-    if (!hover) {
-      setHoverPreview(null);
-      return;
-    }
-    let alive = true;
-    setHoverLoading(true);
-    void loadPreview(hover.conv.id).then((p) => {
-      if (!alive) return;
-      setHoverPreview(p);
-      setHoverLoading(false);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [hover, loadPreview]);
 
   /** 手动排序的落盘入口：拖拽和菜单里的上移/下移共用。 */
   const reorder = (key: string, list: ConversationInfo[], fromId: string, toId: string, half: DropHalf) => {
@@ -307,21 +309,18 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   /** 一行会话：状态点 + 标题 +（单列表模式）工作区名 + 时间 + 管理菜单。 */
   const renderConversation = (c: ConversationInfo, groupKey: string, showWorkspace: boolean) => {
     const active = c.id === activeId;
-    const liveState = c.live ? (states[c.id] ?? c.state ?? "ready") : "";
     // 待审批 > 进行中 > 完成未看 > 活跃（不画点）> 未运行（灰点），见 lib/conversations。
-    const status = conversationStatus({
-      pending: perms[c.id]?.length ?? 0,
-      live: c.live,
-      state: liveState,
-      done: Boolean(doneIds[c.id]),
-    });
+    const status = statusOf(c);
     const manual = view.sort === "manual";
     // 吸附提示线只画在「这次真的能落下去」的那一行上：同组、不是自己、置顶状态一致。
     const marker = drag?.over?.id === c.id ? drag.over.half : null;
     return (
+      // 高亮同样画在整行上（含右侧操作组），与工作区行一致：只包住标题时，
+      // 底色会在按钮前硬生生截断，当前对话看起来像被切了一刀。
       <div
         key={c.id}
-        className="group/session relative flex items-center gap-0.5"
+        className="group/session side-row relative gap-1"
+        data-active={active}
         // 右键 = 「管理对话」菜单：桌面端不用先瞄准右上角那个只有在悬停时才出现的按钮。
         onContextMenu={(e) => openMenuAt(e, c)}
         draggable={manual}
@@ -383,11 +382,9 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         <button
           type="button"
           onClick={() => openOne(c)}
-          onPointerEnter={(e) => startHover(e, c)}
+          onPointerEnter={(e) => armHover(e, { kind: "conv", conv: c })}
           onPointerLeave={endHover}
-          className={`side-row min-w-0 flex-1 ${c.archived ? "opacity-60" : ""}`}
-          data-active={active}
-          title={`${c.cwd}\n${c.live ? stateLabel(liveState, locale) : t("未运行（点击恢复）", "Not running (click to resume)")}`}
+          className={`flex min-w-0 flex-1 items-center gap-2 text-left ${c.archived ? "opacity-60" : ""}`}
         >
           <span className="flex h-[14px] w-[14px] shrink-0 items-center justify-center">
             {status !== "active" && <StateDot state={status} />}
@@ -487,23 +484,21 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   const onWorkspaceClick = (g: WorkspaceGroup) => {
     if (!g.exists) return;
-    // 工作区行本身就是展开/收起开关。
+    // 工作区行只是展开/收起开关：展开一组的会话列表不是导航，不切当前工作区，
+    // 也不能替用户打开那个目录的最近一条对话（点一下就想看看列表，结果进了旧对话）。
+    // 换工作区要么点具体对话（openConversation 自己会切），要么点行尾的「+」新建。
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(g.path)) next.delete(g.path);
       else next.add(g.path);
       return next;
     });
-    // 切到别的工作区时顺带打开它最近的对话；点当前工作区只是展开/收起。
-    const switching = g.path !== OTHER_KEY && g.path !== currentWorkspace;
-    if (switching) void switchWorkspace(g.path);
-    // 只有真的换了工作区（跳到另一个对话）才收起移动端抽屉：展开一组的会话列表
-    // 不是导航，把抽屉关掉等于点了就看不见自己刚展开的东西。
-    if (switching) onClose?.();
   };
 
   const openWsMenu = (e: React.MouseEvent<HTMLButtonElement>, g: WorkspaceGroup) => {
     e.stopPropagation();
+    // 菜单开在行外：悬浮概览让位，别让两张浮层叠在一起。
+    endHover();
     setWsMenu({ path: g.path, name: g.name, anchor: e.currentTarget });
   };
 
@@ -794,15 +789,21 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
               className="mb-1"
               style={g.depth > 0 ? { marginLeft: g.depth * 12 } : undefined}
             >
-              <div className="group flex items-center gap-0.5">
+              {/* 高亮只画在悬停上（对齐 DSH）：当前工作区不再常亮——点击工作区行只负责
+                  展开/收起，常亮那个底色会让人以为这里是「已选中的导航项」。
+                  悬停高亮画在整行上（含右侧「⋯ / +」），只包住名字时底色会在图标前截断。 */}
+              <div
+                className="group side-row gap-1"
+                data-workspace={g.path}
+                onPointerEnter={g.path === OTHER_KEY ? undefined : (e) => armHover(e, { kind: "ws", group: g })}
+                onPointerLeave={endHover}
+              >
                 <button
                   type="button"
                   onClick={() => onWorkspaceClick(g)}
                   disabled={!g.exists}
                   aria-expanded={open}
-                  className={`side-row min-w-0 flex-1 ${isCurrent ? "text-ink" : "text-ink-2"} ${!g.exists ? "opacity-50" : ""}`}
-                  data-active={isCurrent}
-                  title={g.path === OTHER_KEY ? t("不在授权目录内的对话", "Conversations outside authorized directories") : g.path}
+                  className={`flex min-w-0 flex-1 items-center gap-2 text-left ${isCurrent ? "text-ink" : "text-ink-2"} ${!g.exists ? "opacity-50" : ""}`}
                 >
                   {g.path === OTHER_KEY ? <IconTerminal size={15} className="shrink-0 text-muted" /> : <IconFolder size={15} className="shrink-0 text-muted" />}
                   <span className="truncate text-[12.5px] font-medium">{g.name}</span>
@@ -904,14 +905,24 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         }
       />
 
-      {hover && (
+      {hover?.kind === "conv" && (
         <ConversationPreview
           anchor={hover.anchor}
           conv={hover.conv}
           title={titleOf(hover.conv)}
-          workspace={workspaceNameOf(hover.conv.cwd)}
-          preview={hoverPreview}
-          loading={hoverLoading}
+          path={hover.conv.cwd}
+          status={statusOf(hover.conv)}
+        />
+      )}
+
+      {hover?.kind === "ws" && (
+        <WorkspacePreview
+          anchor={hover.anchor}
+          name={hover.group.name}
+          path={hover.group.path}
+          exists={hover.group.exists}
+          count={hover.group.conversations.length}
+          lastUsed={hover.group.workspace?.last_used}
         />
       )}
 
