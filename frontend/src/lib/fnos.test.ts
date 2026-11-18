@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { authorizeFnosDir, canRevealInFnos, classifyAuthorizeResult, classifyPickResult, isFnosApp } from "./fnos";
+import {
+  authorizeFnosDir,
+  canPickFnos,
+  canRevealInFnos,
+  classifyAuthorizeResult,
+  classifyPickResult,
+  isFnosApp,
+} from "./fnos";
 
 describe("classifyAuthorizeResult", () => {
   it("code 0 + data true 视为授权成功", () => {
@@ -79,6 +86,19 @@ describe("isFnosApp", () => {
     expect(isFnosApp("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120")).toBe(false);
     expect(isFnosApp("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari/604.1")).toBe(false);
     expect(isFnosApp("")).toBe(false);
+  });
+});
+
+describe("canPickFnos", () => {
+  // `@` 菜单里的「从飞牛选择」：只要宿主内且不是 TCP 通道。
+  it("宿主内 + unix 通道（或未知通道）才给入口", () => {
+    expect(canPickFnos({ channel: "unix", inHost: true })).toBe(true);
+    expect(canPickFnos({ inHost: true })).toBe(true);
+  });
+
+  it("不在宿主里或 TCP 端口访问都不给", () => {
+    expect(canPickFnos({ channel: "unix", inHost: false })).toBe(false);
+    expect(canPickFnos({ channel: "tcp", inHost: true })).toBe(false);
   });
 });
 

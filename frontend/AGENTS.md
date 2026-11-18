@@ -50,6 +50,7 @@ src/
   lib/skillsImport.ts  技能导入：从文件/相对路径推断技能名、文件类型判定、名字合法性（镜像后端）
   lib/plugins.ts       插件响应兜底、目录查询串、id 拆分（纯函数）
   lib/fnos.ts          飞牛宿主桥接：目录授权（authorizeUserFile）+ 回包归一化（纯函数部分可测）
+  lib/mention.ts       输入框 `@` 引用语法：token 检测/格式化/替换/面包屑（纯函数，对齐 DSH grammar）
   assets/claude-code.svg 左侧栏品牌图标
   store/useAppStore.ts zustand 全局状态（只做状态搬运）
   store/useSidebarStore.ts 右侧栏数据（文件树/Git/预览，所有 fetch 收敛在这里）
@@ -68,6 +69,7 @@ src/
                        / ClaudeInstallPrompt
   components/layout/settings/  设置页分区：GeneralSettings / ModelsSettings / DirsSettings（飞牛已授权目录）/ ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题）
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
+                       / MentionMenu（@ 候选菜单）/ useMention（候选拉取、防抖与键盘仲裁）
                        / ImageLightbox（正文图片放大）
                        / UsageStats（环 + 用量弹层，另导出 UsageSummary）/ ResultBar / WorkspacePicker
   components/tools/    ToolCardHost（注册表）/ AgentCard / BashCard / EditCard / GenericCard（兜底）
@@ -322,6 +324,29 @@ src/
    容器不要 `min-w-max`）：右侧栏宽度是拖出来的，窄栏里横向滚动条基本没法用；
    只写 `break-words` 不够——无空格的长串（base64 / 长路径 / 长 URL）不会断。
    Git 面板的 diff 仍是横向滚动，那是另一块面板，别顺手改。
+
+34. **输入框 `@` 是工作区文件引用**（`lib/mention.ts` + `components/chat/useMention.ts` +
+   `MentionMenu.tsx`，对齐 DSH 的 `dsh-client-ui-input-trigger` + `dsh-client-ui-reference`）：
+   语法、格式化、替换、面包屑全在 `lib/mention.ts`（纯函数、有单测），组件里不要再写一套正则。
+   `@` 只在**行首或空白之后**触发（`user@example.com` 不弹菜单），含空格的路径用 `@"…"`，
+   目录引用以 `/` 结尾且**引号保持打开**（`@"my dir/`）——这是 Tab 能继续下钻的前提。
+   四条交互边界：
+   - **键盘先交给菜单仲裁**（`mention.handleKey(e)` 在 `onKeyDown` 最前面）：`Tab` 进目录、
+     `Enter` 引用、`↑↓` 选候选、`Esc` 关闭；菜单开着时这几个键都要 `preventDefault`，
+     否则 Tab 把焦点移走、Enter 会把半截 `@查询` 发出去。选中后插入的是正文 `@相对路径`，
+     文件内容仍由模型自己用 Read 读，不要改成附件。
+   - **光标是唯一输入**：`mentionAt(text, caret)` 从光标往前扫，所以 textarea 的
+     `onChange`（带 `selectionStart`）、`onSelect`、`onClick`、`onKeyUp` 都要同步 caret；
+     换对话（`draftKey` 变了）时 caret 要归零，否则会在新草稿里命中一个假 token。
+   - **候选还在路上时不许插入旧行**：`loading` 期间 `pick`/`drill` 直接返回、Enter 被吞掉
+     （唯一例外是与查询无关的「从飞牛选择」行——它只在飞牛宿主里出现）。请求经 store 的
+     `completePaths(cwd, query, signal)`，防抖 120ms 并在下一次按键时 abort；组件不直接 fetch。
+   - **飞牛行只在飞牛宿主里出现**：可见性由 `lib/fnos.canPickFnos({channel, inHost})` 决定
+     （宿主内且 `channel !== "tcp"`，与页头「在飞牛打开工作区」同一条规则）——TCP 直连端口
+     或独立浏览器里不摆这一行，点了必然报「当前不在飞牛宿主中」。它仍与 `+` 菜单同一个
+     选择器：图片/PDF 走 `readHostFile` 成附件，其余类型写成 `@绝对路径` 并顶掉敲下的
+     `@查询`（`pickFromFnos(mention)` 的那条分支）。
+   `cwd` 由 `ChatPane` 传（会话 cwd，新对话时是当前工作区）；空串时菜单只剩飞牛行（若在宿主内）。
 
 ## 3. 状态管理（zustand）
 

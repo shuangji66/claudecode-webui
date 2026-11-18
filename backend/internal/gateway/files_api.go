@@ -92,6 +92,30 @@ func (s *Server) handleFsTree(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, listing)
 }
 
+// handleFsComplete 为输入框的 `@` 补全返回工作区内的候选路径。
+//
+// 只回相对路径：选中的值作为 `@相对路径` 插进草稿，文件内容留给 claude 自己用
+// Read 工具去读——补全接口不做宿主文件读取。与文件树一样先过 authorizedCwd，
+// 再走 fsapi 的路径围栏。
+func (s *Server) handleFsComplete(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.openFsRoot(w, r)
+	if !ok {
+		return
+	}
+	limit := 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil {
+			limit = v
+		}
+	}
+	listing, err := root.Complete(r.Context(), r.URL.Query().Get("q"), limit)
+	if err != nil {
+		writeErr(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, listing)
+}
+
 // handleFsFile 返回文本预览；超大文件截断，二进制文件只返回元数据。
 func (s *Server) handleFsFile(w http.ResponseWriter, r *http.Request) {
 	root, ok := s.openFsRoot(w, r)

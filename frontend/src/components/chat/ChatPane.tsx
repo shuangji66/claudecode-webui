@@ -383,6 +383,8 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
             selectedKey={selectedKey}
             selectedEffort={selectedEffort}
             permissionMode={mode}
+            // 补全的根跟着会话走：新对话还没 cwd 时用当前工作区（草稿本来就是按它分桶的）。
+            cwd={session?.cwd ?? currentWorkspace}
             onSelectModel={(provider, model) => {
               const opt = findOption(modelOptions, provider, model);
               // 新模型也支持当前档位就沿用它；否则回到「默认」（不声明推理等级）。

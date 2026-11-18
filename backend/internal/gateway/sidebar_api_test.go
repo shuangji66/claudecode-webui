@@ -65,6 +65,69 @@ func TestFsTreeRequiresAuthAndWorkspace(t *testing.T) {
 	}
 }
 
+func TestFsCompleteRequiresAuthAndWorkspace(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	root := srv.d.ProjectsRoot
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.go"), []byte("package main"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/fs/complete?cwd="+root+"&q=src/ma", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("无 token 应 401，实际 %d", rec.Code)
+	}
+
+	outside := t.TempDir()
+	req := httptest.NewRequest(http.MethodGet, "/api/fs/complete?cwd="+outside+"&q=ma", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("未授权目录应 403，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/fs/complete?cwd="+root+"&q=src/ma", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	var listing struct {
+		Path    string `json:"path"`
+		Entries []struct {
+			Name string `json:"name"`
+			Path string `json:"path"`
+			Type string `json:"type"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listing); err != nil {
+		t.Fatal(err)
+	}
+	if listing.Path != "src" || len(listing.Entries) != 1 || listing.Entries[0].Path != "src/main.go" {
+		t.Fatalf("listing = %+v", listing)
+	}
+
+	// 越界查询只回空候选，不报错（用户还在打字）。
+	req = httptest.NewRequest(http.MethodGet, "/api/fs/complete?cwd="+root+"&q=../../etc", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("越界查询应 200 空候选，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listing); err != nil {
+		t.Fatal(err)
+	}
+	if len(listing.Entries) != 0 {
+		t.Fatalf("越界查询不该给候选: %+v", listing.Entries)
+	}
+}
+
 func TestFsFileAndRawPreview(t *testing.T) {
 	srv, _ := newTestServer(t, "")
 	root := srv.d.ProjectsRoot

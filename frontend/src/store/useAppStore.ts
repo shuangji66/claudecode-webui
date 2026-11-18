@@ -32,6 +32,7 @@ import type {
   ClaudeStatus,
   ConversationInfo,
   FsAccess,
+  FsListing,
   FsPickListing,
   HostFile,
   GatewayModel,
@@ -243,6 +244,13 @@ interface AppState {
   mkdirDir: (parent: string, name: string) => Promise<string>;
   /** 读取飞牛里挑中的图片/PDF（后端只放行这两类），用于转成对话附件。 */
   readHostFile: (path: string) => Promise<HostFile>;
+  /**
+   * 输入框 `@` 补全：按查询串返回工作区内的候选路径。
+   *
+   * 查询串原样交给后端分模式（含 `/` 就列那一层目录，否则在工作区里模糊搜索）；
+   * `signal` 让下一个按键到来时取消上一次请求，避免慢盘上的迟到响应盖掉新结果。
+   */
+  completePaths: (cwd: string, query: string, signal?: AbortSignal) => Promise<FsListing>;
   /** 打开目录下最近一条对话；createIfEmpty=false 时没有对话就保持空态，不新建。 */
   ensureSession: (cwd?: string, createIfEmpty?: boolean) => Promise<SessionInfo | null>;
   createSession: (cwd?: string) => Promise<void>;
@@ -1068,6 +1076,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
       method: "POST",
       body: JSON.stringify({ path }),
     });
+  },
+
+  completePaths: async (cwd, query, signal) => {
+    const params = new URLSearchParams({ cwd, q: query });
+    return apiFetch<FsListing>(`/api/fs/complete?${params.toString()}`, { signal });
   },
 
   mkdirDir: async (parent, name) => {

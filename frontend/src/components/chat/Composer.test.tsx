@@ -6,8 +6,11 @@ import { useAppStore } from "../../store/useAppStore";
 import { SystemDialogs } from "../common/SystemDialogs";
 
 const pickFnosFiles = vi.fn();
+const canPickFnos = vi.fn();
 vi.mock("../../lib/fnos", () => ({
   pickFnosFiles: (params: unknown) => pickFnosFiles(params),
+  canPickFnos: (opts: { channel?: string | null; inHost: boolean }) => canPickFnos(opts),
+  fnosHostAvailable: () => true,
 }));
 
 const readHostFile = vi.fn();
@@ -33,6 +36,7 @@ function composerEl(overrides: Partial<ComposerProps> = {}, onSend = vi.fn()) {
       selectedKey=""
       selectedEffort=""
       permissionMode=""
+      cwd=""
       onSelectModel={vi.fn()}
       onSelectEffort={vi.fn()}
       onPermissionMode={vi.fn()}
@@ -60,6 +64,9 @@ const openMenu = () => fireEvent.click(screen.getByRole("button", { name: "添�
 beforeEach(() => {
   pickFnosFiles.mockReset();
   readHostFile.mockReset();
+  canPickFnos.mockReset();
+  // 默认在飞牛宿主里（unix 通道）：`@` 菜单里才会出现「从飞牛选择」。
+  canPickFnos.mockReturnValue(true);
   useAppStore.setState({ readHostFile });
 });
 
@@ -165,6 +172,7 @@ describe("Composer 权限模式", () => {
           selectedKey=""
           selectedEffort=""
           permissionMode=""
+          cwd=""
           onSelectModel={vi.fn()}
           onSelectEffort={vi.fn()}
           onPermissionMode={onPermissionMode}
@@ -453,5 +461,129 @@ describe("Composer 待发送队列", () => {
     expect(screen.getByText(/空闲中，点右侧箭头逐条发送/)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("发送这条"));
     expect(onSteerQueued).toHaveBeenCalledWith("q1");
+  });
+});
+
+describe("Composer @ 文件引用", () => {
+  const completePaths = vi.fn();
+
+  const listing = (entries: { path: string; type: "dir" | "file" }[]) => ({
+    root: "/ws",
+    path: "",
+    truncated: false,
+    entries: entries.map((entry) => ({
+      name: entry.path.split("/").pop() ?? entry.path,
+      path: entry.path,
+      type: entry.type,
+    })),
+  });
+
+  /** 输入正文并把光标放到末尾（fireEvent.change 不保证 selectionStart）。 */
+  const typeAtEnd = (value: string) => {
+    const input = screen.getByLabelText("消息输入框") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value } });
+    input.setSelectionRange(value.length, value.length);
+    fireEvent.select(input);
+    return input;
+  };
+
+  beforeEach(() => {
+    completePaths.mockReset();
+    useAppStore.setState({ completePaths });
+  });
+
+  it("不在飞牛宿主里（或 TCP 直连）时菜单里没有「从飞牛选择」", async () => {
+    canPickFnos.mockReturnValue(false);
+    completePaths.mockResolvedValue(listing([{ path: "README.md", type: "file" }]));
+    setup({ cwd: "/ws" });
+
+    typeAtEnd("@");
+    await screen.findByText("README.md");
+    expect(screen.queryByText(/从飞牛选择/)).toBeNull();
+  });
+
+  it("输入 @ 弹出工作区候选，并带上会话 cwd 取列表", async () => {
+    completePaths.mockResolvedValue(
+      listing([
+        { path: "src", type: "dir" },
+        { path: "README.md", type: "file" },
+      ]),
+    );
+    setup({ cwd: "/ws" });
+
+    typeAtEnd("@");
+
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
+    expect(screen.getByText("src/")).toBeInTheDocument();
+    expect(completePaths).toHaveBeenCalledWith("/ws", "", expect.anything());
+    // 常驻的飞牛入口也在菜单里。
+    expect(screen.getByText(/从飞牛选择/)).toBeInTheDocument();
+  });
+
+  it("Tab 进入目录：查询串换成这一层，菜单继续列内容", async () => {
+    completePaths
+      .mockResolvedValueOnce(listing([{ path: "src", type: "dir" }]))
+      .mockResolvedValueOnce(listing([{ path: "src/main.go", type: "file" }]));
+    setup({ cwd: "/ws" });
+
+    const input = typeAtEnd("@");
+    await screen.findByText("src/");
+    fireEvent.keyDown(input, { key: "Tab" });
+
+    expect(input.value).toBe("@src/");
+    expect(await screen.findByText("main.go")).toBeInTheDocument();
+    expect(completePaths).toHaveBeenLastCalledWith("/ws", "src/", expect.anything());
+  });
+
+  it("Enter 引用文件：把 @ 查询换成路径，不发送", async () => {
+    completePaths.mockResolvedValue(listing([{ path: "README.md", type: "file" }]));
+    const onSend = vi.fn().mockResolvedValue(true);
+    setup({ cwd: "/ws", onSend });
+
+    const input = typeAtEnd("@REA");
+    await screen.findByText("README.md");
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(input.value).toBe("@README.md ");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("点目录行的 Tab 提示同样进入该目录", async () => {
+    completePaths
+      .mockResolvedValueOnce(listing([{ path: "src", type: "dir" }]))
+      .mockResolvedValueOnce(listing([]));
+    setup({ cwd: "/ws" });
+
+    const input = typeAtEnd("@s");
+    fireEvent.click(await screen.findByRole("button", { name: "进入 src" }));
+
+    expect(input.value).toBe("@src/");
+  });
+
+  it("Esc 关掉菜单后 Enter 照常发送原文", async () => {
+    completePaths.mockResolvedValue(listing([{ path: "README.md", type: "file" }]));
+    const onSend = vi.fn().mockResolvedValue(true);
+    setup({ cwd: "/ws", onSend });
+
+    const input = typeAtEnd("@x");
+    await screen.findByText("README.md");
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByText("README.md")).toBeNull();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("@x", [], undefined);
+  });
+
+  it("菜单里的飞牛入口：调用选择器并顶掉 @ 查询", async () => {
+    completePaths.mockResolvedValue(listing([]));
+    pickFnosFiles.mockResolvedValue({ state: "ok", paths: ["/vol1/1000/docs/notes.md"] });
+    setup({ cwd: "/ws" });
+
+    const input = typeAtEnd("@no");
+    fireEvent.click(await screen.findByRole("button", { name: /从飞牛选择/ }));
+
+    await waitFor(() => expect(input.value).toBe("@/vol1/1000/docs/notes.md\n"));
+    expect(pickFnosFiles).toHaveBeenCalled();
+    expect(readHostFile).not.toHaveBeenCalled();
   });
 });

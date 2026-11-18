@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { CommandInfo, WireAttachment } from "../../transport/types";
 import { useAppStore } from "../../store/useAppStore";
 import { commandDescription, permissionLabel } from "../../lib/labels";
-import { pickFnosFiles } from "../../lib/fnos";
+import { canPickFnos, fnosHostAvailable, pickFnosFiles } from "../../lib/fnos";
+import { applyMention, formatMention, type MentionToken } from "../../lib/mention";
+import { MentionMenu } from "./MentionMenu";
+import { useMention } from "./useMention";
 import { readDraft, writeDraft } from "../../lib/drafts";
 import { useLocale, useT } from "../../lib/i18n";
 import type { ModelOption } from "../../lib/providerForm";
@@ -47,6 +50,11 @@ interface Props {
   onSelectModel: (provider: string, model: string) => void;
   onSelectEffort: (effort: string) => void;
   onPermissionMode: (mode: string) => void;
+  /**
+   * `@` 补全的根：会话 cwd（新对话时是当前工作区）。空串表示还没有授权目录，
+   * 此时只保留「从飞牛选择」那一行。
+   */
+  cwd: string;
   /** 返回 false 表示没发出去（连接断开等），此时输入框必须保留草稿与附件。 */
   onSend: (
     text: string,
@@ -83,6 +91,7 @@ export function Composer({
   selectedKey,
   selectedEffort,
   permissionMode,
+  cwd,
   onSelectModel,
   onSelectEffort,
   onPermissionMode,
@@ -98,6 +107,8 @@ export function Composer({
   const t = useT();
   const locale = useLocale();
   const [text, setText] = useState("");
+  // 光标是 `@` 补全的唯一输入：token 从光标往前扫，移动光标就要重新判断。
+  const [caret, setCaret] = useState(0);
   const [files, setFiles] = useState<PendingAttachment[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
@@ -108,7 +119,11 @@ export function Composer({
   const ref = useRef<HTMLTextAreaElement>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // 菜单吃掉的按键（Tab/Enter/Esc）会在 keyup 时带回**旧的** DOM 光标位置：
+  // 刚把 `@REA` 换成 `@README.md `，keyup 再用旧位置同步一次就会把菜单重新弹出来。
+  const skipCaretSync = useRef(false);
   const readHostFile = useAppStore((s) => s.readHostFile);
+  const channel = useAppStore((s) => s.info?.channel);
   // 落盘用的是「当前这一格属于哪条对话」：切对话的瞬间 text 还是旧内容，
   // 必须靠 ref 而不是 state 拼 key，否则会把 A 的草稿写进 B。
   const draftKeyRef = useRef(draftKey);
@@ -119,6 +134,8 @@ export function Composer({
   useEffect(() => {
     draftKeyRef.current = draftKey;
     setText(draftKey ? readDraft(draftKey) : "");
+    // 换对话后光标位置来自上一份正文，继续用会在新草稿里命中一个假的 `@` token。
+    setCaret(0);
   }, [draftKey]);
 
   /** 唯一的改文本入口：写 state + 落盘（空正文会被 drafts 当成删除）。 */
@@ -188,6 +205,7 @@ export function Composer({
     }
     writeDraft(sendKey, "");
     if (draftKeyRef.current === sendKey) setText("");
+    setCaret(0);
     setFiles([]);
     setFileError(null);
     const el = ref.current;
@@ -262,16 +280,32 @@ export function Composer({
     if (fileRef.current) fileRef.current.value = "";
   };
 
+  /** 用一段新正文替换输入框，并把光标放到指定位置（补全插入、飞牛路径回填都走这里）。 */
+  const applyDraft = (next: string, pos: number) => {
+    updateText(next);
+    setCaret(pos);
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  };
+
   /** 在光标处插入片段（命令、路径引用），并把光标停在片段之后。 */
   const insertAtCaret = (snippet: string) => {
     const el = ref.current;
-    const start = el?.selectionStart ?? text.length;
-    const end = el?.selectionEnd ?? text.length;
-    updateText(`${text.slice(0, start)}${snippet}${text.slice(end)}`);
+    // 以 DOM 里的当前值为准而不是闭包里的 text：上面几个流程会先程序化改写正文，
+    // 紧接着（同一轮事件里）再插入时，闭包里的 text 还是旧的，插入点会算错。
+    const current = el ? el.value : text;
+    const start = el?.selectionStart ?? current.length;
+    const end = el?.selectionEnd ?? current.length;
+    updateText(`${current.slice(0, start)}${snippet}${current.slice(end)}`);
     requestAnimationFrame(() => {
       const pos = start + snippet.length;
       el?.focus();
       el?.setSelectionRange(pos, pos);
+      setCaret(pos);
     });
   };
 
@@ -280,8 +314,11 @@ export function Composer({
    *
    * 图片/PDF 由后端读成附件（只放行这两类，见 /api/fs/host-file）；其余类型
    * 作为路径引用写进消息，让 claude 自己用 Read 工具去读——不做任意宿主文件读取。
+   *
+   * `mention` 非空表示这次从 `@` 菜单进来：用户敲下的那段 `@查询` 要被选中的路径顶掉，
+   * 否则正文里会留下半截查询串。从「+」菜单进来时仍按旧行为插在光标处。
    */
-  const pickFromFnos = async () => {
+  const pickFromFnos = async (mention?: MentionToken) => {
     setFileError(null);
     const picked = await pickFnosFiles({
       title: t("选择文件", "Choose files"),
@@ -324,8 +361,28 @@ export function Composer({
       }
     }
     setFiles(next);
+    if (mention) {
+      const snippet = refs.map((path) => formatMention(path, "file") ?? path).join("\n");
+      const applied = applyMention(text, mention, snippet === "" ? "" : `${snippet}\n`);
+      applyDraft(applied.text, applied.caret);
+      return;
+    }
     if (refs.length > 0) insertAtCaret(`${refs.join("\n")}\n`);
   };
+
+  // 不在飞牛宿主里（独立浏览器 / TCP 直连端口）就别摆一个点了必然报错的入口；
+  // 判定与页头「在飞牛打开工作区」共用 lib/fnos 的同一条规则。
+  const fnosPickable = canPickFnos({ channel, inHost: fnosHostAvailable() });
+
+  // `@` 补全：候选与键盘仲裁都在 useMention 里，这里只把它接到输入框上。
+  const mention = useMention({
+    cwd,
+    text,
+    caret,
+    apply: applyDraft,
+    onFnos: (token) => void pickFromFnos(token),
+    fnos: fnosPickable,
+  });
 
   const addItems: MenuItem[] = [
     {
@@ -489,10 +546,23 @@ export function Composer({
       ? t("连接断开，正在自动重连…", "Disconnected, reconnecting…")
       : disabled
         ? (placeholder ?? t("连接未就绪", "Connection not ready"))
-        : t("输入消息，/ 命令", "Message, / commands");
+        : t("输入消息，/ 命令，@ 文件", "Message, / commands, @ files");
 
   return (
     <div className="w-full">
+      {mention.open && (
+        <MentionMenu
+          rows={mention.rows}
+          crumbs={mention.crumbs}
+          highlight={mention.highlight}
+          loading={mention.loading}
+          error={mention.error}
+          onHover={mention.hover}
+          onPick={mention.pick}
+          onDrill={mention.drill}
+          onCrumb={mention.jumpTo}
+        />
+      )}
       {suggestionRows.length > 0 && (
         <div className="mb-2 max-h-56 overflow-y-auto rounded-xl border border-line bg-canvas p-1 shadow-soft">
           {suggestionRows.map((c) => (
@@ -581,8 +651,27 @@ export function Composer({
           rows={1}
           value={text}
           disabled={disabled}
-          onChange={(e) => updateText(e.target.value)}
+          onChange={(e) => {
+            updateText(e.target.value);
+            setCaret(e.target.selectionStart ?? e.target.value.length);
+          }}
+          // 光标决定 `@` token 的范围：点一下、按方向键都要重新判断（不然菜单会
+          // 停留在上一个位置的候选上）。onSelect 覆盖选中变化，这两个覆盖光标。
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+          onClick={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
+          onKeyUp={(e) => {
+            if (skipCaretSync.current) {
+              skipCaretSync.current = false;
+              return;
+            }
+            setCaret(e.currentTarget.selectionStart ?? 0);
+          }}
           onKeyDown={(e) => {
+            // `@` 菜单开着时先由它仲裁：↑↓ 选候选、Tab 进目录、Enter 引用、Esc 关闭。
+            if (mention.handleKey(e)) {
+              skipCaretSync.current = true;
+              return;
+            }
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               // Ctrl/⌘+Enter = 立刻插话（回合进行中直接写 stdin），Enter = 排队。

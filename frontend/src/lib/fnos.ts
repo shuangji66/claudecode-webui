@@ -303,16 +303,26 @@ export function fnosHostAvailable(): boolean {
 }
 
 /**
- * 顶部「在飞牛打开工作区」按钮要不要出现 —— 纯函数。
+ * 飞牛选择器入口要不要出现 —— 纯函数（`@` 菜单里的「从飞牛选择」用它）。
  *
- * 三个条件缺一不可：
- *   - 有工作区路径（新对话页可能还没选目录）；
+ * 两条缺一不可：
  *   - 页面确实在宿主里（桌面 iframe / App WebView），否则桥接根本不存在；
  *   - 当前不是 TCP 直连端口通道：那条路上页面开在普通浏览器里，本来就没有宿主，
  *     而 `fnosHostAvailable` 只回答「页面结构像不像宿主」，端口访问必须单独挡一次。
+ *
+ * 摆一个点了就报「当前不在飞牛宿主中」的入口，比不摆更糟：用户会以为功能坏了。
+ */
+export function canPickFnos(opts: { channel?: string | null; inHost: boolean }): boolean {
+  return opts.inHost && opts.channel !== "tcp";
+}
+
+/**
+ * 顶部「在飞牛打开工作区」按钮要不要出现 —— 纯函数。
+ *
+ * 在 `canPickFnos` 的基础上再加一条：必须有工作区路径（新对话页可能还没选目录）。
  */
 export function canRevealInFnos(opts: { path: string; channel?: string | null; inHost: boolean }): boolean {
-  return opts.inHost && opts.path.trim() !== "" && opts.channel !== "tcp";
+  return canPickFnos(opts) && opts.path.trim() !== "";
 }
 
 /** 在飞牛里看文件/文件夹详情（宿主能力，App 需要 appApi >= v1.0）。 */
