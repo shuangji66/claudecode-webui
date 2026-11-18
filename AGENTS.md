@@ -294,7 +294,9 @@ hub ── manager ── session ── process ── claude (NDJSON)
   「claude 现在能碰哪些目录」。撤销是破坏性动作，先 `askConfirm` 再调接口。
 - **应用自己的目录不许撤销**（安装包固有目录，撤了连自己的二进制都读不到）：
   `gateway.ProtectedDirs(cfg.DataDir, cfg.ClaudeHome)` 取二进制所在目录、安装根、数据目录、
-  claude HOME 的 realpath，`/api/dirs` 的原样回给前端（`protected`，界面据此不给撤销按钮），
+  claude HOME 的 realpath，`/api/dirs` 的原样回给前端（`protected`，界面据此不给撤销按钮；
+  前端 `lib/dirs.isProtectedDir` 与后端同一套「等于 / 祖先 / 子路径」规则——只比相等的话，
+  授权列表里出现安装目录的父目录时会摆一颗点了就报错的按钮），
   `POST /api/dirs/remove` 再挡一次——**命中「等于 / 在其上 / 在其内」都拒绝**（撤销父目录同样
   会让应用的目录失效）。只靠前端隐藏按钮不算数。
 

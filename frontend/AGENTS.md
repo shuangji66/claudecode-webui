@@ -37,6 +37,7 @@ src/
   lib/sessionExport.ts 会话导出 Markdown（右上角「更多」菜单）
   lib/sidebarView.ts   左侧栏视图偏好：分组/排序/归档筛选 + 手动顺序（纯函数 + localStorage）
   lib/fnosAuth.ts      飞牛路由授权：回调页路径判定、state、回包解析（纯函数）
+  lib/dirs.ts          已授权目录页的受保护路径判定（等于/祖先/子路径，镜像后端）
   lib/dragImage.ts     手动排序的拖影：自己造一块与行同宽的替身交给 setDragImage
   lib/subagents.ts     从消息流收集子代理（页头计数 / 审批归属，纯函数）
   lib/turns.ts         「轮」的切分与视口所在轮（对话区刻度跳转，纯函数）

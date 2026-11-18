@@ -105,6 +105,19 @@ describe("设置 → 目录", () => {
     expect(screen.getByRole("button", { name: "撤销 /vol1/1000/tmp 的授权" })).toBeInTheDocument();
   });
 
+  // 后端 protectedConflict 的规则是「等于 / 在其上 / 在其内」都拒绝：撤销父目录
+  // 同样会让应用的安装目录失去 ACL。前端只比相等的话会摆出一颗点了就报错的按钮。
+  it("受保护目录的祖先目录也不给撤销按钮", async () => {
+    stubFetch(() => ({
+      body: { dirs: ["/vol1/@appdata", "/vol1/1000/tmp"], protected: ["/vol1/@appdata/ClaudeCode/data"] },
+    }));
+    render(<DirsSettings />);
+
+    expect(await screen.findByText("/vol1/@appdata")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /撤销 \/vol1\/@appdata 的授权/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "撤销 /vol1/1000/tmp 的授权" })).toBeInTheDocument();
+  });
+
   // 宿主内：选择器（pickUserFile）本身就是授权，选完直接刷新列表。
   it("宿主内添加：授权成功后刷新列表", async () => {
     let dirs: string[] = [];

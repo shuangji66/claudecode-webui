@@ -388,6 +388,9 @@ export async function addFnosDirAuth(opts: {
   appName: string;
   state: string;
   redirectUri: string;
+  /** 选择器文案（lib 不碰 i18n，由调用方给）。 */
+  title?: string;
+  okText?: string;
 }): Promise<FnosDirAuthOutcome> {
   if (!inHost()) {
     const sdk = await sdkInstance();
@@ -415,8 +418,8 @@ export async function addFnosDirAuth(opts: {
   try {
     const res = await sdk.pickUserFile({
       directory: true,
-      title: "选择授权目录",
-      okText: "确认授权",
+      title: opts.title,
+      okText: opts.okText,
       sidebarGroup: [...DIR_SIDEBAR_GROUPS],
     });
     return classifyPickResult(res);

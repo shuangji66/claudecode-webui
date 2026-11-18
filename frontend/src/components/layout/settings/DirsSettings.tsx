@@ -3,6 +3,7 @@ import { useT } from "../../../lib/i18n";
 import { runtimeBase } from "../../../lib/runtime";
 import { addFnosDirAuth, fnosHostAvailable } from "../../../lib/fnos";
 import { AUTH_MESSAGE, authCallbackPath, authStatusOutcome, authSucceeded, newAuthState, type AuthResult } from "../../../lib/fnosAuth";
+import { isProtectedDir } from "../../../lib/dirs";
 import { useAppStore } from "../../../store/useAppStore";
 import { useDirsStore } from "../../../store/useDirsStore";
 import { Button } from "../../common/Button";
@@ -86,6 +87,9 @@ export function DirsSettings() {
         appName: info?.trim_app || "ClaudeCode",
         state,
         redirectUri: authCallbackPath(runtimeBase()),
+        // 选择器文案由调用方给：lib/fnos.ts 不碰 i18n。
+        title: t("选择要授权的目录", "Choose a folder to authorize"),
+        okText: t("确认授权", "Authorize"),
       });
       if (res.state === "opened") {
         setNotice(
@@ -171,8 +175,9 @@ export function DirsSettings() {
                 {path}
               </span>
               {/* 应用自己的安装/数据目录是安装包固有目录：撤销等于让进程读不到自己的
-                  二进制，后端也会拒绝，所以这里不出按钮。 */}
-              {!protectedDirs.includes(path) && (
+                  二进制，后端也会拒绝，所以这里不出按钮。判定与后端同一套规则（等于 /
+                  祖先 / 子路径），不能只比相等——撤父目录同样会让应用失效。 */}
+              {!isProtectedDir(path, protectedDirs) && (
                 <Button
                   variant="ghost"
                   size="sm"
