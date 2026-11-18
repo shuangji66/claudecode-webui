@@ -12,9 +12,24 @@ export interface BaseItem {
   ts: number;
 }
 
+/** 用户气泡里的图片附件（粘贴/选中的截图，或转录回放里的 image block）。 */
+export interface UserImage {
+  name: string;
+  mediaType: string;
+  /** 纯 base64（不含 data URL 前缀）；渲染时按 mediaType 拼成 data URL。 */
+  data: string;
+}
+
 export interface UserItem extends BaseItem {
   kind: "user";
   text: string;
+  /**
+   * 随消息发出的图片：在气泡里直接显示并可点开预览。
+   *
+   * 只放图片（PDF / 文本文件仍然以「附件：名字」的正文出现）——图片本身是内容，
+   * 一行文件名看不出用户发了什么。
+   */
+  images?: UserImage[];
 }
 
 /** 回合结束时回填到该回合最后一条回答上的用量（只放 CLI 真给过的数）。 */

@@ -35,9 +35,19 @@ export function sessionToMarkdown({ title, cwd, items, locale = "zh", now = new 
 
   for (const item of items) {
     switch (item.kind) {
-      case "user":
-        lines.push(`## ${tr(locale, "用户", "User")}`, "", item.text, "");
+      case "user": {
+        // 图片是内联 base64，塞进 Markdown 会让导出文件几十 MB：只记名字。
+        const images = (item.images ?? []).map((image) =>
+          tr(locale, `[图片：${image.name}]`, `[Image: ${image.name}]`),
+        );
+        lines.push(
+          `## ${tr(locale, "用户", "User")}`,
+          "",
+          [item.text, images.join(" ")].filter(Boolean).join("\n\n"),
+          "",
+        );
         break;
+      }
       case "assistant":
         lines.push(`## Claude`, "", item.text, "");
         break;

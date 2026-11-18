@@ -2,6 +2,7 @@
 //
 // 后端只接受图片 / PDF / 文本；总解码大小 10MB，与 ws 帧上限 16MB 匹配。
 import type { WireAttachment } from "../transport/types";
+import type { UserImage } from "./model";
 import { tr, type Locale } from "./i18n";
 
 export type AttachmentKind = "image" | "pdf" | "text";
@@ -188,9 +189,44 @@ export function withPastedName(file: File, at: Date = new Date()): File {
   return new File([file], `clipboard-${stamp}.${extForType(file.type)}`, { type: file.type });
 }
 
-/** 附件字节的 data URL：输入框缩略图与放大预览共用同一份拼法。 */
+/** 本地气泡要显示的内容：正文 + 正文里的附件名 + 气泡里的图片。 */
+export interface UserBubblePayload {
+  text: string;
+  images: UserImage[];
+}
+
+/**
+ * 把「随消息发出的附件」拆成用户气泡的两部分。
+ *
+ * 图片进气泡本体（可点开预览），PDF / 文本文件仍写成「附件：名字」的正文——
+ * 与 `normalize` 回放转录时的口径必须一致，否则重开对话会换一副样子。
+ */
+export function userBubblePayload(
+  text: string,
+  attachments: WireAttachment[],
+  attachmentLabel: string,
+): UserBubblePayload {
+  const isImage = (a: WireAttachment) => a.media_type.toLowerCase().startsWith("image/");
+  const images = attachments
+    .filter(isImage)
+    .map((a) => ({ name: a.name, mediaType: a.media_type.toLowerCase(), data: a.data }));
+  const display = [
+    text.trim(),
+    ...attachments.filter((a) => !isImage(a)).map((a) => `${attachmentLabel}${a.name}`),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return { text: display, images };
+}
+
+/** base64 字节的 data URL：输入框缩略图、气泡里的图片与放大预览共用同一份拼法。 */
+export function imageDataUrl(mediaType: string, data: string): string {
+  return `data:${mediaType};base64,${data}`;
+}
+
+/** 附件字节的 data URL。 */
 export function attachmentDataUrl(a: PendingAttachment): string {
-  return `data:${a.mediaType};base64,${a.data}`;
+  return imageDataUrl(a.mediaType, a.data);
 }
 
 export function toWireAttachment(a: PendingAttachment): WireAttachment {

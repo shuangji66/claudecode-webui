@@ -59,7 +59,7 @@ const MessageRow = memo(function MessageRow({
     case "user":
       return (
         <div {...box(false)}>
-          <UserBubble text={item.text} ts={item.ts} />
+          <UserBubble text={item.text} ts={item.ts} images={item.images} />
         </div>
       );
     case "assistant":

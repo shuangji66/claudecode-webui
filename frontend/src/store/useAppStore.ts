@@ -25,6 +25,7 @@ import { effortApply } from "../lib/providerForm";
 import { isNewChat } from "../lib/newChat";
 import { openFnosFileManager } from "../lib/fnos";
 import { draftKeyFor, dropDraft, moveDraft } from "../lib/drafts";
+import { userBubblePayload } from "../lib/attachments";
 import type { Item } from "../lib/model";
 import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
 import type {
@@ -1593,10 +1594,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set({ error: "发送失败：连接已断开" });
       return false;
     }
-    const display = [text.trim(), ...attachments.map((a) => `${attachmentLabel}${a.name}`)].filter(Boolean).join("\n");
+    // 图片进气泡本体（可点开预览），其余附件仍以「附件：名字」的正文出现。
+    const bubble = userBubblePayload(text, attachments, attachmentLabel);
     const now = new Date().toISOString();
     set((s) => ({
-      items: { ...s.items, [id!]: appendUser(s.items[id!] ?? [], display) },
+      items: { ...s.items, [id!]: appendUser(s.items[id!] ?? [], bubble.text, bubble.images) },
       conversations: s.conversations.map((c) => (c.id === id ? { ...c, last_active: now } : c)),
     }));
     window.setTimeout(() => void get().refreshConversations(), 600);

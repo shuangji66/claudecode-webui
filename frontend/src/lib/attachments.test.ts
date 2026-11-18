@@ -5,6 +5,7 @@ import {
   classifyAttachment,
   clipboardFiles,
   formatBytes,
+  userBubblePayload,
   withPastedName,
 } from "./attachments";
 
@@ -78,5 +79,28 @@ describe("附件缩略图地址", () => {
         kind: "image",
       }),
     ).toBe("data:image/png;base64,AAAA");
+  });
+});
+
+describe("用户气泡内容", () => {
+  const image = { name: "shot.png", media_type: "image/png", data: "AA" };
+  const pdf = { name: "doc.pdf", media_type: "application/pdf", data: "BB" };
+
+  it("图片进气泡，PDF 仍写「附件：名字」", () => {
+    expect(userBubblePayload("看图", [image, pdf], "附件：")).toEqual({
+      text: "看图\n附件：doc.pdf",
+      images: [{ name: "shot.png", mediaType: "image/png", data: "AA" }],
+    });
+  });
+
+  it("只发图片时正文为空（气泡里只有图）", () => {
+    expect(userBubblePayload("", [image], "附件：")).toEqual({
+      text: "",
+      images: [{ name: "shot.png", mediaType: "image/png", data: "AA" }],
+    });
+  });
+
+  it("没有附件时原样返回正文", () => {
+    expect(userBubblePayload("  你好  ", [], "File: ")).toEqual({ text: "你好", images: [] });
   });
 });

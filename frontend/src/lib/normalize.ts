@@ -15,7 +15,7 @@ import {
   totalsFromUsage,
   type UsageSnapshot,
 } from "./usage";
-import type { Item, SubagentInfo, ToolImage, TurnUsage } from "./model";
+import type { Item, SubagentInfo, ToolImage, TurnUsage, UserImage } from "./model";
 
 let idCounter = 0;
 function nextId(): string {
@@ -452,10 +452,41 @@ function samePromptEcho(lastText: string, prompt: string): boolean {
   );
 }
 
+/** 转录里的图片块能内联渲染的白名单（与后端接受的一组一致）。 */
+const USER_IMAGE_TYPES: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+};
+
+/**
+ * 取用户消息里的图片块（本地发送的截图，或转录回放里的同一批）。
+ *
+ * CLI 的 image block 只有字节、没有文件名，回放时补 `image-N.<扩展名>`；
+ * 只认 base64 内联，`source.type === "url"` 一律跳过——那会让界面去第三方拉图，
+ * 等于把「这条消息被看过」暴露出去。
+ */
+function userImagesOf(blocks: unknown[]): UserImage[] {
+  const out: UserImage[] = [];
+  for (const block of blocks) {
+    const rec = asRecord(block);
+    if (rec?.type !== "image") continue;
+    const source = asRecord(rec.source);
+    const mediaType = typeof source?.media_type === "string" ? source.media_type.toLowerCase() : "";
+    const ext = USER_IMAGE_TYPES[mediaType];
+    const data = typeof source?.data === "string" ? source.data : "";
+    if (ext === undefined || data === "") continue;
+    out.push({ name: `image-${out.length + 1}.${ext}`, mediaType, data });
+  }
+  return out;
+}
+
 function applyUser(items: Item[], m: Raw, at: number): Item[] {
   const message = asRecord(m.message);
   const content = message?.content;
   const blocks = Array.isArray(content) ? content : [];
+  const images = userImagesOf(blocks);
   const results = blocks.filter((b) => asRecord(b)?.type === "tool_result");
 
   if (results.length > 0) {
@@ -508,11 +539,13 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
   const textBlocks = blocks.filter((b) => asRecord(b)?.type === "text");
   const fileBlocks = textBlocks.filter((b) => fileNameOfBlock(b) !== undefined);
   const promptBlocks = textBlocks.filter((b) => fileNameOfBlock(b) === undefined);
-  const binaryCount = blocks.filter((b) => {
-    const type = asRecord(b)?.type;
-    return type === "image" || type === "document";
-  }).length;
-  const attachmentEcho = binaryCount > 0 || textBlocks.length > 1 || fileBlocks.length > 0;
+  const documentCount = blocks.filter((b) => asRecord(b)?.type === "document").length;
+  // 认不出来的图片（url 来源、缺 data）：不能内联渲染，但仍要告诉用户「这里有过一张图」，
+  // 否则整条消息会因为既没有正文、也没有可画的图而被丢掉。
+  const imageBlockCount = blocks.filter((b) => asRecord(b)?.type === "image").length;
+  const unrenderableImages = Math.max(0, imageBlockCount - images.length);
+  const attachmentEcho =
+    images.length > 0 || unrenderableImages > 0 || documentCount > 0 || textBlocks.length > 1 || fileBlocks.length > 0;
   if (attachmentEcho) {
     // 空数组不能走 textOfContent：它会把「无可读文本」降级成 JSON 预览（"[]"），
     // 拼出来的气泡就变成 "[]\n附件：a.txt"。
@@ -520,19 +553,30 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
     const names = fileBlocks
       .map(fileNameOfBlock)
       .filter((n): n is string => typeof n === "string" && n !== "");
-    if (binaryCount > 0) names.push(`${binaryCount} 个图片/PDF`);
+    const binaries = documentCount + unrenderableImages;
+    if (binaries > 0) names.push(`${binaries} 个图片/PDF`);
+    // 图片不进正文：气泡里直接画出来，再写一行「附件：a.png」是重复信息。
     const display = [prompt, ...names.map((n) => `附件：${n}`)].filter(Boolean).join("\n");
     const last = items[items.length - 1];
     // 只有「本地刚插入的那条就是这条回显」时才丢弃。原先只看最后一条是不是 user：
     // 上一轮被中断（没有 assistant 行）时，下一条带附件的消息会被整条吞掉。
-    // 比对只能比提示词前缀：CLI 的 image/document block 不带文件名，本地气泡写的是
-    // 「附件：a.png」，回显只能拼出「附件：1 个图片/PDF」。
-    if (last && last.kind === "user" && samePromptEcho(last.text, prompt)) {
+    // 比对只能比提示词前缀：CLI 的 image/document block 不带文件名，本地气泡对
+    // 不可内联的附件写的是「附件：a.pdf」，回显只能拼出「附件：1 个图片/PDF」。
+    // 只发了一张图、没有正文时两边 text 都是空串，只能靠「都有图片」认出来。
+    const onlyImages = prompt === "" && last?.kind === "user" && last.text === "" && (last.images?.length ?? 0) > 0;
+    if (last && last.kind === "user" && (samePromptEcho(last.text, prompt) || (images.length > 0 && onlyImages))) {
       return items;
     }
     return [
       ...items,
-      { id: nextId(), seq: seqOf(items), ts: at, kind: "user", text: display || "附件" },
+      {
+        id: nextId(),
+        seq: seqOf(items),
+        ts: at,
+        kind: "user",
+        text: display,
+        ...(images.length > 0 ? { images } : {}),
+      },
     ];
   }
 
@@ -812,8 +856,16 @@ export function stripAnsi(s: string): string {
 }
 
 /** 本地插入一条用户消息（不等后端回显）。 */
-export function appendUser(items: Item[], text: string): Item[] {
-  return [...items, { id: nextId(), seq: seqOf(items), ts: Date.now(), kind: "user", text }];
+export function appendUser(items: Item[], text: string, images?: UserImage[]): Item[] {
+  const item: Item = {
+    id: nextId(),
+    seq: seqOf(items),
+    ts: Date.now(),
+    kind: "user",
+    text,
+    ...(images !== undefined && images.length > 0 ? { images } : {}),
+  };
+  return [...items, item];
 }
 
 /** 在列表开头插一条系统提示（例如「更早的消息已省略」）。 */

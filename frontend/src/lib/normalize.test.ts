@@ -290,6 +290,20 @@ describe("附件回显去重", () => {
     expect(items[0]).toMatchObject({ kind: "user", text: "看看这张图\n附件：a.png" });
   });
 
+  it("只发了一张图（没有正文）时回显也不重复", () => {
+    const images = [{ name: "shot.png", mediaType: "image/png", data: "AA" }];
+    let items = appendUser([], "", images);
+    items = applyCLI(items, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "AA" } }],
+      },
+    });
+    expect(items).toHaveLength(1);
+    expect((items[0] as Extract<Item, { kind: "user" }>).images?.[0].name).toBe("shot.png");
+  });
+
   it("仅文本文件、无提示词时也不重复", () => {
     let items: Item[] = appendUser([], "附件：a.txt");
     items = applyCLI(items, {
@@ -557,7 +571,7 @@ describe("附件回放", () => {
     expect((items[0] as Extract<Item, { kind: "user" }>).text).toBe("读一下\n附件：a.txt");
   });
 
-  it("图片附件只报数量", () => {
+  it("图片附件进 item.images，正文里不再写一行数量", () => {
     const items = applyCLI([], {
       type: "user",
       message: {
@@ -568,7 +582,57 @@ describe("附件回放", () => {
         ],
       },
     });
-    expect((items[0] as Extract<Item, { kind: "user" }>).text).toBe("看图\n附件：1 个图片/PDF");
+    const user = items[0] as Extract<Item, { kind: "user" }>;
+    expect(user.text).toBe("看图");
+    expect(user.images).toEqual([{ name: "image-1.png", mediaType: "image/png", data: "AA" }]);
+  });
+
+  it("只发图片（没有正文）时气泡里只有图，没有占位文字", () => {
+    const items = applyCLI([], {
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "BB" } }],
+      },
+    });
+    const user = items[0] as Extract<Item, { kind: "user" }>;
+    expect(user.text).toBe("");
+    expect(user.images).toHaveLength(1);
+    expect(user.images?.[0].mediaType).toBe("image/jpeg");
+  });
+
+  it("PDF 附件仍然写一行占位（只有图片进气泡）", () => {
+    const items = applyCLI([], {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "看这两份" },
+          { type: "image", source: { type: "base64", media_type: "image/png", data: "AA" } },
+          { type: "document", source: { type: "base64", media_type: "application/pdf", data: "CC" } },
+        ],
+      },
+    });
+    const user = items[0] as Extract<Item, { kind: "user" }>;
+    expect(user.text).toBe("看这两份\n附件：1 个图片/PDF");
+    expect(user.images).toHaveLength(1);
+  });
+
+  it("url 来源的图片不内联（不让界面去第三方拉图），但仍写一行占位", () => {
+    const items = applyCLI([], {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "看图" },
+          { type: "image", source: { type: "url", url: "https://example.com/a.png" } },
+        ],
+      },
+    });
+    const user = items[0] as Extract<Item, { kind: "user" }>;
+    expect(user.images).toBeUndefined();
+    // 没有可画的字节时不能把整条消息吞掉。
+    expect(user.text).toBe("看图\n附件：1 个图片/PDF");
   });
 });
 

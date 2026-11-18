@@ -125,6 +125,14 @@ src/
     data URL；内联图片没有工作区路径，所以不挂「在右侧栏打开」）。预览状态只存附件 id，
     从 `files` 里派生：删掉这条附件、或发送后 `files` 清空，预览自动关闭，不要另存一份快照
     自己记着关。非图片附件不摆预览按钮（点了只会看到一个文件图标）。
+    **发出去的图片在用户气泡里直接显示，并可点开预览**（对齐 DSH）：`store.sendPrompt`
+    用 `userBubblePayload` 把附件拆成两半——图片进 `UserItem.images`，其余仍是正文里的
+    「附件：名字」；`UserBubble` 画缩略图（按钮 → `ImageLightbox`），只发图片时正文为空。
+    回放转录走 `lib/normalize.ts` 的 `userImagesOf`：从 user 消息的 `image` block 取回
+    同一批 base64 字节（没有文件名，补 `image-N.<ext>`），**只认 base64**——`source.type
+    === "url"` 不内联（那会让界面去第三方拉图），退回一行「N 个图片/PDF」占位；认不出字节的
+    image block 也必须保留这行占位，否则「只发了图」的消息回放时会整条消失。
+    去重同样要认这种情况：只发图片时本地与回显的 `text` 都是空串，靠「两边都有 images」判定。
 13. **右侧栏是「开始页 + 标签页」**：没有标签时显示开始页——工作区文件 / Git / 新建终端
     三张卡片，**不要自动打开「文件」标签**；栅格用**容器查询**（`@container` +
     `@min-[21rem]:grid-cols-2`）而不是视口断点：右侧栏宽度是拖出来的，与 viewport 无关，
@@ -486,7 +494,7 @@ src/
 
 | kind | 来源 | 渲染 |
 |---|---|---|
-| `user` | 本地插入 / CLI 回显去重 | 右对齐浅色气泡 |
+| `user` | 本地插入 / CLI 回显去重；转录回放从 `image` block 取回图片 | 右对齐浅色气泡 + 图片缩略图（点开 `ImageLightbox`） |
 | `assistant` | `assistant.content[].text`（一条消息可有多个 text 块，各自成段）或 `stream_event` 增量 | 左对齐气泡 + Markdown（标题/列表/表格/引用/链接/代码块），`streaming` 时显示光标 |
 | `thinking` | `assistant.content[].thinking` | 折叠块 |
 | `tool` | `assistant.content[].tool_use` + `user.content[].tool_result` | 按工具名分派卡片（Agent/Task 用 `AgentCard`，带子代理状态与「查看对话」） |
