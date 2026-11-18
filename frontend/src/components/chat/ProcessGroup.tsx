@@ -37,7 +37,8 @@ const ICONS: Record<ToolCategory, (props: { size?: number; className?: string })
  *   - 详细：运行中不显示组头，直接把每一步铺开（卡片），回答一出现就收起。
  *
  * 收起时机有两种（对齐 DSH 的「过程收起时机」）：
- *   - 完成时收起（默认）：这一组后面一出现内容（回答、下一次调用、result）就折回组头；
+ *   - 完成时收起（默认）：整轮结束（`result` 到达）才折回组头。**中途写一句过渡回复不算结束**
+ *     ——按「后面出现任何内容」判断的话，任务进行中每写一句就收起、下一步再展开，全是跳跃；
  *   - 下次发送时收起：最新一轮的组在回答出现后仍然展开（详细模式保持平铺、不显示组头），
  *     等用户发出下一条消息才收起。
  * 用户手动开合过的组不再被自动逻辑改动（`touched`）；自动展开/收起的组由 `auto` 记着，
@@ -46,14 +47,18 @@ const ICONS: Record<ToolCategory, (props: { size?: number; className?: string })
 export function ProcessGroup({
   items,
   live,
+  atTail,
   view,
   keepOpen = false,
   children,
 }: {
   items: Item[];
+  /** 这一组所属的轮次还在跑（后面没有 result）：详细模式据此平铺、收起时机也只看它。 */
   live: boolean;
+  /** 这一组还是列表里最后一段内容：决定组头写「正在…／进行中」还是完成摘要。 */
+  atTail: boolean;
   view: ProcessMode;
-  /** 「下次发送时收起」下，这一组属于最新一轮：回答出现后仍保持展开。 */
+  /** 「下次发送时收起」下，这一组属于最新一轮：回合结束后仍保持展开。 */
   keepOpen?: boolean;
   children: ReactNode;
 }) {
@@ -105,7 +110,8 @@ export function ProcessGroup({
     };
   }, [open, capped]);
 
-  const phase = live ? "running" : "done";
+  // 组头文案看的是「这一组自己有没有结束」（后面还有没有内容），不是整轮。
+  const phase = atTail ? "running" : "done";
   const title = groupTitle(items, phase, locale);
   const detail = view === "concise" ? "" : live ? liveDetail(items) : reasoningPreview(items);
   const Icon = ICONS[dominantCategory(items)];
@@ -130,7 +136,7 @@ export function ProcessGroup({
         <span className="shrink-0 font-medium text-ink-2">{title}</span>
         {detail && <span className="min-w-0 flex-1 truncate text-[10.5px] text-faint">{detail}</span>}
         {!detail && <span className="flex-1" />}
-        {live && <span className="shrink-0 text-[10px] text-brand">{t("进行中", "Running")}</span>}
+        {atTail && <span className="shrink-0 text-[10px] text-brand">{t("进行中", "Running")}</span>}
       </button>
       {/* 横向一律不滚：行内文字必须自己省略，绝不能把整组撑出横向滚动条。
           用 overflow-x-clip 而不是 hidden：hidden 会把元素变成滚动容器（y 轴被算成 auto），

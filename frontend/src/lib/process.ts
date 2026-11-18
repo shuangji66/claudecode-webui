@@ -75,8 +75,14 @@ export type ProcessEntry =
   | { type: "item"; key: string; start: number; item: Item }
   /** 连续的多条 thinking：CLI 一次思考常被拆成好几块，界面上不该各占一行。 */
   | { type: "thinking"; key: string; start: number; items: ThinkingItem[] }
-  /** 连续的过程条目（≥2 条才成组；单独一步直接按行显示，省一次点击）。 */
-  | { type: "process"; key: string; start: number; items: Item[]; live: boolean };
+  /**
+   * 连续的过程条目（≥2 条才成组；单独一步直接按行显示，省一次点击）。
+   *
+   * `live` = 这一组所属的**轮次**还没结束（后面没有 result）：收起时机只看它，
+   * 中途写一句过渡回复不算结束，否则任务进行中会反复折叠/展开。
+   * `tail` = 这一组还是列表里最后一段内容：组头的「正在…」文案与「进行中」标记只看它。
+   */
+  | { type: "process"; key: string; start: number; items: Item[]; live: boolean; tail: boolean };
 
 /** 思考与工具调用都是「过程」，正文回答与用户消息不是。 */
 export function isProcessItem(item: Item): boolean {
@@ -84,10 +90,22 @@ export function isProcessItem(item: Item): boolean {
 }
 
 /**
+ * 这一条目之后还有没有 result：没有就说明这一轮还在跑。
+ * 过程组的「运行中/保留期」、思考行的自动折叠都只认它，不认「是不是列表最后一条」。
+ */
+export function turnRunning(items: Item[], index: number): boolean {
+  for (let i = index + 1; i < items.length; i += 1) {
+    if (items[i].kind === "result") return false;
+  }
+  return true;
+}
+
+/**
  * 把渲染切片折成「行」。
  *
- * `live` 用「组尾是不是列表末尾」判断：回答、下一次工具调用、用户消息、result
- * 只要出现在组后面，这一组就结束了——这正是「回答一出来就收起」的触发条件。
+ * 「这一轮结束了没有」看的是后面有没有 `result`，不是「组尾是不是列表末尾」：
+ * 一轮里模型会写好几段过渡回复，按位置判断的话每写一句就把过程收起来、下一步再展开，
+ * 任务进行中全是跳跃。`result` 才是这一轮真正结束的信号（中断/失败也发 result）。
  */
 export function buildProcessRows(items: Item[]): ProcessEntry[] {
   const rows: ProcessEntry[] = [];
@@ -108,7 +126,8 @@ export function buildProcessRows(items: Item[]): ProcessEntry[] {
           key: `process-${item.id}`,
           start: i,
           items: run,
-          live: end === items.length - 1,
+          live: turnRunning(items, end),
+          tail: end === items.length - 1,
         });
         i = end + 1;
         continue;

@@ -25,6 +25,7 @@ const tool = (id: string, name = "Bash", result?: string): ToolItem => ({
   ...(result !== undefined ? { result } : {}),
 });
 const reply = (id: string): Item => ({ id, seq: 0, ts: 0, kind: "assistant", text: id, streaming: false });
+const result = (id: string): Item => ({ id, seq: 0, ts: 0, kind: "result" });
 
 describe("toolCategory", () => {
   it("按「用户在做什么」归类，未收录的落到 tools", () => {
@@ -54,12 +55,27 @@ describe("buildProcessRows", () => {
     expect(rows[0].items.map((i) => i.id)).toEqual(["a", "b", "c"]);
   });
 
-  it("组尾就是列表末尾时算进行中；回答一出现立刻结束", () => {
+  it("进行中看「这一轮结束没有」，不看「是不是列表末尾」：中途写回复不算结束", () => {
     const running = buildProcessRows([tool("a"), tool("b")]);
     expect(running[0].type === "process" && running[0].live).toBe(true);
+    expect(running[0].type === "process" && running[0].tail).toBe(true);
 
-    const answered = buildProcessRows([tool("a"), tool("b"), reply("r")]);
-    expect(answered[0].type === "process" && answered[0].live).toBe(false);
+    // 模型写完一段过渡回复、接着还要调工具：这一组已经不是末尾，但这一轮没结束。
+    const mid = buildProcessRows([tool("a"), tool("b"), reply("r")]);
+    expect(mid[0].type === "process" && mid[0].live).toBe(true);
+    expect(mid[0].type === "process" && mid[0].tail).toBe(false);
+
+    // result 才是整轮的结束信号。
+    const done = buildProcessRows([tool("a"), tool("b"), reply("r"), result("res")]);
+    expect(done[0].type === "process" && done[0].live).toBe(false);
+  });
+
+  it("同一轮的几组共享同一个「这一轮还在跑」判断：一起收起，不是一组一组折", () => {
+    const rows = buildProcessRows([tool("a"), tool("b"), reply("r"), tool("c"), tool("d")]);
+    const groups = rows.filter((r) => r.type === "process");
+    expect(groups).toHaveLength(2);
+    expect(groups.every((g) => g.type === "process" && g.live)).toBe(true);
+    expect(groups.map((g) => (g.type === "process" ? g.tail : null))).toEqual([false, true]);
   });
 
   it("单独一步不折组：省掉一次点击", () => {

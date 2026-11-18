@@ -187,6 +187,8 @@ describe("MessageList 过程展示", () => {
     result: "a\nb",
   });
   const answer: Item = { id: "a1", seq: 0, ts: 0, kind: "assistant", text: "答案", streaming: false };
+  /** 整轮结束的信号：过程组只在它到达时收起。 */
+  const done: Item = { id: "r1", seq: 0, ts: 0, kind: "result", durationMs: 9000 };
   const turn = [thinking("这是思考首行"), read(), bash(), answer];
 
   it("标准模式：整段过程收成一行组头，每一步默认不展开", () => {
@@ -215,24 +217,44 @@ describe("MessageList 过程展示", () => {
     expect(screen.getByText("/w/a.md")).toBeInTheDocument();
   });
 
-  it("详细模式：运行中直接铺开每一步，回答一到自动收成组头", () => {
+  it("详细模式：运行中直接铺开每一步，中途写回复也不收，整轮结束才折回组头", () => {
     setProcessView("detailed");
     const { rerender } = render(<MessageList items={[thinking("思考中"), read(), bash()]} />);
     expect(screen.getByText("ls -la")).toBeInTheDocument();
+
+    // 过渡回复不结束这一轮：保持平铺，不出现组头（否则任务进行中会一跳一跳）。
+    rerender(<MessageList items={[thinking("思考中"), read(), bash(), answer]} />);
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
     expect(screen.queryByText("已读取文件并执行了命令")).toBeNull();
 
-    rerender(<MessageList items={[thinking("思考中"), read(), bash(), answer]} />);
+    // result 到了才整段收起。
+    rerender(<MessageList items={[thinking("思考中"), read(), bash(), answer, done]} />);
     expect(screen.getByText("已读取文件并执行了命令")).toBeInTheDocument();
     expect(screen.queryByText("ls -la")).toBeNull();
   });
 
-  it("标准模式：手动展开的组在回答到达时自动收起", () => {
+  it("中途写回复不会让展开的组收起（只在整轮结束时收）", () => {
+    const { rerender } = render(<MessageList items={[thinking("思考中"), read(), bash()]} />);
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+
+    // 过渡回复：组已经不是列表末尾，但这一轮还在跑——不能收，否则任务中会反复折叠。
+    rerender(<MessageList items={[thinking("思考中"), read(), bash(), answer]} />);
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+    // 组自己的内容结束了，组头换成完成摘要。
+    expect(screen.getByText("已读取文件并执行了命令")).toBeInTheDocument();
+
+    rerender(<MessageList items={[thinking("思考中"), read(), bash(), answer, done]} />);
+    expect(screen.queryByText("ls -la")).toBeNull();
+  });
+
+  it("标准模式：手动展开的组在这一轮结束时自动收起", () => {
     const live = [thinking("思考中"), read(), bash()];
     const { rerender } = render(<MessageList items={live} />);
     fireEvent.click(screen.getByRole("button", { expanded: false }));
     expect(screen.getByText("ls -la")).toBeInTheDocument();
 
-    rerender(<MessageList items={[...live, answer]} />);
+    rerender(<MessageList items={[...live, answer, done]} />);
     expect(screen.getByText("已读取文件并执行了命令")).toBeInTheDocument();
     expect(screen.queryByText("ls -la")).toBeNull();
   });
@@ -280,20 +302,21 @@ describe("MessageList 收起时机", () => {
   });
   const answer: Item = { id: "a1", seq: 0, ts: 0, kind: "assistant", text: "答案", streaming: false };
   const nextUser: Item = { id: "u2", seq: 0, ts: 0, kind: "user", text: "下一条" };
+  const done: Item = { id: "r1", seq: 0, ts: 0, kind: "result", durationMs: 9000 };
 
-  it("下次发送时收起：回答出现后过程仍然展开", () => {
+  it("下次发送时收起：整轮结束后过程仍然展开", () => {
     setCollapseTiming("onNextSend");
-    render(<MessageList items={[thinking(), read(), bash(), answer]} />);
+    render(<MessageList items={[thinking(), read(), bash(), answer, done]} />);
     expect(screen.getByText("ls -la")).toBeInTheDocument();
     expect(screen.getByText("/w/a.md")).toBeInTheDocument();
   });
 
   it("下次发送时收起：发出下一条消息才折回一行", () => {
     setCollapseTiming("onNextSend");
-    const { rerender } = render(<MessageList items={[thinking(), read(), bash(), answer]} />);
+    const { rerender } = render(<MessageList items={[thinking(), read(), bash(), answer, done]} />);
     expect(screen.getByText("ls -la")).toBeInTheDocument();
 
-    rerender(<MessageList items={[thinking(), read(), bash(), answer, nextUser]} />);
+    rerender(<MessageList items={[thinking(), read(), bash(), answer, done, nextUser]} />);
     expect(screen.queryByText("ls -la")).toBeNull();
     expect(screen.getByText("已读取文件并执行了命令")).toBeInTheDocument();
   });
@@ -301,13 +324,13 @@ describe("MessageList 收起时机", () => {
   it("下次发送时收起：详细模式保留平铺过程行（不冒出组头）", () => {
     setProcessView("detailed");
     setCollapseTiming("onNextSend");
-    render(<MessageList items={[thinking(), read(), bash(), answer]} />);
+    render(<MessageList items={[thinking(), read(), bash(), answer, done]} />);
     expect(screen.getByText("ls -la")).toBeInTheDocument();
     expect(screen.queryByText("已读取文件并执行了命令")).toBeNull();
   });
 
-  it("完成时收起：回答一到就折回一行（对照）", () => {
-    render(<MessageList items={[thinking(), read(), bash(), answer]} />);
+  it("完成时收起：整轮结束就折回一行（对照）", () => {
+    render(<MessageList items={[thinking(), read(), bash(), answer, done]} />);
     expect(screen.queryByText("ls -la")).toBeNull();
     expect(screen.getByText("已读取文件并执行了命令")).toBeInTheDocument();
   });

@@ -8,7 +8,7 @@ import { ToolCardHost } from "../tools/ToolCardHost";
 import { IconAlert, IconChevronDown, IconSpark } from "../common/Icons";
 import { useT } from "../../lib/i18n";
 import { activeTurnIndex, turnsOf, type Turn } from "../../lib/turns";
-import { buildProcessRows, hiddenReplyIds, isProcessItem } from "../../lib/process";
+import { buildProcessRows, hiddenReplyIds, isProcessItem, turnRunning } from "../../lib/process";
 import { useCollapseTiming, useFoldedReplies, useProcessView } from "../../lib/viewMode";
 import { ProcessGroup } from "./ProcessGroup";
 
@@ -404,6 +404,7 @@ export function MessageList({
                     <ProcessGroup
                       items={entry.items}
                       live={entry.live}
+                      atTail={entry.tail}
                       view={view}
                       keepOpen={timing === "onNextSend" && entry.start > lastUserIndex}
                     >
@@ -421,7 +422,7 @@ export function MessageList({
                 );
               }
               if (entry.type === "thinking") {
-                const live = timing === "onComplete" && entry.start + entry.items.length === shown.length;
+                const live = timing === "onComplete" && turnRunning(shown, entry.start + entry.items.length - 1);
                 return (
                   <div key={entry.key} className={dense ? "mt-1" : undefined}>
                     <ThinkingBlock
@@ -433,7 +434,7 @@ export function MessageList({
                   </div>
                 );
               }
-              const live = timing === "onComplete" && entry.start === shown.length - 1;
+              const live = timing === "onComplete" && turnRunning(shown, entry.start);
               return (
                 <div
                   key={entry.key}
