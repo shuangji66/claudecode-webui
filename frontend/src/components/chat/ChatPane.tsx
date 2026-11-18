@@ -345,7 +345,7 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
                 {starting
                   ? t("后端正在拉起 claude 子进程，完成后即可发送消息。", "The backend is starting the claude process; you can send once it is ready.")
                   : currentWorkspace
-                    ? t("输入消息即可开始新的对话；也可以先选一个工作区。", "Type to start a new conversation, or pick a workspace first.")
+                    ? t("输入消息即可开始新的对话。", "Type to start a new conversation.")
                     : t("授权一个目录作为工作区，Claude 会在其中读写文件、执行命令。", "Authorize a directory as a workspace; Claude will read, write and run commands there.")}
               </p>
             </div>
