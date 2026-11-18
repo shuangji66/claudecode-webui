@@ -732,6 +732,9 @@ hub ── manager ── session ── process ── claude (NDJSON)
   （`Task #<id> created successfully`、`Updated task #<id> …`、TaskList 的
   `#1 [pending] 标题 [blocked by #1]`），`tool_use_result` 的结构化字段
   （`taskId` / `statusChange.to`）优先。`TodoWrite` 是整份快照，出现就替换列表。
+- **面板默认收起**（`components/chat/TaskPanel`，对齐 DSH）：标题只报数量
+  「已完成 · 进行中 · 待完成」（那一档为 0 就不出现），展开才是清单。**完成项不划线**——
+  灰字 + 对勾已经区分得开，划线会让一屏已完成的任务看着像被作废。
 - **任务清单工具固定进 `--allowedTools`**（`manager.sessionToolRules`）：一轮里可能被改写
   十几次，落进审批面板就是十几张卡，用户会先放弃这个能力；它们只写 claude HOME 下的
   `tasks/*.json`，不碰工作区。

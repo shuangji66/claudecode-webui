@@ -22,7 +22,18 @@ describe("TaskPanel", () => {
     expect(container.textContent).toBe("");
   });
 
-  it("标题报「N 进行中 · M 待处理」，进行中的优先显示 activeForm", () => {
+  it("默认收起：只报数量，点开才看到清单", () => {
+    const items: Item[] = [
+      tool({ id: "a", input: { subject: "写后端" }, result: "Task #1 created successfully" }),
+    ];
+    render(<TaskPanel items={items} />);
+    expect(screen.getByText("1 待完成")).toBeTruthy();
+    expect(screen.queryByText("写后端")).toBeNull();
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByText("写后端")).toBeTruthy();
+  });
+
+  it("标题按「已完成 · 进行中 · 待完成」报数量，进行中的优先显示 activeForm", () => {
     const items: Item[] = [
       tool({ id: "a", input: { subject: "写后端 fsapi" }, result: "Task #1 created successfully" }),
       tool({ id: "b", input: { subject: "前端 mention 接入" }, result: "Task #2 created successfully" }),
@@ -35,7 +46,8 @@ describe("TaskPanel", () => {
     ];
     render(<TaskPanel items={items} />);
     expect(screen.getByText("任务")).toBeTruthy();
-    expect(screen.getByText("1 进行中 · 1 待处理")).toBeTruthy();
+    expect(screen.getByText("1 进行中 · 1 待完成")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button"));
     expect(screen.getByText("正在写后端 fsapi")).toBeTruthy();
     expect(screen.getByText("前端 mention 接入")).toBeTruthy();
   });
@@ -48,15 +60,19 @@ describe("TaskPanel", () => {
       }),
     ];
     render(<TaskPanel items={items} />);
+    fireEvent.click(screen.getByRole("button"));
     expect(screen.getByText("等待 #1")).toBeTruthy();
   });
 
-  it("点标题收起清单", () => {
-    const items: Item[] = [tool({ input: { subject: "写后端" }, result: "Task #1 created successfully" })];
+  it("全部完成时标题只报「N 已完成」，清单里也不划线（靠灰字与对勾区分）", () => {
+    const items: Item[] = [
+      tool({ name: "TaskList", result: "#1 [completed] 写后端\n#2 [completed] 写前端" }),
+    ];
     render(<TaskPanel items={items} />);
-    expect(screen.getByText("写后端")).toBeTruthy();
+    expect(screen.getByText("2 已完成")).toBeTruthy();
     fireEvent.click(screen.getByRole("button"));
-    expect(screen.queryByText("写后端")).toBeNull();
-    expect(screen.getByText("1 待处理")).toBeTruthy();
+    const done = screen.getByText("写后端");
+    expect(done.className).toContain("text-faint");
+    expect(done.className).not.toContain("line-through");
   });
 });

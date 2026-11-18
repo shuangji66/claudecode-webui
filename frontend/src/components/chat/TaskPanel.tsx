@@ -1,5 +1,5 @@
-// 对话里的任务面板（对齐 DSH 的任务清单）：标题一行「任务 · 1 进行中 · 8 待处理」，
-// 展开后是带状态的清单，贴在输入框上方。
+// 对话里的任务面板（对齐 DSH 的任务清单）：标题一行报数量（已完成 / 进行中 / 待完成），
+// 默认收起，展开才是带状态的清单，贴在输入框上方。
 //
 // 数据全部来自消息流（`lib/tasks.ts`），组件不存任务状态：面板因此天然跟着对话走、
 // 回放转录时也是同一份结果，不需要额外接口。
@@ -17,15 +17,17 @@ export function TaskPanel({ items }: Props) {
   const t = useT();
   const entries = useMemo(() => taskEntries(items), [items]);
   const counts = useMemo(() => taskCounts(entries), [entries]);
-  // 默认展开：任务清单本来就是「一眼看到还剩什么」，收起只在用户自己点的时候。
-  const [open, setOpen] = useState(true);
+  // 默认收起（对齐 DSH）：面板常驻在输入框上方，一行数量足够回答「还剩多少」，
+  // 想看细节再点开——展开着会一直挤占输入区。
+  const [open, setOpen] = useState(false);
 
   if (entries.length === 0) return null;
 
+  // 顺序与 DSH 一致：已完成 → 进行中 → 待完成；数量为 0 的那档不出现。
   const parts: string[] = [];
-  if (counts.inProgress > 0) parts.push(t(`${counts.inProgress} 进行中`, `${counts.inProgress} in progress`));
-  if (counts.pending > 0) parts.push(t(`${counts.pending} 待处理`, `${counts.pending} pending`));
   if (counts.completed > 0) parts.push(t(`${counts.completed} 已完成`, `${counts.completed} done`));
+  if (counts.inProgress > 0) parts.push(t(`${counts.inProgress} 进行中`, `${counts.inProgress} in progress`));
+  if (counts.pending > 0) parts.push(t(`${counts.pending} 待完成`, `${counts.pending} to do`));
   const summary = parts.join(" · ");
 
   return (
@@ -57,7 +59,7 @@ export function TaskPanel({ items }: Props) {
               <span
                 className={`min-w-0 flex-1 break-words ${
                   e.status === "completed"
-                    ? "text-faint line-through"
+                    ? "text-faint"
                     : e.status === "in_progress"
                       ? "text-ink"
                       : "text-muted"
