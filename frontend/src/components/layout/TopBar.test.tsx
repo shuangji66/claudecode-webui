@@ -17,7 +17,6 @@ function bar(over: Partial<React.ComponentProps<typeof TopBar>> = {}) {
       subagents={subs}
       onOpenSubagent={() => {}}
       onToggleSidebar={() => {}}
-      onToggleCollapse={() => {}}
       onCopySession={async () => true}
       onDownloadSession={async () => true}
       rightOpen={false}
@@ -28,6 +27,16 @@ function bar(over: Partial<React.ComponentProps<typeof TopBar>> = {}) {
     />
   );
 }
+
+// 页头原来在桌面端也有一颗「收起侧栏」，与侧栏品牌行那颗同一个图标、又紧挨着标题，
+// 一眼看不出区别。收起/展开归侧栏自己管，页头只留移动端的抽屉入口。
+describe("TopBar 侧栏开关", () => {
+  it("只留移动端的「打开侧栏」，不再有桌面的「收起侧栏」", () => {
+    render(bar());
+    expect(screen.getByLabelText("打开侧栏")).toBeInTheDocument();
+    expect(screen.queryByLabelText("收起侧栏")).toBeNull();
+  });
+});
 
 describe("TopBar 子智能体", () => {
   it("有子代理时显示数量，点开能看到列表并打开对话", () => {

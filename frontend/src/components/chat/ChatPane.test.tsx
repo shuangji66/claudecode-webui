@@ -40,7 +40,6 @@ function setup(activeId: string | null, conversations: ConversationInfo[], sessi
   render(
     <ChatPane
       onToggleSidebar={() => {}}
-      onToggleCollapse={() => {}}
       onAddWorkspace={() => {}}
       rightOpen={false}
       onToggleRight={() => {}}
@@ -96,8 +95,7 @@ describe("ChatPane 回合计时", () => {
     render(
       <ChatPane
         onToggleSidebar={() => {}}
-        onToggleCollapse={() => {}}
-        onAddWorkspace={() => {}}
+          onAddWorkspace={() => {}}
         rightOpen={false}
         onToggleRight={() => {}}
       />,

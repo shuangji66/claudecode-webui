@@ -26,13 +26,12 @@ import { ImageLightbox } from "./ImageLightbox";
 
 interface Props {
   onToggleSidebar: () => void;
-  onToggleCollapse: () => void;
   onAddWorkspace: () => void;
   rightOpen: boolean;
   onToggleRight: () => void;
 }
 
-export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, rightOpen, onToggleRight }: Props) {
+export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleRight }: Props) {
   const t = useT();
   const locale = useLocale();
   const activeId = useAppStore((s) => s.activeId);
@@ -266,7 +265,6 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
         title={title}
         busy={busy}
         onToggleSidebar={onToggleSidebar}
-        onToggleCollapse={onToggleCollapse}
         onDownloadSession={downloadSession}
         onCopySession={copySession}
         rightOpen={rightOpen}

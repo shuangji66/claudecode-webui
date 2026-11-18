@@ -228,7 +228,6 @@ function AppShell() {
       <main className="min-w-0 flex-1">
         <ChatPane
           onToggleSidebar={() => setSidebarOpen(true)}
-          onToggleCollapse={toggleCollapse}
           onAddWorkspace={openWorkspace}
           rightOpen={rightOpen}
           onToggleRight={toggleRight}

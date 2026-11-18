@@ -21,7 +21,6 @@ interface Props {
   title: string;
   busy: boolean;
   onToggleSidebar: () => void;
-  onToggleCollapse: () => void;
   onCopySession: () => Promise<boolean>;
   /** 导出这次会话的原始日志（zip）；返回是否成功。 */
   onDownloadSession: () => Promise<boolean>;
@@ -33,7 +32,7 @@ interface Props {
 }
 
 
-export function TopBar({ session, title, busy, subagents, onOpenSubagent, onToggleSidebar, onToggleCollapse, onCopySession, onDownloadSession, rightOpen, onToggleRight, showReveal, onRevealWorkspace }: Props) {
+export function TopBar({ session, title, busy, subagents, onOpenSubagent, onToggleSidebar, onCopySession, onDownloadSession, rightOpen, onToggleRight, showReveal, onRevealWorkspace }: Props) {
   const t = useT();
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [subAnchor, setSubAnchor] = useState<HTMLElement | null>(null);
@@ -56,6 +55,8 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, onTogg
   return (
     <header className="safe-top shrink-0 border-b border-line bg-canvas md:pt-0">
       <div className="flex h-14 items-center gap-2 px-3 md:px-4">
+        {/* 只有移动端的抽屉入口：桌面收起侧栏的开关在侧栏自己的品牌行里，
+            页头再摆一颗同一个图标（两颗长得一样、位置又挨着标题）只会让人分不清。 */}
         <button
           type="button"
           onClick={onToggleSidebar}
@@ -64,16 +65,6 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, onTogg
         >
           <IconPanel size={18} />
         </button>
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          className="hidden rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink md:inline-flex"
-          aria-label={t("收起侧栏", "Collapse sidebar")}
-          title={t("收起侧栏", "Collapse sidebar")}
-        >
-          <IconPanel size={17} />
-        </button>
-
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <h1 className="truncate text-[14px] font-semibold text-ink">{session ? title : "Claude Code"}</h1>
