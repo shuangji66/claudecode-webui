@@ -3,7 +3,6 @@ import { useAppStore } from "../../store/useAppStore";
 import { relativeTime } from "../../lib/labels";
 import { authorizeFnosDir } from "../../lib/fnos";
 import { useLocale, useT } from "../../lib/i18n";
-import { Button } from "../common/Button";
 import { Dialog } from "../common/Dialog";
 import { IconFolder, IconHistory, IconSearch } from "../common/Icons";
 
@@ -97,20 +96,6 @@ export function HistoryDialog({ open, onClose }: Props) {
       sheet
       bodyScroll={false}
       bodyClassName="flex min-h-0 flex-1 flex-col"
-      footer={
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-[10px] text-faint">
-            {err
-              ? <span className="text-danger">{err}</span>
-              : busyCwd
-                ? t(`正在切换到 ${busyCwd}…`, `Switching to ${busyCwd}…`)
-                : t(`共 ${conversations.length} 条对话`, `${conversations.length} conversations`)}
-          </p>
-          <Button variant="secondary" onClick={onClose}>
-            {t("关闭", "Close")}
-          </Button>
-        </div>
-      }
     >
       <div className="border-b border-line px-4 py-2.5">
           <div className="flex items-center gap-2 rounded-[10px] border border-line-strong px-2.5 py-1.5 focus-within:border-brand/60">
@@ -123,12 +108,20 @@ export function HistoryDialog({ open, onClose }: Props) {
               className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-faint"
             />
           </div>
+          {/* 提示行兼作反馈行：切换/报错时替换掉说明文字，不额外占一条底部栏。
+              底部不再有「共 N 条对话」和「关闭」——右上角 × 与 Esc/遮罩都能关。 */}
           <p className="mt-1.5 text-[10px] leading-relaxed text-faint">
-            {t("点击条目会恢复该对话并回放转录内容；未授权的目录会自动添加授权。", "Clicking an entry resumes the conversation and replays its transcript. Unauthorized directories are added automatically.")}
+            {err
+              ? <span className="text-danger">{err}</span>
+              : busyCwd
+                ? t(`正在切换到 ${busyCwd}…`, `Switching to ${busyCwd}…`)
+                : t("点击条目会恢复该对话并回放转录内容；未授权的目录会自动添加授权。", "Clicking an entry resumes the conversation and replays its transcript. Unauthorized directories are added automatically.")}
           </p>
         </div>
 
-        <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        {/* 底部没有 footer 了，安全区留白挪到这里：滚动区最后一行的下沿不能让
+            iPhone 的 Home Indicator 压住。 */}
+        <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-[calc(env(safe-area-inset-bottom,0px)+8px)]">
           {rows.length === 0 && <p className="px-3 py-8 text-center text-[12px] text-muted">{t("没有匹配的历史会话。", "No matching sessions.")}</p>}
           {rows.map((c) => (
             <button

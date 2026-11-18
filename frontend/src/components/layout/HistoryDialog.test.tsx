@@ -35,4 +35,19 @@ describe("HistoryDialog", () => {
     expect(screen.queryByText("会话甲")).toBeNull();
     expect(screen.getByText("会话乙")).toBeInTheDocument();
   });
+
+  // 底部多了「共 N 条对话」和一颗与右上角重复的「关闭」按钮，全是噪音：
+  // 计数随搜索变化没有意义，关闭已有 × / Esc / 遮罩三条路。
+  it("底部没有计数与多余的关闭按钮，只剩右上角那颗关闭", () => {
+    const onClose = vi.fn();
+    render(<HistoryDialog open onClose={onClose} />);
+
+    expect(screen.queryByText(/共 \d+ 条对话/)).toBeNull();
+    // 「关闭」只剩 Dialog 标题栏那颗图标按钮。
+    const closes = screen.getAllByRole("button", { name: "关闭" });
+    expect(closes).toHaveLength(1);
+
+    fireEvent.click(closes[0]);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });
