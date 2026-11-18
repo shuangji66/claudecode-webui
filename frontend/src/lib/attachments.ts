@@ -141,6 +141,53 @@ export function attachmentFromBase64(
   };
 }
 
+/**
+ * 从剪贴板事件里取出文件（桌面截图直接 Ctrl+V）。
+ *
+ * 优先用 `items` 的 `getAsFile()`：Safari 与部分 Linux 桌面环境里 `files` 是空的，
+ * 只有 items 里带图。返回空数组表示「这是一次普通文本粘贴」，调用方不要拦截默认行为。
+ */
+export function clipboardFiles(data: DataTransfer | null | undefined): File[] {
+  if (!data) return [];
+  const fromItems: File[] = [];
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind !== "file") continue;
+    const file = item.getAsFile();
+    if (file) fromItems.push(file);
+  }
+  if (fromItems.length > 0) return fromItems;
+  return Array.from(data.files ?? []);
+}
+
+/** 图片 MIME → 扩展名（与 `mediaTypeOf` 的白名单同一组）。 */
+function extForType(mediaType: string): string {
+  switch (mediaType.toLowerCase()) {
+    case "image/jpeg":
+      return "jpg";
+    case "image/gif":
+      return "gif";
+    case "image/webp":
+      return "webp";
+    default:
+      return "png";
+  }
+}
+
+/**
+ * 给剪贴板里的文件补一个名字。
+ *
+ * 截图工具只给字节、`File.name` 常常是空串；不补的话附件芯片是一块空白，
+ * 发出去后模型看到的附件名也只是后端的 `attachment` 兜底。
+ */
+export function withPastedName(file: File, at: Date = new Date()): File {
+  if (file.name.trim() !== "") return file;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp =
+    `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}` +
+    `-${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`;
+  return new File([file], `clipboard-${stamp}.${extForType(file.type)}`, { type: file.type });
+}
+
 export function toWireAttachment(a: PendingAttachment): WireAttachment {
   return { name: a.name, media_type: a.mediaType, data: a.data };
 }

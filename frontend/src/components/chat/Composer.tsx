@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNode } from "react";
 import type { CommandInfo, WireAttachment } from "../../transport/types";
 import { useAppStore } from "../../store/useAppStore";
 import { commandDescription, permissionLabel } from "../../lib/labels";
@@ -14,8 +14,10 @@ import {
   MAX_TOTAL_BYTES,
   attachmentFromBase64,
   classifyAttachment,
+  clipboardFiles,
   formatBytes,
   readAttachment,
+  withPastedName,
   toWireAttachment,
   type PendingAttachment,
 } from "../../lib/attachments";
@@ -258,12 +260,13 @@ export function Composer({
     onPermissionMode(next);
   };
 
-  const pickFiles = async (list: FileList | null) => {
-    if (!list || list.length === 0) return;
+  /** 把一批文件读成附件：文件选择器与粘贴共用同一条类型/单文件/总量校验。 */
+  const addFiles = async (incoming: File[]) => {
+    if (incoming.length === 0) return;
     setFileError(null);
     let total = files.reduce((sum, f) => sum + f.size, 0);
     const next = [...files];
-    for (const file of Array.from(list)) {
+    for (const file of incoming) {
       try {
         const attachment = await readAttachment(file, locale);
         if (total + attachment.size > MAX_TOTAL_BYTES) {
@@ -277,7 +280,25 @@ export function Composer({
       }
     }
     setFiles(next);
+  };
+
+  const pickFiles = async (list: FileList | null) => {
+    if (!list || list.length === 0) return;
+    await addFiles(Array.from(list));
     if (fileRef.current) fileRef.current.value = "";
+  };
+
+  /**
+   * 桌面截图直接 Ctrl+V：这是最快的一条路，不该逼用户先存盘再挑文件。
+   *
+   * 只接管**带文件**的剪贴板：纯文本粘贴原样交给浏览器（`clipboardFiles` 返回空）。
+   * 图片/PDF/文本的校验与「+ → 本地文件」完全一致（`addFiles` 里的同一套上限）。
+   */
+  const pasteFiles = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const pasted = clipboardFiles(event.clipboardData);
+    if (pasted.length === 0) return;
+    event.preventDefault();
+    void addFiles(pasted.map((file) => withPastedName(file)));
   };
 
   /** 用一段新正文替换输入框，并把光标放到指定位置（补全插入、飞牛路径回填都走这里）。 */
@@ -655,6 +676,7 @@ export function Composer({
             updateText(e.target.value);
             setCaret(e.target.selectionStart ?? e.target.value.length);
           }}
+          onPaste={pasteFiles}
           // 光标决定 `@` token 的范围：点一下、按方向键都要重新判断（不然菜单会
           // 停留在上一个位置的候选上）。onSelect 覆盖选中变化，这两个覆盖光标。
           onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}

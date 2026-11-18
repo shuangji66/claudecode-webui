@@ -587,3 +587,43 @@ describe("Composer @ 文件引用", () => {
     expect(readHostFile).not.toHaveBeenCalled();
   });
 });
+
+describe("Composer 粘贴图片", () => {
+  const paste = (input: HTMLElement, items: unknown[], files: File[]) =>
+    fireEvent.paste(input, { clipboardData: { items, files } });
+
+  it("截图粘贴直接变成附件，没有文件名时补一个", async () => {
+    setup();
+    const input = screen.getByLabelText("消息输入框");
+    const png = new File([new Uint8Array([137, 80, 78, 71])], "", { type: "image/png" });
+
+    await act(async () => {
+      paste(input, [{ kind: "file", getAsFile: () => png }], []);
+    });
+
+    expect(await screen.findByText(/^clipboard-\d{8}-\d{6}\.png$/)).toBeInTheDocument();
+    expect(screen.getByText("4 B")).toBeInTheDocument();
+  });
+
+  it("带名字的文件沿用原名", async () => {
+    setup();
+    const input = screen.getByLabelText("消息输入框");
+    const png = new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" });
+
+    await act(async () => {
+      paste(input, [], [png]);
+    });
+
+    expect(await screen.findByText("shot.png")).toBeInTheDocument();
+  });
+
+  it("纯文本粘贴不产生附件", () => {
+    setup();
+    const input = screen.getByLabelText("消息输入框");
+
+    paste(input, [{ kind: "string", getAsFile: () => null }], []);
+
+    expect(screen.queryByText(/^clipboard-/)).toBeNull();
+    expect(screen.queryByLabelText(/^移除 /)).toBeNull();
+  });
+});

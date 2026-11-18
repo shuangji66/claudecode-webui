@@ -116,6 +116,11 @@ src/
     CLI 原文）；
     " / " 仍由用户键入触发补全。从飞牛挑中的图片/PDF 走 `readHostFile`（`POST /api/fs/host-file`，
     后端只放行这两类）转成附件，其余类型只把路径写进消息——不要在前端读任意宿主文件。
+    **桌面截图要能直接 Ctrl+V**：textarea 的 `onPaste` 用 `lib/attachments.clipboardFiles`
+    取文件（优先 `items.getAsFile()`，Safari/部分 Linux 的 `files` 是空的），有文件才
+    `preventDefault`——纯文本粘贴必须原样交给浏览器。读成附件的路径与「+ → 本地文件」共用
+    `addFiles`（同一套类型/单文件/10MB 总量校验）；截图常常没有文件名，用
+    `withPastedName` 补成 `clipboard-<时间>.png`，别让附件芯片和模型看到的附件名变成空白。
 13. **右侧栏是「开始页 + 标签页」**：没有标签时显示开始页——工作区文件 / Git / 新建终端
     三张卡片，**不要自动打开「文件」标签**；栅格用**容器查询**（`@container` +
     `@min-[21rem]:grid-cols-2`）而不是视口断点：右侧栏宽度是拖出来的，与 viewport 无关，
