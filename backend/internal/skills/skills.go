@@ -41,10 +41,15 @@ var (
 	ErrEmpty = errors.New("SKILL.md 内容为空")
 	// ErrSymlink 表示目标是符号链接，写入会落到受管目录之外。
 	ErrSymlink = errors.New("技能目录是符号链接，拒绝写入")
+	// ErrNotSkill 表示导入来源既不是含 SKILL.md 的目录，也不是 SKILL.md 文件。
+	ErrNotSkill = errors.New("不是技能：需要一个含 SKILL.md 的目录，或 SKILL.md 文件")
 )
 
 // maxContent 是 SKILL.md 的读写上限。技能是提示词，正常只有几 KB。
 const maxContent = 1 << 20
+
+// MaxImport 是一次批量导入的来源数量上限。技能很小，但一次几百个既点不完也看不清结果。
+const MaxImport = 50
 
 // syncedDir 是 claude 存放 claude.ai 同步技能的保留目录名。
 const syncedDir = "synced"
@@ -363,6 +368,103 @@ func (m *Manager) Delete(scope, cwd, name string) error {
 		return ErrNotFound
 	}
 	return os.RemoveAll(dir)
+}
+
+// ImportResult 是一条导入的结果。
+//
+// 批量导入里单条失败不影响其它条，所以原因逐条带出来而不是整批报错：
+// 用户经常一次拖进好几个技能，其中一个名字不合法不该让其余全部回滚。
+type ImportResult struct {
+	// Path 是来源路径（界面用它标出是哪一条）。
+	Path string `json:"path"`
+	// Name 是写进去的技能名（失败时可能是空）。
+	Name string `json:"name,omitempty"`
+	OK   bool   `json:"ok"`
+	// Error 是这条失败的原因（原文，界面直接显示）。
+	Error string `json:"error,omitempty"`
+}
+
+// ImportFrom 从宿主路径批量导入技能。
+//
+// 路径来自飞牛的文件选择器：那是**用户显式挑选**的目录，但不在工作区授权里，
+// 所以这里把读写边界收紧到只认 SKILL.md 这一个文件名——
+//   - 传目录：读 <目录>/SKILL.md，技能名取目录名；
+//   - 传文件：文件名必须是 SKILL.md，技能名取它的父目录名。
+//
+// 不要放宽成「读任意 .md」或「读目录里所有文件」：这条接口会把内容写进技能、
+// 再经 /api/skills/doc 显示到界面上，等于给前端开了一个受控之外的宿主文件读取口。
+// 来源必须是普通文件（不跟软链），避免把某个被链接过去的文件内容当技能读出来。
+func (m *Manager) ImportFrom(scope, cwd string, paths []string) ([]ImportResult, error) {
+	if scope != ScopePersonal && scope != ScopeProject {
+		return nil, ErrReadOnly
+	}
+	if _, _, err := m.root(scope, cwd); err != nil {
+		return nil, err
+	}
+	if len(paths) > MaxImport {
+		paths = paths[:MaxImport]
+	}
+	out := make([]ImportResult, 0, len(paths))
+	for _, p := range paths {
+		res := ImportResult{Path: p}
+		name, content, err := readSkillSource(p)
+		if err != nil {
+			res.Error = err.Error()
+			out = append(out, res)
+			continue
+		}
+		res.Name = name
+		if _, err := m.Save(scope, cwd, name, content); err != nil {
+			res.Error = err.Error()
+			out = append(out, res)
+			continue
+		}
+		res.OK = true
+		out = append(out, res)
+	}
+	return out, nil
+}
+
+// readSkillSource 把一条来源路径解析成（技能名, 正文）。
+func readSkillSource(p string) (string, string, error) {
+	if !filepath.IsAbs(p) {
+		return "", "", errors.New("需要绝对路径")
+	}
+	clean := filepath.Clean(p)
+	fi, err := os.Lstat(clean)
+	if err != nil {
+		return "", "", err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return "", "", ErrSymlink
+	}
+	dir := clean
+	file := filepath.Join(clean, "SKILL.md")
+	if !fi.IsDir() {
+		if !strings.EqualFold(filepath.Base(clean), "SKILL.md") {
+			return "", "", ErrNotSkill
+		}
+		dir = filepath.Dir(clean)
+		file = clean
+	}
+	sf, err := os.Lstat(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", "", ErrNotSkill
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if sf.Mode()&os.ModeSymlink != 0 || !sf.Mode().IsRegular() {
+		return "", "", ErrNotSkill
+	}
+	if sf.Size() > maxContent {
+		return "", "", ErrTooLarge
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return "", "", err
+	}
+	return filepath.Base(dir), string(b), nil
 }
 
 // readMeta 读取单个技能目录的元信息；没有 SKILL.md 的目录直接跳过。

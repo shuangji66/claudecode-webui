@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"ccweb/backend/internal/skills"
@@ -109,6 +110,47 @@ func writeSkillsError(w http.ResponseWriter, err error) {
 	default:
 		writeErr(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// handleImportSkills 从宿主路径批量导入技能（飞牛选择器挑的目录 / SKILL.md）。
+//
+// 来源路径通常在工作区之外（用户从飞牛里挑的），所以边界不在 authorizedCwd，
+// 而在 skills.readSkillSource：只认 SKILL.md 这一个文件名，且必须是普通文件。
+// 目标作用域仍然是个人技能根或已授权的工作区，写入走 skills.Save 的同一套校验。
+func (s *Server) handleImportSkills(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Cwd   string   `json:"cwd"`
+		Scope string   `json:"scope"`
+		Paths []string `json:"paths"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+		writeErr(w, "请求体解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	cwd, ok := s.skillsTarget(w, r, body.Cwd, body.Scope, "")
+	if !ok {
+		return
+	}
+	if len(body.Paths) == 0 {
+		writeErr(w, "没有要导入的技能", http.StatusBadRequest)
+		return
+	}
+	if len(body.Paths) > skills.MaxImport {
+		writeErr(w, fmt.Sprintf("一次最多导入 %d 个技能", skills.MaxImport), http.StatusBadRequest)
+		return
+	}
+	results, err := s.d.Skills.ImportFrom(body.Scope, cwd, body.Paths)
+	if err != nil {
+		writeSkillsError(w, err)
+		return
+	}
+	saved := 0
+	for _, res := range results {
+		if res.OK {
+			saved++
+		}
+	}
+	writeJSON(w, map[string]any{"results": results, "saved": saved})
 }
 
 // handleGetSkill 读取单个技能的 SKILL.md。

@@ -46,6 +46,7 @@ src/
   lib/conversations.ts 对话归属/最近对话排序（纯函数）
   lib/labels.ts        界面词汇表 / claude 指令中文说明（conversationTitle 等）
   lib/mcpForm.ts       MCP 表单转换：参数/环境变量的文本互转、校验、一行摘要
+  lib/skillsImport.ts  技能导入：从文件/相对路径推断技能名、文件类型判定、名字合法性（镜像后端）
   lib/plugins.ts       插件响应兜底、目录查询串、id 拆分（纯函数）
   lib/fnos.ts          飞牛宿主桥接：目录授权（authorizeUserFile）+ 回包归一化（纯函数部分可测）
   assets/claude-code.svg 左侧栏品牌图标
@@ -487,6 +488,16 @@ src/
   不要把设置项塞进这一页。通用设置即时保存，
   模型配置在底部「保存模型设置」统一提交，代理保存后重启所有 claude 会话。
   「部署」页管 claude 版本（下载源 / 安装进度 / 切换生效版本），切换只影响之后新建的会话。
+  「技能」页有「导入」（`SkillImportDialog.tsx` + `store.importEntries / importFromPaths`）：
+  一次多条，来源是本地文件/文件夹（内容在浏览器里，逐条 `PUT /api/skills/doc`）或飞牛选择器
+  挑的 NAS 路径（交给后端 `POST /api/skills/import`，只认 SKILL.md）。飞牛选择器带
+  `accept: [".md", ".markdown"]`（`pickFnosFiles` 的参数）——那只是选择器的门帘，
+  前端 `isSkillFile` 与后端 `readSkillSource` 各自仍要挡一次。目标作用域与工作区
+  在弹窗里选，与页面上的工作区下拉是同一个状态；同名标「覆盖」。**点「导入」后弹窗
+  自己关掉**，逐条结果（成功数 + 每条失败原因）交给页面上的提示条（`SkillsSettings` 的
+  `importNotice`，可手动关闭）——不要在弹窗里再摆一个「关闭」按钮：右上角 × 与 Esc
+  已经能取消，两个按钮干同一件事只会让人以为有什么没做完。名字推断与合法性判定在
+  `lib/skillsImport.ts`（纯函数、有单测），不要在组件里再写一份。
   「技能」页读写 SKILL.md（`store/useSkillsStore.ts` 收敛请求）：个人技能对所有会话生效，
   项目技能跟着**页面上选中的工作区**走（`lib/workspaceTarget.ts`，与 MCP 页同一套；
   新建表单里也能直接选作用域与目标工作区，不跟活动对话）；claude.ai 同步来的只读。

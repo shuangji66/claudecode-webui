@@ -177,3 +177,64 @@ func TestSkillsDisabledReturns503(t *testing.T) {
 		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestSkillsImportFromHostPaths(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	root := srv.d.ProjectsRoot
+
+	src := t.TempDir()
+	for _, name := range []string{"alpha", "beta"} {
+		dir := filepath.Join(src, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("建来源: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\ndescription: "+name+"\n---\n"), 0o644); err != nil {
+			t.Fatalf("写来源: %v", err)
+		}
+	}
+	body, _ := json.Marshal(map[string]any{
+		"cwd":   root,
+		"scope": "project",
+		"paths": []string{filepath.Join(src, "alpha"), filepath.Join(src, "beta"), filepath.Join(src, "missing")},
+	})
+	rec := skillsReq(t, srv, http.MethodPost, "/api/skills/import", "secret", string(body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Results []struct {
+			Name  string `json:"name"`
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+		} `json:"results"`
+		Saved int `json:"saved"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Saved != 2 || len(out.Results) != 3 {
+		t.Fatalf("saved=%d results=%+v", out.Saved, out.Results)
+	}
+	if out.Results[2].OK || out.Results[2].Error == "" {
+		t.Fatalf("不存在的来源应带原因: %+v", out.Results[2])
+	}
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := os.Stat(filepath.Join(root, ".claude", "skills", name, "SKILL.md")); err != nil {
+			t.Fatalf("%s 没写进工作区: %v", name, err)
+		}
+	}
+
+	// 未授权的工作区必须挡在写入之前。
+	outside := t.TempDir()
+	body, _ = json.Marshal(map[string]any{"cwd": outside, "scope": "project", "paths": []string{filepath.Join(src, "alpha")}})
+	rec = skillsReq(t, srv, http.MethodPost, "/api/skills/import", "secret", string(body))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("未授权 cwd 应 403，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 没有 token 一律 401。
+	rec = skillsReq(t, srv, http.MethodPost, "/api/skills/import", "", `{"scope":"personal","paths":["/x"]}`)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("无 token 应 401，实际 %d", rec.Code)
+	}
+}

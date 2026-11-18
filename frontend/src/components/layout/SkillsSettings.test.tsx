@@ -13,6 +13,8 @@ const save = vi.fn();
 const remove = vi.fn();
 const clearDoc = vi.fn();
 const setError = vi.fn();
+const importEntries = vi.fn();
+const importFromPaths = vi.fn();
 
 const DATA: SkillsPayload = {
   personal: [
@@ -58,7 +60,23 @@ beforeEach(() => {
   remove.mockReset().mockResolvedValue(true);
   clearDoc.mockReset();
   setError.mockReset();
-  useSkillsStore.setState({ cwd: "", data: DATA, doc: null, error: null, busy: false, load, read, save, remove, clearDoc, setError });
+  importEntries.mockReset().mockResolvedValue([]);
+  importFromPaths.mockReset().mockResolvedValue([]);
+  useSkillsStore.setState({
+    cwd: "",
+    data: DATA,
+    doc: null,
+    error: null,
+    busy: false,
+    load,
+    read,
+    save,
+    remove,
+    clearDoc,
+    setError,
+    importEntries,
+    importFromPaths,
+  } as never);
   // 项目技能按工作区取，组件默认目标来自这里。
   useAppStore.setState({ workspaces: [{ path: "/work", name: "work", last_used: "", exists: true }] });
 });
@@ -119,6 +137,22 @@ describe("SkillsSettings", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "创建" }));
     await waitFor(() => expect(save).toHaveBeenCalledWith("project", "lint", expect.stringContaining("description:")));
+  });
+
+  it("导入完成后弹窗关闭，结果留在页面上", async () => {
+    importEntries.mockResolvedValue([{ name: "alpha", ok: true }]);
+    render(<SkillsSettings cwd="/work" />);
+    fireEvent.click(screen.getByRole("button", { name: /导入/ }));
+
+    const file = new File(["---\ndescription: alpha\n---\n"], "alpha.md");
+    fireEvent.change(screen.getByLabelText("选择技能文件"), { target: { files: [file] } });
+    await screen.findByDisplayValue("alpha");
+
+    fireEvent.click(screen.getByRole("button", { name: /导入 1 个/ }));
+    await waitFor(() => expect(importEntries).toHaveBeenCalled());
+    // 弹窗关掉，页面顶部给一句结论。
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "导入技能" })).toBeNull());
+    expect(screen.getByText(/已导入 1 个技能/)).toBeTruthy();
   });
 
   it("新建时名字为空不能提交", () => {

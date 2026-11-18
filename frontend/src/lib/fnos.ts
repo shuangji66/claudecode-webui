@@ -148,6 +148,13 @@ export function classifyAuthorizeResult(res: AuthorizeResponseLike | null | unde
 export interface FnosPickParams {
   title?: string;
   okText?: string;
+  /**
+   * 只允许选择的扩展名（以 `.` 开头，如 `['.md']`）。宿主的文件选择器据此灰掉/隐藏其它类型。
+   *
+   * 只是**选择器的门帘**：拿到的路径仍然要在调用方与后端各校验一次——
+   * 不同宿主版本的过滤能力不一致，不能把它当唯一防线。
+   */
+  accept?: string[];
 }
 
 /** 选择器结果：ok 时带选中的目录；取消/失败与授权同一套语义。 */
@@ -216,6 +223,9 @@ export async function pickFnosFiles(params: FnosPickParams = {}): Promise<FnosFi
       multiple: true,
       title: params.title,
       okText: params.okText,
+      // accept 是宿主选择器的过滤条件；老宿主可能忽略它，所以调用方
+      // 仍要按扩展名自己再筛一遍（见 SkillImportDialog 的 isSkillFile）。
+      ...(params.accept && params.accept.length > 0 ? { accept: params.accept } : {}),
       sidebarGroup: ["myFiles", "external", "favorites", "team"],
     });
     return classifyPickPaths(res);

@@ -305,3 +305,94 @@ func TestParseFrontmatter(t *testing.T) {
 		})
 	}
 }
+
+// 导入的来源只认 SKILL.md：目录取其下的 SKILL.md，文件必须自己就叫 SKILL.md。
+func TestImportFromDirAndFile(t *testing.T) {
+	m, root := newManager(t)
+	src := t.TempDir()
+	mk := func(rel, body string) string {
+		path := filepath.Join(src, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("建来源目录: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatalf("写来源: %v", err)
+		}
+		return path
+	}
+	mk("alpha/SKILL.md", "---\ndescription: alpha\n---\nA\n")
+	mk("beta/SKILL.md", "---\ndescription: beta\n---\nB\n")
+	mk("notes.md", "not a skill\n")
+
+	res, err := m.ImportFrom(ScopePersonal, "", []string{
+		filepath.Join(src, "alpha"),               // 目录
+		filepath.Join(src, "beta", "SKILL.md"),    // SKILL.md 文件
+		filepath.Join(src, "notes.md"),            // 普通 md：拒绝
+		filepath.Join(src, "missing", "SKILL.md"), // 不存在
+	})
+	if err != nil {
+		t.Fatalf("ImportFrom: %v", err)
+	}
+	if len(res) != 4 {
+		t.Fatalf("结果数 = %d，期望 4", len(res))
+	}
+	if !res[0].OK || res[0].Name != "alpha" {
+		t.Fatalf("目录导入失败: %+v", res[0])
+	}
+	if !res[1].OK || res[1].Name != "beta" {
+		t.Fatalf("文件导入失败: %+v", res[1])
+	}
+	if res[2].OK || !strings.Contains(res[2].Error, ErrNotSkill.Error()) {
+		t.Fatalf("普通 md 应被拒: %+v", res[2])
+	}
+	if res[3].OK {
+		t.Fatalf("不存在的路径应失败: %+v", res[3])
+	}
+
+	for _, name := range []string{"alpha", "beta"} {
+		b, err := os.ReadFile(filepath.Join(root, name, "SKILL.md"))
+		if err != nil {
+			t.Fatalf("读导入结果 %s: %v", name, err)
+		}
+		if !strings.Contains(string(b), "description: "+name) {
+			t.Fatalf("%s 内容不对: %s", name, b)
+		}
+	}
+}
+
+func TestImportFromProjectScopeAndSymlink(t *testing.T) {
+	m, _ := newManager(t)
+	cwd := t.TempDir()
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "SKILL.md"), []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("写来源: %v", err)
+	}
+	res, err := m.ImportFrom(ScopeProject, cwd, []string{src})
+	if err != nil {
+		t.Fatalf("ImportFrom: %v", err)
+	}
+	if len(res) != 1 || !res[0].OK {
+		t.Fatalf("项目级导入失败: %+v", res)
+	}
+	got := filepath.Join(cwd, ".claude", "skills", filepath.Base(src), "SKILL.md")
+	if _, err := os.Stat(got); err != nil {
+		t.Fatalf("没有写到工作区: %v", err)
+	}
+
+	// 来源是软链：拒绝（否则等于读一个随便指向哪里的文件）。
+	link := filepath.Join(t.TempDir(), "SKILL.md")
+	if err := os.Symlink(filepath.Join(src, "SKILL.md"), link); err != nil {
+		t.Skipf("无法创建符号链接: %v", err)
+	}
+	res, err = m.ImportFrom(ScopePersonal, "", []string{link})
+	if err != nil {
+		t.Fatalf("ImportFrom: %v", err)
+	}
+	if len(res) != 1 || res[0].OK || !strings.Contains(res[0].Error, ErrSymlink.Error()) {
+		t.Fatalf("软链来源应被拒: %+v", res)
+	}
+
+	if _, err := m.ImportFrom(ScopeSynced, "", []string{src}); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("synced 导入: %v，期望 ErrReadOnly", err)
+	}
+}

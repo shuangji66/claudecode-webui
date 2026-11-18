@@ -414,6 +414,20 @@ hub ── manager ── session ── process ── claude (NDJSON)
   rename，避免半截 SKILL.md 被 claude 当成正文读进去。
 - **删除只删 skills 根目录的直接子目录且必须含 SKILL.md**：名字来自用户输入，
   直接 `RemoveAll(root/name)` 等于把路径穿越变成删库。
+- **导入是一次多条的受控读取**：`POST /api/skills/import` 的来源是飞牛选择器挑的宿主
+  路径（通常在工作区之外），所以边界不在 `authorizedCwd`，而在 `skills.readSkillSource`：
+  只认名为 `SKILL.md` 的普通文件（传目录则读 `<目录>/SKILL.md`），不跟软链、≤1 MiB、
+  一次 ≤ `skills.MaxImport`（50）。**不要放宽成「读任意 .md / 读目录里所有文件」**——
+  内容会写进技能、再经 `/api/skills/doc` 显示到界面上，那等于开一个不在授权体系里的
+  宿主文件读取口。逐条返回结果（单条失败不影响别的），技能名取自目录名（传文件时取父目录名）。
+  浏览器里挑的文件不走这条接口：内容已经在手里，前端逐条 `PUT /api/skills/doc`
+  （顺序执行，正是为了让同名覆盖的顺序可预期、单条失败不中断）；两条来源都支持多选，
+  目标可以是个人技能根或已授权的工作区。
+- **飞牛选择器要带 `accept`，但它只是门帘**：`pickUserFile({directory:false,
+  multiple:true, accept:[".md",".markdown"]})`（`pickFnosFiles` 的 `accept` 参数，
+  文档见飞牛「用户个人授权路径」）。宿主版本旧或用户绕过筛选时仍可能拿到别的扩展名，
+  所以前端还会按 `isSkillFile` 再筛一次、后端 `readSkillSource` 再挡一次
+  ——三层都保留，不要因为加了 accept 就删掉后两层。
 - **项目技能按所选工作区读写**：设置页「项目」分组与新建表单里都有工作区下拉
   （与 MCP 共用 `frontend/src/lib/workspaceTarget.ts`），不跟「当前对话在哪」；
   用户选过就不再被上层 cwd 覆盖，目标工作区被移除时回落默认值。后端不变，

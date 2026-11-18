@@ -6,7 +6,7 @@
 
 import { create } from "zustand";
 import { apiFetch } from "../lib/runtime";
-import type { SkillDoc, SkillEntry, SkillScope, SkillsPayload } from "../transport/types";
+import type { SkillDoc, SkillEntry, SkillImportResult, SkillScope, SkillsPayload } from "../transport/types";
 
 const EMPTY: SkillsPayload = { personal: [], project: [], synced: [], project_root: "", personal_root: "" };
 
@@ -40,6 +40,15 @@ interface SkillsState {
   /** 新建或覆盖；成功返回新正文。 */
   save: (scope: SkillScope, name: string, content: string) => Promise<SkillDoc | null>;
   remove: (scope: SkillScope, name: string) => Promise<boolean>;
+  /**
+   * 批量导入：内容已经在浏览器里（本地挑的文件）。
+   *
+   * 逐条 PUT 而不是并发：同名覆盖的顺序要可预期，失败也只会影响那一条。
+   * 全部跑完才刷新一次列表——每个文件刷一次会把设置页打成一串请求。
+   */
+  importEntries: (scope: SkillScope, entries: { name: string; content: string }[]) => Promise<SkillImportResult[]>;
+  /** 批量导入：来源在 NAS 上（飞牛选择器挑的目录 / SKILL.md），由后端读。 */
+  importFromPaths: (scope: SkillScope, paths: string[]) => Promise<SkillImportResult[]>;
   clearDoc: () => void;
   setError: (msg: string | null) => void;
 }
@@ -113,6 +122,44 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     } catch (e) {
       set({ error: errText(e), busy: false });
       return false;
+    }
+  },
+
+  importEntries: async (scope, entries) => {
+    set({ busy: true, error: null });
+    const cwd = scope === "project" ? get().cwd : "";
+    const results: SkillImportResult[] = [];
+    for (const item of entries) {
+      try {
+        await apiFetch<SkillDoc>("/api/skills/doc", {
+          method: "PUT",
+          body: JSON.stringify({ cwd, scope, name: item.name, content: item.content }),
+        });
+        results.push({ name: item.name, ok: true });
+      } catch (e) {
+        // 单条失败不中断：用户一次拖进十个技能，其中一个名字不合法时
+        // 其余九个应该照旧导进去。
+        results.push({ name: item.name, ok: false, error: errText(e) });
+      }
+    }
+    set({ busy: false });
+    await get().load(get().cwd);
+    return results;
+  },
+
+  importFromPaths: async (scope, paths) => {
+    set({ busy: true, error: null });
+    try {
+      const res = await apiFetch<{ results: SkillImportResult[]; saved: number }>("/api/skills/import", {
+        method: "POST",
+        body: JSON.stringify({ cwd: scope === "project" ? get().cwd : "", scope, paths }),
+      });
+      set({ busy: false });
+      await get().load(get().cwd);
+      return Array.isArray(res.results) ? res.results : [];
+    } catch (e) {
+      set({ error: errText(e), busy: false });
+      return paths.map((path) => ({ path, ok: false, error: errText(e) }));
     }
   },
 

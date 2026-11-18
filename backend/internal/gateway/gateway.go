@@ -201,6 +201,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/skills/doc", s.authed(s.handleGetSkill))
 	s.mux.HandleFunc("PUT /api/skills/doc", s.authed(s.handleSaveSkill))
 	s.mux.HandleFunc("DELETE /api/skills/doc", s.authed(s.handleDeleteSkill))
+	s.mux.HandleFunc("POST /api/skills/import", s.authed(s.handleImportSkills))
 	s.mux.HandleFunc("GET /api/mcp", s.authed(s.handleListMcp))
 	s.mux.HandleFunc("POST /api/mcp", s.authed(s.handleSaveMcp))
 	s.mux.HandleFunc("DELETE /api/mcp", s.authed(s.handleDeleteMcp))

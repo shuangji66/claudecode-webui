@@ -11,11 +11,12 @@ import { useT } from "../../lib/i18n";
 import { useSkillsStore } from "../../store/useSkillsStore";
 import { useAppStore } from "../../store/useAppStore";
 import { initialTarget, workspaceOptions } from "../../lib/workspaceTarget";
-import type { SkillEntry, SkillScope } from "../../transport/types";
+import type { SkillEntry, SkillImportResult, SkillScope } from "../../transport/types";
 import { Button } from "../common/Button";
 import { Select } from "../common/Select";
 import { askConfirm } from "../common/SystemDialogs";
-import { IconPlus, IconRefresh, IconTrash, IconWrench } from "../common/Icons";
+import { IconClose, IconDownload, IconPlus, IconRefresh, IconTrash, IconWrench } from "../common/Icons";
+import { SkillImportDialog } from "./SkillImportDialog";
 
 /** 新建技能时的骨架：description 是 claude 判断「何时自动加载」的唯一依据。 */
 const TEMPLATE = `---
@@ -45,6 +46,10 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
   const [nameDraft, setNameDraft] = useState("");
   const [createScope, setCreateScope] = useState<SkillScope>("personal");
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  // 导入完成后弹窗自己关掉，结果落在这里：成功的数量与每条失败原因，
+  // 不显示的话「点了导入什么都没发生」和「导失败了」在界面上没有区别。
+  const [importNotice, setImportNotice] = useState<{ ok: number; failed: { label: string; error: string }[] } | null>(null);
 
   const workspaces = useAppStore((s) => s.workspaces);
   const options = workspaceOptions(workspaces);
@@ -183,8 +188,20 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
         <h3 className="text-[15px] font-semibold text-ink">{t("技能", "Skills")}</h3>
         <span className="text-[10.5px] text-faint">{data.personal.length + data.project.length + data.synced.length}</span>
         <div className="ml-auto flex items-center gap-1.5">
-          <Button size="sm" variant="ghost" icon={<IconRefresh size={13} />} onClick={() => void load(cwd)} disabled={busy}>
+          <Button size="sm" variant="ghost" icon={<IconRefresh size={13} />} onClick={() => void load(target)} disabled={busy}>
             {t("刷新", "Refresh")}
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<IconDownload size={13} />}
+            onClick={() => {
+              setImportNotice(null);
+              setImportOpen(true);
+            }}
+            disabled={busy}
+          >
+            {t("导入", "Import")}
           </Button>
           <Button size="sm" variant="secondary" icon={<IconPlus size={13} />} onClick={startCreate} disabled={busy}>
             {t("新建", "New")}
@@ -198,6 +215,41 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
         )}
       </p>
       {error && <p className="mt-2 rounded-lg bg-danger/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-danger">{error}</p>}
+      {importNotice && (
+        <div
+          className={`mt-2 flex items-start gap-2 rounded-lg border px-2.5 py-1.5 text-[11px] leading-relaxed ${
+            importNotice.failed.length > 0
+              ? "border-amber-200 bg-amber-50 text-warn dark:border-amber-900/60 dark:bg-amber-950/30"
+              : "border-line bg-panel/60 text-muted"
+          }`}
+        >
+          <div className="min-w-0 flex-1">
+            <p>
+              {importNotice.ok > 0
+                ? t(`已导入 ${importNotice.ok} 个技能`, `Imported ${importNotice.ok} skill(s)`)
+                : t("没有导入成功", "Nothing was imported")}
+              {importNotice.failed.length > 0 ? t(`，${importNotice.failed.length} 个失败`, `, ${importNotice.failed.length} failed`) : ""}
+            </p>
+            {importNotice.failed.length > 0 && (
+              <ul className="mt-0.5 space-y-0.5">
+                {importNotice.failed.map((item, i) => (
+                  <li key={`${item.label}-${i}`} className="break-words">
+                    {item.label}: <span className="text-danger">{item.error}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <button
+            type="button"
+            aria-label={t("关闭提示", "Dismiss")}
+            onClick={() => setImportNotice(null)}
+            className="shrink-0 rounded p-0.5 text-faint transition hover:bg-black/5 hover:text-ink"
+          >
+            <IconClose size={12} />
+          </button>
+        </div>
+      )}
 
       <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3 md:flex-row">
         <div className="dsh-scroll shrink-0 overflow-y-auto pb-4 md:w-[218px] md:border-r md:border-line md:pr-3">
@@ -303,11 +355,29 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
               <p className="max-w-sm text-[10.5px] leading-relaxed text-faint">
                 {t("个人技能对所有会话生效；项目技能跟着仓库走。", "Personal skills apply to every session; project skills travel with the repo.")}
               </p>
-              {data.personal_root && <p className="max-w-full break-all font-mono text-[10px] text-faint">{data.personal_root}</p>}
             </div>
           )}
         </div>
       </div>
+      <SkillImportDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={(results: SkillImportResult[]) => {
+          setImportNotice({
+            ok: results.filter((r) => r.ok).length,
+            failed: results
+              .filter((r) => !r.ok)
+              .map((r) => ({ label: r.name || r.path || t("未知技能", "Unknown skill"), error: r.error || t("未知原因", "Unknown error") })),
+          });
+        }}
+        target={target}
+        onTargetChange={chooseTarget}
+        existing={{
+          personal: data.personal.map((s) => s.name),
+          project: data.project.map((s) => s.name),
+        }}
+        workspaces={workspaces}
+      />
     </div>
   );
 }

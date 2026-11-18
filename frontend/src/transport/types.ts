@@ -626,6 +626,16 @@ export interface SkillDoc extends SkillEntry {
   content: string;
 }
 
+/** 一条导入结果（批量导入逐条返回，单条失败不影响其它条）。 */
+export interface SkillImportResult {
+  /** 来源路径（飞牛导入时有值；本地文件导入时为空）。 */
+  path?: string;
+  name?: string;
+  ok: boolean;
+  /** 失败原因原文，界面直接显示。 */
+  error?: string;
+}
+
 /** /api/skills 的返回。 */
 export interface SkillsPayload {
   personal: SkillEntry[];
@@ -633,6 +643,6 @@ export interface SkillsPayload {
   synced: SkillEntry[];
   /** 项目技能所属的工作目录；空表示没有可用的工作区。 */
   project_root: string;
-  /** 个人技能目录，界面上说明「存在哪」。 */
+  /** 个人技能目录的绝对路径（接口原样给出，排错时用；界面不展示）。 */
   personal_root: string;
 }
