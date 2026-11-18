@@ -2,10 +2,34 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ccweb/backend/internal/workspace"
 )
+
+// setupScheduleFiles 把任务文件与授权目录都指到临时目录。
+//
+// 授权目录里放当前工作目录：子命令不给 workspace 时会取 cwd，而它必须通过
+// 「在用户授权目录内」这一关（否则模型只会得到一句「工作区未授权」）。
+func setupScheduleFiles(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "schedules.json")
+	t.Setenv("CCWEB_SCHEDULES_FILE", path)
+	wsPath := filepath.Join(dir, "workspaces.json")
+	t.Setenv("CCWEB_WORKSPACES_FILE", wsPath)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if _, err := workspace.Open(wsPath, cwd); err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+	return path
+}
 
 // 调一次工具，返回文本结果与是否 isError。
 func callScheduleMCP(t *testing.T, name string, args any) (string, bool) {
@@ -34,7 +58,7 @@ func callScheduleMCP(t *testing.T, name string, args any) (string, bool) {
 }
 
 func TestMCPScheduleCreateListEdit(t *testing.T) {
-	t.Setenv("CCWEB_SCHEDULES_FILE", filepath.Join(t.TempDir(), "schedules.json"))
+	setupScheduleFiles(t)
 
 	text, isErr := callScheduleMCP(t, "schedule_create", map[string]any{
 		"name":   "每日巡检",
@@ -104,7 +128,7 @@ func TestMCPScheduleCreateListEdit(t *testing.T) {
 }
 
 func TestMCPScheduleRejectsBadRule(t *testing.T) {
-	t.Setenv("CCWEB_SCHEDULES_FILE", filepath.Join(t.TempDir(), "schedules.json"))
+	setupScheduleFiles(t)
 	cases := []struct {
 		name string
 		args map[string]any

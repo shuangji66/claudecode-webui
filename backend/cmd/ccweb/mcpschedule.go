@@ -11,13 +11,17 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"ccweb/backend/internal/config"
+	"ccweb/backend/internal/project"
 	"ccweb/backend/internal/schedule"
+	"ccweb/backend/internal/workspace"
 )
 
 // schedulesFile 返回主进程那份 schedules.json 的路径。
@@ -206,12 +210,6 @@ func scheduleCreate(store *schedule.Store, raw json.RawMessage) toolContent {
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return errResult("参数解析失败: " + err.Error())
 	}
-	if strings.TrimSpace(args.Name) == "" || strings.TrimSpace(args.Prompt) == "" {
-		return errResult("name 与 prompt 都不能为空")
-	}
-	if err := args.Rule.Validate(); err != nil {
-		return errResult(err.Error())
-	}
 	// 不指定工作区就用当前会话的工作目录：模型本来就跑在用户的工作区里。
 	ws := strings.TrimSpace(args.Workspace)
 	if ws == "" {
@@ -222,30 +220,68 @@ func scheduleCreate(store *schedule.Store, raw json.RawMessage) toolContent {
 	if ws == "" {
 		return errResult("无法确定工作区：请显式传 workspace（绝对路径）")
 	}
-	now := time.Now()
-	next, ok := args.Rule.Next(now)
-	if !ok {
-		return errResult("这条规则没有下一次发生时间（仅一次任务的时间要在将来）")
-	}
 	target := schedule.Target{Kind: schedule.TargetNewReuse}
 	if args.Target == schedule.TargetNewEach {
 		target = schedule.Target{Kind: schedule.TargetNewEach}
 	}
-	task, err := store.Create(schedule.Task{
+	// 先校验规则与字段（模型改参数时最常错的就是这些），再解析工作区：
+	// 反过来的话一个写错的 cron 会被「工作区未授权」盖住，模型只能瞎猜。
+	task := schedule.Task{
 		Name:      strings.TrimSpace(args.Name),
 		Prompt:    strings.TrimSpace(args.Prompt),
 		Target:    target,
 		Workspace: ws,
 		Rule:      args.Rule,
-		NextRun:   &next,
-	})
+	}
+	if err := task.Validate(); err != nil {
+		return errResult(err.Error())
+	}
+	now := time.Now()
+	next, ok := args.Rule.Next(now)
+	if !ok {
+		return errResult("这条规则没有下一次发生时间（仅一次任务的时间要在将来）")
+	}
+	// 落成绝对路径并核对授权：模型可能传相对路径（"." 会按**主进程**的 cwd 解析，
+	// 那是另一个目录），也可能传一个没授权过的目录。不在这里挡，任务会创建成功、
+	// 到点每轮投递都失败一次，而模型当时看到的是「已创建」。
+	abs, err := resolveWorkspace(ws)
+	if err != nil {
+		return errResult(err.Error())
+	}
+	task.Workspace = abs
+	task.NextRun = &next
+	created, err := store.Create(task)
 	if err != nil {
 		return errResult("创建失败: " + err.Error())
 	}
 	return okResult(fmt.Sprintf(
 		"已创建自动化任务：%s（id %s）。%s，下次运行 %s，工作区 %s。\n到点后系统会把指令投进对话；用户在「自动化任务」面板里可以随时暂停或删除。",
-		task.Name, task.ID, describeRule(task.Rule), next.Local().Format("2006-01-02 15:04"), task.Workspace,
+		created.Name, created.ID, describeRule(created.Rule), next.Local().Format("2006-01-02 15:04"), created.Workspace,
 	))
+}
+
+// resolveWorkspace 把工作区落成绝对路径，并核对它在用户的授权目录内。
+//
+// 主进程投递时还会再挡一次（那才是真正的围栏），这里提前挡只为了一句能看懂的
+// 原因：让模型知道「这个目录不能当执行位置」，而不是给它一条永远失败的任务。
+func resolveWorkspace(raw string) (string, error) {
+	abs, err := project.Validate(raw)
+	if err != nil {
+		return "", fmt.Errorf("工作区不可用: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", errors.New("工作区不可用: 无法解析目录的真实路径")
+	}
+	cfg := config.Load(version)
+	ws, err := workspace.Open(cfg.WorkspacesFile, "")
+	if err != nil {
+		return "", fmt.Errorf("读取授权目录失败: %w", err)
+	}
+	if !ws.Allows(real) && (cfg.ProjectsRoot == "" || filepath.Clean(real) != filepath.Clean(cfg.ProjectsRoot)) {
+		return "", fmt.Errorf("工作区未授权：%s 不在用户已授权的目录里；请用会话当前工作目录，或先让用户在侧栏添加该目录", abs)
+	}
+	return abs, nil
 }
 
 func scheduleList(store *schedule.Store) toolContent {
