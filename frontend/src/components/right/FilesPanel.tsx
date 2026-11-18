@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { useT } from "../../lib/i18n";
 import { copyText } from "../../lib/clipboard";
-import { startDownload } from "../../lib/download";
+import { downloadFromUrl, downloadInFrame } from "../../lib/download";
 import { fsDownloadUrl, rawFileUrl } from "../../lib/runtime";
 import { useAppStore } from "../../store/useAppStore";
 import { formatBytes, previewKind } from "../../lib/workspace";
@@ -195,9 +195,24 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
     requestMention(absolute(entry.path), entry.type === "dir" ? "dir" : "file");
   };
 
-  /** 下载：文件原样、目录由后端打包成 zip；走浏览器原生下载，不整份读进内存。 */
+  /**
+   * 下载：文件走 blob（不导航页面，WS 不会因此断线）；目录是现打包的 zip，
+   * 体积不可知，交给隐藏 iframe 原生下载。
+   */
   const downloadEntry = (entry: FsEntry) => {
-    startDownload(fsDownloadUrl(cwd, entry.path));
+    const url = fsDownloadUrl(cwd, entry.path);
+    if (entry.type === "dir") {
+      downloadInFrame(url);
+      return;
+    }
+    void downloadFromUrl(url, entry.name).catch((reason: unknown) => {
+      setActionError(
+        t(
+          `下载失败：${reason instanceof Error ? reason.message : String(reason)}`,
+          `Download failed: ${reason instanceof Error ? reason.message : String(reason)}`,
+        ),
+      );
+    });
   };
 
   const revealEntry = async (entry: FsEntry) => {

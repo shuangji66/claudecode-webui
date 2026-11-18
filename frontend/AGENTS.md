@@ -144,9 +144,13 @@ src/
     **文件/目录行的「更多」菜单有「引用到对话」与「下载」**：引用只调
     `useAppStore.requestMention(绝对路径, "file"|"dir")`（带单调 `seq`；同一条点第二次
     值没变，没有 seq 就重放不了），格式化与插入由 `Composer` 负责（`mentionPath` 按会话
-    cwd 折成 `@相对路径`，cwd 外保留绝对）；下载用 `lib/runtime.fsDownloadUrl` +
-    `lib/download.startDownload`——`<a>` 带不上 Authorization 头，token 只能放 query，
-    但大文件不经过 blob 内存。目录由后端打包成 zip，前端不自己遍历。
+    cwd 折成 `@相对路径`，cwd 外保留绝对）；下载用 `lib/runtime.fsDownloadUrl` 拼地址，
+    再按类型选 `lib/download` 的入口：**文件走 `downloadFromUrl`（fetch → blob →
+    `<a download>`）**，超 256MB 的文件与目录的 zip 走 `downloadInFrame`（隐藏 iframe）。
+    **绝对不要让顶层锚点导航到下载地址**：在飞牛 App 的 WebView / 宿主 iframe 里那是一次
+    页面跳转，应用页面被顶掉、WS 跟着断开重连（踩过）。`<a>` 也带不上 Authorization 头，
+    token 只能放 query；blob 路径不会把大文件读进内存（超限自动退回 iframe），
+    目录仍由后端打包成 zip，前端不自己遍历。
 14. 文件树/Git 面板的所有请求走 `useSidebarStore`；路径使用后端返回的 POSIX 相对路径，
     不要自己拼绝对路径。切换工作区由 `RightSidebar` 统一 `setCwd`，子面板不要重复调用。
 15. Git 的 `MM` 文件必须同时出现在暂存与更改两组，各自用本侧行数；不要把两侧相加。

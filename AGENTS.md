@@ -217,6 +217,12 @@ hub ── manager ── session ── process ── claude (NDJSON)
   逻辑不要放到侧栏里。下载走 `GET /api/fs/download`：**必须 `Content-Disposition: attachment`**，
   与 `/api/fs/raw` 的 inline 白名单是两条路（下载不设类型白名单、不整份读进内存；目录用
   `fsapi.Zip` 打包，不跟随软链、跳过 `.git`、20000 条目 / 2GiB 预算）。
+- **下载不能做顶层导航**（踩过）：直接点一个指向下载地址的 `<a>`，在飞牛 App 的 WebView /
+  宿主 iframe 里会被当成一次页面跳转——应用页面被换掉，**WS 随之断开再重连**（表现是
+  「下载时闪一下断线」）。现在文件走 `fetch → blob → <a download>`（不导航，DSH 在同一个
+  宿主里也是这个做法），超过 256MB 的文件与目录的 zip 走**隐藏 iframe**（导航只发生在
+  子框架里，同样不碰应用页面）；文件名由后端的 `Content-Disposition` 给（blob 路径用
+  侧栏传的名字）。不要改回「顶层锚点直链下载」。
 - **Git 只拉不推**：`POST /api/git/pull` 只做 `pull --ff-only`（`gitctl.Push` 已删除）。
   推送是对外动作，不该由侧栏一个图标顺手完成；需要时用户自己开终端 `git push`。
 - **Git 状态用 `--porcelain=v2 -z`**，并用 `--untracked-files=all` 列出未跟踪文件

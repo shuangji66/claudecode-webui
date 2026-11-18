@@ -4,8 +4,12 @@ import { FilesPanel } from "./FilesPanel";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { useAppStore } from "../../store/useAppStore";
 
-const startDownload = vi.fn();
-vi.mock("../../lib/download", () => ({ startDownload: (url: string) => startDownload(url) }));
+const downloadFromUrl = vi.fn(async (_url: string, _name: string) => {});
+const downloadInFrame = vi.fn((_url: string) => {});
+vi.mock("../../lib/download", () => ({
+  downloadFromUrl: (url: string, name: string) => downloadFromUrl(url, name),
+  downloadInFrame: (url: string) => downloadInFrame(url),
+}));
 
 const CWD = "/vol1/1000/demo";
 
@@ -35,7 +39,9 @@ const APP_UA = "Mozilla/5.0 (iPhone) FNAppType/ios FNAppVer/1.38.0";
 
 beforeEach(() => {
   seed();
-  startDownload.mockReset();
+  downloadFromUrl.mockReset();
+  downloadFromUrl.mockResolvedValue(undefined);
+  downloadInFrame.mockReset();
   setUA(PLAIN_UA);
 });
 
@@ -70,19 +76,22 @@ describe("FilesPanel 行菜单", () => {
     expect(useAppStore.getState().mentionRequest).toMatchObject({ path: `${CWD}/src`, kind: "dir" });
   });
 
-  it("「下载」走原生下载地址（文件与目录同一个入口）", () => {
+  it("文件走 blob 下载（不导航页面），目录走隐藏 iframe", async () => {
     render(<FilesPanel cwd={CWD} active />);
 
     fireEvent.click(screen.getByLabelText("更多操作 README.md"));
     fireEvent.click(screen.getByRole("menuitem", { name: /下载/ }));
-    expect(startDownload).toHaveBeenCalledTimes(1);
-    const fileUrl = startDownload.mock.calls[0][0] as string;
+    await waitFor(() => expect(downloadFromUrl).toHaveBeenCalledTimes(1));
+    const [fileUrl, name] = downloadFromUrl.mock.calls[0] as unknown as [string, string];
     expect(fileUrl).toContain("/api/fs/download?");
     expect(fileUrl).toContain("path=README.md");
+    expect(name).toBe("README.md");
+    expect(downloadInFrame).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByLabelText("更多操作 src"));
     fireEvent.click(screen.getByRole("menuitem", { name: /下载/ }));
-    expect(startDownload.mock.calls[1][0]).toContain("path=src");
+    expect(downloadInFrame).toHaveBeenCalledTimes(1);
+    expect(downloadInFrame.mock.calls[0][0]).toContain("path=src");
   });
 
   it("目录的复制项叫「复制文件夹路径」", () => {
