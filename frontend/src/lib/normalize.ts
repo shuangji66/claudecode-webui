@@ -571,16 +571,34 @@ export interface TranscriptTurn {
  *     （与 result.duration_ms 同一个口径）。
  *
  * 拿不到的数不编：缺 prompt 时间（转录被截断）就整轮跳过，缺 usage 就跳过该轮。
+ *
+ * 口径与实时路径一致：`contextTokens` 只取**最后一次请求**（上下文占用），
+ * `turnInputTokens` / `outputTokens` / `apiMs` 是本轮所有请求之和（这一轮吃了多少）。
  */
 export function turnsFromTranscript(lines: unknown[]): TranscriptTurn[] {
   const out: TranscriptTurn[] = [];
   let promptAt: number | undefined;
   let last: { ts: number; usage: UsageSnapshot } | undefined;
   let requestAt: number | undefined;
+  // 本轮的累计消耗：一轮里可能有十几次请求，回答下面那行要的是它们的和。
+  let turnIn = 0;
+  let turnOut = 0;
+  let turnApiMs = 0;
 
   const closeTurn = () => {
     if (promptAt === undefined || !last) return;
-    out.push({ ts: last.ts, turn: { durationMs: Math.max(0, last.ts - promptAt), usage: last.usage } });
+    out.push({
+      ts: last.ts,
+      turn: {
+        durationMs: Math.max(0, last.ts - promptAt),
+        usage: {
+          ...last.usage,
+          turnInputTokens: turnIn,
+          outputTokens: turnOut,
+          apiMs: turnApiMs || last.usage.apiMs,
+        },
+      },
+    });
   };
 
   for (const raw of lines) {
@@ -601,6 +619,9 @@ export function turnsFromTranscript(lines: unknown[]): TranscriptTurn[] {
       closeTurn();
       promptAt = at;
       last = undefined;
+      turnIn = 0;
+      turnOut = 0;
+      turnApiMs = 0;
       continue;
     }
     if (type === "assistant") {
@@ -610,13 +631,17 @@ export function turnsFromTranscript(lines: unknown[]): TranscriptTurn[] {
       const apiMs = at !== undefined && requestAt !== undefined && at >= requestAt ? at - requestAt : undefined;
       requestAt = undefined;
       if (!totals) continue;
+      turnIn += contextTokens(totals);
+      turnOut += totals.output;
+      if (apiMs !== undefined) turnApiMs += apiMs;
       last = {
         ts: at ?? last?.ts ?? 0,
         usage: {
           contextTokens: contextTokens(totals),
           cacheHitRate: cacheHitRate(totals),
-          outputTokens: totals.output,
-          apiMs,
+          // 最近一次请求自己的耗时与输出：tok/s 靠它（整轮平均会把每次请求的首字延迟摊进去）。
+          genMs: apiMs,
+          genTokens: totals.output,
         },
       };
     }

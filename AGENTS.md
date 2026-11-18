@@ -335,8 +335,19 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `result.modelUsage` 是**整轮累计**（SDK 类型写明 usage 是主循环的 per-turn 汇总、modelUsage
   跨轮累计，与 `duration_api_ms` 同一口径）：长任务一轮几十上百次请求，cache_read 会累加到
   几百万，拿去当上下文就会得到「已用 9.1M / 窗口 976.6K、进度环顶满 100%」这种数
-  （踩过一次）。`result` 只用来补窗口、本回合输出与 API 耗时；`plausibleContext` 再把
-  「超过窗口」的存量值判为无效（旧版本写进 `conversations.json` 的坏快照也靠它清掉）。
+  （踩过一次）。`result` 只用来补窗口、整轮输出、**整轮输入（`turnInputTokens`，即「本轮
+  消耗」）** 与 API 耗时；`plausibleContext` 再把「超过窗口」的存量值判为无效（旧版本写进
+  `conversations.json` 的坏快照也靠它清掉）。
+  **占用与消耗是两个数，界面必须分开放**：占用答「窗口还剩多少」（最近一次请求的输入侧），
+  消耗答「这一轮/这个会话一共吃了多少」（一轮里所有请求之和，含缓存——长任务动辄几百万）。
+  答里那行小字报的是**本轮消耗**（输入含缓存 + 输出），不是「输出 tok」：一轮几十次工具调用
+  里输入侧占绝大多数，只报输出会让人以为没花钱。会话累计（`sessionInputTokens` /
+  `sessionOutputTokens`）实时按回合滚、重开对话时用整份转录重算。
+  **tok/s 用「最近一次请求」的口径**：`genMs/genTokens` = `message_start` → `message_delta`
+  的到达间隔与那一次的输出（不含首字延迟）。整轮输出 ÷ 整轮 `duration_api_ms` 会把每次请求的
+  首字延迟都摊进分母（实测 200 tok/s 被读成 70，误判成「模型很慢」）。上游把整段回复合并后
+  才下发时（算出来超过 `MAX_GENERATION_TPS`）宁可不显示，别编速度；转录回放只能拿
+  `api-request` → `assistant` 的时间差当这一请求的耗时（含首字延迟，略偏低）。
 - 移动端输入框下方必须保留 `env(safe-area-inset-bottom)`，否则 iPhone Home Indicator 会盖住输入区。
 - 界面文案走 `useT()`（中文 / English 两参数），默认中文；新增文案不要再硬编码单语。
 - **UI 原语入库，不要重复造**：模态 `common/Dialog`、确认/输入 `common/SystemDialogs`

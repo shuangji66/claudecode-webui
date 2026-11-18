@@ -397,13 +397,22 @@ src/
   `result.modelUsage` 是**整轮累计**（SDK 类型：usage 是主循环的 per-turn 汇总、modelUsage
   跨轮累计，与 `duration_api_ms` 同口径），长任务一轮几十上百次请求会把 cache_read 累加到
   几百万——当上下文用就会显示「已用 9.1M / 窗口 976.6K」、进度环顶满（踩过一次）。
-  `result` 只补窗口 / 本回合输出 / API 耗时，`plausibleContext` 再把超过窗口的存量值判废。
+  `result` 只补窗口 / 整轮输出 / 整轮输入（`turnInputTokens`）/ API 耗时，`plausibleContext`
+  再把超过窗口的存量值判废。
+  **占用与消耗必须分开放**：占用 = 最近一次请求的输入侧（窗口还剩多少）；
+  消耗 = 这一轮/这个会话所有请求之和（`turnInputTokens` / `session*Tokens`，含缓存）。
+  回答下面那行小字报的是**本轮消耗**（输入含缓存 + 输出），不是「输出 tok」——
+  工具回合里输入侧占绝大多数，只报输出会让人以为没花钱。
+  **tok/s 用最近一次请求的口径**（`genMs` / `genTokens` = `message_start` → `message_delta`
+  的到达间隔与那一次的输出）：整轮输出 ÷ `duration_api_ms` 会把每次请求的首字延迟摊进分母，
+  实测 200 tok/s 被读成 70，看上去像模型很慢；上游把整段回复合并下发（算出来超过
+  `MAX_GENERATION_TPS`）时不显示速度，别编。
   CLI **不提供**
-  「步骤数」「实时 tok/s」「官方上下文百分比」——步数用工具调用次数、tok/s 用输出 ÷ API 耗时、
-  上下文用 (input+cache_read+cache_creation) ÷ contextWindow，都是同一套数据的换算，
-  不要在界面上编造。
+  「步骤数」「实时 tok/s」「官方上下文百分比」——步数用工具调用次数、tok/s 用上面那对原始
+  数据换算、上下文用 (input+cache_read+cache_creation) ÷ contextWindow，都是同一套数据的
+  换算，不要在界面上编造。
   上下文占用显示成一个小圆环（`UsageStats` 里的 `UsageRing`，≥70% 转琥珀、≥85% 转红），
-  旁边跟百分比；绝对值和缓存命中率放 `title` 里。
+  旁边跟百分比；点开的详情里按「占用 / 本轮消耗 / 速度与耗时 / 会话累计」分段列。
 - **用量要跟着对话持久化**：每回合结束（`result`）把快照 `PATCH /api/conversations {id, usage}`
   存进 `conversations.json`（内容没变就不发）。重开对话时：转录里的 `assistant.message.usage`
   给出最新的 token 数（更准），持久化那份补上转录里没有的 `apiMs` / `contextWindow`

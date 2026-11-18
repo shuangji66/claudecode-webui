@@ -36,11 +36,31 @@ export interface UsageSnapshot {
   inputTokens?: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
-  /** 最近一回合的输出 token 与 API 耗时，用于 tok/s。 */
+  /** 本回合的输出 token 合计（整轮累计口径，与 `turnInputTokens` 配套）。 */
   outputTokens?: number;
+  /**
+   * 本回合的**输入侧合计**（含缓存读取与写入），来自 `result.usage` 或转录里本回合所有
+   * assistant 行之和。这是「这一轮一共吃了多少 token」，与 `contextTokens`（当前上下文多大）
+   * 是两回事：一轮几十次请求会把它累到几百万，而窗口始终只有那么大。
+   */
+  turnInputTokens?: number;
+  /** 会话累计消耗：所有已发生请求的输入侧合计（含缓存），转录回放时重算。 */
+  sessionInputTokens?: number;
+  /** 会话累计消耗：所有已发生请求的输出合计。 */
+  sessionOutputTokens?: number;
+  /**
+   * 最近一次请求的**纯生成耗时**（message_start → message_delta，毫秒）与那一次请求的输出。
+   * tok/s 只认这一对：整轮输出 ÷ 整轮 API 耗时会把每次请求的首字延迟一起摊进去，
+   * 长任务里能低到实际速度的三分之一。
+   */
+  genMs?: number;
+  genTokens?: number;
   /** 输出里用于思考的 token；CLI 没给（或为 0）时为空。 */
   thinkingTokens?: number;
+  /** 最近一回合的 API 耗时（整轮累计，与 `duration_api_ms` 同口径）。 */
   apiMs?: number;
+  /** 内部：最近一次请求的开始时刻（客户端时钟），只用来量 genMs，回合结束时清掉。 */
+  requestStartedAt?: number;
 }
 
 function num(v: unknown): number {
@@ -121,15 +141,28 @@ export function formatTokens(n: number): string {
 }
 
 /**
+ * 生成速度的上限：真模型没有超过这个数的。超过它只说明上游把整段回复合并后才下发
+ * （流式两帧几乎同时到达），那时候量出来的「速度」是假的，宁可不显示。
+ */
+const MAX_GENERATION_TPS = 1000;
+
+/**
  * 从一条 CLI 原始消息更新快照。
  *
  * - `stream_event` 的 message_start / message_delta：流式期间就能更新上下文与输出
- *   （**上下文只认这里**，它是单次请求的数）；
- * - `result`：回合结束，补上 modelUsage 里的 contextWindow 与 API 耗时，以及整轮输出
- *   ——它的 usage 是整轮累计，不碰上下文。
+ *   （**上下文只认这里**，它是单次请求的数）；顺带用两帧的到达时刻量出这一请求的
+ *   纯生成耗时（`genMs` / `genTokens`），tok/s 靠它，不靠整轮平均；
+ * - `result`：回合结束，补上窗口、整轮输出与整轮输入（`turnInputTokens`，这是「消耗」），
+ *   并把本回合加进会话累计。它的 usage 是整轮累计，所以不碰上下文。
+ *
+ * `at` 是这条消息的到达时刻（毫秒）。默认取当前时间，测试里传固定值。
  * 不认识的形状原样返回，调用方据此决定要不要 set。
  */
-export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown): UsageSnapshot | undefined {
+export function applyUsageMessage(
+  prev: UsageSnapshot | undefined,
+  msg: unknown,
+  at: number = Date.now(),
+): UsageSnapshot | undefined {
   if (!msg || typeof msg !== "object") return undefined;
   const m = msg as Record<string, unknown>;
 
@@ -139,12 +172,15 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
     if (ev.type === "message_start") {
       const usage = (ev.message as Record<string, unknown> | undefined)?.usage;
       const totals = totalsFromUsage(usage);
-      if (!totals) return undefined;
+      // 新请求开始了：记下时刻，等 message_delta 到达时量这一段生成花了多久。
+      // 只有 output 占位的 start 也要记（官方形状的输入侧全在 delta 里）。
+      const started = { ...(prev ?? { contextTokens: 0 }), requestStartedAt: at };
+      if (!totals) return started;
       // 只有带输入侧时才更新上下文（start 里只有 output 的时候别把已知的上下文抹成 0）。
       // 已知窗口时再挡一层：超过窗口的数不可能是「这次请求的上下文」（自建中转可能把
       // 累计值塞进单条 usage），宁可保留上一份也不画不可能的数字。
       const context = plausibleContext(contextTokens(totals), prev?.contextWindow);
-      const next: UsageSnapshot = { ...(prev ?? { contextTokens: 0 }), outputTokens: totals.output };
+      const next: UsageSnapshot = { ...started, outputTokens: totals.output };
       if (context > 0) {
         next.contextTokens = context;
         next.cacheHitRate = cacheHitRate(totals);
@@ -171,6 +207,20 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
         next.cacheHitRate = cacheHitRate(totals);
         Object.assign(next, inputParts(totals));
       }
+      // 纯生成耗时：start 帧到 delta 帧（start 是上游开始回话，已含首字延迟之外的部分）。
+      const started = prev?.requestStartedAt;
+      delete next.requestStartedAt;
+      if (started !== undefined && at > started && totals.output > 0) {
+        const ms = at - started;
+        if (totals.output / (ms / 1000) <= MAX_GENERATION_TPS) {
+          next.genMs = ms;
+          next.genTokens = totals.output;
+        } else {
+          // 合并下发，量不出速度：清掉上一次的，别拿旧请求的数冒充这一次。
+          delete next.genMs;
+          delete next.genTokens;
+        }
+      }
       const thinking = thinkingTokensOf(ev.usage);
       if (thinking !== undefined) next.thinkingTokens = thinking;
       return next;
@@ -181,7 +231,7 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
   if (m.type === "result") {
     // `result.usage` / `modelUsage` 是**整轮累计**（见文件头）：一轮里几十上百次请求的
     // 输入侧会加在一起，长任务实测累到 900 万，而窗口只有 100 万。它不是任何一次请求的
-    // 上下文，所以这里只取「整轮」这一层真正成立的三个数：窗口、输出、API 耗时；
+    // 上下文，所以这里只取「整轮」这一层真正成立的数：窗口、整轮输出、整轮输入、API 耗时；
     // 上下文与命中率保持上一次单次请求（message_start / message_delta）的值。
     const totals = totalsFromUsage(m.usage);
     const apiMs = typeof m.duration_api_ms === "number" ? m.duration_api_ms : undefined;
@@ -199,6 +249,7 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
     // 上一份快照可能已经被累计值污染（旧版本就是这么算的）：窗口这一刻已知，顺手把不可能的
     // 数清掉，否则进度环会一直顶在 100% 上，直到用户刷新页面。
     const context = plausibleContext(prev?.contextTokens ?? 0, known);
+    const turnInput = totals ? contextTokens(totals) : undefined;
     const next: UsageSnapshot = {
       ...(prev ?? { contextTokens: 0 }),
       contextTokens: context,
@@ -206,6 +257,16 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
       outputTokens: totals?.output ?? prev?.outputTokens,
       apiMs: apiMs ?? prev?.apiMs,
     };
+    delete next.requestStartedAt;
+    if (turnInput !== undefined) {
+      next.turnInputTokens = turnInput;
+      // 会话累计：只在本进程里滚（`prev` 在就说明这一路的事件都看到了）。`prev` 空着
+      // 说明这是刚接上的半场，宁可不给数，也不要给一个从 0 起跳的假总量。
+      if (prev) {
+        next.sessionInputTokens = (prev.sessionInputTokens ?? 0) + turnInput;
+        if (totals) next.sessionOutputTokens = (prev.sessionOutputTokens ?? 0) + totals.output;
+      }
+    }
     if (context === 0) {
       // 明细与命中率都是从那个不可能的上下文算出来的，一起摘掉。
       delete next.cacheHitRate;
@@ -221,24 +282,48 @@ export function applyUsageMessage(prev: UsageSnapshot | undefined, msg: unknown)
   return undefined;
 }
 
+/** 转录里这条 user 行是「用户的提问」（一轮的开始），而不是工具回包或命令回显。 */
+function isPromptLine(m: Record<string, unknown>): boolean {
+  const content = (m.message as Record<string, unknown> | undefined)?.content;
+  if (typeof content === "string") {
+    const text = content.trim();
+    // /model 这类本地命令的回显也是 user 行，它不结束也不开始一轮。
+    return text !== "" && !text.startsWith("<command-name>") && !text.startsWith("<local-command-");
+  }
+  if (!Array.isArray(content)) return false;
+  return !content.some((b) => (b as Record<string, unknown> | undefined)?.type === "tool_result");
+}
+
 /**
  * 从 claude 转录（jsonl 行）还原一次用量快照。
  *
  * 为什么需要它：页面重开 / 切回旧对话时 WS 上没有实时事件，store 里的快照是空的，
  * 底部那行统计就消失了。转录里其实都有：
- *   - `assistant` 行的 `message.usage`：最近一次请求的 input/cache/output（与实时一致）；
+ *   - `assistant` 行的 `message.usage`：那次请求的 input/cache/output；
  *   - `api-request` 行是请求发出时刻、`assistant` 行是回复落盘时刻，两者之差就是这次
- *     请求的 API 耗时（实测慢速 mock：sleep 1.5s → 差值 1517ms），用它算 tok/s；
+ *     请求的耗时（实测慢速 mock：sleep 1.5s → 差值 1517ms）；
  *   - `cost-state` 行（只在 print 模式出现）作为兜底：累计 API 耗时取相邻差值。
  * 窗口转录里没有，由调用方用设置里的模型窗口兜底。
+ *
+ * 口径与实时路径对齐：上下文取**最后一次请求**；「本轮输入 / 输出 / API 耗时」是本轮
+ * 所有请求之和（= `result.usage` / `duration_api_ms` 的口径）；会话累计是全转录求和。
  */
 export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined {
-  let totals: UsageTotals | undefined;
+  let lastTotals: UsageTotals | undefined;
   let thinking: number | undefined;
   let prevApiMs = 0;
-  let apiMsFromTs: number | undefined;
   let apiMsFromCost: number | undefined;
   let lastRequestAt: number | undefined;
+  // 最近一次请求自己的耗时与输出（算 tok/s 用），与「整轮」区分开。
+  let genMs: number | undefined;
+  let genTokens: number | undefined;
+  // 最后一轮：从最后一条提问行起算，遇到提问就清零。
+  let turnInput = 0;
+  let turnOutput = 0;
+  let turnApiMs = 0;
+  // 会话累计：所有请求之和（主转录已经滤掉 sidechain，不会混进子代理）。
+  let sessionInput = 0;
+  let sessionOutput = 0;
   let window: number | undefined;
   for (const line of lines) {
     if (!line || typeof line !== "object") continue;
@@ -246,16 +331,31 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
     const ts = typeof m.timestamp === "string" ? Date.parse(m.timestamp) : NaN;
     if (m.type === "api-request") {
       if (Number.isFinite(ts)) lastRequestAt = ts;
+    } else if (m.type === "user") {
+      if (!isPromptLine(m)) continue;
+      turnInput = 0;
+      turnOutput = 0;
+      turnApiMs = 0;
     } else if (m.type === "assistant") {
       const usage = (m.message as Record<string, unknown> | undefined)?.usage;
       const t = totalsFromUsage(usage);
-      if (t) totals = t;
       const th = thinkingTokensOf(usage);
       if (th !== undefined) thinking = th;
-      if (lastRequestAt !== undefined && Number.isFinite(ts) && ts >= lastRequestAt) {
-        apiMsFromTs = ts - lastRequestAt;
-      }
+      // 请求结束就要清掉起点，否则下一条 assistant 会算出一条跨两次请求的耗时。
+      const requestMs =
+        lastRequestAt !== undefined && Number.isFinite(ts) && ts >= lastRequestAt ? ts - lastRequestAt : undefined;
       lastRequestAt = undefined;
+      if (!t) continue;
+      lastTotals = t;
+      turnInput += contextTokens(t);
+      turnOutput += t.output;
+      sessionInput += contextTokens(t);
+      sessionOutput += t.output;
+      if (requestMs !== undefined) {
+        turnApiMs += requestMs;
+        genMs = requestMs;
+        genTokens = t.output;
+      }
     } else if (m.type === "cost-state") {
       if (typeof m.totalAPIDuration === "number") {
         // 每条 cost-state 都是累计值：与本条之前的差值才是「最近一回合」的 API 耗时。
@@ -271,13 +371,18 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
       }
     }
   }
-  const apiMs = apiMsFromTs ?? apiMsFromCost;
-  if (!totals && apiMs === undefined) return undefined;
+  const apiMs = turnApiMs > 0 ? turnApiMs : apiMsFromCost;
+  if (!lastTotals && apiMs === undefined) return undefined;
   return {
-    contextTokens: totals ? contextTokens(totals) : 0,
-    cacheHitRate: totals ? cacheHitRate(totals) : undefined,
-    ...(totals ? inputParts(totals) : {}),
-    outputTokens: totals?.output,
+    contextTokens: lastTotals ? contextTokens(lastTotals) : 0,
+    cacheHitRate: lastTotals ? cacheHitRate(lastTotals) : undefined,
+    ...(lastTotals ? inputParts(lastTotals) : {}),
+    outputTokens: turnOutput,
+    turnInputTokens: turnInput,
+    sessionInputTokens: sessionInput || undefined,
+    sessionOutputTokens: sessionOutput || undefined,
+    genMs,
+    genTokens,
     thinkingTokens: thinking,
     apiMs,
     contextWindow: window,
@@ -285,14 +390,19 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
 }
 
 /**
- * 丢掉被判定为「累加值」的上下文与它派生出来的明细，只留下窗口 / 输出 / 耗时
- * 这些与「单次请求」无关、仍然成立的信息。
+ * 丢掉被判定为「累加值」的上下文与它派生出来的明细，只留下窗口 / 输出 / 消耗 / 耗时
+ * 这些与「单次请求的上下文」无关、仍然成立的信息。
  */
 function withoutContext(snap: UsageSnapshot): UsageSnapshot {
   return {
     contextTokens: 0,
     contextWindow: snap.contextWindow,
     outputTokens: snap.outputTokens,
+    turnInputTokens: snap.turnInputTokens,
+    sessionInputTokens: snap.sessionInputTokens,
+    sessionOutputTokens: snap.sessionOutputTokens,
+    genMs: snap.genMs,
+    genTokens: snap.genTokens,
     thinkingTokens: snap.thinkingTokens,
     apiMs: snap.apiMs,
   };
@@ -322,6 +432,11 @@ export function mergeUsage(
     cacheReadTokens: live.cacheReadTokens ?? base.cacheReadTokens,
     cacheCreationTokens: live.cacheCreationTokens ?? base.cacheCreationTokens,
     outputTokens: live.outputTokens ?? base.outputTokens,
+    turnInputTokens: live.turnInputTokens ?? base.turnInputTokens,
+    sessionInputTokens: live.sessionInputTokens ?? base.sessionInputTokens,
+    sessionOutputTokens: live.sessionOutputTokens ?? base.sessionOutputTokens,
+    genMs: live.genMs ?? base.genMs,
+    genTokens: live.genTokens ?? base.genTokens,
     thinkingTokens: live.thinkingTokens ?? base.thinkingTokens,
     apiMs: live.apiMs ?? base.apiMs,
     contextWindow: live.contextWindow ?? base.contextWindow,

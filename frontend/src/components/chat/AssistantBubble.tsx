@@ -4,13 +4,21 @@ import { useT } from "../../lib/i18n";
 import { formatTokens, tokensPerSecond } from "../../lib/usage";
 import type { TurnUsage } from "../../lib/model";
 
-/** 本回合的用量文案：「42.1s · 3.1K tok 输出 · 74 tok/s」，CLI 没给的数不编。 */
+/**
+ * 本回合的用量文案：「42.1s · 本轮 1.1M tok · 210 tok/s」。
+ *
+ * - 中间那个数是**这一轮一共吃掉的 token**（输入含缓存 + 输出），不是「输出 tok」：
+ *   一轮几十次工具调用里，输入侧占了绝大多数，只报输出会让人以为几乎没花钱；
+ * - tok/s 用最近一次请求的输出 ÷ 它自己的生成耗时，不用整轮平均（那会把每次请求的
+ *   首字延迟都摊进去，长任务里能低到实际速度的三分之一）。CLI 没给的数不编。
+ */
 function turnParts(turn: TurnUsage, t: (zh: string, en?: string) => string): string[] {
   const parts: string[] = [];
   if (turn.durationMs !== undefined) parts.push(`${(turn.durationMs / 1000).toFixed(1)}s`);
-  const output = turn.usage?.outputTokens;
-  if (output) parts.push(`${formatTokens(output)} ${t("tok 输出", "tok out")}`);
-  const tps = tokensPerSecond(output ?? 0, turn.usage?.apiMs);
+  const usage = turn.usage;
+  const total = (usage?.turnInputTokens ?? 0) + (usage?.outputTokens ?? 0);
+  if (total > 0) parts.push(`${t("本轮 ", "turn ")}${formatTokens(total)} tok`);
+  const tps = tokensPerSecond(usage?.genTokens ?? 0, usage?.genMs);
   if (tps !== undefined) parts.push(`${Math.round(tps)} tok/s`);
   return parts;
 }

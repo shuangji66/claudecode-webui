@@ -160,6 +160,76 @@ describe("applyUsageMessage", () => {
     expect(snap.contextWindow).toBe(1_000_000);
   });
 
+  // tok/s 的旧算法是「整轮输出 ÷ 整轮 API 耗时」：一次 34.7s 的回合里有 4 次请求，
+  // 每次的首字延迟都摊在分母上，读出来 70 tok/s，而实际生成速度是它的三倍。
+  it("按消息到达时刻量出纯生成速度，不被整轮平均拖慢", () => {
+    const started = applyUsageMessage(
+      undefined,
+      {
+        type: "stream_event",
+        event: { type: "message_start", message: { usage: { input_tokens: 410, cache_read_input_tokens: 10_400, output_tokens: 1 } } },
+      },
+      1_000,
+    )!;
+    const done = applyUsageMessage(
+      started,
+      { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 400 } } },
+      3_000,
+    )!;
+    expect(done.genMs).toBe(2000);
+    expect(done.genTokens).toBe(400);
+    expect(tokensPerSecond(done.genTokens ?? 0, done.genMs)).toBeCloseTo(200, 5);
+
+    // 回合结束后整轮口径仍然保留（面板上的「本回合 API 耗时」），但 tok/s 继续用 gen。
+    const result = applyUsageMessage(done, {
+      type: "result",
+      duration_api_ms: 11_300,
+      usage: { input_tokens: 1640, cache_read_input_tokens: 41_600, output_tokens: 793 },
+    })!;
+    expect(result.apiMs).toBe(11_300);
+    expect(tokensPerSecond(result.genTokens ?? 0, result.genMs)).toBeCloseTo(200, 5);
+    // 旧口径：793 ÷ 11.3s = 70 tok/s，正是被误解成「模型很慢」的那个数。
+    expect(Math.round(tokensPerSecond(result.outputTokens ?? 0, result.apiMs)!)).toBe(70);
+  });
+
+  it("上游把整段回复合并下发时不编造速度", () => {
+    const started = applyUsageMessage(
+      undefined,
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } } },
+      1_000,
+    )!;
+    const done = applyUsageMessage(
+      started,
+      { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 400 } } },
+      1_010,
+    )!;
+    expect(done.genMs).toBeUndefined();
+    expect(done.genTokens).toBeUndefined();
+  });
+
+  it("result 给出本轮消耗（输入含缓存 + 输出），并滚进会话累计", () => {
+    const prev = { contextTokens: 9312, sessionInputTokens: 1_000_000, sessionOutputTokens: 1000 };
+    const snap = applyUsageMessage(prev, {
+      type: "result",
+      duration_api_ms: 5000,
+      usage: { input_tokens: 410, cache_read_input_tokens: 10_400, cache_creation_input_tokens: 0, output_tokens: 793 },
+    })!;
+    expect(snap.turnInputTokens).toBe(10_810);
+    expect(snap.outputTokens).toBe(793);
+    expect(snap.sessionInputTokens).toBe(1_010_810);
+    expect(snap.sessionOutputTokens).toBe(1793);
+  });
+
+  it("刚接上半场（没有 prev）时不给会话累计，免得从 0 起跳", () => {
+    const snap = applyUsageMessage(undefined, {
+      type: "result",
+      duration_api_ms: 5000,
+      usage: { input_tokens: 410, cache_read_input_tokens: 10_400, output_tokens: 793 },
+    })!;
+    expect(snap.turnInputTokens).toBe(10_810);
+    expect(snap.sessionInputTokens).toBeUndefined();
+  });
+
   it("窗口已知时，超过窗口的旧上下文在回合末被清掉", () => {
     const snap = applyUsageMessage(
       { contextTokens: 9_100_000, cacheHitRate: 0.98, inputTokens: 141_100, cacheReadTokens: 8_900_000 },
@@ -240,7 +310,9 @@ describe("usageFromTranscript", () => {
       { type: "cost-state", totalAPIDuration: 40, modelUsage: {} },
     ])!;
     expect(snap.apiMs).toBe(17);
-    expect(snap.outputTokens).toBe(5);
+    // 同一轮里的两次请求：输出取和（这一轮一共写了 12 tok），上下文仍是最新那次请求的。
+    expect(snap.outputTokens).toBe(12);
+    expect(snap.turnInputTokens).toBe(9312 + 9012);
   });
 
   it("用 api-request → assistant 的时间戳算本回合 API 耗时（交互模式没有 cost-state）", () => {

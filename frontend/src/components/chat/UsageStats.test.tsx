@@ -10,15 +10,20 @@ const SNAP = {
   inputTokens: 12,
   cacheReadTokens: 9000,
   cacheCreationTokens: 300,
-  outputTokens: 7,
-  thinkingTokens: 4,
+  outputTokens: 7000,
+  turnInputTokens: 1_000_000,
+  sessionInputTokens: 2_048_000,
+  sessionOutputTokens: 20_480,
+  genMs: 4000,
+  genTokens: 840,
+  thinkingTokens: 4000,
   apiMs: 22,
 };
 
 describe("UsageStats", () => {
   it("有 usage 时显示轮数 / 工具 / tok/s，上下文单独用圈 + 百分比", () => {
     const { container } = render(<UsageStats snap={SNAP} turns={3} tools={12} events={40} />);
-    expect(screen.getByText("3 轮 · 12 工具 · 318 tok/s")).toBeInTheDocument();
+    expect(screen.getByText("3 轮 · 12 工具 · 210 tok/s")).toBeInTheDocument();
     expect(screen.getByLabelText("上下文占用 5%")).toBeInTheDocument();
     // 圈是两段圆：底环 + 按比例画弧（5% → dashoffset 接近满周长）
     const arcs = container.querySelectorAll("svg circle");
@@ -29,7 +34,7 @@ describe("UsageStats", () => {
     expect(offset).toBeCloseTo(dash * 0.95, 3);
   });
 
-  it("点上下文圈弹出详情：绝对值、缓存命中、本回合输出与速度", () => {
+  it("点上下文圈弹出详情：占用 / 本轮消耗 / 会话累计分开列", () => {
     render(<UsageStats snap={SNAP} turns={1} tools={0} events={9} />);
     // 关着的时候不渲染，也不再往 title 里塞长文（触屏拿不到悬停）。
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -46,10 +51,16 @@ describe("UsageStats", () => {
     expect(panel).toHaveTextContent("缓存读取8.8K");
     expect(panel).toHaveTextContent("缓存写入300");
     expect(panel).toHaveTextContent("缓存命中97%");
-    expect(panel).toHaveTextContent("本回合输出7 tok");
-    expect(panel).toHaveTextContent("其中思考4 tok");
-    expect(panel).toHaveTextContent("API 耗时0.02s");
-    expect(panel).toHaveTextContent("生成速度318 tok/s");
+    // 消耗与占用分开：本轮输入含缓存，输出单独一行，合计是两者之和。
+    expect(panel).toHaveTextContent("本轮消耗");
+    expect(panel).toHaveTextContent("输入（含缓存）976.6K");
+    expect(panel).toHaveTextContent("输出6.8K");
+    expect(panel).toHaveTextContent("合计983.4K tok");
+    expect(panel).toHaveTextContent("其中思考3.9K tok");
+    expect(panel).toHaveTextContent("生成速度210 tok/s");
+    expect(panel).toHaveTextContent("本回合 API 耗时0.02s");
+    expect(panel).toHaveTextContent("会话累计消耗2M tok");
+    expect(panel).toHaveTextContent("输入 / 输出2M / 20K");
     expect(panel).toHaveTextContent("累计1 轮 · 9 条事件");
   });
 

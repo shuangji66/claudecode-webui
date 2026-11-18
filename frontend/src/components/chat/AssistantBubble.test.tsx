@@ -29,20 +29,32 @@ describe("AssistantBubble 复制回复", () => {
     expect(await screen.findByText("已复制")).toBeInTheDocument();
   });
 
-  it("回合结束后在复制按钮旁给出本轮用量", () => {
+  it("回合结束后在复制按钮旁给出本轮消耗与生成速度", () => {
     render(
       <AssistantBubble
         text="答案"
         streaming={false}
-        turn={{ durationMs: 42_100, usage: { contextTokens: 9_000, outputTokens: 9_330, apiMs: 126_000 } }}
+        turn={{
+          durationMs: 42_100,
+          // 这一轮（含工具调用里的输入侧）合计 1.1M tok，输出只有 9.1K；
+          // tok/s 取最近一次请求自己的 4s / 840 tok。
+          usage: {
+            contextTokens: 9_000,
+            turnInputTokens: 1_100_000,
+            outputTokens: 9_330,
+            genMs: 4_000,
+            genTokens: 840,
+            apiMs: 126_000,
+          },
+        }}
       />,
     );
-    expect(screen.getByText("42.1s · 9.1K tok 输出 · 74 tok/s")).toBeInTheDocument();
+    expect(screen.getByText("42.1s · 本轮 1.1M tok · 210 tok/s")).toBeInTheDocument();
   });
 
   it("流式中不显示用量（还没结算）", () => {
     render(<AssistantBubble text="半句" streaming turn={{ durationMs: 1_000 }} />);
-    expect(screen.queryByText(/tok 输出/)).toBeNull();
+    expect(screen.queryByText(/本轮/)).toBeNull();
   });
 
   it("流式未结束、或正文为空时不给复制入口", () => {

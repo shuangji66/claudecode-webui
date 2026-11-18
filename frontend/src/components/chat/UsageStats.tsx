@@ -61,19 +61,23 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-// 详情里要放下输入侧的三个分项，比原来略宽；高度按 9 行估算（含两条分隔线）。
-const PANEL_WIDTH = 248;
+// 详情里要放下输入侧分项 + 本轮消耗 + 会话累计；高度按 12 行估算（含三条分隔线）。
+const PANEL_WIDTH = 264;
 
 export function UsageStats({ snap, turns, tools, events }: Props) {
   const t = useT();
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setAnchor(null), []);
-  const pos = useAnchoredPanel(anchor, anchor !== null, PANEL_WIDTH, 320);
+  const pos = useAnchoredPanel(anchor, anchor !== null, PANEL_WIDTH, 400);
   useDismiss(anchor !== null, panelRef, anchor, close);
 
-  const tps = snap ? tokensPerSecond(snap.outputTokens ?? 0, snap.apiMs) : undefined;
+  // tok/s 只认「最近一次请求的输出 ÷ 它自己的生成耗时」：整轮平均会把每次请求的首字
+  // 延迟都摊进来，长任务里读出来只有实际速度的三分之一。
+  const tps = snap ? tokensPerSecond(snap.genTokens ?? 0, snap.genMs) : undefined;
   const pct = snap ? contextPercent(snap.contextTokens, snap.contextWindow) : undefined;
+  const turnTotal = snap ? (snap.turnInputTokens ?? 0) + (snap.outputTokens ?? 0) : 0;
+  const sessionTotal = snap ? (snap.sessionInputTokens ?? 0) + (snap.sessionOutputTokens ?? 0) : 0;
 
   // 顶栏那行只放最短的几项：轮数 / 工具数 / tok/s，细节留给点开的详情。
   const parts: string[] = [];
@@ -153,24 +157,40 @@ export function UsageStats({ snap, turns, tools, events }: Props) {
               )}
             </div>
             <div className="my-1.5 h-px bg-line" />
+            {/* 消耗与占用分开：一轮里几十次请求会把输入侧累到几百万，那和「窗口还剩多少」
+                不是一回事，混在一起就会得到 9.1M / 976.6K 这种数。 */}
             <div className="space-y-1 text-[11px]">
-              {snap.outputTokens !== undefined && (
-                <Row label={t("本回合输出", "Turn output")}>{formatTokens(snap.outputTokens)} tok</Row>
+              <div className="text-[10.5px] text-faint">{t("本轮消耗", "This turn")}</div>
+              {snap.turnInputTokens !== undefined && (
+                <Row label={t("输入（含缓存）", "Input (cached)")}>{formatTokens(snap.turnInputTokens)}</Row>
               )}
+              {snap.outputTokens !== undefined && (
+                <Row label={t("输出", "Output")}>{formatTokens(snap.outputTokens)}</Row>
+              )}
+              {turnTotal > 0 && <Row label={t("合计", "Total")}>{formatTokens(turnTotal)} tok</Row>}
               {snap.thinkingTokens !== undefined && (
                 <Row label={t("其中思考", "Thinking")}>{formatTokens(snap.thinkingTokens)} tok</Row>
               )}
-              {snap.apiMs !== undefined && (
-                <Row label={t("API 耗时", "API time")}>{(snap.apiMs / 1000).toFixed(2)}s</Row>
-              )}
-              {tps !== undefined && <Row label={t("生成速度", "Throughput")}>{Math.round(tps)} tok/s</Row>}
             </div>
             <div className="my-1.5 h-px bg-line" />
-            {totals && (
-              <div className="text-[11px]">
-                <Row label={t("累计", "Totals")}>{totals}</Row>
-              </div>
-            )}
+            <div className="space-y-1 text-[11px]">
+              {tps !== undefined && <Row label={t("生成速度", "Throughput")}>{Math.round(tps)} tok/s</Row>}
+              {snap.apiMs !== undefined && (
+                <Row label={t("本回合 API 耗时", "Turn API time")}>{(snap.apiMs / 1000).toFixed(2)}s</Row>
+              )}
+            </div>
+            {(sessionTotal > 0 || totals) && <div className="my-1.5 h-px bg-line" />}
+            <div className="space-y-1 text-[11px]">
+              {sessionTotal > 0 && (
+                <Row label={t("会话累计消耗", "Session total")}>{formatTokens(sessionTotal)} tok</Row>
+              )}
+              {sessionTotal > 0 && (
+                <Row label={t("输入 / 输出", "Input / output")}>
+                  {`${formatTokens(snap.sessionInputTokens ?? 0)} / ${formatTokens(snap.sessionOutputTokens ?? 0)}`}
+                </Row>
+              )}
+              {totals && <Row label={t("累计", "Totals")}>{totals}</Row>}
+            </div>
           </div>,
           document.body,
         )}

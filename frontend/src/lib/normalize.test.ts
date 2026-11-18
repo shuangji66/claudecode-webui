@@ -884,13 +884,17 @@ describe("转录回放的回合用量", () => {
     },
   ];
 
-  it("按「提问 → 本轮最后一条回答」推导耗时与输出 token", () => {
+  it("按「提问 → 本轮最后一条回答」推导耗时与本轮消耗", () => {
     const turns = turnsFromTranscript(lines);
     expect(turns).toHaveLength(2);
-    // 第一轮：提问 00:00 → 最后回答 00:00:09 = 9s；输出是最后那次请求的 900 tok。
-    expect(turns[0].turn).toMatchObject({ durationMs: 9000, usage: { outputTokens: 900, apiMs: 4000 } });
-    // 第二轮：00:00:20 → 00:00:23 = 3s。
-    expect(turns[1].turn).toMatchObject({ durationMs: 3000, usage: { outputTokens: 40, apiMs: 2000 } });
+    // 第一轮有两次请求（一次工具调用 + 一次回答）：耗时/输入/输出都取这一轮的和，
+    // 上下文仍是最新那次请求的（100 + 900 + 0 = 1000… 见下一条断言）。
+    expect(turns[0].turn).toMatchObject({
+      durationMs: 9000,
+      usage: { outputTokens: 1100, turnInputTokens: 1300, apiMs: 6000 },
+    });
+    // 第二轮只有一次请求：00:00:20 → 00:00:23 = 3s。
+    expect(turns[1].turn).toMatchObject({ durationMs: 3000, usage: { outputTokens: 40, turnInputTokens: 10, apiMs: 2000 } });
     expect(turns[1].ts).toBe(Date.parse("2026-01-02T00:00:23.000Z"));
   });
 
