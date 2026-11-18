@@ -11,6 +11,7 @@ import {
   IconChevronDown,
   IconChevronLeft,
   IconChevronRight,
+  IconCode,
   IconCopy,
   IconExternal,
   IconEye,
@@ -18,6 +19,7 @@ import {
   IconFolder,
   IconMore,
   IconRetry,
+  IconType,
 } from "../common/Icons";
 import { FileIcon, FolderIcon } from "../common/FileIcon";
 import { Menu, type MenuItem } from "../common/Menu";
@@ -424,7 +426,14 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
   const rawUrl = rawFileUrl(cwd, path);
   // 原始字节预览只放行图片/PDF（后端白名单），其它类型点开会拿到 415，不如不摆这个入口。
   const rawAllowed = kind === "image" || kind === "pdf";
-  const lines = file && !file.binary && kind === "text" ? file.content.split("\n") : [];
+  // md / html 既能看源码又能渲染：默认都先给源码——打开一个文件时先看它到底写了
+  // 什么，比直接吃一份渲染结果更安全（渲染是显式的第二下）。其余类型只有一种看法，
+  // 不摆切换按钮。
+  const togglable = kind === "markdown" || kind === "html";
+  const [view, setView] = useState<"render" | "source">("source");
+  const showSource = !togglable || view === "source";
+  const textLike = kind !== "image" && kind !== "pdf";
+  const lines = file && !file.binary && textLike ? file.content.split("\n") : [];
   const shown = lines.slice(0, MAX_PREVIEW_LINES);
 
   return (
@@ -448,6 +457,18 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
             {file ? ` · ${formatBytes(file.size)}` : ""}
           </p>
         </div>
+        {togglable && (
+          <button
+            type="button"
+            onClick={() => setView((v) => (v === "render" ? "source" : "render"))}
+            className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+            aria-label={view === "source" ? t("查看渲染效果", "Show rendered view") : t("查看源码", "Show source")}
+            title={view === "source" ? t("查看渲染效果", "Show rendered view") : t("查看源码", "Show source")}
+            aria-pressed={view === "render"}
+          >
+            {view === "source" ? <IconType size={14} /> : <IconCode size={14} />}
+          </button>
+        )}
         <button
           type="button"
           onClick={onCopy}
@@ -497,10 +518,22 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
               />
             ) : kind === "pdf" ? (
               <iframe src={rawUrl} title={name} className="h-full min-h-[420px] w-full border-0 bg-panel" />
-            ) : kind === "markdown" ? (
+            ) : kind === "markdown" && !showSource ? (
               <div className="px-3 py-3">
                 <Markdown text={file.content} />
               </div>
+            ) : kind === "html" && !showSource ? (
+              /* 工作区里的 HTML 只在这层沙箱里跑：`sandbox=""` 同时禁掉脚本和
+                 allow-same-origin，页面拿到的是一份不透明源，读不到本页的
+                 localStorage（token 就在那里），也发不出同源请求。内容用已经取回的
+                 文本走 srcDoc，不走 /api/fs/raw——那条路的白名单只有图片/PDF，而且
+                 不该为「预览」把 text/html 变成一个同源 URL。 */
+              <iframe
+                sandbox=""
+                srcDoc={file.content}
+                title={name}
+                className="h-full min-h-[420px] w-full border-0 bg-white"
+              />
             ) : (
               <div className="min-w-max py-1 font-mono text-[11.5px] leading-[1.55]">
                 {shown.map((line, i) => (
@@ -516,7 +549,7 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
                 {t("文件超过 1MB，仅预览前 1MB。", "File exceeds 1MB; preview truncated.")}
               </p>
             )}
-            {kind === "text" && lines.length > MAX_PREVIEW_LINES && (
+            {showSource && lines.length > MAX_PREVIEW_LINES && (
               <p className="mx-3 mb-3 mt-1 rounded-md bg-warn/10 px-2 py-1 text-[10.5px] text-warn">
                 {t(`仅渲染前 ${MAX_PREVIEW_LINES} 行（共 ${lines.length} 行）。`, `Showing first ${MAX_PREVIEW_LINES} of ${lines.length} lines.`)}
               </p>

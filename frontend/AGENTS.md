@@ -299,6 +299,16 @@ src/
    「当前不在飞牛宿主中」的按钮。失败提示复用 store 的 `openWorkspaceInFiles`（写 `error`
    由 `App` 统一显示），不要在组件里另起一套。
 
+33. **右侧栏预览里，md / html 有「源码 ↔ 渲染」两视图**（标题栏左侧那颗按钮，`FilesPanel` 的
+   `FilePreview`）：`previewKind` 给出 `markdown` / `html`，其余类型只有一种看法、不摆按钮。
+   **默认都先给源码**（md 与 html 一致）：打开文件先看它到底写了什么，渲染是显式的第二下
+   ——反过来会让工作区里的页面一打开就执行。html 的渲染视图用 `<iframe sandbox="" srcDoc={content}>`：
+   `sandbox=""` 同时禁掉脚本与 `allow-same-origin`，页面拿到的是不透明源，读不到本页
+   localStorage（token 在那儿），也发不出同源请求；**内容走已经取回的文本，不走
+   `/api/fs/raw`**——那条路的后端白名单只有图片/PDF，也不该为了预览把 `text/html` 变成一个
+   同源 URL。不要改用 `dangerouslySetInnerHTML`（规则 6）。源码视图复用行号渲染，
+   「仅渲染前 3000 行」的提示只在真的显示源码时出现。
+
 ## 3. 状态管理（zustand）
 
 - 每个会话的消息独立存 `items[sid]`，切换会话不重新拉取；

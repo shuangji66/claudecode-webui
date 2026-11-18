@@ -138,8 +138,63 @@ describe("文件预览的缩放", () => {
 
   it("markdown / 文本预览没有缩放条", async () => {
     render(<FilesPanel cwd={CWD} active pending={{ path: "README.md", seq: 1 }} />);
-    // 树里也有 README.md，等预览区渲染出正文内容再断言
-    expect(await screen.findByText("hi")).toBeTruthy();
+    // 树里也有 README.md，等预览区显示出来再断言（md 默认是源码视图）
+    expect(await screen.findByText("# hi")).toBeTruthy();
     expect(screen.queryByText("100%")).toBeNull();
+  });
+});
+
+describe("可渲染文件的视图切换", () => {
+  const readAs = (path: string, content: string) => async () => ({
+    path,
+    size: content.length,
+    binary: false,
+    truncated: false,
+    content,
+  });
+
+  beforeEach(() => {
+    seed();
+    useSidebarStore.setState({ openRequest: null });
+  });
+
+  it("markdown 默认看源码，点按钮渲染，再点回源码", async () => {
+    useSidebarStore.setState({ readFile: readAs("README.md", "# hi") });
+    render(<FilesPanel cwd={CWD} active pending={{ path: "README.md", seq: 1 }} />);
+
+    // 默认源码：先看文件本身写了什么，渲染是显式的第二下。
+    expect(await screen.findByText("# hi")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "hi" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看渲染效果" }));
+    expect(screen.getByRole("heading", { name: "hi" })).toBeTruthy();
+    expect(screen.queryByText("# hi")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看源码" }));
+    expect(screen.getByText("# hi")).toBeTruthy();
+  });
+
+  it("html 默认看源码，点按钮在沙箱 iframe 里渲染", async () => {
+    useSidebarStore.setState({ readFile: readAs("index.html", "<h1>hello</h1>") });
+    render(<FilesPanel cwd={CWD} active pending={{ path: "index.html", seq: 1 }} />);
+
+    // 默认源码：与改动前一致，不会一打开就跑工作区里的页面。
+    expect(await screen.findByText("<h1>hello</h1>")).toBeTruthy();
+    expect(document.querySelector("iframe[title='index.html']")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "查看渲染效果" }));
+    const frame = document.querySelector("iframe[title='index.html']") as HTMLIFrameElement | null;
+    expect(frame).toBeTruthy();
+    // 沙箱必须一个字都不开：脚本与 allow-same-origin 都不给，页面读不到本地令牌。
+    expect(frame?.getAttribute("sandbox")).toBe("");
+    expect(frame?.getAttribute("srcdoc")).toContain("<h1>hello</h1>");
+  });
+
+  it("不可渲染的类型没有切换按钮", async () => {
+    useSidebarStore.setState({ readFile: readAs("main.go", "package main") });
+    render(<FilesPanel cwd={CWD} active pending={{ path: "main.go", seq: 1 }} />);
+
+    expect(await screen.findByText("package main")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /查看源码|查看渲染效果/ })).toBeNull();
   });
 });

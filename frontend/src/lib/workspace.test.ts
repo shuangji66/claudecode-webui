@@ -103,6 +103,8 @@ describe("parseUnifiedDiff", () => {
 describe("preview/format helpers", () => {
   it("按扩展名选择预览方式", () => {
     expect(previewKind("README.md")).toBe("markdown");
+    expect(previewKind("docs/index.html")).toBe("html");
+    expect(previewKind("a.HTM")).toBe("html");
     expect(previewKind("a/b/logo.PNG")).toBe("image");
     expect(previewKind("manual.pdf")).toBe("pdf");
     expect(previewKind("main.go")).toBe("text");

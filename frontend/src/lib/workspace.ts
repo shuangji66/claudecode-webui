@@ -198,7 +198,7 @@ export function asAddedDiff(text: string): string {
   return lines.map((line) => `+${line}`).join("\n");
 }
 
-export type FilePreviewKind = "markdown" | "image" | "pdf" | "text";
+export type FilePreviewKind = "markdown" | "html" | "image" | "pdf" | "text";
 
 const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
 const TEXT_EXT = new Set([
@@ -212,6 +212,8 @@ const TEXT_EXT = new Set([
 export function previewKind(name: string): FilePreviewKind {
   const ext = extensionOf(name);
   if (ext === "md" || ext === "markdown") return "markdown";
+  // html 单独一类：它既能看源码也能在沙箱里渲染，右侧栏据此给「切换视图」。
+  if (ext === "html" || ext === "htm") return "html";
   if (IMAGE_EXT.has(ext)) return "image";
   if (ext === "pdf") return "pdf";
   if (TEXT_EXT.has(ext) || ext === "") return "text";

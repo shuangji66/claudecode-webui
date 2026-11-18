@@ -428,6 +428,14 @@ export function IconFileText(props: Props) {
   );
 }
 
+export function IconCode(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="m9 8-4.5 4L9 16M15 8l4.5 4L15 16" />
+    </Svg>
+  );
+}
+
 export function IconEye(props: Props) {
   return (
     <Svg {...props}>
