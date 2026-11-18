@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -394,5 +395,28 @@ func TestImportFromProjectScopeAndSymlink(t *testing.T) {
 
 	if _, err := m.ImportFrom(ScopeSynced, "", []string{src}); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("synced 导入: %v，期望 ErrReadOnly", err)
+	}
+}
+
+// 导入是「读宿主上的文件」，大小上限必须在**读的时候**也成立：
+// 先 Lstat 再 ReadFile 的话，两步之间文件被写大就会整个读进内存。
+func TestImportRejectsOversizedSource(t *testing.T) {
+	m, _ := newManager(t)
+	src := t.TempDir()
+	big := filepath.Join(src, "SKILL.md")
+	// 1 MiB + 1 字节：超过 maxContent。
+	if err := os.WriteFile(big, bytes.Repeat([]byte("a"), 1<<20+1), 0o644); err != nil {
+		t.Fatalf("写来源: %v", err)
+	}
+	res, err := m.ImportFrom(ScopePersonal, "", []string{big})
+	if err != nil {
+		t.Fatalf("ImportFrom: %v", err)
+	}
+	if len(res) != 1 || res[0].OK || !strings.Contains(res[0].Error, ErrTooLarge.Error()) {
+		t.Fatalf("超大来源应被拒: %+v", res)
+	}
+	// 什么都没写进去
+	if got, err := os.ReadDir(m.PersonalRoot()); err == nil && len(got) != 0 {
+		t.Fatalf("失败的导入不应落盘: %v", got)
 	}
 }

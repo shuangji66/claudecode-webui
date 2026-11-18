@@ -118,3 +118,33 @@ describe("SkillImportDialog", () => {
     expect(props.onClose).toHaveBeenCalled();
   });
 });
+
+describe("SkillImportDialog 的失败路径", () => {
+  it("读不出来的文件既不进清单，也不能被下面的清空吞掉原因", async () => {
+    setup();
+    const good = new File(["x\n"], "good.md");
+    const bad = new File(["y\n"], "bad.md");
+    vi.spyOn(bad, "text").mockRejectedValue(new Error("文件被占用"));
+
+    fireEvent.change(screen.getByLabelText("选择技能文件"), { target: { files: [good, bad] } });
+
+    // 读得出来的照常入清单
+    expect(await screen.findByDisplayValue("good")).toBeTruthy();
+    // 读不出来的要说明是哪一条、为什么
+    expect(screen.getByText(/bad\.md：文件被占用/)).toBeTruthy();
+    expect(screen.queryByDisplayValue("bad")).toBeNull();
+  });
+
+  it("有条目没填名字时拦住导入，不静默少导一个", async () => {
+    const props = setup();
+    // 光秃秃的 SKILL.md 推不出目录名 → 技能名为空（红框）
+    const file = new File(["x\n"], "SKILL.md");
+    fireEvent.change(screen.getByLabelText("选择技能文件"), { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByLabelText("技能名")).toHaveValue(""));
+
+    fireEvent.click(screen.getByRole("button", { name: /导入 1 个/ }));
+    expect(await screen.findByText(/给每个技能填一个名字/)).toBeTruthy();
+    expect(importEntries).not.toHaveBeenCalled();
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+});

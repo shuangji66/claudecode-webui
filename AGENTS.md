@@ -423,6 +423,8 @@ hub ── manager ── session ── process ── claude (NDJSON)
   一次 ≤ `skills.MaxImport`（50）。**不要放宽成「读任意 .md / 读目录里所有文件」**——
   内容会写进技能、再经 `/api/skills/doc` 显示到界面上，那等于开一个不在授权体系里的
   宿主文件读取口。逐条返回结果（单条失败不影响别的），技能名取自目录名（传文件时取父目录名）。
+  **大小上限在读取时也成立**：`os.Lstat` 与 `os.ReadFile` 之间文件还可能变大，
+  读取走 `io.LimitReader(maxContent+1)`，多一个字节就判 `ErrTooLarge`，别把几十 MB 读进内存。
   浏览器里挑的文件不走这条接口：内容已经在手里，前端逐条 `PUT /api/skills/doc`
   （顺序执行，正是为了让同名覆盖的顺序可预期、单条失败不中断）；两条来源都支持多选，
   目标可以是个人技能根或已授权的工作区。

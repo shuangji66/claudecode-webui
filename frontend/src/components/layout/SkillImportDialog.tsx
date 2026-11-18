@@ -101,25 +101,33 @@ export function SkillImportDialog({ open, onClose, target, onTargetChange, exist
       return;
     }
     const drafts: ImportDraft[] = [];
+    // 读取失败不能静默跳过：只 setError 之后又被下面的 setError(null) 清掉的话，
+    // 用户会看到「选了两个、清单里只有一个」而没有任何解释。
+    const failed: string[] = [];
     for (const file of picked) {
       const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? "";
-      let content = "";
       try {
-        content = await file.text();
+        const content = await file.text();
+        drafts.push({
+          id: nextId(),
+          name: skillNameFromPath(rel || file.name),
+          size: file.size,
+          kind: "local",
+          content,
+        });
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-        continue;
+        failed.push(`${rel || file.name}：${e instanceof Error ? e.message : String(e)}`);
       }
-      drafts.push({
-        id: nextId(),
-        name: skillNameFromPath(rel || file.name),
-        size: file.size,
-        kind: "local",
-        content,
-      });
+    }
+    if (drafts.length > 0) setItems((prev) => [...prev, ...drafts]);
+    if (failed.length > 0) {
+      // 成功的照常进清单，失败的把文件名与原因说清楚（最多列三条，其余只报数量）。
+      const shown = failed.slice(0, 3).join("；");
+      const more = failed.length > 3 ? `…（共 ${failed.length} 个）` : "";
+      setError(t(`有文件读不出来：${shown}${more}`, `Could not read: ${shown}${more}`));
+      return;
     }
     setError(null);
-    setItems((prev) => [...prev, ...drafts]);
   };
 
   const addFromFnos = async () => {
@@ -168,11 +176,18 @@ export function SkillImportDialog({ open, onClose, target, onTargetChange, exist
       setError(t("先选一个工作区，才能导入项目技能", "Pick a workspace first to import project skills"));
       return;
     }
-    const named = items.filter((item) => item.name.trim() !== "");
-    if (named.length === 0) {
-      setError(t("给每个技能填一个名字", "Give every skill a name"));
+    // 名字是空的条目**不许静默丢弃**：导入按钮上写着「导入 N 个」，少导一个却不说，
+    // 用户只会以为导入坏了。宁可拦住，让他把那个红框填掉或删掉。
+    const unnamed = items.filter((item) => item.name.trim() === "").length;
+    if (unnamed > 0) {
+      setError(
+        unnamed === items.length
+          ? t("给每个技能填一个名字", "Give every skill a name")
+          : t(`还有 ${unnamed} 个条目没填技能名`, `${unnamed} entr${unnamed === 1 ? "y has" : "ies have"} no skill name yet`),
+      );
       return;
     }
+    const named = items;
     if (named.some((item) => !validSkillName(item.name.trim()))) {
       setError(t("技能名不能包含 / \\ < >，不能以点开头，也不能超过 64 字节", "Names cannot contain / \\ < >, start with a dot, or exceed 64 bytes"));
       return;

@@ -11,6 +11,7 @@ package skills
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -460,9 +461,19 @@ func readSkillSource(p string) (string, string, error) {
 	if sf.Size() > maxContent {
 		return "", "", ErrTooLarge
 	}
-	b, err := os.ReadFile(file)
+	// Lstat 到 ReadFile 之间文件还可能变大（写日志 / 正在同步），所以真正读的时候
+	// 也只读到上限多一个字节：多出这一字节就判定过大，别把几十 MB 读进内存。
+	f, err := os.Open(file)
 	if err != nil {
 		return "", "", err
+	}
+	defer func() { _ = f.Close() }()
+	b, err := io.ReadAll(io.LimitReader(f, maxContent+1))
+	if err != nil {
+		return "", "", err
+	}
+	if len(b) > maxContent {
+		return "", "", ErrTooLarge
 	}
 	return filepath.Base(dir), string(b), nil
 }
