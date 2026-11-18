@@ -50,6 +50,15 @@ describe("drafts 存取", () => {
     expect(readDraft("s1")).toBe("");
   });
 
+  it("超长正文不清掉已存的那一版：粘贴一大段日志不该把草稿抹成空白", () => {
+    writeDraft("s1", "先打到一半的提示词");
+    writeDraft("s1", "b".repeat(MAX_DRAFT_CHARS + 1));
+    expect(readDraft("s1")).toBe("先打到一半的提示词");
+    // 改短之后又能正常覆盖
+    writeDraft("s1", "改短了");
+    expect(readDraft("s1")).toBe("改短了");
+  });
+
   it("没有 key（既没有会话也没有工作区）时不写也不读", () => {
     writeDraft("", "不该存的字");
     expect(localStorage.getItem("ccweb-drafts")).toBeNull();

@@ -87,16 +87,23 @@ export function readDraft(key: string, now: number = Date.now()): string {
   return now - entry.at > DRAFT_MAX_AGE_MS ? "" : entry.text;
 }
 
-/** writeDraft 保存草稿。空正文（含纯空白）等于删掉这一条，别留下空壳。 */
+/**
+ * writeDraft 保存草稿。空正文（含纯空白）等于删掉这一条，别留下空壳。
+ *
+ * 超长正文**只跳过写入、不删已有草稿**：一次粘贴几十万字的日志很常见，把上一次
+ * 存下的那版删掉就成了「什么都没存下」——刷新页面连之前打的字都找不回来。
+ * 留着旧的那份，用户改短一点就又能正常保存。
+ */
 export function writeDraft(key: string, text: string, now: number = Date.now()): void {
   if (!key) return;
   const map = readMap();
-  if (text.trim() === "" || text.length > MAX_DRAFT_CHARS) {
+  if (text.trim() === "") {
     if (!(key in map)) return;
     delete map[key];
     writeMap(map);
     return;
   }
+  if (text.length > MAX_DRAFT_CHARS) return;
   map[key] = { text, at: now };
   writeMap(pruneDraftMap(map, now));
 }
