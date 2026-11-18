@@ -50,6 +50,13 @@ describe("ruleSummary", () => {
       expect(ruleSummary(rule, t, zh)).toBe(want);
     });
   }
+
+  // 一天都没选时后端会拒绝保存，摘要不能拼出「每周  09:00」这种两个空格的残句。
+  it("每周一天都没选时给一句人话", () => {
+    const summary = ruleSummary({ kind: "weekly", time: "09:00", weekdays: [] }, t, zh);
+    expect(summary).toContain("未选星期");
+    expect(summary).not.toContain("每周  ");
+  });
 });
 
 describe("本地时间换算", () => {

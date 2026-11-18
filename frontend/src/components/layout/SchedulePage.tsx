@@ -87,6 +87,12 @@ export function SchedulePage({ onClose, onOpenSidebar }: Props) {
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [deliveries, setDeliveries] = useState<ScheduleDelivery[]>([]);
+  /**
+   * 表单校验错误单独放：store 的 `error` 是「接口报错」，而 `load()` 成功就会把它清空
+   * （`save`/`action`/`remove` 每个动作都会调一次），拿它显示「名称不能为空」会被下一次
+   * 刷新抹掉，反过来也会让接口错误混进表单里。
+   */
+  const [formError, setFormError] = useState<string | null>(null);
   const fetchDeliveries = useScheduleStore((s) => s.deliveries);
 
   // 页面挂载即进入：每次进来都是一份干净的列表（离开时组件卸载，草稿不跨次残留）。
@@ -119,14 +125,21 @@ export function SchedulePage({ onClose, onOpenSidebar }: Props) {
     const ws = workspaceOptions[0]?.value ?? currentWorkspace;
     setDraft(emptyDraft(ws));
     setError(null);
+    setFormError(null);
   };
 
   const submit = async () => {
     if (!draft) return;
     if (!draft.name.trim() || !draft.prompt.trim()) {
-      setError(t("任务名称和内容都不能为空。", "Name and instruction are required."));
+      setFormError(t("任务名称和内容都不能为空。", "Name and instruction are required."));
       return;
     }
+    // 每周任务一天都没选：后端会拒绝（「每周任务要选至少一天」），在这里先说清楚。
+    if (draft.rule.kind === "weekly" && (draft.rule.weekdays ?? []).length === 0) {
+      setFormError(t("每周任务至少要选一天。", "Pick at least one day for a weekly schedule."));
+      return;
+    }
+    setFormError(null);
     const saved = await save({
       id: draft.id,
       name: draft.name.trim(),
@@ -199,8 +212,10 @@ export function SchedulePage({ onClose, onOpenSidebar }: Props) {
       }
       bodyClassName="dsh-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] pt-4 md:px-8 md:pb-6 md:pt-5"
     >
-      {error && (
-        <p className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-[11.5px] text-danger dark:bg-rose-950/30">{error}</p>
+      {(formError ?? error) && (
+        <p className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-[11.5px] text-danger dark:bg-rose-950/30">
+          {formError ?? error}
+        </p>
       )}
 
       {draft ? (
@@ -224,6 +239,7 @@ export function SchedulePage({ onClose, onOpenSidebar }: Props) {
           onPick={(task) => {
             setDraft(draftOf(task));
             setError(null);
+            setFormError(null);
           }}
           nextRunText={(task) => nextRunText(task, locale, t)}
         />

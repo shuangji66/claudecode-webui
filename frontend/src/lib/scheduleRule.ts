@@ -102,6 +102,9 @@ export function ruleSummary(rule: ScheduleRule, t: T, locale: "zh" | "en"): stri
       return t(`周一至周五 ${rule.time ?? ""}`, `Weekdays at ${rule.time ?? ""}`);
     case "weekly": {
       const days = (rule.weekdays ?? []).slice().sort((a, b) => WEEKDAY_ORDER.indexOf(a) - WEEKDAY_ORDER.indexOf(b));
+      // 一天都没选：后端会以「每周任务要选至少一天」拒绝保存，摘要这里给一句人话，
+      // 不要拼出「每周  09:00」这种两个空格的残句。
+      if (days.length === 0) return t(`每周（未选星期）${rule.time ?? ""}`, `Weekly (no day picked) ${rule.time ?? ""}`);
       const label = days.map((d) => weekdayLabel(d, locale)).join(locale === "zh" ? "、" : ", ");
       return t(`每周 ${label} ${rule.time ?? ""}`, `Weekly on ${label} at ${rule.time ?? ""}`);
     }
