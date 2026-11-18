@@ -10,8 +10,18 @@ import {
   setCollapseTiming,
   setProcessView,
 } from "../../lib/viewMode";
+import { useAppStore } from "../../store/useAppStore";
+
+/**
+ * 会话此刻在不在跑：过程组「运行中 / 保留期」只认这个（回放的转录里没有 result 行，
+ * 不能靠扫列表猜）。默认按「空闲」处理，需要「进行中」的用例自己调。
+ */
+function setSessionRunning(running: boolean) {
+  useAppStore.setState({ activeId: "s1", states: { s1: running ? "busy" : "ready" } });
+}
 
 beforeEach(() => {
+  setSessionRunning(false);
   // 过程展示偏好存在模块缓存里：每个用例从默认的「标准」开始。
   resetProcessViewCache();
   setProcessView("standard");
@@ -165,6 +175,8 @@ describe("MessageList 本轮用量", () => {
 });
 
 describe("MessageList 过程展示", () => {
+  // 这一段演的都是「这一轮正在跑」：过程组要靠 result 或会话状态才收起。
+  beforeEach(() => setSessionRunning(true));
   const thinking = (text: string): Item => ({ id: "th1", seq: 0, ts: 0, kind: "thinking", text });
   const read = (): Item => ({
     id: "t1",
@@ -278,7 +290,49 @@ describe("MessageList 过程展示", () => {
   });
 });
 
+// 转录回放里没有 result 行（claude 只把它写 stdout）：只看「后面有没有 result」
+// 会把所有历史轮次判成还在跑，详细模式下整段历史被平铺展开、组头永远写「进行中」。
+describe("MessageList 回放历史", () => {
+  const read: Item = {
+    id: "t1",
+    seq: 0,
+    ts: 0,
+    kind: "tool",
+    toolUseId: "tu1",
+    name: "Read",
+    input: { file_path: "/w/a.md" },
+    result: "内容",
+  };
+  const bash: Item = {
+    id: "t2",
+    seq: 0,
+    ts: 0,
+    kind: "tool",
+    toolUseId: "tu2",
+    name: "Bash",
+    input: { command: "ls -la" },
+    result: "a",
+  };
+  const answer: Item = { id: "a1", seq: 0, ts: 0, kind: "assistant", text: "答案", streaming: false };
+
+  it("会话空闲时，没有 result 的历史过程组也按已完成收起", () => {
+    setProcessView("detailed");
+    setSessionRunning(false);
+    render(<MessageList items={[read, bash, answer]} />);
+    expect(screen.getByText("已读取文件并执行了命令")).toBeInTheDocument();
+    expect(screen.queryByText("ls -la")).toBeNull();
+  });
+
+  it("会话在跑时，同样的列表按运行中处理", () => {
+    setProcessView("detailed");
+    setSessionRunning(true);
+    render(<MessageList items={[read, bash, answer]} />);
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+  });
+});
+
 describe("MessageList 收起时机", () => {
+  beforeEach(() => setSessionRunning(true));
   const thinking = (): Item => ({ id: "th1", seq: 0, ts: 0, kind: "thinking", text: "思考中" });
   const read = (): Item => ({
     id: "t1",
@@ -377,6 +431,7 @@ describe("MessageList 收起后的回复", () => {
 
   it("仍有过程在跑时，阶段回复不消失", () => {
     setFoldedReplies("final");
+    setSessionRunning(true);
     render(<MessageList items={[user(), stage, read, bash]} />);
     expect(screen.getByText("阶段回复")).toBeInTheDocument();
   });

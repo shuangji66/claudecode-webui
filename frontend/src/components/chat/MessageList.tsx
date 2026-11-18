@@ -10,6 +10,7 @@ import { useT } from "../../lib/i18n";
 import { activeTurnIndex, turnsOf, type Turn } from "../../lib/turns";
 import { buildProcessRows, hiddenReplyIds, isProcessItem, turnRunning } from "../../lib/process";
 import { useCollapseTiming, useFoldedReplies, useProcessView } from "../../lib/viewMode";
+import { useAppStore } from "../../store/useAppStore";
 import { ProcessGroup } from "./ProcessGroup";
 
 /**
@@ -193,15 +194,21 @@ export function MessageList({
   /**
    * 「仅最终回答」：只有**最新一轮**在过程仍展开时才保留全部回复；
    * 其余轮次（以及已完成的最新一轮）只留最后一条回答。
+   *
+   * 「最新一轮结束了没有」认会话状态而不是「有没有 result」：转录回放里没有 result 行，
+   * 按它判断的话重开一个旧对话会让最新一轮永远保持展开。
    */
   const folded = useFoldedReplies();
-  const keepTail =
-    timing === "onNextSend" || !shown.slice(Math.max(0, lastUserIndex)).some((i) => i.kind === "result");
+  const running = useAppStore((s) => {
+    const st = s.states[s.activeId ?? ""];
+    return st === "busy" || st === "starting";
+  });
+  const keepTail = timing === "onNextSend" || running;
   const hiddenReplies = useMemo(
     () => (folded === "final" ? hiddenReplyIds(shown, keepTail) : null),
     [folded, shown, keepTail],
   );
-  const rows = useMemo(() => buildProcessRows(shown), [shown]);
+  const rows = useMemo(() => buildProcessRows(shown, running), [shown, running]);
 
   /**
    * 每一轮用户消息相对「滚动内容顶部」的距离，缓存给滚动帧用。
@@ -440,7 +447,7 @@ export function MessageList({
                 );
               }
               if (entry.type === "thinking") {
-                const live = timing === "onComplete" && turnRunning(shown, entry.start + entry.items.length - 1);
+                const live = timing === "onComplete" && turnRunning(shown, entry.start + entry.items.length - 1, running);
                 return (
                   <div key={entry.key} className={dense ? "mt-1" : undefined}>
                     <ThinkingBlock
@@ -452,7 +459,7 @@ export function MessageList({
                   </div>
                 );
               }
-              const live = timing === "onComplete" && turnRunning(shown, entry.start);
+              const live = timing === "onComplete" && turnRunning(shown, entry.start, running);
               return (
                 <div
                   key={entry.key}

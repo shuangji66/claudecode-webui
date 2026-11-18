@@ -94,10 +94,15 @@ export function isProcessItem(item: Item): boolean {
 }
 
 /**
- * 这一条目之后还有没有 result：没有就说明这一轮还在跑。
- * 过程组的「运行中/保留期」、思考行的自动折叠都只认它，不认「是不是列表最后一条」。
+ * 这一条目之后还有没有 result，**并且**这条会话此刻真的在跑。
+ *
+ * 只看 result 在实时流里够用，但**转录回放里没有 result 行**（claude 只把它写 stdout）：
+ * 重开一个早就结束的对话时，最后一个 result 之后的所有过程组都会被判成「还在跑」，
+ * 详细模式下整段历史被平铺展开、组头永远写「进行中」。所以「会话在不在跑」必须由
+ * 调用方显式给（store 的 `states[sid]`），不能靠扫 result 猜。
  */
-export function turnRunning(items: Item[], index: number): boolean {
+export function turnRunning(items: Item[], index: number, running = true): boolean {
+  if (!running) return false;
   for (let i = index + 1; i < items.length; i += 1) {
     if (items[i].kind === "result") return false;
   }
@@ -110,8 +115,12 @@ export function turnRunning(items: Item[], index: number): boolean {
  * 「这一轮结束了没有」看的是后面有没有 `result`，不是「组尾是不是列表末尾」：
  * 一轮里模型会写好几段过渡回复，按位置判断的话每写一句就把过程收起来、下一步再展开，
  * 任务进行中全是跳跃。`result` 才是这一轮真正结束的信号（中断/失败也发 result）。
+ *
+ * `running` 是「这条会话此刻在不在跑」（store 的会话状态）：转录回放里没有 result 行，
+ * 只靠扫描列表会把所有历史轮次当成在跑。默认 true 只给「拿不准」的调用方，
+ * 界面上必须传真实状态。
  */
-export function buildProcessRows(items: Item[]): ProcessEntry[] {
+export function buildProcessRows(items: Item[], running = true): ProcessEntry[] {
   const rows: ProcessEntry[] = [];
   let i = 0;
 
@@ -130,8 +139,8 @@ export function buildProcessRows(items: Item[]): ProcessEntry[] {
           key: `process-${item.id}`,
           start: i,
           items: run,
-          live: turnRunning(items, end),
-          tail: end === items.length - 1,
+          live: turnRunning(items, end, running),
+          tail: running && end === items.length - 1,
         });
         i = end + 1;
         continue;
