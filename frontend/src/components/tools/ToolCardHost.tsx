@@ -1,11 +1,12 @@
 import type { ToolItem } from "../../lib/model";
-import { IconSpark, IconTerminal, IconWrench } from "../common/Icons";
+import { IconFileText, IconSpark, IconTerminal, IconWrench } from "../common/Icons";
 import { useT } from "../../lib/i18n";
 import { toolSummary } from "../../lib/tools";
 import { AgentBody, AgentCard, agentLabel } from "./AgentCard";
 import { BashBody, BashCard } from "./BashCard";
 import { EditBody, EditCard } from "./EditCard";
 import { GenericBody, GenericCard } from "./GenericCard";
+import { PlanBody, PlanCard, planStatus } from "./PlanCard";
 import { WriteBody, WriteCard } from "./WriteCard";
 import { ToolShell } from "./ToolShell";
 import type { ToolRegistration } from "./types";
@@ -27,6 +28,8 @@ const registry: Record<string, ToolRegistration> = {
   // Write 的输入是 file_path/content，没有 old_string/new_string：走 EditCard 会
   // diff 构造失败、只显示一行 "File created successfully"，写入内容看不到。
   Write: { icon: IconWrench, title: () => "Write", Card: WriteCard, Body: WriteBody },
+  // 计划模式的最后一步：入参是一整份 Markdown 计划，按兜底卡片渲染等于让人读 JSON。
+  ExitPlanMode: { icon: IconFileText, title: (_item, t) => t("计划", "Plan"), status: planStatus, Card: PlanCard, Body: PlanBody },
 };
 
 /**
@@ -50,6 +53,7 @@ export function ToolCardHost({ item, dense = false }: { item: ToolItem; dense?: 
       icon={reg ? <reg.icon size={13} /> : <IconWrench size={13} />}
       title={title}
       subtitle={summary === title ? "" : summary}
+      status={reg?.status?.(item, t)}
     >
       {reg ? <reg.Body item={item} /> : <GenericBody item={item} />}
     </ToolShell>

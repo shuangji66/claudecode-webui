@@ -4,6 +4,7 @@ import { useT } from "../../lib/i18n";
 import { IconAlert, IconShield, IconSpark } from "../common/Icons";
 import { useAppStore } from "../../store/useAppStore";
 import { subagentLabel } from "../../lib/subagents";
+import { Markdown } from "../common/Markdown";
 
 export interface PermissionReply {
   allow: boolean;
@@ -37,6 +38,16 @@ export function PermissionPanel({ perm, onReply }: Props) {
   const showSubagent = useAppStore((s) => s.showSubagent);
   const items = useAppStore((s) => s.items);
   const fromSubagent = agentId ? subagentLabel(activeId ? (items[activeId] ?? []) : [], agentId) : undefined;
+
+  // 计划模式的审批：入参是 {plan: "<整份 Markdown>"}，把 JSON 摊开等于让人读一堆 \n。
+  // 只在审批卡上替换展示，「编辑后运行」里仍然是可编辑的 JSON。
+  const planText = useMemo(() => {
+    if (perm.tool_name !== "ExitPlanMode") return "";
+    const input = perm.input;
+    if (!input || typeof input !== "object" || Array.isArray(input)) return "";
+    const plan = (input as Record<string, unknown>).plan;
+    return typeof plan === "string" ? plan.trim() : "";
+  }, [perm.tool_name, perm.input]);
 
   const suggestions = useMemo(() => perm.permission_suggestions ?? [], [perm.permission_suggestions]);
   const addRules = suggestions.find((s) => s.type === "addRules") as Extract<PermissionSuggestion, { type: "addRules" }> | undefined;
@@ -95,9 +106,15 @@ export function PermissionPanel({ perm, onReply }: Props) {
         <p className="px-3.5 pt-1 break-all font-mono text-[10.5px] text-amber-700 dark:text-amber-400">{t("路径：", "Path: ")}{perm.blocked_path}</p>
       )}
 
-      <pre className="mx-3.5 mt-2 max-h-40 overflow-auto rounded-xl border border-amber-200/60 bg-white/70 p-2.5 font-mono text-[11px] leading-relaxed text-ink-2 dark:border-amber-900/40 dark:bg-black/20">
-        {safePretty(perm.input)}
-      </pre>
+      {planText ? (
+        <div className="dsh-scroll mx-3.5 mt-2 max-h-60 overflow-y-auto rounded-xl border border-amber-200/60 bg-white/70 p-3 dark:border-amber-900/40 dark:bg-black/20">
+          <Markdown text={planText} />
+        </div>
+      ) : (
+        <pre className="mx-3.5 mt-2 max-h-40 overflow-auto rounded-xl border border-amber-200/60 bg-white/70 p-2.5 font-mono text-[11px] leading-relaxed text-ink-2 dark:border-amber-900/40 dark:bg-black/20">
+          {safePretty(perm.input)}
+        </pre>
+      )}
 
       {editing && (
         <div className="mx-3.5 mt-2">

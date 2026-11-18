@@ -58,6 +58,15 @@ export function toolSummary(item: ToolItem): string {
       return text(input.taskId) ? `#${text(input.taskId)}` : "";
     case "TaskList":
       return "";
+    // 计划模式：一行摘要取计划里第一句正文（跳过 Markdown 标题）。
+    case "ExitPlanMode": {
+      const plan = text(input.plan);
+      const line = plan
+        .split("\n")
+        .map((l) => l.trim())
+        .find((l) => l !== "" && !l.startsWith("#"));
+      return line ?? firstLine(plan);
+    }
     case "TodoWrite": {
       const todos = Array.isArray(input.todos) ? input.todos : [];
       return todos.length > 0 ? `[${todos.length}]` : "";

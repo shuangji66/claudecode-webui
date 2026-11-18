@@ -24,6 +24,24 @@ describe("PermissionPanel", () => {
     expect(screen.getByText(/rm -rf \/tmp\/x/)).toBeInTheDocument();
   });
 
+  it("计划模式的审批按 Markdown 渲染计划，而不是摊开 JSON", () => {
+    render(
+      <PermissionPanel
+        perm={perm({
+          tool_name: "ExitPlanMode",
+          display_name: "ExitPlanMode",
+          description: "",
+          blocked_path: undefined,
+          input: { plan: "# 重构任务面板\n\n- 先改 lib/tasks.ts\n- 再补测试\n" },
+        })}
+        onReply={() => {}}
+      />,
+    );
+    expect(screen.getByText("重构任务面板")).toBeInTheDocument();
+    expect(document.body.textContent).toContain("再补测试");
+    expect(document.body.textContent).not.toContain('"plan":');
+  });
+
   it("仅此次允许回 allow", () => {
     const onReply = vi.fn();
     render(<PermissionPanel perm={perm()} onReply={onReply} />);
