@@ -3,7 +3,7 @@ import type { SessionInfo } from "../../transport/types";
 import { useT } from "../../lib/i18n";
 import { runningSubagents, type SubagentEntry } from "../../lib/subagents";
 import { Menu } from "../common/Menu";
-import { IconCheck, IconCopy, IconDownload, IconMore, IconPanel, IconSidebarRight, IconSpark } from "../common/Icons";
+import { IconCheck, IconCopy, IconDownload, IconFolder, IconMore, IconPanel, IconSidebarRight, IconSpark } from "../common/Icons";
 
 /** 子代理状态点配色（与侧栏对话状态点一致：进行中强调色、完成绿、失败红、停止琥珀）。 */
 const SUBAGENT_TONE = {
@@ -27,10 +27,13 @@ interface Props {
   onDownloadSession: () => Promise<boolean>;
   rightOpen: boolean;
   onToggleRight: () => void;
+  /** 「在飞牛打开工作区」按钮：只有宿主内且非 TCP 端口访问时才给 true。 */
+  showReveal: boolean;
+  onRevealWorkspace: () => void;
 }
 
 
-export function TopBar({ session, title, busy, subagents, onOpenSubagent, onToggleSidebar, onToggleCollapse, onCopySession, onDownloadSession, rightOpen, onToggleRight }: Props) {
+export function TopBar({ session, title, busy, subagents, onOpenSubagent, onToggleSidebar, onToggleCollapse, onCopySession, onDownloadSession, rightOpen, onToggleRight, showReveal, onRevealWorkspace }: Props) {
   const t = useT();
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [subAnchor, setSubAnchor] = useState<HTMLElement | null>(null);
@@ -107,6 +110,18 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, onTogg
           width={260}
           align="end"
         />
+
+        {showReveal && (
+          <button
+            type="button"
+            onClick={onRevealWorkspace}
+            className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+            aria-label={t("在飞牛文件管理器中打开工作区", "Open workspace in Files")}
+            title={t("在飞牛文件管理器中打开工作区", "Open workspace in Files")}
+          >
+            <IconFolder size={17} />
+          </button>
+        )}
 
         <button
           type="button"

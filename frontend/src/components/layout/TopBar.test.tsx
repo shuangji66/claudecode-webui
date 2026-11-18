@@ -22,6 +22,8 @@ function bar(over: Partial<React.ComponentProps<typeof TopBar>> = {}) {
       onDownloadSession={async () => true}
       rightOpen={false}
       onToggleRight={() => {}}
+      showReveal={false}
+      onRevealWorkspace={() => {}}
       {...over}
     />
   );
@@ -63,5 +65,21 @@ describe("TopBar 更多菜单", () => {
 
     fireEvent.click(screen.getByLabelText("更多"));
     expect(await screen.findByRole("menuitem", { name: "已下载" })).toBeInTheDocument();
+  });
+});
+
+describe("TopBar 在飞牛打开工作区", () => {
+  const label = "在飞牛文件管理器中打开工作区";
+
+  it("宿主内显示文件夹按钮，点击调回调", () => {
+    const onReveal = vi.fn();
+    render(bar({ showReveal: true, onRevealWorkspace: onReveal }));
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    expect(onReveal).toHaveBeenCalledTimes(1);
+  });
+
+  it("不在宿主 / 端口访问时不渲染按钮", () => {
+    render(bar({ showReveal: false }));
+    expect(screen.queryByRole("button", { name: label })).toBeNull();
   });
 });

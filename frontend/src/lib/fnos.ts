@@ -292,6 +292,19 @@ export function fnosHostAvailable(): boolean {
   return inHost();
 }
 
+/**
+ * 顶部「在飞牛打开工作区」按钮要不要出现 —— 纯函数。
+ *
+ * 三个条件缺一不可：
+ *   - 有工作区路径（新对话页可能还没选目录）；
+ *   - 页面确实在宿主里（桌面 iframe / App WebView），否则桥接根本不存在；
+ *   - 当前不是 TCP 直连端口通道：那条路上页面开在普通浏览器里，本来就没有宿主，
+ *     而 `fnosHostAvailable` 只回答「页面结构像不像宿主」，端口访问必须单独挡一次。
+ */
+export function canRevealInFnos(opts: { path: string; channel?: string | null; inHost: boolean }): boolean {
+  return opts.inHost && opts.path.trim() !== "" && opts.channel !== "tcp";
+}
+
 /** 在飞牛里看文件/文件夹详情（宿主能力，App 需要 appApi >= v1.0）。 */
 export async function showFnosFileDetails(paths: string[]): Promise<FnosOpenOutcome> {
   if (!inHost()) return { ok: false, reason: "standalone" };

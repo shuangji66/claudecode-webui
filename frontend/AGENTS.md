@@ -290,6 +290,15 @@ src/
    回调页只解析 + postMessage，**state 的比对在发起方**（`authSucceeded`）。
    直连端口访问（没有 `/app/` 前缀）打不开 `/app-auth`，只给一句人话，不要跳 404。
 
+32. **页头的「在飞牛打开工作区」只在宿主内出现**（`TopBar` 里右边栏按钮左侧的文件夹图标）：
+   点一下用 `openFnosFileManager(path)`（宿主桥接，等同右侧栏文件菜单的「在文件夹显示」）
+   在飞牛文件管理器里打开**会话所属工作区的根目录**（`workspaceFor` 最长匹配，没有会话时
+   用 `currentWorkspace`）。可见性由 `lib/fnos.canRevealInFnos` 一个纯函数给出：**有路径 +
+   在宿主内 + 不是 `channel === "tcp"`**。端口访问必须单独挡——那条路上页面开在普通浏览器里，
+   而 `fnosHostAvailable()` 只回答「页面结构像不像宿主」，单靠它会在直连端口上摆一个点了就报
+   「当前不在飞牛宿主中」的按钮。失败提示复用 store 的 `openWorkspaceInFiles`（写 `error`
+   由 `App` 统一显示），不要在组件里另起一套。
+
 ## 3. 状态管理（zustand）
 
 - 每个会话的消息独立存 `items[sid]`，切换会话不重新拉取；

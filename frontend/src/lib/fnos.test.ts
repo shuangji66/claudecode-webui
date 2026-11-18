@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authorizeFnosDir, classifyAuthorizeResult, classifyPickResult, isFnosApp } from "./fnos";
+import { authorizeFnosDir, canRevealInFnos, classifyAuthorizeResult, classifyPickResult, isFnosApp } from "./fnos";
 
 describe("classifyAuthorizeResult", () => {
   it("code 0 + data true 视为授权成功", () => {
@@ -79,5 +79,27 @@ describe("isFnosApp", () => {
     expect(isFnosApp("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120")).toBe(false);
     expect(isFnosApp("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari/604.1")).toBe(false);
     expect(isFnosApp("")).toBe(false);
+  });
+});
+
+describe("canRevealInFnos", () => {
+  // 三个条件缺一不可：宿主内、有工作区路径、不是 TCP 端口通道。
+  it("宿主内 + 有工作区 + unix 通道才显示", () => {
+    expect(canRevealInFnos({ path: "/vol1/1000/ws", channel: "unix", inHost: true })).toBe(true);
+    // channel 缺省（老后端 / 还没拿到 info）按 unix 处理。
+    expect(canRevealInFnos({ path: "/vol1/1000/ws", inHost: true })).toBe(true);
+  });
+
+  it("不在宿主里（独立浏览器 / make dev）不显示", () => {
+    expect(canRevealInFnos({ path: "/vol1/1000/ws", channel: "unix", inHost: false })).toBe(false);
+  });
+
+  it("TCP 端口访问不显示：那条路上页面没有飞牛宿主", () => {
+    expect(canRevealInFnos({ path: "/vol1/1000/ws", channel: "tcp", inHost: true })).toBe(false);
+  });
+
+  it("还没有工作区路径时不显示", () => {
+    expect(canRevealInFnos({ path: "", channel: "unix", inHost: true })).toBe(false);
+    expect(canRevealInFnos({ path: "   ", channel: "unix", inHost: true })).toBe(false);
   });
 });

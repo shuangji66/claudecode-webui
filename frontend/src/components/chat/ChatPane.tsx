@@ -10,6 +10,8 @@ import { TopBar } from "../layout/TopBar";
 import { PermissionPanel } from "../permission/PermissionPanel";
 import type { PermissionPayload } from "../../transport/types";
 import { conversationTitle } from "../../lib/labels";
+import { workspaceFor } from "../../lib/conversations";
+import { canRevealInFnos, fnosHostAvailable } from "../../lib/fnos";
 import { isNewChat } from "../../lib/newChat";
 import { effortFor, findOption, modelOptionsFromSettings } from "../../lib/providerForm";
 import { sessionToMarkdown } from "../../lib/sessionExport";
@@ -61,6 +63,8 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
   const setPermissionMode = useAppStore((s) => s.setPermissionMode);
   const replyPermission = useAppStore((s) => s.replyPermission);
   const retryConnection = useAppStore((s) => s.retryConnection);
+  const info = useAppStore((s) => s.info);
+  const openWorkspaceInFiles = useAppStore((s) => s.openWorkspaceInFiles);
 
   const conversation = useMemo(() => conversations.find((c) => c.id === activeId) ?? null, [conversations, activeId]);
   // 活着的会话才带着「进程启动时固定的」模型与推理强度；下面据此判断改了强度要不要提示。
@@ -221,6 +225,12 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
     </>
   );
 
+  // 「在飞牛打开工作区」：目标是会话所属的工作区根目录（最长匹配），
+  // 没有会话时退回落当前工作区。端口访问 / 不在宿主里时按钮不出现——
+  // 那两种情况下函数调用只会得到「当前不在飞牛宿主中」。
+  const revealPath = session ? workspaceFor(session.cwd, workspaces) || session.cwd : currentWorkspace;
+  const showReveal = canRevealInFnos({ path: revealPath, channel: info?.channel, inHost: fnosHostAvailable() });
+
   /** 导出原始日志：zip 里是 claude 自己写的转录（含子代理），不经后端二次加工。 */
   const downloadSession = async (): Promise<boolean> => {
     if (!session) return false;
@@ -261,6 +271,8 @@ export function ChatPane({ onToggleSidebar, onToggleCollapse, onAddWorkspace, ri
         onCopySession={copySession}
         rightOpen={rightOpen}
         onToggleRight={onToggleRight}
+        showReveal={showReveal}
+        onRevealWorkspace={() => void openWorkspaceInFiles(revealPath)}
       />
 
       {activeId && conn.state !== "open" && conn.state !== "idle" && (
