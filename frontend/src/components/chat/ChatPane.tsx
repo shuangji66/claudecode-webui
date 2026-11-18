@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { Composer } from "./Composer";
+import { TaskPanel } from "./TaskPanel";
 import { MessageList } from "./MessageList";
 import { TurnTimer } from "./TurnTimer";
 import { WorkspacePicker } from "./WorkspacePicker";
@@ -369,6 +370,10 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
           )}
 
           {!newChat && <TurnTimer startedAt={turnStartedAt} className="mb-1.5 px-1" />}
+
+          {/* 任务清单贴在输入框上方（对齐 DSH）：模型用 Tasks API 维护的长期任务
+              一眼能看到还剩什么，不必去聊天记录里翻 TaskCreate 卡片。 */}
+          {!newChat && <TaskPanel items={itemList} />}
 
           <Composer
             disabled={disabled}

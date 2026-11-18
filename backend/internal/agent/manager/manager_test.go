@@ -2,6 +2,7 @@ package manager
 
 import (
 	"os"
+	"slices"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -169,5 +170,31 @@ func TestSessionsUsingAndClose(t *testing.T) {
 	case <-gone:
 	case <-time.After(3 * time.Second):
 		t.Fatal("CloseSessionsUsing 返回时进程还在跑")
+	}
+}
+
+// 任务清单工具固定放行，且不能污染装配层交回来的切片（它有富余容量时会被 append 写进底层数组）。
+func TestSessionToolRulesAlwaysAllowsTaskTools(t *testing.T) {
+	allow, deny := sessionToolRules(nil)
+	for _, want := range taskToolNames {
+		if !slices.Contains(allow, want) {
+			t.Fatalf("--allowedTools 缺少 %s：%v", want, allow)
+		}
+	}
+	if len(deny) != 0 {
+		t.Fatalf("没有装配规则时不该有禁用项：%v", deny)
+	}
+
+	shared := make([]string, 2, 8)
+	shared[0], shared[1] = "mcp__a__b", "mcp__c__d"
+	allow, deny = sessionToolRules(func() ([]string, []string) { return shared, []string{"WebSearch"} })
+	if len(shared) != 2 || shared[0] != "mcp__a__b" || shared[1] != "mcp__c__d" {
+		t.Fatalf("装配层的切片被改写了：%v", shared)
+	}
+	if !slices.Contains(allow, "mcp__a__b") || !slices.Contains(allow, taskToolNames[0]) {
+		t.Fatalf("规则与任务清单工具都要保留：%v", allow)
+	}
+	if len(deny) != 1 || deny[0] != "WebSearch" {
+		t.Fatalf("禁用项应原样带出：%v", deny)
 	}
 }

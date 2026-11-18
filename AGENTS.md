@@ -716,6 +716,31 @@ hub ── manager ── session ── process ── claude (NDJSON)
   与 `/api/fs/tree` 同一条围栏；前端请求在 `useAppStore.completePaths`（带 `AbortSignal`，
   下一个按键到来时取消上一次）。
 
+### 4.17 任务清单 / 长期任务（`lib/tasks.ts` + Tasks API）
+
+- **Tasks API 在较新版本上默认是关的**：2.1.233 起，除了老模型（`claude-opus-4-7` 及更早）
+  之外，`CLAUDE_CODE_ENABLE_TODO_TOOLS` 不为真时 `TaskCreate`/`TaskUpdate`/`TaskList`/
+  `TaskGet` 与 `TodoWrite` **都不出现在 tools 里**（实测 2.1.327：不加变量时模型看到的
+  工具名单里一个都没有，加 `=1` 才出现）。`manager.start` 固定注入这个变量——
+  少了它面板永远是空的，而且没有任何报错可看。
+- **任务落盘在 `$CCWEB_CLAUDE_HOME/.claude/tasks/<listId>/<id>.json`**，`listId` 默认是
+  会话 cwd 的净化路径（`[^a-zA-Z0-9_-]` → `-`），所以同一工作区的多条对话共享一份；
+  `CLAUDE_CODE_TASK_LIST_ID` 可以钉死它。带 `blocks`/`blockedBy` 依赖。
+- **面板从消息流现算，不读那些文件**（`frontend/src/lib/tasks.ts`，纯函数 + 单测）：
+  面板要回答的是「这条对话在做什么」，回放转录拿到的也是同一批 tool 消息；
+  读磁盘会把别的对话留下的任务一起翻出来。结果文案按 CLI 自己的格式解析
+  （`Task #<id> created successfully`、`Updated task #<id> …`、TaskList 的
+  `#1 [pending] 标题 [blocked by #1]`），`tool_use_result` 的结构化字段
+  （`taskId` / `statusChange.to`）优先。`TodoWrite` 是整份快照，出现就替换列表。
+- **任务清单工具固定进 `--allowedTools`**（`manager.sessionToolRules`）：一轮里可能被改写
+  十几次，落进审批面板就是十几张卡，用户会先放弃这个能力；它们只写 claude HOME 下的
+  `tasks/*.json`，不碰工作区。
+- **`/goal` 是另一套东西，界面还没接**：它是 session 级的 prompt Stop hook（每轮结束由一个
+  独立的小模型判定条件是否满足），状态只写在转录的 attachment 消息里
+  （`{type:"attachment", attachment:{type:"goal_status", met, sentinel, condition}}`），
+  达成时的条目另带 `iterations`/`durationMs`/`tokens`。要接得先确认 stream-json 会不会
+  把这条 attachment 转发给客户端——没验证过之前不要凭 `/goal` 的用户消息猜状态。
+
 ## 5. 命令速查
 
 ```bash

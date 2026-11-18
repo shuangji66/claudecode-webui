@@ -99,6 +99,28 @@ func New(cfg config.Config, resolve func() (string, error), store *settings.Stor
 	return m
 }
 
+// taskToolNames 是会话里预先放行的任务清单工具（见 start 里的说明）。
+//
+// 名字与 claude 的 Tasks API 一致；老版本没有这些工具时，--allowedTools 里多列几个
+// 不存在的名字没有副作用。
+var taskToolNames = []string{"TaskCreate", "TaskGet", "TaskList", "TaskUpdate"}
+
+// sessionToolRules 合并「装配层的规则」与「任务清单工具的放行」。
+//
+// 任务清单工具（TaskCreate/TaskUpdate/...）每轮可能被改写十几次，落进审批面板就是
+// 十几张卡，用户会先放弃这个能力。它们只写 claude HOME 下的 tasks/*.json，
+// 不碰工作区内容，与「跳过权限」无关，所以随会话固定放行。
+func sessionToolRules(rules func() (allow, deny []string)) (allow, deny []string) {
+	if rules != nil {
+		allow, deny = rules()
+	}
+	// 复制一份再拼：rules() 交回来的切片可能有富余容量，直接 append 会写进它的底层数组。
+	out := make([]string, 0, len(allow)+len(taskToolNames))
+	out = append(out, allow...)
+	out = append(out, taskToolNames...)
+	return out, deny
+}
+
 // SetToolRules 接上「本会话的工具规则」取值函数。
 //
 // 规则只在会话启动时生效（--allowedTools / --disallowedTools 是命令行参数），
@@ -404,10 +426,7 @@ func (m *Manager) createWith(abs, sessionID, resumeID, model, permissionMode str
 	if err != nil {
 		return Info{}, fmt.Errorf("manager: %w；请在「设置 → 部署」里安装 claude", err)
 	}
-	var allowTools, denyTools []string
-	if m.toolRules != nil {
-		allowTools, denyTools = m.toolRules()
-	}
+	allowTools, denyTools := sessionToolRules(m.toolRules)
 	args := process.Args(process.Options{
 		Model:          model,
 		PermissionMode: permissionMode,
@@ -433,6 +452,10 @@ func (m *Manager) createWith(abs, sessionID, resumeID, model, permissionMode str
 	// 先净化继承环境，再追加设置里的 ANTHROPIC_*（后者生效，从而覆盖宿主机同名变量）。
 	env := process.CleanEnv(os.Environ(), m.cfg.ClaudeHome, abs)
 	env = append(env, cfgSet.Env()...)
+	// Tasks API（TaskCreate / TaskUpdate / TaskList / TaskGet）：2.1.233 起对较新的模型
+	// 默认关闭，关着的时候工具根本不出现在 tools 里，模型没法维护任务清单。
+	// 这个变量只开能力、不改行为；旧版本不认识它，忽略即可。
+	env = append(env, "CLAUDE_CODE_ENABLE_TODO_TOOLS=1")
 
 	proc, err := process.Spawn(bin, args, abs, env)
 	if err != nil {

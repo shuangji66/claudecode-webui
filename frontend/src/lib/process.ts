@@ -47,6 +47,10 @@ const CATEGORY_BY_TOOL: Record<string, ToolCategory> = {
   Agent: "subagents",
   Task: "subagents",
   TodoWrite: "plan",
+  TaskCreate: "plan",
+  TaskUpdate: "plan",
+  TaskList: "plan",
+  TaskGet: "plan",
   ExitPlanMode: "plan",
 };
 

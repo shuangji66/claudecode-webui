@@ -49,6 +49,19 @@ export function toolSummary(item: ToolItem): string {
     case "Agent":
     case "Task":
       return text(input.description) || firstLine(text(input.prompt));
+    // Tasks API：标题是这里的全部信息（结果里的 id 不占摘要位）。
+    case "TaskCreate":
+      return text(input.subject) || text(input.description);
+    case "TaskUpdate":
+      return join(text(input.taskId) ? `#${text(input.taskId)}` : "", text(input.status));
+    case "TaskGet":
+      return text(input.taskId) ? `#${text(input.taskId)}` : "";
+    case "TaskList":
+      return "";
+    case "TodoWrite": {
+      const todos = Array.isArray(input.todos) ? input.todos : [];
+      return todos.length > 0 ? `[${todos.length}]` : "";
+    }
     case "Skill":
       return text(input.skill) || text(input.command);
     default:
