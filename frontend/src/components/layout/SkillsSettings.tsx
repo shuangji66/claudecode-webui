@@ -6,11 +6,14 @@
 //
 // 改完不需要重启会话：claude 会监听这几个目录，当前会话内即生效。
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { useSkillsStore } from "../../store/useSkillsStore";
+import { useAppStore } from "../../store/useAppStore";
+import { initialTarget, workspaceOptions } from "../../lib/workspaceTarget";
 import type { SkillEntry, SkillScope } from "../../transport/types";
 import { Button } from "../common/Button";
+import { Select } from "../common/Select";
 import { askConfirm } from "../common/SystemDialogs";
 import { IconPlus, IconRefresh, IconTrash, IconWrench } from "../common/Icons";
 
@@ -40,14 +43,35 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
   const [draft, setDraft] = useState("");
   const [creating, setCreating] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  const [createScope, setCreateScope] = useState<SkillScope>("personal");
   const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  const workspaces = useAppStore((s) => s.workspaces);
+  const options = workspaceOptions(workspaces);
+
+  // 项目技能长在 <工作区>/.claude/skills 上，写哪个工作区由这里选：
+  // 默认取当前对话所属的工作区，用户选过之后就不再被上层 cwd 覆盖。
+  // cwd 只是默认值——多工作区下「把技能建到另一个仓库」是常态。
+  const [target, setTarget] = useState(() => initialTarget(cwd, workspaces));
+  const picked = useRef(false);
+
+  const chooseTarget = (v: string) => {
+    picked.current = true;
+    setTarget(v);
+  };
+
+  useEffect(() => {
+    // 用户选过的目标被移除后要回落默认值，否则后续请求会撞 400。
+    if (picked.current && workspaces.some((w) => w.path === target)) return;
+    setTarget(initialTarget(cwd, workspaces));
+  }, [cwd, workspaces, target]);
+
+  useEffect(() => {
+    void load(target);
+  }, [target, load]);
 
   const dirty = doc !== null && draft !== doc.content;
   const readOnly = doc?.read_only === true;
-
-  useEffect(() => {
-    void load(cwd);
-  }, [cwd, load]);
 
   const open = async (scope: SkillScope, name: string) => {
     if (dirty && !(await askConfirm({ title: t("放弃未保存的修改？", "Discard unsaved changes?"), danger: true }))) return;
@@ -62,6 +86,7 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
     setCreating(true);
     setNameDraft("");
     setDraft(TEMPLATE);
+    setCreateScope("personal");
     setSavedAt(null);
   };
 
@@ -73,10 +98,14 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
   };
 
   const submit = async () => {
-    const scope: SkillScope = creating ? "personal" : doc?.scope ?? "personal";
+    const scope: SkillScope = creating ? createScope : doc?.scope ?? "personal";
     const name = creating ? nameDraft.trim() : doc?.name ?? "";
     if (!name) {
       setError(t("先给技能起个名字（会成为 /命令名）", "Give the skill a name first (it becomes the /command)"));
+      return;
+    }
+    if (scope === "project" && !target) {
+      setError(t("先选一个工作区，才能建项目技能", "Pick a workspace first to create project skills"));
       return;
     }
     const next = await save(scope, name, draft);
@@ -107,6 +136,11 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
         <span className="text-[10.5px] text-faint">{items.length}</span>
       </div>
       <p className="mt-0.5 px-1 text-[10.5px] leading-relaxed text-faint">{hint}</p>
+      {scope === "project" && options.length > 0 && (
+        <div className="mt-1.5 px-1">
+          <Select ariaLabel={t("项目技能工作区", "Project skills workspace")} value={target} onChange={chooseTarget} options={options} />
+        </div>
+      )}
       <div className="mt-1.5 space-y-0.5">
         {items.length === 0 ? (
           <p className="px-1 py-1.5 text-[11px] text-faint">{t("暂无", "None")}</p>
@@ -136,14 +170,15 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
           })
         )}
       </div>
-      {scope === "project" && !cwd && (
+      {scope === "project" && !target && (
         <p className="mt-1 px-1 text-[10.5px] text-faint">{t("先选择一个工作区才能管理项目技能", "Pick a workspace to manage project skills")}</p>
       )}
     </div>
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    // pb 给底部按钮留出呼吸空间与安全区：这一页是满高 flex，按钮行原本紧贴弹窗下沿
+    <div className="flex h-full min-h-0 flex-col pb-[calc(env(safe-area-inset-bottom,0px)+16px)] md:pb-5">
       <div className="flex items-center gap-2">
         <h3 className="text-[15px] font-semibold text-ink">{t("技能", "Skills")}</h3>
         <span className="text-[10.5px] text-faint">{data.personal.length + data.project.length + data.synced.length}</span>
@@ -175,7 +210,7 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {creating ? (
             <>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <input
                   autoFocus
                   value={nameDraft}
@@ -183,8 +218,36 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
                   placeholder={t("技能名（会成为 /命令名）", "Skill name (becomes /command)")}
                   className="min-w-0 flex-1 rounded-lg border border-line-strong bg-canvas px-2.5 py-1.5 font-mono text-[12px] text-ink outline-none focus:border-brand/60"
                 />
-                <span className="shrink-0 text-[10.5px] text-faint">{t("个人技能", "Personal")}</span>
+                <div className="w-[7.5rem] shrink-0">
+                  <Select
+                    ariaLabel={t("作用域", "Scope")}
+                    value={createScope}
+                    onChange={(v) => setCreateScope(v as SkillScope)}
+                    options={[
+                      { value: "personal", label: t("个人", "Personal") },
+                      { value: "project", label: t("项目", "Project") },
+                    ]}
+                  />
+                </div>
+                {createScope === "project" && (
+                  <div className="w-[11rem] shrink-0">
+                    <Select
+                      ariaLabel={t("目标工作区", "Target workspace")}
+                      value={target}
+                      onChange={chooseTarget}
+                      options={options}
+                      placeholder={t("先选工作区", "Pick a workspace")}
+                    />
+                  </div>
+                )}
               </div>
+              {createScope === "project" && (
+                <p className="mt-1 truncate font-mono text-[10.5px] text-faint" title={target ? `${target}/.claude/skills` : ""}>
+                  {target
+                    ? t(`写入 ${target}/.claude/skills`, `Writes to ${target}/.claude/skills`)
+                    : t("先选一个工作区，才能建项目技能", "Pick a workspace first to create project skills")}
+                </p>
+              )}
               <textarea
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}

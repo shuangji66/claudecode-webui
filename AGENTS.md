@@ -414,6 +414,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
   rename，避免半截 SKILL.md 被 claude 当成正文读进去。
 - **删除只删 skills 根目录的直接子目录且必须含 SKILL.md**：名字来自用户输入，
   直接 `RemoveAll(root/name)` 等于把路径穿越变成删库。
+- **项目技能按所选工作区读写**：设置页「项目」分组与新建表单里都有工作区下拉
+  （与 MCP 共用 `frontend/src/lib/workspaceTarget.ts`），不跟「当前对话在哪」；
+  用户选过就不再被上层 cwd 覆盖，目标工作区被移除时回落默认值。后端不变，
+  `/api/skills*` 仍按传入 `cwd` 工作并过 `authorizedCwd`。
 - 技能名同时是 `/命令名`：不允许分隔符、点开头、`<`/`>`、控制字符与零宽字符，
   `synced` 是保留名（与 claude 的加载规则一致）。
 - 新建一个此前不存在的顶级 `.claude/skills` 目录时，claude 没在监听它，
@@ -430,9 +434,21 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **写入要逐层拒绝符号链接**（从 claude HOME 或工作区起算），并原子替换（同目录临时
   文件 + rename）：工作区里一个 `.mcp.json -> /某处` 就能把写操作带到工作区外；写到一半
   被 claude 读到就是「配置损坏」。
+- **项目级作用域按工作区选，不跟「当前对话在哪」**：设置页「项目级」旁边有一个工作区
+  下拉（`McpSettings` 的 `target`），「添加/编辑」弹窗里也有一个（同一个状态），
+  默认取活动对话所属的工作区，用户改过就不再被上层 `cwd` 覆盖；那个工作区被移除时回落
+  默认值。多工作区下「把这条服务加到另一个目录的 `.mcp.json`」是常态，靠活动对话隐式
+  决定目标只会让人反复切对话。**编辑已有条目时工作区下拉锁定**（换目录等于搬走一条现成
+  配置，界面没有这个语义，要换就删了重加）。后端没变：`GET/POST/DELETE /api/mcp`
+  仍然按传入的 `cwd` 工作，网关照旧过 `authorizedCwd`。
 - **停用 = 把整条配置摘到本应用自己的暂存文件**（`CCWEB_DATA_DIR/mcp-disabled.json`），
   启用再原样写回。不用 claude 的 `disabledMcpjsonServers`：那个只对项目级生效，用户级
   没有官方开关，两种作用域要同一套语义。代价是停用期间外部工具看不到这条配置。
+- **暂存条目必须记归属工作区**（`stashEntry.Cwd`，用户级为空；匹配按 `scope+cwd+name`）：
+  只记 `scope+name` 时，A 里停用的服务会出现在 B 的列表里，在 B 点「启用」就把 A 的命令
+  写进了 `B/.mcp.json`，A 那条再也回不来；两个工作区各停用一份同名服务时还会互相覆盖。
+  旧版本写的条目没有 `cwd`，读的时候按「处处匹配」处理（否则升级后凭空消失），
+  下一次编辑/启用把它绑到一个具体工作区。
 - **探测只认已保存的服务名**（scope+name），绝不接受请求里带命令进来——那等于给接口
   开了「免审批执行任意命令」。stdio 走一次 `initialize` JSON-RPC；http POST 一帧
   initialize；sse 只看握手。探测是面板自己的出站请求，必须接 `netproxy`（`SetProxySource`）。

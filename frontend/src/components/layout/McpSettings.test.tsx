@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { McpSettings } from "./McpSettings";
 import { SystemDialogs } from "../common/SystemDialogs";
 import { useMcpStore } from "../../store/useMcpStore";
+import { useAppStore } from "../../store/useAppStore";
 
 const apiFetch = vi.fn();
 vi.mock("../../lib/runtime", () => ({
@@ -36,12 +37,19 @@ const PAYLOAD = {
   project_path: "/data/ws/.mcp.json",
 };
 
-function setup() {
+function seedWorkspaces(paths: string[], names: Record<string, string> = {}) {
+  useAppStore.setState({
+    workspaces: paths.map((path) => ({ path, name: names[path] ?? path.split("/").pop() ?? path, last_used: "", exists: true })),
+  });
+}
+
+function setup(cwd = "/data/ws") {
   useMcpStore.setState({ cwd: "", data: { user: [], project: [], project_root: "", user_path: "", project_path: "" }, probes: {}, error: null, busy: false, probing: null });
+  seedWorkspaces(["/data/ws"]);
   render(
     <>
       <SystemDialogs />
-      <McpSettings cwd="/data/ws" />
+      <McpSettings cwd={cwd} />
     </>,
   );
 }
@@ -82,8 +90,68 @@ describe("McpSettings", () => {
     await waitFor(() => expect(apiFetch).toHaveBeenCalledWith("/api/mcp?cwd=%2Fdata%2Fws", undefined));
   });
 
+  it("项目级配置写到所选工作区，不跟随当前对话", async () => {
+    useMcpStore.setState({ cwd: "", data: { user: [], project: [], project_root: "", user_path: "", project_path: "" }, probes: {}, error: null, busy: false, probing: null });
+    // 当前对话在 /data/ws，但用户要把服务加到 /data/other。
+    seedWorkspaces(["/data/ws", "/data/other"]);
+    render(
+      <>
+        <SystemDialogs />
+        <McpSettings cwd="/data/ws" />
+      </>,
+    );
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith("/api/mcp?cwd=%2Fdata%2Fws", undefined));
+
+    fireEvent.click(screen.getByRole("button", { name: "工作区" }));
+    fireEvent.click(screen.getByRole("option", { name: /other/ }));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith("/api/mcp?cwd=%2Fdata%2Fother", undefined));
+
+    fireEvent.click(screen.getByRole("button", { name: /添加/ }));
+    fireEvent.change(screen.getByPlaceholderText("github"), { target: { value: "mydb" } });
+    fireEvent.click(screen.getByRole("button", { name: "作用域" }));
+    fireEvent.click(screen.getByRole("option", { name: /项目级/ }));
+    fireEvent.change(screen.getByPlaceholderText("npx"), { target: { value: "node" } });
+    fireEvent.click(within(screen.getByRole("dialog", { name: "MCP 服务" })).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith("/api/mcp", expect.objectContaining({ method: "POST" })));
+    // 列表加载也是 POST 之外的 /api/mcp 调用，别取到 GET 那一条。
+    const post = apiFetch.mock.calls.find(([path, init]) => path === "/api/mcp" && (init as { method?: string } | null)?.method === "POST");
+    expect(JSON.parse((post?.[1] as { body: string }).body).cwd).toBe("/data/other");
+  });
+
+  it("添加弹窗里也能选工作区，保存写到所选目录", async () => {
+    useMcpStore.setState({ cwd: "", data: { user: [], project: [], project_root: "", user_path: "", project_path: "" }, probes: {}, error: null, busy: false, probing: null });
+    seedWorkspaces(["/data/ws", "/data/other"]);
+    render(
+      <>
+        <SystemDialogs />
+        <McpSettings cwd="/data/ws" />
+      </>,
+    );
+    await screen.findByText("github");
+    fireEvent.click(screen.getByRole("button", { name: /添加/ }));
+
+    const dialog = screen.getByRole("dialog", { name: "MCP 服务" });
+    fireEvent.change(within(dialog).getByPlaceholderText("github"), { target: { value: "mydb" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "作用域" }));
+    fireEvent.click(screen.getByRole("option", { name: /项目级/ }));
+    // 弹窗内的工作区下拉（aria-label 为「目标工作区」，与页面顶部那个区分开）。
+    fireEvent.click(within(dialog).getByRole("button", { name: "目标工作区" }));
+    fireEvent.click(screen.getByRole("option", { name: /other/ }));
+    expect(within(dialog).getByText(/写入 \/data\/other\/\.mcp\.json/)).toBeInTheDocument();
+    // 背景列表跟着切到新工作区（加载期间「保存」是禁用的，等它落定再点）。
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith("/api/mcp?cwd=%2Fdata%2Fother", undefined));
+    fireEvent.change(within(dialog).getByPlaceholderText("npx"), { target: { value: "node" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith("/api/mcp", expect.objectContaining({ method: "POST" })));
+    const post = apiFetch.mock.calls.find(([path, init]) => path === "/api/mcp" && (init as { method?: string } | null)?.method === "POST");
+    expect(JSON.parse((post?.[1] as { body: string }).body).cwd).toBe("/data/other");
+  });
+
   it("没有工作区时不允许提交项目级服务（否则会白填一遍再吃 400）", async () => {
     useMcpStore.setState({ cwd: "", data: { user: [], project: [], project_root: "", user_path: "", project_path: "" }, probes: {}, error: null, busy: false, probing: null });
+    seedWorkspaces([]);
     render(
       <>
         <SystemDialogs />

@@ -4,6 +4,7 @@ vi.mock("../common/SystemDialogs", () => ({ askConfirm: vi.fn().mockResolvedValu
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SkillsSettings } from "./SkillsSettings";
 import { useSkillsStore } from "../../store/useSkillsStore";
+import { useAppStore } from "../../store/useAppStore";
 import type { SkillDoc, SkillsPayload } from "../../transport/types";
 
 const load = vi.fn();
@@ -58,6 +59,8 @@ beforeEach(() => {
   clearDoc.mockReset();
   setError.mockReset();
   useSkillsStore.setState({ cwd: "", data: DATA, doc: null, error: null, busy: false, load, read, save, remove, clearDoc, setError });
+  // 项目技能按工作区取，组件默认目标来自这里。
+  useAppStore.setState({ workspaces: [{ path: "/work", name: "work", last_used: "", exists: true }] });
 });
 
 describe("SkillsSettings", () => {
@@ -93,6 +96,29 @@ describe("SkillsSettings", () => {
     await waitFor(() => expect(screen.getByText("/pdf")).toBeTruthy());
     expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
     expect(screen.getByText("该来源只读")).toBeTruthy();
+  });
+
+  it("项目技能可以选目标工作区，保存时按该作用域提交", async () => {
+    useAppStore.setState({
+      workspaces: [
+        { path: "/work", name: "work", last_used: "", exists: true },
+        { path: "/data/other", name: "other", last_used: "", exists: true },
+      ],
+    });
+    render(<SkillsSettings cwd="/work" />);
+    fireEvent.click(screen.getByRole("button", { name: "新建" }));
+    fireEvent.change(screen.getByPlaceholderText("技能名（会成为 /命令名）"), { target: { value: "lint" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "作用域" }));
+    fireEvent.click(screen.getByRole("option", { name: "项目" }));
+    fireEvent.click(screen.getByRole("button", { name: "目标工作区" }));
+    fireEvent.click(screen.getByRole("option", { name: /other/ }));
+    expect(screen.getByText(/写入 \/data\/other\/\.claude\/skills/)).toBeTruthy();
+    // 目标换到别的工作区，列表跟着重新加载。
+    await waitFor(() => expect(load).toHaveBeenCalledWith("/data/other"));
+
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith("project", "lint", expect.stringContaining("description:")));
   });
 
   it("新建时名字为空不能提交", () => {

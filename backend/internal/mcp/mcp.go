@@ -529,6 +529,11 @@ func (m *Manager) List(cwd string) (Payload, error) {
 			if cwd == "" {
 				continue
 			}
+			// 停用暂存按工作区记账：A 里摘出来的那条不该在 B 的列表里冒出来，
+			// 否则在 B 点「启用」会把 A 的命令写进 B 的 .mcp.json。
+			if !stashBelongs(e, cwd) {
+				continue
+			}
 			if _, ok := project[e.Name]; ok {
 				continue
 			}
@@ -557,7 +562,7 @@ func (m *Manager) Find(cwd, scope, name string) (Server, error) {
 	if err != nil {
 		return Server{}, err
 	}
-	if i := m.findStash(stash, scope, name); i >= 0 {
+	if i := m.findStash(stash, scope, cwd, name); i >= 0 {
 		srv := parseSpec(name, scope, "", stash.Servers[i].Spec)
 		srv.Disabled = true
 		return srv, nil
@@ -587,9 +592,13 @@ func (m *Manager) Save(cwd string, in Server) (Server, error) {
 	if err != nil {
 		return Server{}, err
 	}
-	if i := m.findStash(stash, srv.Scope, srv.Name); i >= 0 {
+	if i := m.findStash(stash, srv.Scope, cwd, srv.Name); i >= 0 {
 		// 停用中的服务：改的是暂存副本，用户点「启用」时才回到配置里。
 		stash.Servers[i].Spec = spec
+		// 旧版本写下的暂存条目没有 cwd，这次编辑就把它绑到当前工作区。
+		if srv.Scope == ScopeProject {
+			stash.Servers[i].Cwd = cwd
+		}
 		if err := m.writeStash(stash); err != nil {
 			return Server{}, err
 		}
@@ -627,7 +636,7 @@ func (m *Manager) Delete(cwd, scope, name string) error {
 	if err != nil {
 		return err
 	}
-	idx := m.findStash(stash, scope, name)
+	idx := m.findStash(stash, scope, cwd, name)
 	if !inConfig && idx < 0 {
 		return ErrNotFound
 	}
@@ -665,7 +674,7 @@ func (m *Manager) SetEnabled(cwd, scope, name string, enabled bool) error {
 		return err
 	}
 	if enabled {
-		idx := m.findStash(stash, scope, name)
+		idx := m.findStash(stash, scope, cwd, name)
 		if idx < 0 {
 			return ErrNotFound
 		}
@@ -698,15 +707,38 @@ func (m *Manager) SetEnabled(cwd, scope, name string, enabled bool) error {
 	}); err != nil {
 		return err
 	}
-	return m.upsertStash(stash, stashEntry{Scope: scope, Name: name, Spec: spec})
+	return m.upsertStash(stash, stashEntry{Scope: scope, Cwd: stashCwd(scope, cwd), Name: name, Spec: spec})
 }
 
 // ---- 停用暂存 ----
 
+// stashEntry 是「停用期间被摘出 claude 配置」的一条服务。
+//
+// Cwd 是项目级条目的归属工作区，用户级为空。早期版本只有 scope+name，
+// 多工作区下会串味：在 A 停用的条目出现在 B 的列表里，在 B 点「启用」
+// 就把 A 的命令写进了 B/.mcp.json，而 A 的那条再也回不来。
 type stashEntry struct {
-	Scope string          `json:"scope"`
-	Name  string          `json:"name"`
-	Spec  json.RawMessage `json:"spec"`
+	Scope string `json:"scope"`
+	// Cwd 只对项目级有意义；旧条目没有这个字段，按「处处匹配」读（见 stashBelongs）。
+	Cwd  string          `json:"cwd,omitempty"`
+	Name string          `json:"name"`
+	Spec json.RawMessage `json:"spec"`
+}
+
+// stashCwd 给项目级条目记归属工作区；用户级对所有项目生效，没有归属。
+func stashCwd(scope, cwd string) string {
+	if scope == ScopeProject {
+		return cwd
+	}
+	return ""
+}
+
+// stashBelongs 报告一条暂存条目是否属于这个工作区。
+//
+// 旧版本写的项目级条目没有 Cwd：升级后不能让它们凭空从界面上消失，
+// 所以仍然按旧行为在任意工作区列出；下一次编辑/启用会把它绑到一个具体工作区。
+func stashBelongs(e stashEntry, cwd string) bool {
+	return e.Scope != ScopeProject || e.Cwd == "" || e.Cwd == cwd
 }
 
 type stashFile struct {
@@ -740,10 +772,15 @@ func (m *Manager) writeStash(s stashFile) error {
 		return errors.New("mcp: 未配置停用暂存文件")
 	}
 	sort.Slice(s.Servers, func(i, j int) bool {
-		if s.Servers[i].Scope != s.Servers[j].Scope {
-			return s.Servers[i].Scope < s.Servers[j].Scope
+		a, b := s.Servers[i], s.Servers[j]
+		if a.Scope != b.Scope {
+			return a.Scope < b.Scope
 		}
-		return s.Servers[i].Name < s.Servers[j].Name
+		if a.Name != b.Name {
+			return a.Name < b.Name
+		}
+		// 同名服务可以在多个工作区各停用一份，cwd 是第三排序键（也是去重边界）。
+		return a.Cwd < b.Cwd
 	})
 	if s.Servers == nil {
 		s.Servers = []stashEntry{}
@@ -756,7 +793,7 @@ func (m *Manager) writeStash(s stashFile) error {
 }
 
 func (m *Manager) upsertStash(s stashFile, e stashEntry) error {
-	if i := m.findStash(s, e.Scope, e.Name); i >= 0 {
+	if i := m.findStash(s, e.Scope, e.Cwd, e.Name); i >= 0 {
 		s.Servers[i] = e
 	} else {
 		s.Servers = append(s.Servers, e)
@@ -764,13 +801,24 @@ func (m *Manager) upsertStash(s stashFile, e stashEntry) error {
 	return m.writeStash(s)
 }
 
-func (m *Manager) findStash(s stashFile, scope, name string) int {
+// findStash 找一条同作用域同名的暂存条目。
+//
+// 项目级优先精确命中当前工作区的那条，其次才是旧版本留下、没有归属的条目
+// （两个工作区各停用一份同名服务是正常场景，挑错就等于删了别人那条）。
+func (m *Manager) findStash(s stashFile, scope, cwd, name string) int {
+	legacy := -1
 	for i, e := range s.Servers {
-		if e.Scope == scope && e.Name == name {
+		if e.Scope != scope || e.Name != name {
+			continue
+		}
+		if scope != ScopeProject || e.Cwd == cwd {
 			return i
 		}
+		if e.Cwd == "" && legacy < 0 {
+			legacy = i
+		}
 	}
-	return -1
+	return legacy
 }
 
 // sortedServers 把 map 转成按名字排序的切片。

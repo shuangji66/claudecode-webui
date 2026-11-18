@@ -8,10 +8,12 @@
 //   2. 停用是「把配置摘到本应用自己的暂存文件」，期间外部工具看不到这条配置；
 //   3. 探测只针对已保存的服务，命令写错了（PATH 里没有 npx 之类）会在这里报出来。
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { NO_AUTOFILL } from "../../lib/autofill";
 import { useT } from "../../lib/i18n";
 import { useMcpStore } from "../../store/useMcpStore";
+import { useAppStore } from "../../store/useAppStore";
+import { initialTarget, workspaceOptions } from "../../lib/workspaceTarget";
 import type { McpScope, McpServer, McpType } from "../../transport/types";
 import { formatArgs, formatPairs, parseArgs, parsePairs, summarize, validateDraft } from "../../lib/mcpForm";
 import { Button } from "../common/Button";
@@ -82,16 +84,37 @@ export function McpSettings({ cwd }: { cwd: string }) {
   const setError = useMcpStore((s) => s.setError);
 
   const [draft, setDraft] = useState<Draft | null>(null);
+  const workspaces = useAppStore((s) => s.workspaces);
+
+  // target 是「项目级配置写到哪个工作区」。用户一旦自己选过，就不再被
+  // 上层传下来的 cwd 覆盖（否则切个对话，选好的工作区会悄悄跳走）。
+  const [target, setTarget] = useState(() => initialTarget(cwd, workspaces));
+  const picked = useRef(false);
+
+  // 页面顶部的下拉与「添加/编辑」弹窗里的是同一个选择：在弹窗里换工作区，
+  // 背景列表也跟着切过去，保存时写的就是用户眼前那个 .mcp.json。
+  const chooseTarget = (v: string) => {
+    picked.current = true;
+    setTarget(v);
+  };
+  const options = workspaceOptions(workspaces);
 
   useEffect(() => {
-    void load(cwd);
-  }, [cwd, load]);
+    // 选过就尊重用户的选择；但那个工作区被移除后必须回到默认值，
+    // 否则后续每个请求都会撞 400（cwd 已不在授权列表里）。
+    if (picked.current && workspaces.some((w) => w.path === target)) return;
+    setTarget(initialTarget(cwd, workspaces));
+  }, [cwd, workspaces, target]);
+
+  useEffect(() => {
+    void load(target);
+  }, [target, load]);
 
   const submit = async () => {
     if (!draft) return;
     // 项目级配置写在 <工作区>/.mcp.json 里，没有工作区就没地方落盘：
     // 与其让用户填完一整个表单再吃一个 400，不如现在说清楚。
-    if (draft.scope === "project" && !cwd) {
+    if (draft.scope === "project" && !target) {
       setError(t("先选一个工作区，才能添加项目级服务", "Pick a workspace first to add project-scope servers"));
       return;
     }
@@ -258,13 +281,20 @@ export function McpSettings({ cwd }: { cwd: string }) {
       </section>
 
       <section>
-        <div className="mb-1.5 flex items-baseline justify-between gap-2">
-          <h3 className="text-[12px] font-medium text-ink">{t("项目级", "Project scope")}</h3>
-          <span className="min-w-0 truncate font-mono text-[10px] text-faint" title={data.project_path}>
+        <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+          <h3 className="shrink-0 text-[12px] font-medium text-ink">{t("项目级", "Project scope")}</h3>
+          {/* 工作区在这里选，不跟着「当前对话在哪」：多工作区时经常要把一条
+              服务加到别的目录的 .mcp.json 里。 */}
+          {options.length > 0 && (
+            <div className="w-[12rem] max-w-full min-w-0">
+              <Select ariaLabel={t("工作区", "Workspace")} value={target} onChange={chooseTarget} options={options} />
+            </div>
+          )}
+          <span className="ml-auto min-w-0 max-w-full truncate font-mono text-[10px] text-faint" title={data.project_path}>
             {data.project_path}
           </span>
         </div>
-        {cwd ? (
+        {target ? (
           <div className="space-y-2">
             {data.project.length > 0 ? rows(data.project) : <p className="text-[11.5px] text-faint">{t("这个工作区还没有项目级服务。", "No project-scope servers for this workspace.")}</p>}
           </div>
@@ -320,7 +350,7 @@ export function McpSettings({ cwd }: { cwd: string }) {
                   onChange={(v) => setDraft({ ...draft, scope: v as McpScope })}
                   options={[
                     { value: "user", label: t("用户级（所有项目）", "User (all projects)") },
-                    { value: "project", label: t("项目级（仅当前工作区）", "Project (this workspace)") },
+                    { value: "project", label: t("项目级（所选工作区）", "Project (picked workspace)") },
                   ]}
                 />
               </div>
@@ -357,6 +387,30 @@ export function McpSettings({ cwd }: { cwd: string }) {
                 </span>
               </span>
             </label>
+
+            {draft.scope === "project" && (
+              <div>
+                <span className="mb-1 block text-[11.5px] text-muted">{t("工作区", "Workspace")}</span>
+                {options.length > 0 ? (
+                  <Select
+                    ariaLabel={t("目标工作区", "Target workspace")}
+                    value={target}
+                    // 编辑已有条目时不能换工作区：那等于「搬走」一条现成配置，
+                    // 界面没有这个语义（要换目录就删了重加）。
+                    disabled={draft.existing}
+                    onChange={chooseTarget}
+                    options={options}
+                  />
+                ) : (
+                  <p className="text-[11.5px] text-faint">{t("还没有授权目录。", "No workspaces yet.")}</p>
+                )}
+                <p className="mt-1 truncate font-mono text-[10.5px] text-faint" title={target ? `${target}/.mcp.json` : ""}>
+                  {target
+                    ? t(`写入 ${target}/.mcp.json`, `Writes to ${target}/.mcp.json`)
+                    : t("先选一个工作区", "Pick a workspace first")}
+                </p>
+              </div>
+            )}
 
             {draft.type === "stdio" ? (
               <>

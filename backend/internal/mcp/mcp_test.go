@@ -339,6 +339,98 @@ func TestSymlinkConfigRejected(t *testing.T) {
 	}
 }
 
+// 停用暂存按工作区记账：A 里摘出来的条目不能在 B 的列表里冒出来，
+// 更不能在 B 点「启用」时把 A 的命令写进 B 的配置。
+func TestStashScopedToWorkspace(t *testing.T) {
+	m, wsA, dir := newManager(t)
+	wsB := filepath.Join(dir, "ws-b")
+	if err := os.MkdirAll(wsB, 0o755); err != nil {
+		t.Fatalf("建第二个工作区: %v", err)
+	}
+	if _, err := m.Save(wsA, Server{Name: "pw", Scope: ScopeProject, Command: "npx", Args: []string{"a"}}); err != nil {
+		t.Fatalf("Save A: %v", err)
+	}
+	if err := m.SetEnabled(wsA, ScopeProject, "pw", false); err != nil {
+		t.Fatalf("停用 A: %v", err)
+	}
+
+	payload, err := m.List(wsB)
+	if err != nil {
+		t.Fatalf("List B: %v", err)
+	}
+	if len(payload.Project) != 0 {
+		t.Fatalf("A 的停用项跑到 B 了: %+v", payload.Project)
+	}
+	if err := m.SetEnabled(wsB, ScopeProject, "pw", true); err != ErrNotFound {
+		t.Fatalf("在 B 启用 A 的停用项: %v，期望 ErrNotFound", err)
+	}
+	// B 的 .mcp.json 不能被这条操作写出来。
+	if _, err := os.Stat(filepath.Join(wsB, ".mcp.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("B 的配置被写了: %v", err)
+	}
+	payload, err = m.List(wsA)
+	if err != nil {
+		t.Fatalf("List A: %v", err)
+	}
+	if len(payload.Project) != 1 || !payload.Project[0].Disabled {
+		t.Fatalf("A 的停用项丢了: %+v", payload.Project)
+	}
+
+	// 两个工作区各停用一份同名服务，互不覆盖。
+	if _, err := m.Save(wsB, Server{Name: "pw", Scope: ScopeProject, Command: "npx", Args: []string{"b"}}); err != nil {
+		t.Fatalf("Save B: %v", err)
+	}
+	if err := m.SetEnabled(wsB, ScopeProject, "pw", false); err != nil {
+		t.Fatalf("停用 B: %v", err)
+	}
+	if err := m.SetEnabled(wsB, ScopeProject, "pw", true); err != nil {
+		t.Fatalf("启用 B: %v", err)
+	}
+	topB := readJSON(t, filepath.Join(wsB, ".mcp.json"))
+	serversB, _ := serversOf(topB)
+	if got := string(serversB["pw"]); !strings.Contains(got, `"b"`) {
+		t.Fatalf("B 启用的不是 B 的配置: %s", got)
+	}
+	payload, err = m.List(wsA)
+	if err != nil {
+		t.Fatalf("List A: %v", err)
+	}
+	if len(payload.Project) != 1 || !payload.Project[0].Disabled {
+		t.Fatalf("启用 B 把 A 的停用项弄丢了: %+v", payload.Project)
+	}
+}
+
+// 旧版本写的暂存条目没有 cwd：升级后仍要在列表里看得到，
+// 启用时落到当前工作区并补上归属。
+func TestStashLegacyEntryStillVisible(t *testing.T) {
+	m, ws, dir := newManager(t)
+	legacy := `{"servers":[{"scope":"project","name":"old","spec":{"command":"node","args":["x.js"]}}]}`
+	if err := os.WriteFile(filepath.Join(dir, "mcp-disabled.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatalf("写旧暂存: %v", err)
+	}
+	payload, err := m.List(ws)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(payload.Project) != 1 || !payload.Project[0].Disabled {
+		t.Fatalf("旧条目没列出来: %+v", payload.Project)
+	}
+	if err := m.SetEnabled(ws, ScopeProject, "old", true); err != nil {
+		t.Fatalf("启用旧条目: %v", err)
+	}
+	top := readJSON(t, filepath.Join(ws, ".mcp.json"))
+	if servers, _ := serversOf(top); len(servers) != 1 {
+		t.Fatalf("旧条目没写回配置: %v", servers)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "mcp-disabled.json"))
+	if err != nil {
+		t.Fatalf("读暂存: %v", err)
+	}
+	if strings.Contains(string(b), `"old"`) {
+		t.Fatalf("启用后暂存里还有: %s", b)
+	}
+}
+
 func TestProjectScopeRequiresCwd(t *testing.T) {
 	m, _, _ := newManager(t)
 	if _, err := m.Save("", Server{Name: "x", Scope: ScopeProject, Command: "node"}); err == nil {
