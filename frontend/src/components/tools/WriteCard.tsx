@@ -5,42 +5,15 @@ import { writeDiff } from "../../lib/diff";
 import type { ToolItem } from "../../lib/model";
 import { useT } from "../../lib/i18n";
 import { ToolImages } from "./ToolImages";
+import { ToolShell } from "./ToolShell";
 
-/**
- * Write 卡片：新建文件时输入是 file_path/content，没有 old_string/new_string。
- *
- * 之前它被注册成 EditCard，diff 构造必然失败，卡片只剩「无结构化补丁」+ 一行
- * "File created successfully" —— 写进去的内容在界面上完全看不到。
- */
-export function WriteCard({ item }: { item: ToolItem }) {
+/** Write 正文：新建/覆盖文件时的全部内容（没有 old_string，走不了 Edit 的 diff）。 */
+export function WriteBody({ item }: { item: ToolItem }) {
   const t = useT();
   const diff = useMemo(() => writeDiff(item.input), [item.input]);
-  const path =
-    item.input && typeof item.input === "object" && typeof (item.input as Record<string, unknown>).file_path === "string"
-      ? String((item.input as Record<string, unknown>).file_path)
-      : t("新建文件", "New file");
 
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-canvas">
-      <div className="flex items-center gap-2 border-b border-line bg-panel/60 px-3 py-2 text-[12px]">
-        <IconWrench size={14} className="shrink-0 text-muted" />
-        <span className="font-medium text-ink">Write</span>
-        <span className="truncate font-mono text-[11px] text-muted">
-          {path}
-          {diff ? `  +${diff.added}` : ""}
-        </span>
-        <span
-          className={`ml-auto rounded-full px-2 py-0.5 text-[10px] ${
-            item.isError
-              ? "bg-rose-50 text-danger dark:bg-rose-950/30"
-              : item.result === undefined
-                ? "bg-brand-soft text-brand"
-                : "bg-panel-strong text-muted"
-          }`}
-        >
-          {item.isError ? t("失败", "Failed") : item.result === undefined ? t("进行中", "Working") : t("完成", "Done")}
-        </span>
-      </div>
+    <>
       {diff ? (
         <div className="max-h-80 overflow-auto py-1 font-mono text-[11.5px] leading-[1.6]">
           {diff.lines.map((l, i) => (
@@ -62,6 +35,26 @@ export function WriteCard({ item }: { item: ToolItem }) {
           <ToolImages item={item} />
         </div>
       )}
-    </div>
+    </>
+  );
+}
+
+export function WriteCard({ item }: { item: ToolItem }) {
+  const t = useT();
+  const diff = useMemo(() => writeDiff(item.input), [item.input]);
+  const path =
+    item.input && typeof item.input === "object" && typeof (item.input as Record<string, unknown>).file_path === "string"
+      ? String((item.input as Record<string, unknown>).file_path)
+      : t("新建文件", "New file");
+
+  return (
+    <ToolShell
+      item={item}
+      icon={<IconWrench size={14} />}
+      title="Write"
+      subtitle={`${path}${diff ? `  +${diff.added}` : ""}`}
+    >
+      <WriteBody item={item} />
+    </ToolShell>
   );
 }

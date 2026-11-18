@@ -6,61 +6,36 @@ import { formatTokens } from "../../lib/usage";
 import { useT } from "../../lib/i18n";
 import { useAppStore } from "../../store/useAppStore";
 import { ToolImages } from "./ToolImages";
+import { ToolShell, type ToolStatus } from "./ToolShell";
 
-const tone: Record<SubagentInfo["status"], string> = {
-  running: "bg-brand-soft text-brand",
-  completed: "bg-panel-strong text-muted",
-  failed: "bg-rose-50 text-danger dark:bg-rose-950/30",
-  stopped: "bg-amber-50 text-warn dark:bg-amber-950/30",
+const tone: Record<SubagentInfo["status"], { className: string; tone: ToolStatus["tone"] }> = {
+  running: { className: "bg-brand-soft text-brand", tone: "run" },
+  completed: { className: "bg-panel-strong text-muted", tone: "ok" },
+  failed: { className: "bg-rose-50 text-danger dark:bg-rose-950/30", tone: "fail" },
+  stopped: { className: "bg-amber-50 text-warn dark:bg-amber-950/30", tone: "warn" },
 };
 
 /**
- * Agent（子代理）卡片。
+ * Agent（子代理）正文：用量、摘要、查看/停止、任务说明与结果。
  *
  * 数据来源有两套，必须都认：
  *   - 实时：system/task_started|task_updated|task_notification 折进 subagent；
  *   - 回放：主转录里没有 task_* 行，只能从 tool_result 的 agentId / <usage> 里补。
  */
-export function AgentCard({ item }: { item: ToolItem }) {
+export function AgentBody({ item }: { item: ToolItem }) {
   const t = useT();
   const showSubagent = useAppStore((s) => s.showSubagent);
   const stopTask = useAppStore((s) => s.stopTask);
 
   const input = (item.input ?? {}) as Record<string, unknown>;
   const sub = item.subagent;
-  const description = sub?.description || text(input.description);
-  const type = sub?.type || text(input.subagent_type);
   const prompt = sub?.prompt || text(input.prompt);
-  const label = description || type || t("子代理", "Subagent");
   const status: SubagentInfo["status"] =
     sub?.status ?? (item.result === undefined ? "running" : item.isError ? "failed" : "completed");
   const usage = sub?.usage;
 
-  const statusLabel =
-    status === "running"
-      ? typeof item.progress === "number"
-        ? t(`运行中 ${item.progress}s`, `Running ${item.progress}s`)
-        : t("运行中…", "Running…")
-      : status === "completed"
-        ? t("完成", "Done")
-        : status === "failed"
-          ? t("失败", "Failed")
-          : t("已停止", "Stopped");
-
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-canvas">
-      <div className="flex items-center gap-2 border-b border-line bg-panel/60 px-3 py-2 text-[12px]">
-        <IconSpark size={14} className="shrink-0 text-brand" />
-        <span className="min-w-0 truncate font-medium text-ink">{label}</span>
-        {type && <span className="shrink-0 rounded-full bg-panel-strong px-2 py-0.5 text-[10px] text-muted">{type}</span>}
-        {sub?.background && (
-          <span className="shrink-0 rounded-full bg-panel-strong px-2 py-0.5 text-[10px] text-muted">
-            {t("后台", "Background")}
-          </span>
-        )}
-        <span className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10px] ${tone[status]}`}>{statusLabel}</span>
-      </div>
-
+    <>
       {(usage || sub?.summary) && (
         <div className="space-y-1 px-3 py-2">
           {usage && (
@@ -79,7 +54,7 @@ export function AgentCard({ item }: { item: ToolItem }) {
       {(sub?.agentId || (status === "running" && sub?.taskId)) && (
         <div className="flex flex-wrap gap-2 px-3 pb-2">
           {sub?.agentId && (
-            <Button size="sm" variant="secondary" icon={<IconChat size={13} />} onClick={() => showSubagent(sub.agentId!, label)}>
+            <Button size="sm" variant="secondary" icon={<IconChat size={13} />} onClick={() => showSubagent(sub.agentId!, agentLabel(item, t))}>
               {t("查看对话", "Open chat")}
             </Button>
           )}
@@ -108,8 +83,47 @@ export function AgentCard({ item }: { item: ToolItem }) {
         )}
         {item.images && item.images.length > 0 && <ToolImages item={item} />}
       </div>
-    </div>
+    </>
   );
+}
+
+export function AgentCard({ item }: { item: ToolItem }) {
+  const t = useT();
+  const sub = item.subagent;
+  const input = (item.input ?? {}) as Record<string, unknown>;
+  const type = sub?.type || text(input.subagent_type);
+  const status: SubagentInfo["status"] =
+    sub?.status ?? (item.result === undefined ? "running" : item.isError ? "failed" : "completed");
+
+  const statusLabel =
+    status === "running"
+      ? typeof item.progress === "number"
+        ? t(`运行中 ${item.progress}s`, `Running ${item.progress}s`)
+        : t("运行中…", "Running…")
+      : status === "completed"
+        ? t("完成", "Done")
+        : status === "failed"
+          ? t("失败", "Failed")
+          : t("已停止", "Stopped");
+
+  return (
+    <ToolShell
+      item={item}
+      icon={<IconSpark size={14} className="text-brand" />}
+      title={agentLabel(item, t)}
+      subtitle={[type, sub?.background ? t("后台", "Background") : ""].filter(Boolean).join(" · ")}
+      status={{ label: statusLabel, className: tone[status].className, tone: tone[status].tone }}
+    >
+      <AgentBody item={item} />
+    </ToolShell>
+  );
+}
+
+/** 子代理的显示名：任务描述 > 类型 > 「子代理」。详细卡片与紧凑工具行共用。 */
+export function agentLabel(item: ToolItem, t: (zh: string, en?: string) => string): string {
+  const sub = item.subagent;
+  const input = (item.input ?? {}) as Record<string, unknown>;
+  return sub?.description || text(input.description) || sub?.type || text(input.subagent_type) || t("子代理", "Subagent");
 }
 
 function text(v: unknown): string {

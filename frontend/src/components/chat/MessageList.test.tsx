@@ -1,7 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MessageList } from "./MessageList";
 import type { Item } from "../../lib/model";
+import { resetProcessViewCache, setProcessView } from "../../lib/viewMode";
+
+beforeEach(() => {
+  // 过程展示偏好存在模块缓存里：每个用例从默认的「标准」开始。
+  resetProcessViewCache();
+  setProcessView("standard");
+});
 
 function userItem(i: number): Item {
   return { id: `u${i}`, seq: i, ts: 0, kind: "user", text: `消息 ${i}` };
@@ -143,5 +150,97 @@ describe("MessageList 本轮用量", () => {
     ];
     render(<MessageList items={items} />);
     expect(screen.getAllByText("5.0s")).toHaveLength(1);
+  });
+});
+
+describe("MessageList 过程展示", () => {
+  const thinking = (text: string): Item => ({ id: "th1", seq: 0, ts: 0, kind: "thinking", text });
+  const read = (): Item => ({
+    id: "t1",
+    seq: 0,
+    ts: 0,
+    kind: "tool",
+    toolUseId: "tu1",
+    name: "Read",
+    input: { file_path: "/w/a.md" },
+    result: "内容",
+  });
+  const bash = (): Item => ({
+    id: "t2",
+    seq: 0,
+    ts: 0,
+    kind: "tool",
+    toolUseId: "tu2",
+    name: "Bash",
+    input: { command: "ls -la" },
+    result: "a\nb",
+  });
+  const answer: Item = { id: "a1", seq: 0, ts: 0, kind: "assistant", text: "答案", streaming: false };
+  const turn = [thinking("这是思考首行"), read(), bash(), answer];
+
+  it("标准模式：整段过程收成一行组头，每一步默认不展开", () => {
+    render(<MessageList items={turn} />);
+    expect(screen.getByText("已读取文件并执行了命令")).toBeInTheDocument();
+    expect(screen.queryByText("ls -la")).toBeNull();
+    expect(screen.getByText("答案")).toBeInTheDocument();
+  });
+
+  it("标准模式：组头带上思考首行预览", () => {
+    render(<MessageList items={turn} />);
+    expect(screen.getByText("这是思考首行")).toBeInTheDocument();
+  });
+
+  it("简洁模式：只有摘要，不显示推理预览", () => {
+    setProcessView("concise");
+    render(<MessageList items={turn} />);
+    expect(screen.getByText("已读取文件并执行了命令")).toBeInTheDocument();
+    expect(screen.queryByText("这是思考首行")).toBeNull();
+  });
+
+  it("点组头能看到每一步（标准模式）", () => {
+    render(<MessageList items={turn} />);
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+    expect(screen.getByText("/w/a.md")).toBeInTheDocument();
+  });
+
+  it("详细模式：运行中直接铺开每一步，回答一到自动收成组头", () => {
+    setProcessView("detailed");
+    const { rerender } = render(<MessageList items={[thinking("思考中"), read(), bash()]} />);
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+    expect(screen.queryByText("已读取文件并执行了命令")).toBeNull();
+
+    rerender(<MessageList items={[thinking("思考中"), read(), bash(), answer]} />);
+    expect(screen.getByText("已读取文件并执行了命令")).toBeInTheDocument();
+    expect(screen.queryByText("ls -la")).toBeNull();
+  });
+
+  it("标准模式：手动展开的组在回答到达时自动收起", () => {
+    const live = [thinking("思考中"), read(), bash()];
+    const { rerender } = render(<MessageList items={live} />);
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+
+    rerender(<MessageList items={[...live, answer]} />);
+    expect(screen.getByText("已读取文件并执行了命令")).toBeInTheDocument();
+    expect(screen.queryByText("ls -la")).toBeNull();
+  });
+
+  it("单独一步不成组：直接显示那一行，省一次点击", () => {
+    render(<MessageList items={[bash(), answer]} />);
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+    expect(screen.queryByText("执行了命令")).toBeNull();
+  });
+
+  it("详细模式：单独的工具仍是完整卡片（留作回退）", () => {
+    setProcessView("detailed");
+    render(<MessageList items={[bash(), answer]} />);
+    expect(screen.getByText("输出")).toBeInTheDocument();
+  });
+
+  it("行内始终有可展开入口：紧凑行不是死行（点击能看到输出）", () => {
+    render(<MessageList items={[bash(), answer]} />);
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByText("输出")).toBeInTheDocument();
   });
 });

@@ -3,41 +3,35 @@ import { IconWrench } from "../common/Icons";
 import type { ToolItem } from "../../lib/model";
 import { useT } from "../../lib/i18n";
 import { ToolImages } from "./ToolImages";
+import { ToolShell } from "./ToolShell";
 
-/** 兜底卡片：任何未注册的工具都能显示，保证版本升级后不出现空白卡片。 */
-export function GenericCard({ item }: { item: ToolItem }) {
+/** 兜底卡片的正文：参数与结果各一个折叠块。任何未注册的工具都能显示。 */
+export function GenericBody({ item }: { item: ToolItem }) {
   const t = useT();
-  const running = item.result === undefined;
   const inputText = safePretty(item.input);
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-canvas">
-      <div className="flex items-center gap-2 border-b border-line bg-panel/60 px-3 py-2 text-[12px]">
-        <IconWrench size={14} className="shrink-0 text-muted" />
-        <span className="font-medium text-ink">{item.name}</span>
-        <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] ${running ? "bg-brand-soft text-brand" : item.isError ? "bg-rose-50 text-danger dark:bg-rose-950/30" : "bg-panel-strong text-muted"}`}>
-          {running
-            ? typeof item.progress === "number"
-              ? t(`运行中 ${item.progress}s`, `Running ${item.progress}s`)
-              : t("运行中…", "Running…")
-            : item.isError
-              ? t("失败", "Failed")
-              : t("完成", "Done")}
-        </span>
-      </div>
-      <div className="space-y-2 px-3 py-2.5">
-        <Collapsible title={t("参数", "Input")} summary={preview(inputText)}>
-          <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-ink-2">{inputText}</pre>
+    <div className="space-y-2 px-3 py-2.5">
+      <Collapsible title={t("参数", "Input")} summary={preview(inputText)}>
+        <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-ink-2">{inputText}</pre>
+      </Collapsible>
+      {item.result !== undefined && (
+        <Collapsible title={t("结果", "Result")} summary={preview(item.result)}>
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-ink-2">
+            {item.result}
+          </pre>
         </Collapsible>
-        {item.result !== undefined && (
-          <Collapsible title={t("结果", "Result")} summary={preview(item.result)}>
-            <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-ink-2">
-              {item.result}
-            </pre>
-          </Collapsible>
-        )}
-        <ToolImages item={item} />
-      </div>
+      )}
+      <ToolImages item={item} />
     </div>
+  );
+}
+
+/** 兜底卡片：保证版本升级后新工具不会渲染成空白。 */
+export function GenericCard({ item }: { item: ToolItem }) {
+  return (
+    <ToolShell item={item} icon={<IconWrench size={14} />} title={item.name}>
+      <GenericBody item={item} />
+    </ToolShell>
   );
 }
 

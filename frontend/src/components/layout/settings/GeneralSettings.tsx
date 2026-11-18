@@ -5,6 +5,7 @@ import { getToken, setToken } from "../../../lib/runtime";
 import { useT } from "../../../lib/i18n";
 import { permissionLabel } from "../../../lib/labels";
 import { setThemePreference, themePreference } from "../../../lib/theme";
+import { PROCESS_VIEWS, setProcessView, useProcessView } from "../../../lib/viewMode";
 import { isDangerousPermissionMode, permissionModeWarning } from "../../../lib/permissionModes";
 import { Select } from "../../common/Select";
 import { askConfirm } from "../../common/SystemDialogs";
@@ -33,6 +34,8 @@ export function GeneralSettings() {
   const [theme, setTheme] = useState(themePreference);
   const locale = settings?.locale || "zh";
   const fontSize = settings?.font_size || 15;
+  // 过程展示只存本设备（和主题同理）：手机要挤、桌面可以宽松。
+  const view = useProcessView();
 
   /** 默认权限里的危险模式同样要二次确认：这里保存的是「以后新会话」的默认值。 */
   const changeDefaultMode = async (next: string) => {
@@ -156,6 +159,48 @@ export function GeneralSettings() {
         </div>
         <p className="chat-text mt-3 rounded-lg border border-line bg-panel/60 px-3 py-2 text-ink">
           {t("这是一段会话内容预览。Claude 会在当前工作区读取文件并执行命令。", "This is a preview of conversation text. Claude reads files and runs commands in the current workspace.")}
+        </p>
+      </Section>
+
+      <Section
+        title={t("过程展示", "Process display")}
+        desc={t("思考与工具调用在对话里排得多紧。只保存在本设备。", "How tightly reasoning and tool calls are laid out. Saved on this device only.")}
+      >
+        <div className="inline-flex rounded-lg border border-line-strong p-0.5">
+          {PROCESS_VIEWS.map((item) => {
+            const active = view === item;
+            const label =
+              item === "concise" ? t("简洁", "Concise") : item === "standard" ? t("标准", "Standard") : t("详细", "Detailed");
+            return (
+              <button
+                key={item}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setProcessView(item)}
+                className={`rounded-md px-3 py-1.5 text-[12px] ${
+                  active ? "bg-panel-strong font-medium text-ink" : "text-muted hover:text-ink"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-[11px] leading-relaxed text-faint">
+          {view === "concise"
+            ? t(
+                "一轮里的思考与工具调用只留一行摘要，点开才看每一步。",
+                "Reasoning and tool calls collapse into one summary line; click to see each step.",
+              )
+            : view === "standard"
+              ? t(
+                  "过程收成一行，带上正在做什么与思考首行；点开看每一步。",
+                  "Steps fold into one line showing the current activity and the first line of reasoning; click to see each step.",
+                )
+              : t(
+                  "运行中直接铺开每一步的卡片，回答一出现就自动收起成一行。",
+                  "Each step shows as a full card while running, then folds into one line as soon as the answer arrives.",
+                )}
         </p>
       </Section>
 

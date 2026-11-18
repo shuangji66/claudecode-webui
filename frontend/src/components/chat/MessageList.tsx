@@ -8,6 +8,9 @@ import { ToolCardHost } from "../tools/ToolCardHost";
 import { IconAlert, IconChevronDown, IconSpark } from "../common/Icons";
 import { useT } from "../../lib/i18n";
 import { activeTurnIndex, turnsOf, type Turn } from "../../lib/turns";
+import { buildProcessRows, isProcessItem } from "../../lib/process";
+import { useProcessView } from "../../lib/viewMode";
+import { ProcessGroup } from "./ProcessGroup";
 
 /**
  * 长对话只渲染最近这一批，往上翻时再按批展开。
@@ -29,7 +32,22 @@ function durationShownOnAnswer(prev: Item | undefined): boolean {
 }
 
 /** 单条消息。memo 化：流式追加时只有最后一个气泡需要重渲染。 */
-const MessageRow = memo(function MessageRow({ item, hideDuration = false }: { item: Item; hideDuration?: boolean }) {
+const MessageRow = memo(function MessageRow({
+  item,
+  hideDuration = false,
+  dense = false,
+  preview = true,
+  live = false,
+}: {
+  item: Item;
+  hideDuration?: boolean;
+  /** 紧凑模式：思考与工具压成一行，正文/用户消息不受影响。 */
+  dense?: boolean;
+  /** 是否显示思考首行预览（「简洁」不显示）。 */
+  preview?: boolean;
+  /** 这一条是否属于仍在进行中的尾部（回答一出现就自动折起思考）。 */
+  live?: boolean;
+}) {
   switch (item.kind) {
     case "user":
       return (
@@ -46,13 +64,13 @@ const MessageRow = memo(function MessageRow({ item, hideDuration = false }: { it
     case "thinking":
       return (
         <div className="animate-rise" style={OFFSCREEN}>
-          <ThinkingBlock text={item.text} />
+          <ThinkingBlock text={item.text} dense={dense} preview={preview} live={live} />
         </div>
       );
     case "tool":
       return (
         <div className="animate-rise" style={OFFSCREEN}>
-          <ToolCardHost item={item} />
+          <ToolCardHost item={item} dense={dense} />
         </div>
       );
     case "result":
@@ -132,7 +150,11 @@ export function MessageList({
   };
 
   const hidden = Math.max(0, items.length - limit);
-  const shown = hidden > 0 ? items.slice(-limit) : items;
+  const shown = useMemo(() => (hidden > 0 ? items.slice(-limit) : items), [items, hidden, limit]);
+  /** 过程展示偏好：detailed 走改造前的完整卡片，另两档压成单行。 */
+  const view = useProcessView();
+  const dense = view !== "detailed";
+  const rows = useMemo(() => buildProcessRows(shown), [shown]);
 
   /**
    * 每一轮用户消息相对「滚动内容顶部」的距离，缓存给滚动帧用。
@@ -332,9 +354,9 @@ export function MessageList({
         onScroll={onScroll}
       >
         <div className={`mx-auto w-full max-w-[820px] px-4 py-6 md:px-6 md:py-8 ${turns.length >= 2 ? "md:pr-10" : ""}`}>
-          <div className="space-y-5">
+          <div className={dense ? "" : "space-y-5"}>
             {hidden > 0 && (
-              <div className="flex justify-center">
+              <div className={`flex justify-center ${dense ? "mt-3" : ""}`}>
                 <button
                   type="button"
                   onClick={loadEarlier}
@@ -344,11 +366,49 @@ export function MessageList({
                 </button>
               </div>
             )}
-            {shown.map((item, index) => (
-              <div key={item.id} data-item-id={item.id}>
-                <MessageRow item={item} hideDuration={durationShownOnAnswer(shown[index - 1])} />
-              </div>
-            ))}
+            {rows.map((entry) => {
+              const hideDuration = durationShownOnAnswer(shown[entry.start - 1]);
+              if (entry.type === "process") {
+                return (
+                  <div key={entry.key} className={dense ? "mt-1" : undefined}>
+                    <ProcessGroup items={entry.items} live={entry.live} view={view}>
+                      {entry.items.map((item) => (
+                        <MessageRow key={item.id} item={item} dense={dense} preview={view !== "concise"} />
+                      ))}
+                    </ProcessGroup>
+                  </div>
+                );
+              }
+              if (entry.type === "thinking") {
+                const live = entry.start + entry.items.length === shown.length;
+                return (
+                  <div key={entry.key} className={dense ? "mt-1" : undefined}>
+                    <ThinkingBlock
+                      text={entry.items.map((it) => it.text).join("\n\n")}
+                      dense={dense}
+                      preview={view !== "concise"}
+                      live={live}
+                    />
+                  </div>
+                );
+              }
+              const live = entry.start === shown.length - 1;
+              return (
+                <div
+                  key={entry.key}
+                  data-item-id={entry.item.id}
+                  className={dense ? (isProcessItem(entry.item) ? "mt-1" : "mt-5") : undefined}
+                >
+                  <MessageRow
+                    item={entry.item}
+                    hideDuration={hideDuration}
+                    dense={dense}
+                    preview={view !== "concise"}
+                    live={live}
+                  />
+                </div>
+              );
+            })}
           </div>
           <div className="h-6" />
         </div>

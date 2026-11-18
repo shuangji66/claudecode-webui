@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { ToolCardHost } from "./ToolCardHost";
 import type { ToolItem } from "../../lib/model";
 
@@ -85,5 +85,41 @@ describe("Write 与工具结果图片", () => {
     );
     const img = screen.getByAltText("工具结果图片") as HTMLImageElement;
     expect(img.src).toContain("data:image/png;base64,");
+  });
+});
+
+describe("ToolCardHost 紧凑模式", () => {
+  it("默认只占一行：工具名 + 摘要，正文要点开", () => {
+    render(<ToolCardHost dense item={tool({ result: "line1\nline2" })} />);
+    expect(screen.getByText("Bash")).toBeInTheDocument();
+    expect(screen.getByText("echo hi")).toBeInTheDocument();
+    expect(screen.queryByText("输出")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByText("输出")).toBeInTheDocument();
+  });
+
+  it("失败在行内标红，不用展开就能看见", () => {
+    render(<ToolCardHost dense item={tool({ result: "boom", isError: true })} />);
+    expect(screen.getByText("失败")).toBeInTheDocument();
+  });
+
+  it("未知工具也有摘要：折叠后不能变成一行空白", () => {
+    render(<ToolCardHost dense item={tool({ name: "SomeFutureTool", input: { note: "看看这个" } })} />);
+    expect(screen.getByText("SomeFutureTool")).toBeInTheDocument();
+    expect(screen.getByText("看看这个")).toBeInTheDocument();
+  });
+
+  it("Edit 紧凑行摘要带文件路径，展开仍是 diff", () => {
+    render(
+      <ToolCardHost
+        dense
+        item={tool({ name: "Edit", input: { file_path: "/a.go", old_string: "old", new_string: "new" } })}
+      />,
+    );
+    const row = screen.getByRole("button", { expanded: false });
+    expect(row.textContent).toContain("/a.go");
+    fireEvent.click(row);
+    expect(screen.getByText("old")).toBeInTheDocument();
   });
 });
