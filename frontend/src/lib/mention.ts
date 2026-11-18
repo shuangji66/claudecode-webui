@@ -110,3 +110,17 @@ export function mentionCrumbs(query: string): MentionCrumb[] {
   }
   return crumbs;
 }
+
+/**
+ * 右侧栏「引用到对话」用：把 NAS 绝对路径折成相对会话 cwd 的写法。
+ *
+ * 在 cwd 里就给相对路径（与 `@` 补全的候选口径一致）；不在 cwd 里就保留绝对路径
+ * ——`@` 引用本来就允许工作区外的绝对路径（飞牛选中的文件就是这么写的）。
+ */
+export function mentionPath(absPath: string, cwd: string): string {
+  const target = absPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  const base = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (base === "" || target === base) return target;
+  if (target.startsWith(`${base}/`)) return target.slice(base.length + 1);
+  return target;
+}

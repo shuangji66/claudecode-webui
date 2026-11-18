@@ -141,6 +141,12 @@ src/
     标签自带 × 关闭；文件与 Git 是单例，终端每次都新建（上限 8，标签名 `bash`、`bash 2`…）。
     **切标签只切 `hidden`、不卸载**：终端里挂着 PTY，卸载等于杀 shell；关标签才结束进程。
     不要再加「启动页 + 返回」式的切换。Git 只拉不推（`/api/git/pull`，`pull --ff-only`）。
+    **文件/目录行的「更多」菜单有「引用到对话」与「下载」**：引用只调
+    `useAppStore.requestMention(绝对路径, "file"|"dir")`（带单调 `seq`；同一条点第二次
+    值没变，没有 seq 就重放不了），格式化与插入由 `Composer` 负责（`mentionPath` 按会话
+    cwd 折成 `@相对路径`，cwd 外保留绝对）；下载用 `lib/runtime.fsDownloadUrl` +
+    `lib/download.startDownload`——`<a>` 带不上 Authorization 头，token 只能放 query，
+    但大文件不经过 blob 内存。目录由后端打包成 zip，前端不自己遍历。
 14. 文件树/Git 面板的所有请求走 `useSidebarStore`；路径使用后端返回的 POSIX 相对路径，
     不要自己拼绝对路径。切换工作区由 `RightSidebar` 统一 `setCwd`，子面板不要重复调用。
 15. Git 的 `MM` 文件必须同时出现在暂存与更改两组，各自用本侧行数；不要把两侧相加。

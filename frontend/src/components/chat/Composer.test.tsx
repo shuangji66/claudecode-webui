@@ -675,3 +675,32 @@ describe("Composer 附件预览", () => {
     expect(screen.queryByRole("button", { name: /预览/ })).toBeNull();
   });
 });
+
+describe("Composer 引用到对话", () => {
+  const textarea = () => screen.getByLabelText("消息输入框") as HTMLTextAreaElement;
+
+  it("把绝对路径折成相对会话 cwd 的 @ 引用并消费请求", async () => {
+    setup({ cwd: "/ws" });
+
+    act(() => {
+      useAppStore.getState().requestMention("/ws/src/main.go", "file");
+    });
+
+    await waitFor(() => expect(textarea().value).toBe("@src/main.go "));
+    expect(useAppStore.getState().mentionRequest).toBeNull();
+  });
+
+  it("目录以 / 结尾；工作区外的路径保留绝对写法", async () => {
+    setup({ cwd: "/ws" });
+
+    act(() => {
+      useAppStore.getState().requestMention("/ws/docs", "dir");
+    });
+    await waitFor(() => expect(textarea().value).toBe("@docs/ "));
+
+    act(() => {
+      useAppStore.getState().requestMention("/vol1/other/a.png", "file");
+    });
+    await waitFor(() => expect(textarea().value).toBe("@docs/ @/vol1/other/a.png "));
+  });
+});

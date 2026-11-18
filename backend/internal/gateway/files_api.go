@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path"
@@ -114,6 +116,84 @@ func (s *Server) handleFsComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, listing)
+}
+
+// countingWriter 记录已经写出去的字节数：打包失败时用它判断还能不能改状态码。
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// attachmentHeader 生成 Content-Disposition：文件名走 RFC 2231，中文名也能正确落盘。
+func attachmentHeader(name string) string {
+	return mime.FormatMediaType("attachment", map[string]string{"filename": name})
+}
+
+// handleFsDownload 下载工作区里的文件（原样流式）或目录（打包成 zip）。
+//
+// 与 /api/fs/raw 的分工：raw 是**同源 inline 预览**，只放行图片/PDF 并带 CSP；
+// 下载一律 `Content-Disposition: attachment`，浏览器不会渲染它，所以不设类型白名单，
+// 也不把整个文件读进内存（大文件在 NAS 上很常见）。
+func (s *Server) handleFsDownload(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.openFsRoot(w, r)
+	if !ok {
+		return
+	}
+	rel := r.URL.Query().Get("path")
+	if strings.TrimSpace(rel) == "" {
+		writeErr(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	info, relPath, err := root.Stat(rel)
+	if err != nil {
+		code := http.StatusBadRequest
+		if errors.Is(err, fsapi.ErrOutside) {
+			code = http.StatusForbidden
+		}
+		writeErr(w, err.Error(), code)
+		return
+	}
+
+	if info.IsDir() {
+		name := root.ArchiveName(relPath)
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", attachmentHeader(name))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		out := &countingWriter{w: w}
+		if _, err := root.Zip(r.Context(), rel, out); err != nil {
+			// 已经开始写正文就改不了状态码了（客户端可能也已经断开）：只记下原因。
+			if out.n == 0 {
+				w.Header().Del("Content-Disposition")
+				w.Header().Del("Content-Type")
+				writeErr(w, err.Error(), http.StatusBadRequest)
+			}
+			return
+		}
+		return
+	}
+
+	f, fileInfo, relPath, err := root.OpenDownload(rel)
+	if err != nil {
+		code := http.StatusBadRequest
+		if errors.Is(err, fsapi.ErrOutside) {
+			code = http.StatusForbidden
+		}
+		writeErr(w, err.Error(), code)
+		return
+	}
+	defer f.Close()
+	name := path.Base(relPath)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", attachmentHeader(name))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// ServeContent 负责 Range / Content-Length；ReadSeeker 就是 *os.File。
+	http.ServeContent(w, r, name, fileInfo.ModTime(), f)
 }
 
 // handleFsFile 返回文本预览；超大文件截断，二进制文件只返回元数据。

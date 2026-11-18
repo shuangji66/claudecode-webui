@@ -129,6 +129,18 @@ export function terminalWsUrl(cwd: string, cols: number, rows: number, token: st
   return token ? `${base}&token=${encodeURIComponent(token)}` : base;
 }
 
+/**
+ * 工作区文件的下载地址（文件原样、目录打包成 zip）。
+ *
+ * 走浏览器原生下载而不是 fetch→blob：NAS 上的文件可能很大，blob 会整份进内存；
+ * 而 `<a>` 带不上 Authorization 头，token 只能放 query（与 raw 预览同一条限制）。
+ */
+export function fsDownloadUrl(cwd: string, path: string): string {
+  const token = getToken();
+  const base = `${apiUrl("/api/fs/download")}?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(path)}`;
+  return token ? `${base}&token=${encodeURIComponent(token)}` : base;
+}
+
 /** 图片 / PDF 的 inline 预览地址；token 只能放在 query 里。 */
 export function rawFileUrl(cwd: string, path: string): string {
   const token = getToken();

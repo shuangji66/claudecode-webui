@@ -211,6 +211,12 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **Git 支持工作区内的多个仓库**：`GET /api/git/repos` 扫描（深度 3、跳过隐藏目录与
   `node_modules`、命中仓库不再下钻），前端把选中的仓库绝对路径直接当 `/api/git/*` 的
   `cwd`（子目录本来就能过 `authorizedCwd`，不必为它加新参数）。
+- **文件面板行菜单有「引用到对话」和「下载」**：引用只把**绝对路径**交给
+  `useAppStore.requestMention`（带单调递增 `seq`，Composer 消费一次后清空），由 Composer 用
+  `lib/mention.mentionPath` 折算成 `@相对路径` 插进光标处（cwd 之外保留绝对写法）——格式化
+  逻辑不要放到侧栏里。下载走 `GET /api/fs/download`：**必须 `Content-Disposition: attachment`**，
+  与 `/api/fs/raw` 的 inline 白名单是两条路（下载不设类型白名单、不整份读进内存；目录用
+  `fsapi.Zip` 打包，不跟随软链、跳过 `.git`、20000 条目 / 2GiB 预算）。
 - **Git 只拉不推**：`POST /api/git/pull` 只做 `pull --ff-only`（`gitctl.Push` 已删除）。
   推送是对外动作，不该由侧栏一个图标顺手完成；需要时用户自己开终端 `git push`。
 - **Git 状态用 `--porcelain=v2 -z`**，并用 `--untracked-files=all` 列出未跟踪文件

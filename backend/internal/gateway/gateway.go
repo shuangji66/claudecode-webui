@@ -169,6 +169,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/fs/tree", s.authed(s.handleFsTree))
 	s.mux.HandleFunc("GET /api/fs/complete", s.authed(s.handleFsComplete))
 	s.mux.HandleFunc("GET /api/fs/file", s.authed(s.handleFsFile))
+	s.mux.HandleFunc("GET /api/fs/download", s.authed(s.handleFsDownload))
 	s.mux.HandleFunc("GET /api/fs/raw", s.authed(s.handleFsRaw))
 	s.mux.HandleFunc("GET /api/git/repos", s.authed(s.handleGitRepos))
 	s.mux.HandleFunc("GET /api/git/status", s.authed(s.handleGitStatus))

@@ -320,7 +320,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `POST /api/workspaces/rename`（只改显示名）、`GET /api/fs/list`、`POST /api/fs/mkdir`
   （只接受单层目录名）、`POST /api/fs/access`（写探测）、`POST /api/fs/host-file`（宿主文件
   读取，唯一不受工作区围栏约束的接口）。目录浏览是只读但能枚举宿主目录，必须保持鉴权。
-  右侧栏文件树的浏览走 `/api/fs/tree|file|raw`（见下方「右侧栏路由」）。
+  右侧栏文件树的浏览走 `/api/fs/tree|file|raw`，下载走 `/api/fs/download`（文件原样流式、
+  目录打包成 zip；一律 `Content-Disposition: attachment`，与 raw 的 inline 白名单分开，
+  见下方「右侧栏路由」）。
 - 新路由必须 `s.authed(...)`；WS 在 handler 内自行校验 token。
 - `GET /ws` 有两条语义：带 `?id=<session>` 是会话通道；**不带 id 是系统通道**
   （只订阅 `systemTopic`，只收应用级事件，目前是 `claude.update`）。系统通道没有会话，
@@ -348,7 +350,7 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   agent id 走 `[A-Za-z0-9_-]` 白名单，会话 id 走 `validSessionID`，不能拼路径。
   `POST /api/session` 带 `resume` 时：有转录走 `manager.Resume`，没有转录走
   `manager.StartFresh`（同 id `--session-id`），不带 `resume` 才 `Create`。
-- 右侧栏路由：`GET /api/fs/tree|file|raw`、`GET /api/git/repos|status|diff|show|log|branches`、
+- 右侧栏路由：`GET /api/fs/tree|file|raw|download`、`GET /api/git/repos|status|diff|show|log|branches`、
   `POST /api/git/stage|unstage|discard|commit|checkout|pull`、`GET /ws/terminal`。
   全部先过 `authorizedCwd`（`project.Validate` + `workspace.Allows`），再做路径围栏；
   原始字节只放行图片/PDF 并带 `CSP: sandbox`，HTML/SVG 不得同源 inline。

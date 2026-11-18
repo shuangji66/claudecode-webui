@@ -6,6 +6,7 @@ import {
   mentionCrumbs,
   mentionDir,
   mentionFragment,
+  mentionPath,
 } from "./mention";
 
 describe("mentionAt", () => {
@@ -90,5 +91,20 @@ describe("目录拆分与面包屑", () => {
     ]);
     expect(mentionCrumbs("src")).toEqual([]);
     expect(mentionCrumbs("")).toEqual([]);
+  });
+});
+
+describe("mentionPath", () => {
+  it("cwd 内的绝对路径折成相对路径（与 @ 补全的候选口径一致）", () => {
+    expect(mentionPath("/vol1/ws/src/a.ts", "/vol1/ws")).toBe("src/a.ts");
+    expect(mentionPath("/vol1/ws/src/a.ts", "/vol1/ws/")).toBe("src/a.ts");
+    expect(mentionPath("/vol1/ws/a.ts", "/vol1/ws/")).toBe("a.ts");
+  });
+
+  it("cwd 之外（或只是前缀相同）时保留绝对路径", () => {
+    expect(mentionPath("/vol1/other/a.ts", "/vol1/ws")).toBe("/vol1/other/a.ts");
+    expect(mentionPath("/vol1/ws-other/a.ts", "/vol1/ws")).toBe("/vol1/ws-other/a.ts");
+    expect(mentionPath("/vol1/ws", "/vol1/ws")).toBe("/vol1/ws");
+    expect(mentionPath("/vol1/ws/a.ts", "")).toBe("/vol1/ws/a.ts");
   });
 });

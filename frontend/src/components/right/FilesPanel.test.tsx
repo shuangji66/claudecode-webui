@@ -1,7 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { FilesPanel } from "./FilesPanel";
 import { useSidebarStore } from "../../store/useSidebarStore";
+import { useAppStore } from "../../store/useAppStore";
+
+const startDownload = vi.fn();
+vi.mock("../../lib/download", () => ({ startDownload: (url: string) => startDownload(url) }));
 
 const CWD = "/vol1/1000/demo";
 
@@ -19,6 +23,7 @@ function seed() {
     errors: {},
     hidden: true,
   });
+  useAppStore.setState({ mentionRequest: null });
 }
 
 function setUA(value: string) {
@@ -30,6 +35,7 @@ const APP_UA = "Mozilla/5.0 (iPhone) FNAppType/ios FNAppVer/1.38.0";
 
 beforeEach(() => {
   seed();
+  startDownload.mockReset();
   setUA(PLAIN_UA);
 });
 
@@ -38,13 +44,45 @@ afterEach(() => {
 });
 
 describe("FilesPanel 行菜单", () => {
-  it("不在宿主里时只有「复制文件路径」", () => {
+  it("不在宿主里时给「引用到对话 / 下载 / 复制路径」，不给宿主专属项", () => {
     render(<FilesPanel cwd={CWD} active />);
     fireEvent.click(screen.getByLabelText("更多操作 README.md"));
 
+    expect(screen.getByRole("menuitem", { name: /引用到对话/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /下载/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /复制文件路径/ })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /在文件夹显示/ })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: /文件详情/ })).toBeNull();
+  });
+
+  it("「引用到对话」把绝对路径与类型交给 store", () => {
+    render(<FilesPanel cwd={CWD} active />);
+
+    fireEvent.click(screen.getByLabelText("更多操作 README.md"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /引用到对话/ }));
+    expect(useAppStore.getState().mentionRequest).toMatchObject({
+      path: `${CWD}/README.md`,
+      kind: "file",
+    });
+
+    fireEvent.click(screen.getByLabelText("更多操作 src"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /引用到对话/ }));
+    expect(useAppStore.getState().mentionRequest).toMatchObject({ path: `${CWD}/src`, kind: "dir" });
+  });
+
+  it("「下载」走原生下载地址（文件与目录同一个入口）", () => {
+    render(<FilesPanel cwd={CWD} active />);
+
+    fireEvent.click(screen.getByLabelText("更多操作 README.md"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /下载/ }));
+    expect(startDownload).toHaveBeenCalledTimes(1);
+    const fileUrl = startDownload.mock.calls[0][0] as string;
+    expect(fileUrl).toContain("/api/fs/download?");
+    expect(fileUrl).toContain("path=README.md");
+
+    fireEvent.click(screen.getByLabelText("更多操作 src"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /下载/ }));
+    expect(startDownload.mock.calls[1][0]).toContain("path=src");
   });
 
   it("目录的复制项叫「复制文件夹路径」", () => {

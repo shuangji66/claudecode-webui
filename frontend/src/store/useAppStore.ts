@@ -252,6 +252,14 @@ interface AppState {
    * `signal` 让下一个按键到来时取消上一次请求，避免慢盘上的迟到响应盖掉新结果。
    */
   completePaths: (cwd: string, query: string, signal?: AbortSignal) => Promise<FsListing>;
+  /**
+   * 右侧栏「引用到对话」的请求（带单调递增 seq）。Composer 消费一次后清空；
+   * 由 `requestMention` 写入、`consumeMentionRequest` 清除。
+   */
+  mentionRequest: { seq: number; path: string; kind: "file" | "dir" } | null;
+  /** 请 Composer 把某个工作区路径以 `@…` 的形式插进输入框（绝对路径，由 Composer 折算）。 */
+  requestMention: (path: string, kind: "file" | "dir") => void;
+  consumeMentionRequest: () => void;
   /** 打开目录下最近一条对话；createIfEmpty=false 时没有对话就保持空态，不新建。 */
   ensureSession: (cwd?: string, createIfEmpty?: boolean) => Promise<SessionInfo | null>;
   createSession: (cwd?: string) => Promise<void>;
@@ -516,6 +524,12 @@ async function recoverSession(id: string, get: () => AppState): Promise<void> {
  * 读上一次的 nonce 就会归零，重复点同一个子代理时 nonce 又回到 1。
  */
 let subagentViewSeq = 0;
+
+/**
+ * 「引用到对话」的请求序号：只存路径的话，同一个文件点第二次值没变，
+ * Composer 的 effect 不会重跑（与右侧栏 `openRequest` 同一个坑）。
+ */
+let mentionRequestSeq = 0;
 
 export const useAppStore = create<AppState>()((set, get) => ({
   info: null,
@@ -1083,6 +1097,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const params = new URLSearchParams({ cwd, q: query });
     return apiFetch<FsListing>(`/api/fs/complete?${params.toString()}`, { signal });
   },
+
+  mentionRequest: null,
+
+  requestMention: (path, kind) => {
+    mentionRequestSeq += 1;
+    set({ mentionRequest: { seq: mentionRequestSeq, path, kind } });
+  },
+
+  consumeMentionRequest: () => set({ mentionRequest: null }),
 
   mkdirDir: async (parent, name) => {
     const r = await apiFetch<{ path: string }>("/api/fs/mkdir", {

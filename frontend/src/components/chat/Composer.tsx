@@ -3,7 +3,7 @@ import type { CommandInfo, WireAttachment } from "../../transport/types";
 import { useAppStore } from "../../store/useAppStore";
 import { commandDescription, permissionLabel } from "../../lib/labels";
 import { canPickFnos, fnosHostAvailable, pickFnosFiles } from "../../lib/fnos";
-import { applyMention, formatMention, type MentionToken } from "../../lib/mention";
+import { applyMention, formatMention, mentionPath, type MentionToken } from "../../lib/mention";
 import { MentionMenu } from "./MentionMenu";
 import { useMention } from "./useMention";
 import { readDraft, writeDraft } from "../../lib/drafts";
@@ -129,8 +129,12 @@ export function Composer({
   // 菜单吃掉的按键（Tab/Enter/Esc）会在 keyup 时带回**旧的** DOM 光标位置：
   // 刚把 `@REA` 换成 `@README.md `，keyup 再用旧位置同步一次就会把菜单重新弹出来。
   const skipCaretSync = useRef(false);
+  // 上一次处理过的「引用到对话」请求（seq 单调递增，消费一次即止）。
+  const lastMentionSeq = useRef(0);
   const readHostFile = useAppStore((s) => s.readHostFile);
   const channel = useAppStore((s) => s.info?.channel);
+  const mentionRequest = useAppStore((s) => s.mentionRequest);
+  const consumeMentionRequest = useAppStore((s) => s.consumeMentionRequest);
   // 落盘用的是「当前这一格属于哪条对话」：切对话的瞬间 text 还是旧内容，
   // 必须靠 ref 而不是 state 拼 key，否则会把 A 的草稿写进 B。
   const draftKeyRef = useRef(draftKey);
@@ -397,6 +401,22 @@ export function Composer({
     }
     if (refs.length > 0) insertAtCaret(`${refs.join("\n")}\n`);
   };
+
+  // 右侧栏「引用到对话」：把 NAS 路径折成相对会话 cwd 的 `@…`，插到光标处。
+  // 输入框没焦点时插到末尾——用户的目光还在右侧栏，没有「当前光标」可言。
+  useEffect(() => {
+    if (!mentionRequest || mentionRequest.seq <= lastMentionSeq.current) return;
+    lastMentionSeq.current = mentionRequest.seq;
+    consumeMentionRequest();
+    const snippet = formatMention(mentionPath(mentionRequest.path, cwd), mentionRequest.kind);
+    if (snippet === undefined) return;
+    const el = ref.current;
+    const focused = el !== null && document.activeElement === el;
+    const start = focused ? (el.selectionStart ?? text.length) : text.length;
+    const end = focused ? (el.selectionEnd ?? start) : text.length;
+    const value = `${snippet} `;
+    applyDraft(`${text.slice(0, start)}${value}${text.slice(end)}`, start + value.length);
+  }, [mentionRequest, cwd, text, consumeMentionRequest]);
 
   // 不在飞牛宿主里（独立浏览器 / TCP 直连端口）就别摆一个点了必然报错的入口；
   // 判定与页头「在飞牛打开工作区」共用 lib/fnos 的同一条规则。

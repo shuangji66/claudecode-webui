@@ -1,12 +1,15 @@
 package gateway
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -304,5 +307,83 @@ func TestSidebarRejectsSymlinkEscape(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/fs/tree?cwd="+sub, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("子目录: code = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestFsDownloadFileAndFolder(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	root := srv.d.ProjectsRoot
+	if err := os.MkdirAll(filepath.Join(root, "pkg", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pkg", "a.txt"), []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pkg", "sub", "b.txt"), []byte("world"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/fs/download?cwd="+root+"&path=pkg/a.txt", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("无 token 应 401，实际 %d", rec.Code)
+	}
+
+	outside := t.TempDir()
+	req := httptest.NewRequest(http.MethodGet, "/api/fs/download?cwd="+outside+"&path=a.txt", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("未授权目录应 403，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/fs/download?cwd="+root+"&path=pkg/a.txt", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("文件下载 code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != "hello" {
+		t.Fatalf("body = %q", got)
+	}
+	if disposition := rec.Header().Get("Content-Disposition"); !strings.Contains(disposition, "attachment") || !strings.Contains(disposition, "a.txt") {
+		t.Fatalf("Content-Disposition = %q", disposition)
+	}
+
+	// 目录下载是 zip：把响应体当 zip 读，条目名要带顶层目录。
+	req = httptest.NewRequest(http.MethodGet, "/api/fs/download?cwd="+root+"&path=pkg", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("目录下载 code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Header().Get("Content-Disposition"), "pkg.zip") {
+		t.Fatalf("目录下载的文件名 = %q", rec.Header().Get("Content-Disposition"))
+	}
+	body := rec.Body.Bytes()
+	reader, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("响应不是合法 zip: %v", err)
+	}
+	var names []string
+	for _, f := range reader.File {
+		names = append(names, f.Name)
+	}
+	sort.Strings(names)
+	want := []string{"pkg/", "pkg/a.txt", "pkg/sub/", "pkg/sub/b.txt"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("zip 条目 = %v，期望 %v", names, want)
+	}
+
+	// 越界路径：403。
+	req = httptest.NewRequest(http.MethodGet, "/api/fs/download?cwd="+root+"&path=../etc/passwd", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("路径穿越应 403，实际 %d: %s", rec.Code, rec.Body.String())
 	}
 }

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { useT } from "../../lib/i18n";
 import { copyText } from "../../lib/clipboard";
-import { rawFileUrl } from "../../lib/runtime";
+import { startDownload } from "../../lib/download";
+import { fsDownloadUrl, rawFileUrl } from "../../lib/runtime";
+import { useAppStore } from "../../store/useAppStore";
 import { formatBytes, previewKind } from "../../lib/workspace";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import type { FsEntry, FsFile } from "../../transport/types";
@@ -12,7 +14,9 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconCode,
+  IconChat,
   IconCopy,
+  IconDownload,
   IconExternal,
   IconEye,
   IconEyeOff,
@@ -57,6 +61,7 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
   const reloadTree = useSidebarStore((s) => s.reloadTree);
   const setHidden = useSidebarStore((s) => s.setHidden);
   const readFile = useSidebarStore((s) => s.readFile);
+  const requestMention = useAppStore((s) => s.requestMention);
 
   const [selected, setSelected] = useState<string | null>(null);
   const [file, setFile] = useState<FsFile | null>(null);
@@ -143,6 +148,23 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
   const entryMenuItems = (entry: FsEntry): MenuItem[] => {
     const host = fnosHostAvailable();
     const items: MenuItem[] = [];
+    // 「other」是软链/设备文件：引用进对话没有意义，下载也只会 400。
+    if (entry.type === "file" || entry.type === "dir") {
+      items.push(
+        {
+          id: "mention",
+          label: t("引用到对话", "Reference in chat"),
+          icon: <IconChat size={13} className="text-muted" />,
+          onSelect: () => referenceEntry(entry),
+        },
+        {
+          id: "download",
+          label: t("下载", "Download"),
+          icon: <IconDownload size={13} className="text-muted" />,
+          onSelect: () => downloadEntry(entry),
+        },
+      );
+    }
     if (host) {
       items.push({
         id: "reveal",
@@ -166,6 +188,16 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
       });
     }
     return items;
+  };
+
+  /** 引用到对话：只把绝对路径交给 store，相对/绝对由输入框按会话 cwd 折算。 */
+  const referenceEntry = (entry: FsEntry) => {
+    requestMention(absolute(entry.path), entry.type === "dir" ? "dir" : "file");
+  };
+
+  /** 下载：文件原样、目录由后端打包成 zip；走浏览器原生下载，不整份读进内存。 */
+  const downloadEntry = (entry: FsEntry) => {
+    startDownload(fsDownloadUrl(cwd, entry.path));
   };
 
   const revealEntry = async (entry: FsEntry) => {

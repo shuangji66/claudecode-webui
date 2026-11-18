@@ -27,3 +27,18 @@ export async function downloadFile(path: string, filename: string): Promise<void
 export function sessionLogName(id: string): string {
   return `claude-session-${id}.zip`;
 }
+
+/**
+ * 用已经拼好鉴权参数的地址触发一次下载（大文件不经过 blob 内存）。
+ *
+ * 文件名由后端 `Content-Disposition: attachment` 给（目录是 `<目录名>.zip`），
+ * 这里不需要也不该再传 `download` 属性——同源时它会被响应头覆盖。
+ */
+export function startDownload(url: string): void {
+  const a = document.createElement("a");
+  a.href = url;
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
