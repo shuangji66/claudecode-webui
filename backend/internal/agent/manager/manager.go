@@ -689,6 +689,9 @@ func infoOf(s *session.Session) Info {
 }
 
 // newUUID 生成 RFC 4122 v4 UUID；claude 的 --session-id 要求这个格式。
+// NewUUID 生成一个会话 id（自动化任务在网关侧新建对话时也要用同一种 id）。
+func NewUUID() (string, error) { return newUUID() }
+
 func newUUID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

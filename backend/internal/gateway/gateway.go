@@ -29,6 +29,7 @@ import (
 	"ccweb/backend/internal/hub"
 	"ccweb/backend/internal/mcp"
 	"ccweb/backend/internal/plugin"
+	"ccweb/backend/internal/schedule"
 	"ccweb/backend/internal/settings"
 	"ccweb/backend/internal/skills"
 	"ccweb/backend/internal/workspace"
@@ -74,6 +75,8 @@ type Deps struct {
 	Settings      *settings.Store
 	Workspaces    *workspace.Store
 	Conversations *conversation.Store
+	// Schedules 是自动化任务存储；为 nil 时相关路由返回 503。
+	Schedules *schedule.Store
 	// Claude 是 claude 版本管理（下载/切换）；为 nil 时部署相关路由返回 503。
 	Claude ClaudeDeployer
 	// Skills 管理 SKILL.md（个人/项目）；为 nil 时技能路由返回 503。
@@ -117,6 +120,10 @@ type Server struct {
 	// 补过一次「可用插件」（每进程只自动一次，失败留给用户手动重试）。
 	pluginAvailLoaded bool
 	pluginAutoTried   bool
+
+	// runner 是自动化任务的调度循环（装配层创建后接进来）；为 nil 时
+	// 「立即执行」返回 503。
+	runner *schedule.Runner
 
 	// tcp 是直连 TCP 端口的监听状态：端口来自设置，保存后可运行期换端口。
 	tcp tcpState
@@ -193,6 +200,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PATCH /api/conversations", s.authed(s.handlePatchConversation))
 	s.mux.HandleFunc("DELETE /api/conversations", s.authed(s.handleDeleteConversation))
 	s.mux.HandleFunc("POST /api/conversations/fork", s.authed(s.handleForkConversation))
+	// 自动化任务（宿主级调度）：任务列表 / 增删改 / 暂停恢复 / 立即执行 / 运行记录。
+	s.mux.HandleFunc("GET /api/schedules", s.authed(s.handleListSchedules))
+	s.mux.HandleFunc("POST /api/schedules", s.authed(s.handleCreateSchedule))
+	s.mux.HandleFunc("PATCH /api/schedules", s.authed(s.handleUpdateSchedule))
+	s.mux.HandleFunc("DELETE /api/schedules", s.authed(s.handleDeleteSchedule))
+	s.mux.HandleFunc("POST /api/schedules/action", s.authed(s.handleScheduleAction))
+	s.mux.HandleFunc("GET /api/schedules/deliveries", s.authed(s.handleScheduleDeliveries))
 	s.mux.HandleFunc("GET /api/settings", s.authed(s.handleGetSettings))
 	s.mux.HandleFunc("PUT /api/settings", s.authed(s.handlePutSettings))
 	s.mux.HandleFunc("POST /api/settings/test", s.authed(s.handleTestProvider))

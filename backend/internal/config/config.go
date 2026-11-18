@@ -44,6 +44,9 @@ type Config struct {
 	// ConversationsFile 是对话元数据（归档/删除/重命名/最近活跃）的持久化路径
 	// （CCWEB_CONVERSATIONS_FILE）。
 	ConversationsFile string
+	// SchedulesFile 是自动化任务的持久化路径（CCWEB_SCHEDULES_FILE）。
+	// MCP 子命令 `ccweb mcp-schedule` 读的是同一份文件。
+	SchedulesFile string
 	// AutoStart 为 true 时，进程启动后恢复当前工作区最近的一条对话（CCWEB_AUTO_START）；
 	// 没有历史对话时不新建，由前端创建第一条。
 	AutoStart bool
@@ -150,6 +153,7 @@ func Load(version string) Config {
 		SettingsFile:      EnvOr("SETTINGS_FILE", filepath.Join(dataDir, "settings.json")),
 		WorkspacesFile:    EnvOr("WORKSPACES_FILE", filepath.Join(dataDir, "workspaces.json")),
 		ConversationsFile: EnvOr("CONVERSATIONS_FILE", filepath.Join(dataDir, "conversations.json")),
+		SchedulesFile:     EnvOr("SCHEDULES_FILE", filepath.Join(dataDir, "schedules.json")),
 		AutoStart:         envBool("AUTO_START", true),
 		MaxSessions:       maxSessions,
 		IdleTimeout:       idle,

@@ -30,6 +30,7 @@ import (
 	"ccweb/backend/internal/hub"
 	"ccweb/backend/internal/mcp"
 	"ccweb/backend/internal/plugin"
+	"ccweb/backend/internal/schedule"
 	"ccweb/backend/internal/search"
 	"ccweb/backend/internal/settings"
 	"ccweb/backend/internal/skills"
@@ -77,6 +78,13 @@ func main() {
 
 	// 对话元数据：归档/删除/重命名/最近活跃。转录本身由 claude 写盘。
 	convStore, err := conversation.Open(cfg.ConversationsFile)
+	if err != nil {
+		logger.Printf("启动失败: %v", err)
+		os.Exit(1)
+	}
+
+	// 自动化任务：任务存在数据目录下的 schedules.json，调度循环随进程常驻。
+	scheduleStore, err := schedule.Open(cfg.SchedulesFile)
 	if err != nil {
 		logger.Printf("启动失败: %v", err)
 		os.Exit(1)
@@ -147,6 +155,7 @@ func main() {
 		Settings:      store,
 		Workspaces:    wsStore,
 		Conversations: convStore,
+		Schedules:     scheduleStore,
 		// 个人技能挂在 claude 子进程的 HOME 下：process.CleanEnv 会把 HOME 改成
 		// CCWEB_CLAUDE_HOME，所以这里不能用自己的 ~/.claude/skills。
 		Skills:  skills.New(filepath.Join(cfg.ClaudeHome, ".claude", "skills")),
@@ -164,6 +173,11 @@ func main() {
 		TerminalShell: cfg.TerminalShell,
 		StartedAt:     time.Now(),
 	}, logger)
+
+	// 自动化任务的调度循环：到期投递由 gateway 实现（它才有 manager / 对话元数据 /
+	// 工作区围栏）。启动时先跑一次，补投停机期间到期的一次性任务。
+	scheduleRunner := schedule.NewRunner(scheduleStore, srv.DeliverScheduledTask, logger)
+	srv.SetScheduleRunner(scheduleRunner)
 
 	// APP 启动预热：恢复当前工作区最近的一条对话，而不是新建一条空对话。
 	// 前端仍会按自己保存的 active id 选择；这里只是让首屏更快，manager.Resume
@@ -212,6 +226,8 @@ func main() {
 	watchCtx, stopWatch := context.WithCancel(context.Background())
 	defer stopWatch()
 	startClaudeUpdateWatch(watchCtx, claudeMgr, srv, claudeUpdateInterval, logger)
+
+	go scheduleRunner.Start(watchCtx)
 
 	// 收到 TERM/INT 时优雅退出：关掉全部子进程，避免 claude 变孤儿。
 	stop := make(chan os.Signal, 1)

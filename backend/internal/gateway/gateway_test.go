@@ -38,6 +38,10 @@ type fakeMgr struct {
 	closedUsing []string
 	// subdirCwd 非空时 List/Get 用它在根目录下再套一层，模拟「子目录里的会话」。
 	subdirCwd string
+	// sessions 保存测试注入的会话（自动化任务投递要真的往 stdin 写一行）。
+	sessions map[string]*session.Session
+	// newSession 非空时，Create/Resume/StartFresh 会给新 id 现造一个会话登记进去。
+	newSession func(id, cwd string) *session.Session
 }
 
 func (f *fakeMgr) cwd() string {
@@ -67,17 +71,20 @@ func (f *fakeMgr) Create(cwd, model, mode string) (manager.Info, error) {
 		return manager.Info{}, errFake
 	}
 	f.created = append(f.created, cwd)
+	f.register("sess-1", cwd)
 	return manager.Info{ID: "sess-1", Cwd: cwd, State: "ready"}, nil
 }
 
 func (f *fakeMgr) Resume(id, cwd, model, mode string) (manager.Info, error) {
 	f.resumed = append(f.resumed, id)
+	f.register(id, cwd)
 	return manager.Info{ID: id, Cwd: cwd, State: "ready"}, nil
 }
 
 // StartFresh 用同一个 id 起全新会话（对话在 claude 那边没有转录时用）。
 func (f *fakeMgr) StartFresh(id, cwd, model, mode string) (manager.Info, error) {
 	f.fresh = append(f.fresh, id)
+	f.register(id, cwd)
 	return manager.Info{ID: id, Cwd: cwd, State: "ready"}, nil
 }
 
@@ -95,10 +102,24 @@ func (f *fakeMgr) Ensure(cwd, model, mode string) (manager.Info, error) {
 }
 
 func (f *fakeMgr) Get(id string) (*session.Session, bool) {
+	if s, ok := f.sessions[id]; ok {
+		return s, true
+	}
 	if id == "sess-1" {
 		return &session.Session{ID: "sess-1", Cwd: f.cwd()}, true
 	}
 	return nil, false
+}
+
+// register 在 Create/Resume/StartFresh 之后登记一个可写会话。
+func (f *fakeMgr) register(id, cwd string) {
+	if f.newSession == nil {
+		return
+	}
+	if f.sessions == nil {
+		f.sessions = make(map[string]*session.Session)
+	}
+	f.sessions[id] = f.newSession(id, cwd)
 }
 
 func (f *fakeMgr) List() []manager.Info {
