@@ -270,6 +270,41 @@ pre {
     background: color-mix(in srgb, var(--c-ink) 7%, transparent);
   }
 
+  /* 手动排序的吸附提示线（对齐 DSH）：2px 强调色横线 + 左端一颗圆点，
+     画在被拖到的行的上沿或下沿，明确「松手会插到这里」。 */
+  .side-drop-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--c-brand);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--c-brand) 22%, transparent),
+      0 0 6px color-mix(in srgb, var(--c-brand) 55%, transparent);
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .side-drop-line::before {
+    content: "";
+    position: absolute;
+    left: -1px;
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    border-radius: 9999px;
+    background: inherit;
+    transform: translateY(-50%);
+  }
+
+  .side-drop-line-before {
+    top: -1px;
+  }
+
+  .side-drop-line-after {
+    bottom: -1px;
+  }
+
   /* 有轮次刻度时把原生滚动条藏起来，避免和刻度叠在一起。 */
   .dsh-scroll-none {
     scrollbar-width: none;

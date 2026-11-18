@@ -3,12 +3,15 @@ import {
   DEFAULT_VIEW,
   FLAT_KEY,
   applyOrder,
+  canDrop,
+  dropHalf,
   flattenWorkspaceTree,
   loadOrder,
   loadView,
   matchArchive,
   moveBefore,
   moveStep,
+  moveTo,
   parseView,
   saveOrder,
   saveView,
@@ -67,14 +70,20 @@ describe("手动顺序", () => {
     expect(applyOrder(list, []).map((x) => x.id)).toEqual(["a", "b", "c"]);
   });
 
-  it("moveBefore 把一项挪到另一项前面", () => {
+  it("moveBefore / moveTo 的落点就是提示线画的地方", () => {
     expect(moveBefore([], list, "c", "a")).toEqual(["c", "a", "b"]);
-    expect(moveBefore([], list, "a", "c")).toEqual(["b", "c", "a"]);
+    // 「插到 c 前面」就是 a、b 之间的位置——旧实现（不复位下标）会落到 c 后面，
+    // 用户看到提示线在上沿、松手却跑到下沿，正是这轮改掉的问题。
+    expect(moveBefore([], list, "a", "c")).toEqual(["b", "a", "c"]);
+    expect(moveTo([], list, "a", "c", "after")).toEqual(["b", "c", "a"]);
+    expect(moveTo([], list, "c", "a", "before")).toEqual(["c", "a", "b"]);
+    expect(moveTo([], list, "b", "b", "after")).toEqual(["a", "b", "c"]);
   });
 
   it("跨组（找不到 id）时顺序不变，但返回完整顺序", () => {
     const order = ["a", "b"];
     expect(moveBefore(order, list, "zzz", "a")).toEqual(["a", "b", "c"]);
+    expect(moveTo(order, list, "a", "zzz", "after")).toEqual(["a", "b", "c"]);
     expect(moveStep(order, list, "zzz", 1)).toEqual(["a", "b", "c"]);
   });
 
@@ -82,6 +91,29 @@ describe("手动顺序", () => {
     expect(moveStep([], list, "b", -1)).toEqual(["b", "a", "c"]);
     expect(moveStep([], list, "b", 1)).toEqual(["a", "c", "b"]);
     expect(moveStep([], list, "a", -1)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("拖拽落点（dropHalf / canDrop）", () => {
+  const rect = { top: 100, height: 28 };
+
+  it("以中线分上下半；正好在中线上算下半", () => {
+    expect(dropHalf(100, rect)).toBe("before");
+    expect(dropHalf(113, rect)).toBe("before");
+    expect(dropHalf(114, rect)).toBe("after");
+    expect(dropHalf(127, rect)).toBe("after");
+  });
+
+  // 置顶由 pinnedFirst 最后统一排序：允许跨置顶组落位的话，
+  // 提示线画在最上面、松手却被拉回置顶项之后，看着像没生效。
+  it("同组、不是自己、置顶状态一致才给落点", () => {
+    const dragged = { id: "a", groupKey: "/w", pinned: false };
+    expect(canDrop(dragged, { id: "b", pinned: false }, "/w")).toBe(true);
+    expect(canDrop(dragged, { id: "b", pinned: true }, "/w")).toBe(false);
+    expect(canDrop(dragged, { id: "a", pinned: false }, "/w")).toBe(false);
+    expect(canDrop(dragged, { id: "b", pinned: false }, "/other")).toBe(false);
+    // 没有 pinned 字段的旧数据按「未置顶」处理。
+    expect(canDrop(dragged, { id: "b" }, "/w")).toBe(true);
   });
 });
 

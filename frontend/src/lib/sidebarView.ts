@@ -67,26 +67,66 @@ function idsOf(order: string[], list: ConversationInfo[]): string[] {
   return applyOrder(list, order).map((c) => c.id);
 }
 
+/** 拖拽落点：落在目标行的上半 = 插到它前面，下半 = 插到它后面。 */
+export type DropHalf = "before" | "after";
+
 /**
- * 把 fromId 挪到 toId 前面。
+ * 指针落在目标行的哪一半（对齐 DSH 的 rowHalf）。
+ *
+ * 只认中线：没有这一层，往「下一行」拖永远只能落到它前面，
+ * 想放到列表末尾就得先拖到再下一行，最后一格永远够不着。
+ */
+export function dropHalf(clientY: number, rect: { top: number; height: number }): DropHalf {
+  return clientY < rect.top + rect.height / 2 ? "before" : "after";
+}
+
+/**
+ * 能不能把 dragged 落到 target 上。
+ *
+ * 三条都必须满足：同一组（跨工作区的拖拽没有落点）、不是自己、置顶状态一致——
+ * `pinnedFirst` 是最后一道排序，把一条未置顶的拖到置顶项中间会被拉回去，
+ * 与其落位后位置「跳」一下，不如干脆不给提示线。
+ */
+export function canDrop(
+  dragged: { id: string; groupKey: string; pinned: boolean },
+  target: { id: string; pinned?: boolean },
+  groupKey: string,
+): boolean {
+  return dragged.groupKey === groupKey && dragged.id !== target.id && dragged.pinned === Boolean(target.pinned);
+}
+
+/**
+ * 把 fromId 挪到 toId 的前面或后面。
  *
  * 找不到 id（跨组拖拽、并发删除）时返回当前完整顺序而不是原数组：
  * 调用方拿到的永远是一份可以直接落盘的完整顺序。
  */
+export function moveTo(
+  order: string[],
+  list: ConversationInfo[],
+  fromId: string,
+  toId: string,
+  half: DropHalf,
+): string[] {
+  const ids = idsOf(order, list);
+  const from = ids.indexOf(fromId);
+  if (from < 0 || ids.indexOf(toId) < 0 || fromId === toId) return ids;
+  // 先摘掉自己再找落点：否则往下拖时要多减一格，往上拖时又会少一格。
+  const next = [...ids];
+  next.splice(from, 1);
+  const to = next.indexOf(toId);
+  next.splice(to + (half === "after" ? 1 : 0), 0, fromId);
+  return next;
+}
+
+/** 插到 toId 前面（moveTo 的简写）。 */
 export function moveBefore(
   order: string[],
   list: ConversationInfo[],
   fromId: string,
   toId: string,
 ): string[] {
-  const ids = idsOf(order, list);
-  const from = ids.indexOf(fromId);
-  const to = ids.indexOf(toId);
-  if (from < 0 || to < 0 || from === to) return ids;
-  const next = [...ids];
-  next.splice(from, 1);
-  next.splice(to, 0, fromId);
-  return next;
+  return moveTo(order, list, fromId, toId, "before");
 }
 
 /** 上移 / 下移一格（触屏没有拖拽，用菜单里的这两项）。 */

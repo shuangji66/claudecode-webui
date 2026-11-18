@@ -36,6 +36,7 @@ src/
   lib/permissionModes.ts 权限模式判定与危险模式标记（唯一入口）
   lib/sessionExport.ts 会话导出 Markdown（右上角「更多」菜单）
   lib/sidebarView.ts   左侧栏视图偏好：分组/排序/归档筛选 + 手动顺序（纯函数 + localStorage）
+  lib/dragImage.ts     手动排序的拖影：自己造一块与行同宽的替身交给 setDragImage
   lib/subagents.ts     从消息流收集子代理（页头计数 / 审批归属，纯函数）
   lib/turns.ts         「轮」的切分与视口所在轮（对话区刻度跳转，纯函数）
   lib/usage.ts         用量换算：上下文/缓存命中/tok/s（只从 CLI 的 usage 派生）
@@ -169,6 +170,19 @@ src/
     localStorage（`ccweb-sidebar-view`），手动顺序存在 `ccweb-session-order`
     （按工作区路径分键，单列表用 `__flat__`）。手动排序的入口有两个：桌面拖拽 +
     会话「更多」菜单里的上移/下移（触屏没有拖拽）。视图偏好是**每台设备**的，不进后端。
+    **拖拽的落点由行的上/下半决定**（`dropHalf`：上半插到它前面、下半插到它后面，
+    `moveTo` 的落点就是提示线画的地方）：拖到哪一行，就在那一行的上沿或下沿画一条
+    2px 强调色提示线 + 左端圆点（`styles.css` 的 `.side-drop-line`，对齐 DSH 的
+    `dropBefore`/`dropAfter`）。三条边界：
+    - **线只在真能落下去的行上画**（`canDrop`：同组、不是自己、置顶状态一致）。
+      跨工作区、拖到自己、在置顶项与非置顶项之间都不给线——`pinnedFirst` 是最后一道排序，
+      允许落位会变成「画了线却被拉回去」。
+    - **落位只认真正的 `drop`**：拖到列表外松手或按 Esc 取消都不改顺序，
+      提示线是预告而不是「已经插进去」。
+    - **拖影自己造**（`lib/dragImage.ts`，对齐 DSH 的 `useRowDragPreview`）：浏览器默认那张
+      截图在手机上会被缩小，看起来像把被拖的那行压扁了。我们在视口外挂一块与行同宽的
+      不透明替身交给 `setDragImage`，`dragend` 时摘掉；拿不到 `setDragImage` 的 WebView
+      静默回落到默认拖影。
 24. **回合进行中的消息走「待发送」队列，不许直接写 stdin 之外的地方**（`lib/queue.ts` +
     `store.queued`）：插话要带 **`priority: "now"`**（`sendPrompt` 的第 4 个参数）——只写裸
     user 帧的话 CLI 按默认的 next 处理，要等本轮工具收尾，看起来跟排队一样（「插话没生效」
@@ -291,8 +305,9 @@ src/
 - **置顶（`pinned`）只是排序偏好**（`lib/conversations.pinnedFirst`）：两种排序模式都先过它，
   置顶的永远在同一组最前，组内顺序保持原样；它不进 `LastFor`，不影响「默认恢复哪一条」，
   也不结束进程。行上常驻一颗小图钉表示置顶状态，取消置顶从行内按钮或菜单点。
-  **手动排序下把一条未置顶的拖到置顶项之上会被拉回**——`pinnedFirst` 是最后一道排序，
-  拖拽只改组内相对顺序。要换位置就先取消置顶，不要为此去掉这层排序。
+  **置顶项与非置顶项之间拖不出落点**（`sidebarView.canDrop`）：`pinnedFirst` 是最后一道排序，
+  允许落位就成了「提示线画在最上面、松手却被拉回置顶项之后」。拖拽只改组内相对顺序；
+  要换位置就先取消置顶，不要为此去掉这层排序。
 - **「复制 Session ID」已暂时下线**（`Sidebar.tsx` 的 `SHOW_COPY_SESSION_ID = false`）：
   菜单项藏起来了，但 `copySessionId`、剪贴板失败回落与实现都**没删**，恢复时改回 `true`
   并恢复它的组件测试。下线的理由：这个 id 只服务 `--resume` / 排查，粘进对话不会让模型

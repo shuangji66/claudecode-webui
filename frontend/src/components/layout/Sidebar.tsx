@@ -9,16 +9,20 @@ import {
   FLAT_KEY,
   OTHER_KEY,
   applyOrder,
+  canDrop,
+  dropHalf,
   flattenWorkspaceTree,
   loadOrder,
   loadView,
   matchArchive,
-  moveBefore,
   moveStep,
+  moveTo,
   saveOrder,
   saveView,
+  type DropHalf,
   type SidebarView,
 } from "../../lib/sidebarView";
+import { clearDragPreview, startDragPreview } from "../../lib/dragImage";
 import { askConfirm, askPrompt } from "../common/SystemDialogs";
 import { copyText } from "../../lib/clipboard";
 import { Menu, type MenuItem } from "../common/Menu";
@@ -94,6 +98,14 @@ interface WsMenuState {
   anchor: HTMLElement;
 }
 
+/** 手动排序的拖拽状态：拖的是谁（哪一组、是否置顶），以及当前吸附在哪一行的哪半边。 */
+interface DragState {
+  id: string;
+  groupKey: string;
+  pinned: boolean;
+  over: { id: string; half: DropHalf } | null;
+}
+
 export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSettings, onOpenDeploy, onAddWorkspace, onOpenHistory }: Props) {
   const t = useT();
   const claude = useAppStore((s) => s.claude);
@@ -133,8 +145,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const [view, setView] = useState<SidebarView>(loadView);
   const [order, setOrder] = useState<Record<string, string[]>>(loadOrder);
   const [viewAnchor, setViewAnchor] = useState<HTMLElement | null>(null);
-  /** 拖拽中的会话 id：手动排序用。 */
-  const dragId = useRef<string | null>(null);
+  /** 拖拽中的会话与当前吸附位置：手动排序用（对齐 DSH 的 drag marker）。 */
+  const [drag, setDrag] = useState<DragState | null>(null);
   /** 悬浮预览：鼠标停住一会儿才弹，离开/滚动就收。 */
   const [hover, setHover] = useState<{ conv: ConversationInfo; anchor: HTMLElement } | null>(null);
   const [hoverPreview, setHoverPreview] = useState<HistoryPreview | null>(null);
@@ -278,8 +290,14 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   }, [hover, loadPreview]);
 
   /** 手动排序的落盘入口：拖拽和菜单里的上移/下移共用。 */
-  const reorder = (key: string, list: ConversationInfo[], fromId: string, toId: string) => {
-    setOrder((prev) => ({ ...prev, [key]: moveBefore(prev[key] ?? [], list, fromId, toId) }));
+  const reorder = (key: string, list: ConversationInfo[], fromId: string, toId: string, half: DropHalf) => {
+    setOrder((prev) => ({ ...prev, [key]: moveTo(prev[key] ?? [], list, fromId, toId, half) }));
+  };
+  const commitDrag = (d: DragState) => {
+    if (!d.over) return;
+    const group = groups.find((g) => g.path === d.groupKey);
+    if (!group) return;
+    reorder(d.groupKey, group.conversations, d.id, d.over.id, d.over.half);
   };
   const stepOrder = (key: string, list: ConversationInfo[], id: string, delta: number) => {
     setOrder((prev) => ({ ...prev, [key]: moveStep(prev[key] ?? [], list, id, delta) }));
@@ -287,12 +305,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const groupOf = (c: ConversationInfo) => groups.find((g) => g.conversations.some((x) => x.id === c.id));
 
   /** 一行会话：状态点 + 标题 +（单列表模式）工作区名 + 时间 + 管理菜单。 */
-  const renderConversation = (
-    c: ConversationInfo,
-    groupKey: string,
-    list: ConversationInfo[],
-    showWorkspace: boolean,
-  ) => {
+  const renderConversation = (c: ConversationInfo, groupKey: string, showWorkspace: boolean) => {
     const active = c.id === activeId;
     const liveState = c.live ? (states[c.id] ?? c.state ?? "ready") : "";
     // 待审批 > 进行中 > 完成未看 > 活跃（不画点）> 未运行（灰点），见 lib/conversations。
@@ -303,6 +316,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       done: Boolean(doneIds[c.id]),
     });
     const manual = view.sort === "manual";
+    // 吸附提示线只画在「这次真的能落下去」的那一行上：同组、不是自己、置顶状态一致。
+    const marker = drag?.over?.id === c.id ? drag.over.half : null;
     return (
       <div
         key={c.id}
@@ -313,33 +328,57 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         onDragStart={
           manual
             ? (e) => {
-                dragId.current = c.id;
+                endHover();
                 e.dataTransfer.effectAllowed = "move";
                 e.dataTransfer.setData("text/plain", c.id);
+                // 自己造拖影：浏览器默认那张图在手机上会被缩小，看起来像把这行压扁了。
+                startDragPreview(e.dataTransfer, e.currentTarget, e.clientX, e.clientY);
+                setDrag({ id: c.id, groupKey, pinned: Boolean(c.pinned), over: null });
               }
             : undefined
         }
         onDragOver={
           manual
             ? (e) => {
-                if (dragId.current && dragId.current !== c.id) {
+                if (!drag) return;
+                const valid = canDrop(drag, c, groupKey);
+                if (valid) {
                   e.preventDefault();
                   e.dataTransfer.dropEffect = "move";
                 }
+                // 提示线永远跟着指针所在的那一行：飘到不能落的行（自己 / 置顶组）上，
+                // 线就收掉，而不是留在上一行——否则松手会落到一个已经不看的位置。
+                const over = valid ? { id: c.id, half: dropHalf(e.clientY, e.currentTarget.getBoundingClientRect()) } : null;
+                setDrag((prev) => {
+                  if (!prev) return prev;
+                  // dragover 每帧都来：位置没变就别触发重渲染。
+                  if (prev.over?.id === over?.id && prev.over?.half === over?.half) return prev;
+                  return { ...prev, over };
+                });
               }
             : undefined
         }
         onDrop={
           manual
             ? (e) => {
+                if (!drag) return;
                 e.preventDefault();
-                const from = dragId.current ?? e.dataTransfer.getData("text/plain");
-                dragId.current = null;
-                if (from && from !== c.id) reorder(groupKey, list, from, c.id);
+                commitDrag(drag);
+                setDrag(null);
+                clearDragPreview();
               }
             : undefined
         }
-        onDragEnd={manual ? () => (dragId.current = null) : undefined}
+        onDragEnd={
+          manual
+            ? () => {
+                // 落位只认真正的 drop：拖到空白处或按 Esc 取消都不改顺序
+                // （提示线是「松手会插到这里」的预告，不是「已经插进去」）。
+                setDrag(null);
+                clearDragPreview();
+              }
+            : undefined
+        }
       >
         <button
           type="button"
@@ -412,6 +451,15 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             <IconMore size={14} />
           </button>
         </div>
+        {/* 吸附提示线（对齐 DSH）：拖到这一行的上半/下半就画在它的上/下沿，
+            比「整行变色」清楚得多，也不会盖住标题。 */}
+        {marker && (
+          <span
+            aria-hidden
+            data-drop-line={marker}
+            className={`side-drop-line ${marker === "before" ? "side-drop-line-before" : "side-drop-line-after"}`}
+          />
+        )}
       </div>
     );
   };
@@ -734,7 +782,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                 {g.conversations.length === 0 && (
                   <p className="px-2 py-1.5 text-[11px] text-faint">{t("暂无对话", "No conversations")}</p>
                 )}
-                {g.conversations.map((c) => renderConversation(c, FLAT_KEY, g.conversations, true))}
+                {g.conversations.map((c) => renderConversation(c, FLAT_KEY, true))}
               </div>
             );
           }
@@ -802,7 +850,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                       {isCurrent && starting ? t("正在启动 Claude…", "Starting Claude…") : t("暂无对话", "No conversations")}
                     </p>
                   )}
-                  {g.conversations.map((c) => renderConversation(c, g.path, g.conversations, false))}
+                  {g.conversations.map((c) => renderConversation(c, g.path, false))}
                 </div>
               )}
             </div>

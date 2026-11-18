@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { Sidebar } from "./Sidebar";
 import { useAppStore } from "../../store/useAppStore";
 
@@ -403,5 +403,175 @@ describe("Sidebar 退出登录", () => {
     useAppStore.setState({ info: { auth_required: false } as never });
     renderSidebar();
     expect(screen.queryByRole("button", { name: "退出登录" })).toBeNull();
+  });
+});
+
+describe("Sidebar 手动排序的拖拽（对齐 DSH）", () => {
+  const cwd = "/w/demo";
+
+  function seed(pinned = false) {
+    localStorage.clear();
+    localStorage.setItem("ccweb-sidebar-view", JSON.stringify({ group: "workspace", sort: "manual", archive: "hide" }));
+    useAppStore.setState({
+      workspaces: [{ path: cwd, name: "demo", last_used: "", exists: true }],
+      currentWorkspace: cwd,
+      activeId: null,
+      conversations: [
+        {
+          id: "c-a",
+          cwd,
+          title: "会话甲",
+          created_at: "",
+          last_active: "2026-01-02T00:00:00Z",
+          messages: 1,
+          archived: false,
+          live: false,
+          pinned,
+        },
+        {
+          id: "c-b",
+          cwd,
+          title: "会话乙",
+          created_at: "",
+          last_active: "2026-01-01T00:00:00Z",
+          messages: 1,
+          archived: false,
+          live: false,
+        },
+      ],
+    });
+  }
+
+  function rowOf(title: string): HTMLElement {
+    return screen.getByRole("button", { name: `管理对话 ${title}` }).parentElement!.parentElement!;
+  }
+
+  /** jsdom 不做布局：给行一个固定高度，落点的上/下半才判得出来。 */
+  function stubLayout(row: HTMLElement, top = 100, height = 28) {
+    row.getBoundingClientRect = () =>
+      ({ top, height, left: 0, right: 200, bottom: top + height, width: 200, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+  }
+
+  /** jsdom 没有 DragEvent，RTL 会退回 Event（丢掉 clientY）：手动补上指针位置。 */
+  function dragOver(el: HTMLElement, dt: DataTransfer, clientY: number) {
+    const ev = createEvent.dragOver(el, { dataTransfer: dt });
+    Object.defineProperty(ev, "clientY", { value: clientY });
+    fireEvent(el, ev);
+  }
+
+  function orderOf(key: string): string[] | undefined {
+    return (JSON.parse(localStorage.getItem("ccweb-session-order") ?? "{}") as Record<string, string[]>)[key];
+  }
+
+  function fakeDataTransfer() {
+    return {
+      effectAllowed: "",
+      dropEffect: "move",
+      setDragImage: vi.fn(),
+      setData: vi.fn(),
+      getData: () => "",
+    } as unknown as DataTransfer;
+  }
+
+  // 拖到目标行的上半 = 插到它前面，下半 = 插到它后面。提示线画在哪一半，
+  // 松手就落在哪一半——旧实现没有提示线，落点还固定是「目标行的原下标」。
+  it("拖到行的上半画上沿线、下半画下沿线", () => {
+    seed();
+    renderSidebar();
+    const from = rowOf("会话甲");
+    const target = rowOf("会话乙");
+    stubLayout(from);
+    stubLayout(target);
+
+    const dt = fakeDataTransfer();
+    fireEvent.dragStart(from, { dataTransfer: dt });
+
+    dragOver(target, dt, 102);
+    expect(target.querySelector('[data-drop-line="before"]')).not.toBeNull();
+    expect(target.querySelector('[data-drop-line="after"]')).toBeNull();
+
+    dragOver(target, dt, 126);
+    expect(target.querySelector('[data-drop-line="after"]')).not.toBeNull();
+    expect(target.querySelector('[data-drop-line="before"]')).toBeNull();
+
+    // 离开这一行，提示线跟着消失（不会同时挂在两行上）。
+    dragOver(from, dt, 102);
+    expect(target.querySelector("[data-drop-line]")).toBeNull();
+  });
+
+  it("拖到自己身上不给提示线", () => {
+    seed();
+    renderSidebar();
+    const from = rowOf("会话甲");
+    stubLayout(from);
+
+    const dt = fakeDataTransfer();
+    fireEvent.dragStart(from, { dataTransfer: dt });
+    dragOver(from, dt, 102);
+    expect(from.querySelector("[data-drop-line]")).toBeNull();
+  });
+
+  it("落位后写进手动顺序，并把拖影清掉", () => {
+    seed();
+    renderSidebar();
+    const from = rowOf("会话甲");
+    const target = rowOf("会话乙");
+    stubLayout(from);
+    stubLayout(target);
+
+    const dt = fakeDataTransfer();
+    fireEvent.dragStart(from, { dataTransfer: dt });
+    // 自己造的全尺寸拖影：交给 setDragImage 的是离屏替身，不是行本身。
+    expect(dt.setDragImage).toHaveBeenCalledTimes(1);
+    const ghost = (dt.setDragImage as unknown as { mock: { calls: [HTMLElement, number, number][] } }).mock.calls[0][0];
+    expect(document.body.contains(ghost)).toBe(true);
+
+    dragOver(target, dt, 126);
+    fireEvent.drop(target, { dataTransfer: dt });
+
+    expect(orderOf(cwd)).toEqual(["c-b", "c-a"]);
+    expect(document.body.contains(ghost)).toBe(false);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  // 置顶由 pinnedFirst 最后统一排序：跨置顶组落位会让提示线「画了但不生效」，
+  // 所以干脆不给落点。
+  it("置顶项与非置顶项之间不给落点", () => {
+    seed(true);
+    renderSidebar();
+    const pinnedRow = rowOf("会话甲");
+    const plainRow = rowOf("会话乙");
+    stubLayout(pinnedRow);
+    stubLayout(plainRow);
+
+    const dt = fakeDataTransfer();
+    fireEvent.dragStart(plainRow, { dataTransfer: dt });
+    dragOver(pinnedRow, dt, 102);
+    expect(pinnedRow.querySelector("[data-drop-line]")).toBeNull();
+
+    fireEvent.drop(pinnedRow, { dataTransfer: dt });
+    expect(orderOf(cwd)).toBeUndefined();
+  });
+
+  // 落位只认真正的 drop：拖到列表外松手（或 Esc 取消）不该偷偷改顺序，
+  // 否则提示线成了「已经插过去了」的假象。
+  it("在列表外松手（没有 drop）不落位，并清掉拖影", () => {
+    seed();
+    renderSidebar();
+    const from = rowOf("会话甲");
+    const target = rowOf("会话乙");
+    stubLayout(from);
+    stubLayout(target);
+
+    const dt = fakeDataTransfer();
+    fireEvent.dragStart(from, { dataTransfer: dt });
+    dragOver(target, dt, 126);
+    const ghost = (dt.setDragImage as unknown as { mock: { calls: [HTMLElement, number, number][] } }).mock.calls[0][0];
+
+    fireEvent.dragEnd(from, { dataTransfer: { ...dt, dropEffect: "none" } as unknown as DataTransfer });
+
+    expect(orderOf(cwd)).toBeUndefined();
+    expect(document.body.contains(ghost)).toBe(false);
+    expect(target.querySelector("[data-drop-line]")).toBeNull();
   });
 });
