@@ -92,6 +92,11 @@ type Server struct {
 	AlwaysLoad bool              `json:"always_load,omitempty"`
 	Disabled   bool              `json:"disabled"`
 	ConfigPath string            `json:"config_path"`
+	// Builtin 表示这条服务由 ccweb 自己注册、由启动流程维护（目前只有自动化任务的
+	// ccweb-schedule）。它不是配置文件里的字段，也不由本包判定：网关列出结果时打标，
+	// 界面据此不给「删除」按钮，DELETE 接口也拒绝——删了下次启动照样被写回，
+	// 中间那段时间只是白丢掉工具。
+	Builtin bool `json:"builtin,omitempty"`
 }
 
 // Payload 是 GET /api/mcp 的返回。

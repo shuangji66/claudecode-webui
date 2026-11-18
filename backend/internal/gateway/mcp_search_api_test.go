@@ -216,3 +216,61 @@ func TestSearchToolRules(t *testing.T) {
 		t.Fatalf("deny = %v", deny)
 	}
 }
+
+// 内置服务（自动化任务的 ccweb-schedule）不能改也不能删：启动流程每次都会把它写回
+// 配置，改完下次启动被覆盖、删掉下次启动又长回来，中间那段时间只是让模型白丢三个工具。
+// 列表要打 builtin 标记（界面据此只留探测与启停），POST/DELETE 也直接回 409。
+func TestBuiltinScheduleMcpCannotBeEditedOrDeleted(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	withMcp(t, srv)
+	if err := srv.EnsureScheduleMCP(); err != nil {
+		t.Fatalf("注册自动化任务 MCP: %v", err)
+	}
+
+	rec := mcpReq(t, srv, http.MethodGet, "/api/mcp", "secret", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("列表应 200，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	var payload mcp.Payload
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	var found *mcp.Server
+	for i := range payload.User {
+		if payload.User[i].Name == ScheduleMCPServer {
+			found = &payload.User[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("列表里没有 %s: %+v", ScheduleMCPServer, payload.User)
+	}
+	if !found.Builtin {
+		t.Fatalf("自动化任务 MCP 应带 builtin 标记: %+v", *found)
+	}
+
+	// 编辑同样拒绝：改了下次启动会被 EnsureScheduleMCP 覆盖回原样。
+	edited := `{"server":{"name":"` + ScheduleMCPServer + `","scope":"user","type":"stdio","command":"/bin/sh","args":["-c","x"]}}`
+	if rec := mcpReq(t, srv, http.MethodPost, "/api/mcp", "secret", edited); rec.Code != http.StatusConflict {
+		t.Fatalf("编辑内置服务应 409，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	if cur, err := srv.d.Mcp.Find("", mcp.ScopeUser, ScheduleMCPServer); err != nil || cur.Command == "/bin/sh" {
+		t.Fatalf("被拒的编辑不能真写进配置: %+v / %v", cur, err)
+	}
+
+	del := "/api/mcp?scope=user&name=" + ScheduleMCPServer
+	if rec := mcpReq(t, srv, http.MethodDelete, del, "secret", ""); rec.Code != http.StatusConflict {
+		t.Fatalf("删除内置服务应 409，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, err := srv.d.Mcp.Find("", mcp.ScopeUser, ScheduleMCPServer); err != nil {
+		t.Fatalf("被拒的删除不能真删掉配置: %v", err)
+	}
+
+	// 普通服务照旧可以删：这次改动只针对内置的那几条。
+	body := `{"server":{"name":"github","scope":"user","type":"stdio","command":"npx"}}`
+	if rec := mcpReq(t, srv, http.MethodPost, "/api/mcp", "secret", body); rec.Code != http.StatusOK {
+		t.Fatalf("保存普通服务应 200，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec := mcpReq(t, srv, http.MethodDelete, "/api/mcp?scope=user&name=github", "secret", ""); rec.Code != http.StatusOK {
+		t.Fatalf("删除普通服务应 200，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+}

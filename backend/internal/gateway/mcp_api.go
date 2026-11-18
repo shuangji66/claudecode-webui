@@ -85,7 +85,19 @@ func (s *Server) handleListMcp(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, "读取 MCP 配置失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	markBuiltinMcp(&payload)
 	writeJSON(w, payload)
+}
+
+// markBuiltinMcp 给 ccweb 自己维护的服务打标（界面据此只留探测与启停）。
+//
+// 这个标记只在这里算：mcp 包不认识「哪些名字是内置的」，那属于装配/网关的事。
+func markBuiltinMcp(payload *mcp.Payload) {
+	for i := range payload.User {
+		if isBuiltinMcp(payload.User[i].Scope, payload.User[i].Name) {
+			payload.User[i].Builtin = true
+		}
+	}
 }
 
 // handleSaveMcp 新增或覆盖一条服务。
@@ -102,6 +114,13 @@ func (s *Server) handleSaveMcp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// 内置服务也不许编辑：改了下次启动被 EnsureScheduleMCP 覆盖回原样，中间那段时间
+	// 会话里跑的是「用户以为改过、实际马上会消失」的配置。启停仍然开放（那是暂存语义）。
+	if isBuiltinMcp(body.Server.Scope, body.Server.Name) {
+		writeErr(w, "内置服务由 ccweb 自动维护（自动化任务的模型入口），不能编辑；需要临时关掉请用「停用」",
+			http.StatusConflict)
+		return
+	}
 	saved, err := s.d.Mcp.Save(cwd, body.Server)
 	if err != nil {
 		writeMcpError(w, err)
@@ -115,6 +134,14 @@ func (s *Server) handleDeleteMcp(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	cwd, ok := s.mcpTarget(w, q.Get("scope"), q.Get("cwd"))
 	if !ok {
+		return
+	}
+	// 内置服务（自动化任务的 ccweb-schedule）删不得：删掉之后模型立刻没有那三个工具，
+	// 下次启动 EnsureScheduleMCP 又原样写回来——用户看到的是「删了又自己长出来」。
+	// 只想暂时关掉就用「停用」（写进暂存文件，重启后仍然保持）。
+	if isBuiltinMcp(q.Get("scope"), q.Get("name")) {
+		writeErr(w, "内置服务由 ccweb 自动维护（自动化任务的模型入口），不能删除；需要临时关掉请用「停用」",
+			http.StatusConflict)
 		return
 	}
 	if err := s.d.Mcp.Delete(cwd, q.Get("scope"), q.Get("name")); err != nil {

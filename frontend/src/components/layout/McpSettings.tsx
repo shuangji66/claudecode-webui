@@ -174,6 +174,9 @@ export function McpSettings({ cwd }: { cwd: string }) {
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="font-mono text-[12.5px] font-medium text-ink">{srv.name}</span>
             <span className="rounded-full bg-panel-strong px-1.5 py-0.5 text-[10px] text-muted">{srv.type}</span>
+            {srv.builtin && (
+              <span className="rounded-full bg-brand/10 px-1.5 py-0.5 text-[10px] text-brand">{t("内置", "Built-in")}</span>
+            )}
             {srv.disabled && (
               <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] text-warn dark:bg-amber-950/30">
                 {t("已停用", "Disabled")}
@@ -192,19 +195,26 @@ export function McpSettings({ cwd }: { cwd: string }) {
               <Button size="sm" variant="ghost" disabled={busy} onClick={() => void setEnabled(srv.scope, srv.name, srv.disabled)}>
                 {srv.disabled ? t("启用", "Enable") : t("停用", "Disable")}
               </Button>
-              <Button size="sm" variant="ghost" disabled={busy} onClick={() => setDraft(draftOf(srv))}>
-                {t("编辑", "Edit")}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy}
-                onClick={() => void confirmRemove(srv)}
-                icon={<IconTrash size={12} />}
-                aria-label={t("删除", "Delete")}
-              >
-                {""}
-              </Button>
+              {/* 内置服务（自动化任务的 ccweb-schedule）只留探测与启停：配置由后端每次启动
+                  写回，改完下次启动又变回去、删掉下次启动又长出来。想临时关掉用「停用」——
+                  那个状态留在本应用的暂存文件里，重启后保持。 */}
+              {!srv.builtin && (
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setDraft(draftOf(srv))}>
+                  {t("编辑", "Edit")}
+                </Button>
+              )}
+              {!srv.builtin && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => void confirmRemove(srv)}
+                  icon={<IconTrash size={12} />}
+                  aria-label={t("删除", "Delete")}
+                >
+                  {""}
+                </Button>
+              )}
             </span>
           </div>
           <div className="mt-1 min-w-0 truncate font-mono text-[11px] text-muted">

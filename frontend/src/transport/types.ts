@@ -77,6 +77,13 @@ export interface McpServer {
   disabled: boolean;
   /** 这条配置实际写在哪个文件（排错用）。 */
   config_path: string;
+  /**
+   * true = 由 ccweb 自己注册并维护（目前是自动化任务的 ccweb-schedule）。
+   *
+   * 后端每次启动都会把它写回配置，所以界面不给「删除」按钮（接口也会拒绝）；
+   * 想暂时关掉用「停用」，那个状态是留在本应用暂存文件里的，重启后保持。
+   */
+  builtin?: boolean;
 }
 
 export interface McpPayload {

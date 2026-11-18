@@ -90,6 +90,51 @@ describe("McpSettings", () => {
     await waitFor(() => expect(apiFetch).toHaveBeenCalledWith("/api/mcp?cwd=%2Fdata%2Fws", undefined));
   });
 
+  // 自动化任务的 ccweb-schedule 由 ccweb 每次启动写回配置：改完下次启动被覆盖、
+  // 删掉下次启动又长回来。所以这一行只留探测与启停，没有编辑/删除。
+  it("内置服务只留探测与启停，普通服务照旧有编辑与删除", async () => {
+    const builtin = {
+      name: "ccweb-schedule",
+      scope: "user",
+      type: "stdio",
+      command: "/bin/ccweb",
+      args: ["mcp-schedule"],
+      always_load: true,
+      builtin: true,
+      disabled: false,
+      config_path: "/claude/.claude.json",
+    };
+    apiFetch.mockImplementation((path: string) => {
+      if (path.startsWith("/api/search")) {
+        return Promise.resolve({
+          base_url: "https://api.deepseek.com/v1/tools",
+          search_count: 10,
+          search_enabled: false,
+          search_api_key_set: false,
+          search_api_key_masked: "",
+          attached: false,
+          server_name: "ccweb-web",
+          command: "/bin/ccweb",
+          mcp_supported: true,
+        });
+      }
+      return Promise.resolve({ ...PAYLOAD, user: [...PAYLOAD.user, builtin] });
+    });
+    setup();
+
+    await screen.findByText("ccweb-schedule");
+    expect(screen.getByText("内置")).toBeInTheDocument();
+    // 按行断言：内置那一行只有探测与停用，没有编辑/删除。
+    const row = screen.getByText("ccweb-schedule").closest(".rounded-xl") as HTMLElement;
+    expect(within(row).getByRole("button", { name: "探测" })).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "停用" })).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "编辑" })).toBeNull();
+    expect(within(row).queryByRole("button", { name: "删除" })).toBeNull();
+    // 普通服务（github / 项目级的 old）两样都在。
+    expect(screen.getAllByRole("button", { name: "编辑" })).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: "删除" })).toHaveLength(2);
+  });
+
   it("项目级配置写到所选工作区，不跟随当前对话", async () => {
     useMcpStore.setState({ cwd: "", data: { user: [], project: [], project_root: "", user_path: "", project_path: "" }, probes: {}, error: null, busy: false, probing: null });
     // 当前对话在 /data/ws，但用户要把服务加到 /data/other。

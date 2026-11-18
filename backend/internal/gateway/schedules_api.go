@@ -28,6 +28,19 @@ const mcpScheduleServer = "ccweb-schedule"
 // ScheduleMCPServer 是对外暴露的服务名（装配层用它判断「自动化任务工具是否已注册」）。
 const ScheduleMCPServer = mcpScheduleServer
 
+// builtinUserMcpServers 是本应用自己注册、由启动流程维护的用户级 MCP 服务。
+//
+// 它们的配置由 EnsureScheduleMCP 在每次启动时写回，所以「删除」是一件自相矛盾的事：
+// 接口上删掉之后模型立刻看不到那三个工具，下次启动又被原样写回来。
+// 界面不给删除按钮，DELETE /api/mcp 也拒绝（理由见 mcp_api.go）。
+// 只收自动化任务这一条：内置搜索的「解除」本来就要靠删配置（search_api.go 的 Detach）。
+var builtinUserMcpServers = map[string]bool{mcpScheduleServer: true}
+
+// isBuiltinMcp 报告某条服务是否由 ccweb 自己维护（只有用户级的这几条）。
+func isBuiltinMcp(scope, name string) bool {
+	return scope == mcp.ScopeUser && builtinUserMcpServers[name]
+}
+
 // 自动化任务的三个模型工具（`ccweb mcp-schedule` 暴露）。
 var scheduleAllowedTools = []string{
 	"mcp__" + mcpScheduleServer + "__schedule_create",
