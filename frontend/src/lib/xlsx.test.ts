@@ -76,6 +76,12 @@ describe("parseXlsx", () => {
     expect(doc.sheets[0].truncated).toBe(true);
   });
 
+  it("省略 r 引用的单元格按顺序排，不错位", () => {
+    // 部分生成器不写 r="A1"：按上一格的下一列放，而不是整格丢掉。
+    const doc = parseXlsx(workbook(`<row><c><v>1</v></c><c><v>2</v></c><c t="inlineStr"><is><t>x</t></is></c></row>`));
+    expect(doc.sheets[0].rows[0]).toEqual(["1", "2", "x"]);
+  });
+
   it("尾部空行不入表", () => {
     const doc = parseXlsx(workbook(`<row r="1"><c r="A1"><v>1</v></c></row><row r="2"/><row r="3"><c r="A3" s="0"/></row>`));
     expect(doc.sheets[0].rows).toEqual([["1"]]);

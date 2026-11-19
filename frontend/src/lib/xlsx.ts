@@ -55,7 +55,7 @@ interface SheetRef {
  * 解析 xlsx 字节。
  *
  * 解析失败（不是 zip、缺 workbook.xml）返回空表数据，由调用方显示「无法解析」。
- * 抛错的是解压本身（fflate 会拒绝损坏的 zip）。
+ * 解压本身会抛错：损坏的 zip 由 fflate 报，超出解压预算抛 `OoxmlTooLargeError`。
  */
 export function parseXlsx(data: Uint8Array): XlsxDoc {
   const parts = unzipParts(data, (name) => {
@@ -151,28 +151,58 @@ function readSheet(parts: OoxmlParts, ref: SheetRef, shared: string[], dateStyle
   if (!doc) return { name: ref.name, rows: [], truncated: false };
   const rows: string[][] = [];
   let truncated = false;
-  for (const row of byTag(doc, "row")) {
-    if (rows.length >= XLSX_MAX_ROWS) {
-      truncated = true;
-      break;
-    }
-    const cells: string[] = [];
-    for (const cell of byTag(row, "c")) {
-      const index = columnIndex(attrByLocalName(cell, "r").replace(/[0-9]/g, ""));
-      if (index < 0) continue;
-      if (index >= XLSX_MAX_COLS) {
+
+  // 直接遍历 live 的 HTMLCollection，不先 Array.from：十万行的 sheet 会白建一个
+  // 十万个元素的数组，而我们只取前 XLSX_MAX_ROWS 行。
+  const rowNodes = doc.getElementsByTagName("row");
+  if (rowNodes.length > 0) {
+    for (let i = 0; i < rowNodes.length; i += 1) {
+      if (rows.length >= XLSX_MAX_ROWS) {
         truncated = true;
-        continue;
+        break;
       }
-      while (cells.length < index) cells.push("");
-      cells[index] = cellValue(cell, shared, dateStyles);
+      const row = readRow(rowNodes[i], shared, dateStyles);
+      if (row.truncated) truncated = true;
+      rows.push(row.cells);
     }
-    while (cells.length > 0 && cells[cells.length - 1] === "") cells.pop();
-    rows.push(cells);
+  } else {
+    // 带前缀的生成器（`<x:row>`）：只能按本地名扫，文件不多见。
+    for (const node of byTag(doc, "row")) {
+      if (rows.length >= XLSX_MAX_ROWS) {
+        truncated = true;
+        break;
+      }
+      const row = readRow(node, shared, dateStyles);
+      if (row.truncated) truncated = true;
+      rows.push(row.cells);
+    }
   }
+
   // 尾部空行（Excel 常留一堆格式化过的空行）不占预览空间。
   while (rows.length > 0 && rows[rows.length - 1].every((v) => v === "")) rows.pop();
   return { name: ref.name, rows, truncated };
+}
+
+/** 读一行单元格。缺 `r` 引用的格按上一格的下一列放，不让整行错位。 */
+function readRow(row: Element, shared: string[], dateStyles: boolean[]): { cells: string[]; truncated: boolean } {
+  const cells: string[] = [];
+  let truncated = false;
+  let nextIndex = 0;
+  for (const cell of byTag(row, "c")) {
+    const ref = attrByLocalName(cell, "r").replace(/[0-9]/g, "");
+    // 部分生成器（以及手写测试数据）会省略 r：按顺序排，比整格丢掉好。
+    const index = ref ? columnIndex(ref) : nextIndex;
+    if (index < 0) continue;
+    nextIndex = index + 1;
+    if (index >= XLSX_MAX_COLS) {
+      truncated = true;
+      continue;
+    }
+    while (cells.length < index) cells.push("");
+    cells[index] = cellValue(cell, shared, dateStyles);
+  }
+  while (cells.length > 0 && cells[cells.length - 1] === "") cells.pop();
+  return { cells, truncated };
 }
 
 function cellValue(cell: Element, shared: string[], dateStyles: boolean[]): string {
@@ -216,9 +246,15 @@ function clip(text: string): string {
   return `${oneLine.slice(0, MAX_CELL_CHARS)}…`;
 }
 
-/** 数字去掉浮点噪声（0.30000000000000004），大数不做科学计数法。 */
+/**
+ * 数字去掉浮点噪声（0.30000000000000004）。
+ *
+ * 只对 1e10 以下的小数做 round：`num * 1e10` 超过 2^53 后会把自己的精度吃掉，
+ * 大数原样交给 `String()`（>=1e21 时是科学计数法，可接受）。
+ */
 function formatNumber(num: number): string {
   if (Number.isInteger(num)) return String(num);
+  if (Math.abs(num) >= 1e10) return String(num);
   return String(Math.round(num * 1e10) / 1e10);
 }
 

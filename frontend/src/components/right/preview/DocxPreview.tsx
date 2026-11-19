@@ -55,6 +55,8 @@ export default function DocxPreview({ bytes, name }: Props) {
       })
       .catch((reason: unknown) => {
         if (cancelled) return;
+        // 解析到一半失败会留下半截 DOM：错误提示会和残缺内容叠在一起，清掉。
+        host.replaceChildren();
         setError(reason instanceof Error ? reason.message : String(reason));
       });
     return () => {
