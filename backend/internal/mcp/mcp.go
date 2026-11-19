@@ -913,8 +913,8 @@ func probeStdio(ctx context.Context, srv Server) ProbeResult {
 	}
 	// stderr 只留尾部用于报错（MCP server 常把启动失败写在这里），
 	// 且必须持续排空，否则管道写满会把子进程卡住。
-	var stderr bytes.Buffer
-	cmd.Stderr = &limitedWriter{buf: &stderr, limit: 4 << 10}
+	stderr := &limitedWriter{buf: &bytes.Buffer{}, limit: 4 << 10}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return ProbeResult{Error: err.Error()}
 	}
@@ -1148,12 +1148,19 @@ func envPairs(env map[string]string) []string {
 }
 
 // limitedWriter 只保留前 limit 字节，后续写入丢弃：stderr 可能刷屏。
+//
+// **自带锁**：写入发生在子进程的 stderr 管道 goroutine 里，读取发生在探测主流程
+// （`String()`）。不加锁时 `bytes.Buffer` 会同时被读写，`go test -race` 直接报数据
+// 竞争，真实场景下还可能读到写了一半的切片。
 type limitedWriter struct {
+	mu    sync.Mutex
 	buf   *bytes.Buffer
 	limit int
 }
 
 func (w *limitedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if room := w.limit - w.buf.Len(); room > 0 {
 		if len(p) > room {
 			w.buf.Write(p[:room])
@@ -1162,4 +1169,11 @@ func (w *limitedWriter) Write(p []byte) (int, error) {
 		}
 	}
 	return len(p), nil
+}
+
+// String 返回已经收下的内容（并发安全）。
+func (w *limitedWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
 }
