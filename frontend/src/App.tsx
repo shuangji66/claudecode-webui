@@ -265,7 +265,7 @@ function AppShell() {
       {rightOpen && (
         <div className={view ? "hidden" : "contents"}>
           <Suspense fallback={null}>
-            <RightSidebar cwd={rightCwd} onClose={() => setRightOpen(false)} />
+            <RightSidebar cwd={rightCwd} onClose={() => setRightOpen(false)} visible={view === null} />
           </Suspense>
         </div>
       )}

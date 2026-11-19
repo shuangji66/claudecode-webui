@@ -103,6 +103,9 @@ let treeEpoch = 0;
 /** Git 状态轮询单飞，避免定时器与手动刷新叠在一起。
  *  必须带上 cwd+epoch：切目录时旧请求仍可能在路上，不能拿它挡住新目录的刷新。 */
 let gitInFlight: { key: string; promise: Promise<void> } | null = null;
+/** git log 也单飞：一次推送要同时刷状态/分支/历史，用户点「拉取」时还会再来一遍，
+ *  不合并就是同一条 git log 并发跑两三次（每次都要遍历整棵提交图）。 */
+let logInFlight: { key: string; promise: Promise<void> } | null = null;
 
 function errorText(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
@@ -324,17 +327,27 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     const cwd = gitCwd(get());
     if (!cwd) return;
     const at = epoch;
+    const key = `${at}:${cwd}`;
+    if (logInFlight?.key === key) return logInFlight.promise;
     set({ logLoading: true, logError: "" });
-    try {
-      const query = new URLSearchParams({ cwd, count: "30" });
-      const payload = await apiFetch<{ entries: GitLogEntry[] }>(`/api/git/log?${query.toString()}`);
-      if (at !== epoch || gitCwd(get()) !== cwd) return;
-      set({ log: payload.entries ?? [], logLoading: false, logError: "" });
-    } catch (reason) {
-      if (at !== epoch || gitCwd(get()) !== cwd) return;
-      const message = errorText(reason);
-      set({ logLoading: false, logError: message, actionError: message });
-    }
+    const slot: { key: string; promise: Promise<void> } = { key, promise: Promise.resolve() };
+    const promise = (async () => {
+      try {
+        const query = new URLSearchParams({ cwd, count: "30" });
+        const payload = await apiFetch<{ entries: GitLogEntry[] }>(`/api/git/log?${query.toString()}`);
+        if (at !== epoch || gitCwd(get()) !== cwd) return;
+        set({ log: payload.entries ?? [], logLoading: false, logError: "" });
+      } catch (reason) {
+        if (at !== epoch || gitCwd(get()) !== cwd) return;
+        const message = errorText(reason);
+        set({ logLoading: false, logError: message, actionError: message });
+      } finally {
+        if (logInFlight === slot) logInFlight = null;
+      }
+    })();
+    slot.promise = promise;
+    logInFlight = slot;
+    return promise;
   },
 
   loadDiff: async (path, staged) => {

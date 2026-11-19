@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { attachedPosition } from "./Menu";
+import { useRef } from "react";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render } from "@testing-library/react";
+import { attachedPosition, useDismiss } from "./Menu";
 
 /** 只给用得到的字段，其余补 0（jsdom 里所有 rect 都是 0，纯函数得自己造）。 */
 function rect(partial: Partial<DOMRect>): DOMRect {
@@ -49,5 +51,35 @@ describe("attachedPosition（添加菜单贴在输入卡上展开）", () => {
 
     expect(pos.top).toBe(204);
     expect(pos.bottom).toBeUndefined();
+  });
+});
+
+/** 只用来量 useDismiss 的触发次数：真实组件里 onClose 是 setState，重复调用看不出来。 */
+function DismissProbe({ onClose }: { onClose: () => void }) {
+  const layer = useRef<HTMLDivElement>(null);
+  useDismiss(true, layer, null, onClose);
+  return <div ref={layer}>layer</div>;
+}
+
+describe("useDismiss 的按下事件", () => {
+  it("一次按下只关一次：pointerdown 之后合成的 mousedown 不再重复触发 onClose", () => {
+    // 两个事件都注册时，浏览器的一次点击会先 pointerdown、再补一条兼容 mousedown，
+    // onClose 被调两次；有副作用的关闭逻辑会跑两遍。
+    const onClose = vi.fn();
+    render(<DismissProbe onClose={onClose} />);
+
+    fireEvent.pointerDown(document.body);
+    fireEvent.mouseDown(document.body);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("落在浮层里不关", () => {
+    const onClose = vi.fn();
+    const { getByText } = render(<DismissProbe onClose={onClose} />);
+
+    fireEvent.pointerDown(getByText("layer"));
+
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

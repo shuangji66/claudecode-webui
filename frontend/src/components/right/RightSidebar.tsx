@@ -25,6 +25,14 @@ interface Tab {
 interface Props {
   cwd: string;
   onClose: () => void;
+  /**
+   * 整个侧栏是否真的看得见。
+   *
+   * 功能区整页视图打开时侧栏只是 `display: none`（不卸载，否则终端会被 SIGHUP），
+   * 此时 Git 面板仍是「激活标签」，但它要是在后台继续订阅，NAS 上就会没人看也每 3 秒
+   * 跑一次 git。所以「激活」要再与可见性相与。
+   */
+  visible?: boolean;
 }
 
 const WIDTH_KEY = "ccweb-right-width";
@@ -82,7 +90,7 @@ const KIND_ICON = { files: IconFolder, git: IconGitBranch, terminal: IconTermina
  * 参照 DSH：没有「启动页 + 返回」那种切换，标签本身就是入口与关闭按钮，`+` 打开新标签。
  * **标签切走不卸载**：终端里挂着 PTY，卸载等于杀 shell；关掉标签才结束进程。
  */
-export function RightSidebar({ cwd, onClose }: Props) {
+export function RightSidebar({ cwd, onClose, visible = true }: Props) {
   const t = useT();
   const setCwd = useSidebarStore((s) => s.setCwd);
   const openRequest = useSidebarStore((s) => s.openRequest);
@@ -433,7 +441,7 @@ export function RightSidebar({ cwd, onClose }: Props) {
             {tabs.map((tab) => (
               <div key={tab.id} className={tab.id === active ? "absolute inset-0" : "hidden"}>
                 {tab.kind === "files" && <FilesPanel cwd={cwd} active={tab.id === active} pending={pendingOpen} />}
-                {tab.kind === "git" && <GitPanel cwd={cwd} active={tab.id === active} />}
+                {tab.kind === "git" && <GitPanel cwd={cwd} active={tab.id === active && visible} />}
                 {tab.kind === "subagent" && tab.agentId && (
                   <SubagentPanel sessionId={tab.sessionId ?? ""} agentId={tab.agentId} />
                 )}

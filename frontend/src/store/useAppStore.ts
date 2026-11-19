@@ -411,10 +411,30 @@ export function watchGitRepo(cwd: string | null): void {
   sendGitWatch();
 }
 
-/** 把当前订阅值同步给服务端；连接不在时什么都不做，连上后会补发。 */
-function sendGitWatch(): void {
-  if (!systemClient) return;
-  systemClient.send(gitWatchCwd ? { kind: "git.watch", cwd: gitWatchCwd } : { kind: "git.unwatch" });
+/** 已经发给服务端的订阅值；null 表示这条连接上还没同步过（新建/重连后）。 */
+let sentGitWatch: string | null = null;
+
+/** 把当前订阅值同步给服务端；连接不在时什么都不做，连上后会补发。
+ *
+ *  页面在后台（手机锁屏、切到别的 App）时**不订阅**：后端是每 3 秒 spawn 一次 git，
+ *  没人看的屏幕上不该让 NAS 一直跑。恢复可见时由 handleVisibility 重新订阅并补刷一次。 */
+function sendGitWatch(force = false): void {
+  if (!systemClient) {
+    sentGitWatch = null;
+    return;
+  }
+  const want = document.hidden ? "" : gitWatchCwd;
+  if (!force && want === sentGitWatch) return;
+  sentGitWatch = want;
+  systemClient.send(want ? { kind: "git.watch", cwd: want } : { kind: "git.unwatch" });
+}
+
+/** 切回前台时补订阅 + 补刷：后台期间的变化不会补推，订阅也是跟着可见性断开的。 */
+function handleVisibility(): void {
+  if (!gitWatchCwd) return;
+  const before = sentGitWatch;
+  sendGitWatch();
+  if (!document.hidden && before === "") void useSidebarStore.getState().gitChanged(gitWatchCwd);
 }
 
 /** 打开系统通道（幂等）。系统通道只收应用级事件（claude 更新、对话列表变化），事件交给 applyEvent 统一处理。 */
@@ -433,7 +453,7 @@ function openSystemChannel(): void {
       if (status !== "open") return;
       // 服务端的订阅跟着连接走，旧连接一断就没了：每次连上都要补发一次，
       // 哪怕订阅值没变（watchGitRepo 里的去重只在本地生效）。
-      sendGitWatch();
+      sendGitWatch(true);
       // 首次连接后的状态由 bootstrap 自己拉；重连成功后补一次——断线期间可能有新版，
       // 也可能有自动化任务新建/跑完了一条对话（不补拉的话侧栏停在「新对话 + 转圈」）。
       if (firstOpen) {
@@ -448,6 +468,8 @@ function openSystemChannel(): void {
   });
   systemClient = client;
   client.connect();
+  // 可见性只在系统通道打开后才有意义（订阅本身挂在它上面）：挂一次，进程内常驻。
+  document.addEventListener("visibilitychange", handleVisibility);
 }
 
 function readActiveId(): string {

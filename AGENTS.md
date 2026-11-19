@@ -275,6 +275,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
   那是「拉取成功后历史不刷新、源码变了面板半天不动」的来源。
   `cwd` 与 `/api/git/*` 走同一条 `authorizedCwd` 围栏；订阅是**按连接**的（多标签页各自
   订阅各自路径），不做全局引用计数。
+  **看得见才订阅**：页面在后台（`document.hidden`，手机锁屏 / 切走 App）不订阅，切回前台
+  补订阅并补刷一次；功能区整页视图盖住右侧栏时（`App` 的 `view`，侧栏只是 `display:none`）
+  也按不可见处理（`RightSidebar` 的 `visible` → `GitPanel.active`）。否则没人看的屏幕上
+  NAS 会一直每 3 秒跑一次 git。
 - **Git 状态用 `--porcelain=v2 -z`**，并用 `--untracked-files=all` 列出未跟踪文件
   （`normal` 只给目录，点开无法 diff）。解析按 NUL 字段走，不能按空格 split，
   否则带空格的路径会被截断。
@@ -457,10 +461,12 @@ hub ── manager ── session ── process ── claude (NDJSON)
   折叠块 `common/Collapsible`、文件图标 `common/FileIcon`。
   原生 `window.confirm/prompt/alert` 与 `<select>` 一律不用：它们的配色/圆角/字号由系统决定，
   在飞牛桌面 iframe 里和主题对不上。
-- **「点外部关闭」必须听 `pointerdown`，不能只听 `mousedown`**（`Menu.useDismiss` 两个都注册）：
-  拖拽手柄（右侧栏分隔线）在 `pointerdown` 里 `preventDefault` 挡住文字选中，浏览器随即不再
-  合成兼容的 `mousedown`——只听 `mousedown` 时点/拖分隔线浮层既不关、也不重新定位，输入卡被
-  拖宽了添加菜单还停在旧坐标（踩过）。新增浮层一律复用 `useDismiss`。
+- **「点外部关闭」必须听 `pointerdown`，不能只听 `mousedown`**（`Menu.useDismiss` 两个都注册，
+  但**同一次按下只处理第一条**）：拖拽手柄（右侧栏分隔线）在 `pointerdown` 里 `preventDefault`
+  挡住文字选中，浏览器随即不再合成兼容的 `mousedown`——只听 `mousedown` 时点/拖分隔线浮层
+  既不关、也不重新定位，输入卡被拖宽了添加菜单还停在旧坐标（踩过）。两条都注册是因为老 WebKit
+  只有 `mousedown`；不能不去重——一次点击会先 `pointerdown` 再补 `mousedown`，`onClose`
+  会跑两次（`ModelMenu` 的关闭还带着父级状态同步）。新增浮层一律复用 `useDismiss`。
 
 ### 4.8 子代理（Agent / Task 工具）
 

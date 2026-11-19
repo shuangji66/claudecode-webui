@@ -289,16 +289,33 @@ export function useDismiss(
       if (onEscape?.()) return;
       onClose();
     };
-    // pointerdown **和** mousedown 都要听：拖拽手柄（右侧栏分隔线）在 pointerdown 里
-    // preventDefault 挡住文字选中，而取消 pointerdown 会连带吞掉浏览器合成的兼容
-    // mousedown —— 只听 mousedown 时点/拖分隔线浮层既不关、也不跟随，卡片变宽了菜单
-    // 还停在旧坐标上。两个事件都注册在最外层，重复触发只是再 setState 一次同一个值。
-    document.addEventListener("pointerdown", onDown);
-    document.addEventListener("mousedown", onDown);
+    // pointerdown **和** mousedown 都听，但同一次按下只处理第一条：
+    //   - 拖拽手柄（右侧栏分隔线）在 pointerdown 里 preventDefault 挡住文字选中，
+    //     取消 pointerdown 会连带吞掉浏览器合成的兼容 mousedown —— 只听 mousedown 时
+    //     点/拖分隔线浮层既不关也不跟随，卡片变宽了菜单还停在旧坐标上；
+    //   - 反过来只听 pointerdown 也不够：老 WebKit 没有 PointerEvent，只能收到 mousedown。
+    // 两条都注册时浏览器的一次点击会先后派发 pointerdown 与 mousedown，不去重的话
+    // onClose 跑两次（ModelMenu 这类关闭逻辑还带着父级状态同步）。
+    // 兼容的 mousedown 与 pointerdown 在同一个输入任务里同步派发，所以用 0ms 定时器标记
+    // 「这次按下已经处理过」——定时器在下一次按下之前早就跑完了，不会误吞。
+    let handledPress = false;
+    const onPointerDown = (e: Event) => {
+      handledPress = true;
+      window.setTimeout(() => {
+        handledPress = false;
+      }, 0);
+      onDown(e);
+    };
+    const onMouseDown = (e: Event) => {
+      if (handledPress) return;
+      onDown(e);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("mousedown", onMouseDown);
     document.addEventListener("keydown", onKey);
     return () => {
-      document.removeEventListener("pointerdown", onDown);
-      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("mousedown", onMouseDown);
       document.removeEventListener("keydown", onKey);
     };
   }, [open, layer, anchor, onClose, onEscape]);

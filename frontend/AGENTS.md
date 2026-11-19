@@ -152,6 +152,9 @@ src/
     **Git 状态不自己轮询**：面板可见时 `watchGitRepo(cwd)` 在系统通道上发 `git.watch`，
     后端变了就推 `git.changed`，由 `useSidebarStore.gitChanged` 刷新状态/分支/历史；
     切走标签或卸载时 `watchGitRepo(null)` 退订（后端会跟着停掉轮询）。
+    **看得见才订阅**：页面在后台（`document.hidden`）退订、回前台补订并补刷；
+    功能区整页视图盖住侧栏时（侧栏只是 `display:none`）由 `App` 传 `visible={view === null}`，
+    `GitPanel` 的 `active` 与它相与——否则没人看也在 NAS 上每 3 秒跑一次 git。
     **文件/目录行的「更多」菜单有「引用到对话」与「下载」**：引用只调
     `useAppStore.requestMention(绝对路径, "file"|"dir")`（带单调 `seq`；同一条点第二次
     值没变，没有 seq 就重放不了），格式化与插入由 `Composer` 负责（`mentionPath` 按会话
