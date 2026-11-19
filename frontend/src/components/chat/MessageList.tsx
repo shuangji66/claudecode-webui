@@ -185,6 +185,14 @@ export function MessageList({
   /** 不贴底时来了新内容：按钮上点一个提示点。 */
   const [unseen, setUnseen] = useState(false);
   const prevCount = useRef(items.length);
+
+  /**
+   * 上一次见到的最后一条用户消息 id：变了就说明「用户刚发了一条」。
+   *
+   * 只在切换对话时重置（`resetKey`），**不在用户往上翻时重置**——这个 ref 记的是
+   * 「最后一条用户消息是谁」，与滚动位置无关。
+   */
+  const lastUserSent = useRef<string | null>(null);
   /** 展开更早消息前记录的「距底部距离」，用于展开后保持视口不动。 */
   const anchorFromBottom = useRef<number | null>(null);
   /** 轮次刻度：每条用户消息一个刻度，点一下跳到那一轮。 */
@@ -379,6 +387,8 @@ export function MessageList({
     setAtBottom(true);
     setUnseen(false);
     prevCount.current = items.length;
+    // 换对话：新会话的第一条 user 不是「刚发的」，别在挂载时额外触发一次强制贴底。
+    lastUserSent.current = items[items.length - 1]?.kind === "user" ? items[items.length - 1].id : null;
   }, [resetKey]);
 
   // 距底部距离：窗口是「尾部 limit 条」，消息一增长窗口就整体上移一条，
@@ -424,14 +434,33 @@ export function MessageList({
     }
   }, [limit]);
 
+  // 窗口整体上移（`hidden` 变了）时还原视口，以及**用户自己发消息时强制贴底**。
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
     const dist = distFromBottom.current;
+    /**
+     * **用户自己刚发了一条**：无论此刻滚到哪儿都回到底部并恢复跟随。
+     *
+     * 用户往上翻着读历史、直接发一句话，界面却停在他读的那段、自己刚发的气泡和后面的
+     * 回复全在视口外，看起来就像「发了没反应」。这是唯一会强行接管滚动的情况——别人发来的
+     * 消息（另一台设备、定时任务投递）仍然遵守「往上翻就停下」。
+     *
+     * 判定放在这里而不是下面那个 effect：`hidden > 0` 的「还原视口」也在这段跑，
+     * 放到后面会把刚滚到底的位置又按旧距离还原回去（闪一帧再跳回）。
+     */
+    const tail = items[items.length - 1];
+    const sentNow = tail?.kind === "user" && tail.id !== lastUserSent.current;
+    if (tail?.kind === "user") lastUserSent.current = tail.id;
+    if (sentNow) {
+      stick.current = true;
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
     if (!stick.current && hidden > 0 && dist !== null) {
       el.scrollTop = el.scrollHeight - dist;
     }
-  }, [items.length, hidden]);
+  }, [items, hidden]);
 
   // 滚动停止后重量一次：折叠/展开卡片、图片加载完成都会让上面的高度变化，
   // 而轮次签名没变、缓存不会自动失效。趁用户没在滚（也没有布局竞争）时补一次。

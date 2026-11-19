@@ -744,6 +744,12 @@ src/
     （`MessageList` 传 `stick`、`ProcessGroup` 传自己的 `bodyStick`）。在
     `ResizeObserver` 回调里现算 `scrollHeight - scrollTop - clientHeight` 必然得出
     「不贴底」（内容变高的瞬间 `scrollHeight` 已经变大、`scrollTop` 还没动），于是永远不跟。
+  - **用户自己发消息时强行回到底部并恢复跟随**（`MessageList` 的 `lastUserSent`）：他往上翻着
+    读历史、直接发一句话，界面却停在他读的那段——自己刚发的气泡和后面的回复全在视口外，
+    看起来就是「发了没反应」。判定是「最后一条 item 是 user，且它的 id 与上一次见到的不一样」，
+    写在那个 `useLayoutEffect` 里、**早于 `!stick.current && hidden > 0` 的视口还原**（顺序反过来
+    会先滚到底再按旧距离还原回去，闪一帧再跳回）。**这是唯一会强行接管滚动的情况**：别人发来的
+    消息（另一台设备、定时任务投递）仍然遵守「往上翻就停下，只点亮『有新内容』」。
 - **刻度高亮在贴底时直接取最后一轮**（`lib/turns.activeTurnIndex` 的 `atBottom`）：
   贴底那一刻视口顶部通常还停在最后一条回答的开头（一轮的末尾可能就是整屏），按
   「视口顶部落在哪一轮」算会一直亮着倒数第二轮，看起来「滚到底了刻度却没走到最后一个」。

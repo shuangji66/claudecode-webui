@@ -34,6 +34,9 @@ beforeEach(() => {
 function userItem(i: number): Item {
   return { id: `u${i}`, seq: i, ts: 0, kind: "user", text: `消息 ${i}` };
 }
+function assistantItem(i: number): Item {
+  return { id: `a${i}`, seq: i, ts: 0, kind: "assistant", text: `回复 ${i}`, streaming: false };
+}
 const many = (n: number) => Array.from({ length: n }, (_, i) => userItem(i));
 
 /** jsdom 里滚动几何全是 0：按需给元素补上可测的尺寸。 */
@@ -104,8 +107,35 @@ describe("MessageList 长对话", () => {
     scrollUp(el);
     expect(screen.getByRole("button", { name: "回到底部" })).toBeInTheDocument();
 
-    rerender(<MessageList items={[...many(5), userItem(99)]} />);
+    // 不是自己发的（别的设备 / 回复），所以只点亮提示，不抢滚动位置。
+    rerender(<MessageList items={[...many(5), userItem(99), assistantItem(100)]} />);
     expect(screen.getByRole("button", { name: "有新内容，回到底部" })).toBeInTheDocument();
+  });
+
+  // 用户往上翻着读历史、直接发一句话：必须立刻回到底部并恢复跟随，
+  // 否则自己刚发的气泡与后面的回复全在视口外，看起来像「发了没反应」。
+  it("自己发消息时强行回到底部并恢复跟随", () => {
+    const { rerender } = render(<MessageList items={many(5)} />);
+    const el = sizedScroller();
+    scrollUp(el);
+    expect(screen.getByRole("button", { name: "回到底部" })).toBeInTheDocument();
+
+    rerender(<MessageList items={[...many(5), userItem(99)]} />);
+    expect(el.scrollTop).toBe(el.scrollHeight);
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
+  });
+
+  it("自己发消息之后，后续的回复继续贴底跟随", async () => {
+    const { rerender } = render(<MessageList items={many(5)} />);
+    const el = sizedScroller();
+    scrollUp(el);
+
+    rerender(<MessageList items={[...many(5), userItem(99)]} />);
+    // 回复进来时内容变高，跟随着喂到新的底部（跟随写在 rAF 里，等一帧）。
+    Object.defineProperty(el, "scrollHeight", { value: 2000, configurable: true });
+    rerender(<MessageList items={[...many(5), userItem(99), assistantItem(100)]} />);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    expect(el.scrollTop).toBe(2000);
   });
 
   it("切换对话（resetKey 变化）后回到只渲染最近一批", () => {
