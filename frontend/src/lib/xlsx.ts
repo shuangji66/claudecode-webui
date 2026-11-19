@@ -78,8 +78,10 @@ function readSheetRefs(parts: OoxmlParts): SheetRef[] {
   const out: SheetRef[] = [];
   for (const sheet of byTag(workbook, "sheet")) {
     const name = sheet.getAttribute("name") ?? "";
-    // 隐藏工作表（state="hidden"）不列出来：用户打开文件看不到它，预览也不该多一页。
-    if ((sheet.getAttribute("state") ?? "") === "hidden") continue;
+    // 隐藏工作表（state=hidden / veryHidden）不列出来：用户在 Excel 里看不到它，
+    // 预览也不该多一页。veryHidden 只能从 VBA 改回来，同样是「不该出现在界面上」。
+    const state = sheet.getAttribute("state") ?? "";
+    if (state === "hidden" || state === "veryHidden") continue;
     const relId = attrByLocalName(sheet, "id");
     const target = rels[relId] ?? "";
     const part = target ? resolvePartTarget("xl", target) : "";

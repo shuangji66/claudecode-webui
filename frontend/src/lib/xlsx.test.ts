@@ -58,10 +58,12 @@ describe("parseXlsx", () => {
     expect(doc.sheets[0].rows[0]).toEqual(["2023-03-15", "读音"]);
   });
 
-  it("隐藏工作表不列出来", () => {
+  it("隐藏与深度隐藏的工作表都不列出来", () => {
     const doc = parseXlsx(workbook(
       `<row r="1"><c r="A1"><v>1</v></c></row>`,
-      `<sheet name="数据" sheetId="1" r:id="rId1"/><sheet name="隐藏" sheetId="2" state="hidden" r:id="rId2"/>`,
+      `<sheet name="数据" sheetId="1" r:id="rId1"/>` +
+        `<sheet name="隐藏" sheetId="2" state="hidden" r:id="rId2"/>` +
+        `<sheet name="深度隐藏" sheetId="3" state="veryHidden" r:id="rId2"/>`,
     ));
     expect(doc.sheets.map((s) => s.name)).toEqual(["数据"]);
   });

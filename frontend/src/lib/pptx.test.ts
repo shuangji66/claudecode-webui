@@ -1,6 +1,6 @@
 import { zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { parsePptx, PPTX_MAX_SLIDES } from "./pptx";
+import { isPptxPreviewPart, parsePptx, PPTX_MAX_SLIDES } from "./pptx";
 
 const P_NS = 'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
 const A_NS = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
@@ -82,5 +82,25 @@ describe("parsePptx", () => {
 
   it("不是 zip 的字节会抛错", () => {
     expect(() => parsePptx(new Uint8Array([0, 1, 2]))).toThrow();
+  });
+});
+
+describe("isPptxPreviewPart", () => {
+  it("只解压页库、关系表与位图媒体", () => {
+    expect(isPptxPreviewPart("ppt/presentation.xml")).toBe(true);
+    expect(isPptxPreviewPart("ppt/_rels/presentation.xml.rels")).toBe(true);
+    expect(isPptxPreviewPart("ppt/slides/slide1.xml")).toBe(true);
+    expect(isPptxPreviewPart("ppt/slides/_rels/slide1.xml.rels")).toBe(true);
+    expect(isPptxPreviewPart("ppt/media/image1.PNG")).toBe(true);
+  });
+
+  it("视频、音频与矢量图不进内存", () => {
+    // 一场演示里挂几十 MB 视频是常态；解压它们既没有用，还会顶到预算上限。
+    expect(isPptxPreviewPart("ppt/media/movie.mp4")).toBe(false);
+    expect(isPptxPreviewPart("ppt/media/voice.m4a")).toBe(false);
+    expect(isPptxPreviewPart("ppt/media/icon.emf")).toBe(false);
+    // 包外的东西更不该读：主题、备注、批注都不参与预览。
+    expect(isPptxPreviewPart("ppt/theme/theme1.xml")).toBe(false);
+    expect(isPptxPreviewPart("docProps/thumbnail.jpeg")).toBe(false);
   });
 });

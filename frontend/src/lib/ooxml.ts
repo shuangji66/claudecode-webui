@@ -9,16 +9,74 @@ import { unzipSync } from "fflate";
 export type OoxmlParts = Record<string, Uint8Array>;
 
 /**
+ * 解压预算。
+ *
+ * OOXML 是 zip，压缩比可以做到 1000:1：一个 32MB 的 xlsx 能解出几十 GB 的 XML
+ * （zip bomb），浏览器标签页会直接 OOM。请求侧的上限（`/api/fs/blob` 的 32MB）
+ * 管不到解压后的体积，所以这里必须自己设一道。
+ */
+export interface UnzipBudget {
+  /** 保留部件的解压后总量上限。 */
+  totalBytes: number;
+  /** 单个部件的解压后上限。 */
+  entryBytes: number;
+}
+
+/** 默认预算：正常的 Office 文档远在下面，zip bomb 会远超。 */
+export const DEFAULT_UNZIP_BUDGET: UnzipBudget = {
+  // 32MB 的 pptx 里几张 4K 图通常解出几十 MB，128MB 留了余量。
+  totalBytes: 128 << 20,
+  // 单张图/单个 sheet XML 超过这个数基本不是「看一眼」的场景。
+  entryBytes: 48 << 20,
+};
+
+/** 解压超出预算。消息直接展示给用户，说明「请下载后打开」。 */
+export class OoxmlTooLargeError extends Error {
+  /** 触发上限的部件路径（总量超限时是压垮预算的那一个）。 */
+  readonly part: string;
+
+  constructor(part: string) {
+    super(`解压后超过预览上限（${part}）`);
+    this.name = "OoxmlTooLargeError";
+    this.part = part;
+  }
+}
+
+/**
  * 解压 OOXML 包，只保留 `keep` 认可的部件。
  *
- * 带过滤是必须的：pptx 里 `ppt/media/*` 常常是几十 MB 的原图，
- * 全解压会让一次预览吃掉双倍内存。
+ * 带过滤是必须的：pptx 里 `ppt/media/*` 常常是几十 MB 的原图/视频，
+ * 全解压会让一次预览吃掉双倍内存。`filter` 在解压前就能拿到解压后大小，
+ * 所以预算检查不额外花代价——超限的条目**不再解压**，跑完后整包报错。
  */
-export function unzipParts(data: Uint8Array, keep: (name: string) => boolean): OoxmlParts {
+export function unzipParts(
+  data: Uint8Array,
+  keep: (name: string) => boolean,
+  budget: UnzipBudget = DEFAULT_UNZIP_BUDGET,
+): OoxmlParts {
   const out: OoxmlParts = {};
+  let total = 0;
+  let over: string | null = null;
   // fflate 的 filter 拿到的是条目信息；不支持 zip64 之外的奇怪压缩法时它会抛错，
   // 由调用方包成「无法解析」。
-  const entries = unzipSync(data, { filter: (file) => keep(file.name) });
+  const entries = unzipSync(data, {
+    filter: (file) => {
+      if (!keep(file.name)) return false;
+      // 已经超限就一个字节都别再解，OOM 只看峰值。
+      if (over) return false;
+      if (file.originalSize > budget.entryBytes) {
+        over = file.name;
+        return false;
+      }
+      total += file.originalSize;
+      if (total > budget.totalBytes) {
+        over = file.name;
+        return false;
+      }
+      return true;
+    },
+  });
+  if (over) throw new OoxmlTooLargeError(normalizePartPath(over));
   for (const [name, bytes] of Object.entries(entries)) out[normalizePartPath(name)] = bytes;
   return out;
 }
