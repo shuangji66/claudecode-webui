@@ -1,6 +1,6 @@
 import { zipSync } from "fflate";
 import { describe, expect, it } from "vitest";
-import { OoxmlTooLargeError, normalizePartPath, unzipParts } from "./ooxml";
+import { isTooLargeError, OoxmlTooLargeError, normalizePartPath, unzipParts } from "./ooxml";
 
 function zipOf(entries: Record<string, Uint8Array>): Uint8Array {
   return zipSync(entries);
@@ -53,5 +53,20 @@ describe("normalizePartPath", () => {
     expect(normalizePartPath("/xl/worksheets/sheet1.xml")).toBe("xl/worksheets/sheet1.xml");
     expect(normalizePartPath("ppt/slides/../media/a.png")).toBe("ppt/media/a.png");
     expect(normalizePartPath("./a//b")).toBe("a/b");
+  });
+});
+
+describe("isTooLargeError", () => {
+  it("认 instanceof，也认同名的类（跨 chunk 副本 / 另一个 realm）", () => {
+    expect(isTooLargeError(new OoxmlTooLargeError("ppt/media/movie.mp4"))).toBe(true);
+    const copy = new Error("解压后超过预览上限");
+    copy.name = "OoxmlTooLargeError";
+    expect(isTooLargeError(copy)).toBe(true);
+  });
+
+  it("普通错误与任意值不算", () => {
+    expect(isTooLargeError(new Error("invalid zip data"))).toBe(false);
+    expect(isTooLargeError("OoxmlTooLargeError")).toBe(false);
+    expect(isTooLargeError(null)).toBe(false);
   });
 });

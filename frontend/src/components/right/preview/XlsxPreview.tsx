@@ -4,7 +4,7 @@
 // sharedStrings 解析在手机上要几百毫秒，同步跑会让点击看起来像没反应。
 import { useEffect, useState } from "react";
 import { useT } from "../../../lib/i18n";
-import { OoxmlTooLargeError } from "../../../lib/ooxml";
+import { isTooLargeError } from "../../../lib/ooxml";
 import { XLSX_MAX_COLS, XLSX_MAX_ROWS, parseXlsx, type XlsxDoc } from "../../../lib/xlsx";
 
 interface Props {
@@ -35,7 +35,7 @@ export default function XlsxPreview({ bytes, name }: Props) {
         setState({
           status: "error",
           message: reason instanceof Error ? reason.message : String(reason),
-          tooLarge: reason instanceof OoxmlTooLargeError,
+          tooLarge: isTooLargeError(reason),
         });
       }
     }, 0);

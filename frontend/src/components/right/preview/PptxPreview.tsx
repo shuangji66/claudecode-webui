@@ -4,7 +4,7 @@
 // 页面固定白底深字，模拟幻灯片本身：主题令牌在深色模式下会把内容变成浅字浅底。
 import { useEffect, useMemo, useState } from "react";
 import { useT } from "../../../lib/i18n";
-import { OoxmlTooLargeError } from "../../../lib/ooxml";
+import { isTooLargeError } from "../../../lib/ooxml";
 import { PPTX_MAX_SLIDES, parsePptx, type PptxDoc } from "../../../lib/pptx";
 
 interface Props {
@@ -32,7 +32,7 @@ export default function PptxPreview({ bytes, name }: Props) {
         setState({
           status: "error",
           message: reason instanceof Error ? reason.message : String(reason),
-          tooLarge: reason instanceof OoxmlTooLargeError,
+          tooLarge: isTooLargeError(reason),
         });
       }
     }, 0);

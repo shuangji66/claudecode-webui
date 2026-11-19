@@ -43,6 +43,17 @@ export class OoxmlTooLargeError extends Error {
 }
 
 /**
+ * 是否「解压后体积超限」。
+ *
+ * 不能只靠 `instanceof`：三个渲染器各自是一个懒加载 chunk，`ooxml` 是共享
+ * chunk——将来打包策略一变、它被内联成两份，两个 class 副本会让 instanceof
+ * 静默失败，用户又看到内部部件路径。类名是字符串字面量，跟着实例走。
+ */
+export function isTooLargeError(err: unknown): boolean {
+  return err instanceof OoxmlTooLargeError || (err instanceof Error && err.name === "OoxmlTooLargeError");
+}
+
+/**
  * 解压 OOXML 包，只保留 `keep` 认可的部件。
  *
  * 带过滤是必须的：pptx 里 `ppt/media/*` 常常是几十 MB 的原图/视频，
