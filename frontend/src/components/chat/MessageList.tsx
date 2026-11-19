@@ -466,9 +466,13 @@ export function MessageList({
      *
      * 判定放在这里而不是下面那个 effect：`hidden > 0` 的「还原视口」也在这段跑，
      * 放到后面会把刚滚到底的位置又按旧距离还原回去（闪一帧再跳回）。
+     *
+     * **`echoed` 的不算「我刚发的」**：那是后端 `prompt.echo` 补进来的别的设备/标签
+     * 发的消息。按「尾巴是新的 user」一刀切会把正在读历史的人拽回底部——注释里说的
+     * 「别人发来的仍然遵守往上翻就停下」正是这条，之前漏了这个标记。
      */
     const tail = items[items.length - 1];
-    const sentNow = tail?.kind === "user" && tail.id !== lastUserSent.current;
+    const sentNow = tail?.kind === "user" && !tail.echoed && tail.id !== lastUserSent.current;
     if (tail?.kind === "user") lastUserSent.current = tail.id;
     if (sentNow) {
       stick.current = true;

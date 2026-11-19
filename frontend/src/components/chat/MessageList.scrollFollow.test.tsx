@@ -236,3 +236,34 @@ describe("MessageList 容器尺寸变化后贴底", () => {
     expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
   });
 });
+
+// 别的设备/标签发的消息（后端 `prompt.echo` 补进来的）不是「我刚发的」：
+// 往上翻着读历史时被拽回底部，正是注释里说「仍然遵守往上翻就停下」要避免的。
+describe("MessageList 别人发的消息不抢滚动位置", () => {
+  async function mountScrolled(items: Item[]) {
+    const { rerender } = render(<MessageList items={items} resetKey="k" />);
+    const el = screen.getByTestId("message-scroller");
+    Object.defineProperty(el, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(el, "clientHeight", { value: 500, configurable: true });
+    Object.defineProperty(el, "scrollTop", { value: 1500, writable: true, configurable: true });
+    await raf();
+    // 往上翻着读历史。
+    el.scrollTop = 100;
+    fireEvent.scroll(el);
+    return { el, rerender };
+  }
+
+  it("往上翻着读历史时来了 echo：位置不动", async () => {
+    const { el, rerender } = await mountScrolled([thinking, answer]);
+    const echo: Item = { id: "u-echo", seq: 3, ts: 0, kind: "user", text: "别人的消息", echoed: true };
+    rerender(<MessageList items={[thinking, answer, echo]} resetKey="k" />);
+    expect(el.scrollTop).toBe(100);
+  });
+
+  it("自己发的仍然强制回到底部", async () => {
+    const { el, rerender } = await mountScrolled([thinking, answer]);
+    const mine: Item = { id: "u-mine", seq: 3, ts: 0, kind: "user", text: "我刚发的" };
+    rerender(<MessageList items={[thinking, answer, mine]} resetKey="k" />);
+    expect(el.scrollTop).toBe(2000);
+  });
+});
