@@ -26,7 +26,11 @@ const WorkspaceDialog = lazy(() =>
 const FeaturePage = lazy(() =>
   import("./components/layout/FeaturePage").then((m) => ({ default: m.FeaturePage })),
 );
-const RightSidebar = lazy(() => import("./components/right/RightSidebar").then((m) => ({ default: m.RightSidebar })));
+// 右侧栏（文件/Git/终端）首次打开时才拉取；之后**关掉只隐藏不卸载**，
+// 否则关一次抽屉就把标签与终端 PTY 全丢一遍（见 RightSidebarDock）。
+const RightSidebarDock = lazy(() =>
+  import("./components/right/RightSidebar").then((m) => ({ default: m.RightSidebarDock })),
+);
 
 /** 首次打开后才挂载，之后保持挂载：配合 lazy，关闭再打开不会丢表单状态。 */
 function useLazyMount(flag: boolean): boolean {
@@ -260,15 +264,11 @@ function AppShell() {
       </main>
 
       {/* 标签页由右侧栏自己管：文件 / Git / 每个终端各一个标签，切走不卸载。
-          功能区整页视图打开时只隐藏（`display: none`）不卸载——卸载等于 SIGHUP
-          掉里面的终端 shell。 */}
-      {rightOpen && (
-        <div className={view ? "hidden" : "contents"}>
-          <Suspense fallback={null}>
-            <RightSidebar cwd={rightCwd} onClose={() => setRightOpen(false)} visible={view === null} />
-          </Suspense>
-        </div>
-      )}
+          收起侧栏、或者功能区整页视图盖住它时**都只隐藏**（`display: none`）：
+          卸载等于 SIGHUP 掉里面的终端 shell，标签与当前选中项也一并丢失。 */}
+      <Suspense fallback={null}>
+        <RightSidebarDock open={rightOpen} covered={view !== null} cwd={rightCwd} onClose={() => setRightOpen(false)} />
+      </Suspense>
 
       <Suspense fallback={null}>
         {settingsMounted && (

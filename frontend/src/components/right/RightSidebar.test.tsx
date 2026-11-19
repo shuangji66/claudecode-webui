@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { RightSidebar, clampWidth } from "./RightSidebar";
+import { RightSidebar, RightSidebarDock, clampWidth } from "./RightSidebar";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { useAppStore } from "../../store/useAppStore";
 
@@ -31,6 +31,72 @@ describe("RightSidebar 开始页栅格", () => {
     expect(grid.parentElement!.className).toContain("@container");
     expect(grid.className).toContain("grid-cols-1");
     expect(grid.className).toContain("@min-[21rem]:grid-cols-2");
+  });
+});
+
+describe("RightSidebar 收起侧栏", () => {
+  // 移动端关抽屉是高频动作：卸载会把标签、当前选中项、终端 PTY 一起丢掉。
+  // 判定看**外层壳的 class**：jsdom 不加载 Tailwind，`hidden` 不是 computed style，
+  // `toBeVisible()` 在这里永远是 true。
+  function dock(open: boolean, covered = false) {
+    const onClose = vi.fn();
+    const r = render(<RightSidebarDock open={open} covered={covered} cwd="/w" onClose={onClose} />);
+    const shell = () => screen.getByLabelText("工作区侧栏").parentElement!;
+    return {
+      onClose,
+      shell,
+      set: (next: boolean, nextCovered = covered) =>
+        r.rerender(<RightSidebarDock open={next} covered={nextCovered} cwd="/w" onClose={onClose} />),
+    };
+  }
+
+  it("关掉再打开时已打开的标签还在，当前选中的也没变", () => {
+    const { onClose, shell, set } = dock(true);
+    expect(shell().className).toBe("contents");
+    fireEvent.click(screen.getByRole("button", { name: /工作区文件/ }));
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Git/ }));
+    expect(screen.getByText("GIT")).toBeInTheDocument();
+
+    set(false);
+    // 收起：只是隐藏，标签与面板都还在 DOM 里（终端 PTY 才不会被 SIGHUP）。
+    expect(shell().className).toBe("hidden");
+    expect(screen.getByText("GIT")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Git$/ })).toBeInTheDocument();
+
+    set(true);
+    expect(shell().className).toBe("contents");
+    // Git 仍是选中的那个标签，没有被重置回「文件」或开始页。
+    expect(screen.getByText("GIT")).toBeInTheDocument();
+    expect(screen.getByText("FILES").closest("div[class='hidden']")).not.toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("功能区整页视图盖住时同样只隐藏", () => {
+    const { shell, set } = dock(true);
+    fireEvent.click(screen.getByRole("button", { name: /工作区文件/ }));
+    set(true, true);
+    expect(shell().className).toBe("hidden");
+    set(true, false);
+    expect(shell().className).toBe("contents");
+    expect(screen.getByText("FILES")).toBeInTheDocument();
+  });
+
+  it("重新可见时补一次数据刷新（收起不再靠重新挂载重拉）", () => {
+    const setCwd = vi.fn(async () => {});
+    useSidebarStore.setState({ setCwd } as never);
+    const { set } = dock(true);
+    expect(setCwd).toHaveBeenCalledTimes(1); // 首次挂载
+    set(false);
+    expect(setCwd).toHaveBeenCalledTimes(1); // 收起不该发请求
+    set(true);
+    expect(setCwd).toHaveBeenCalledTimes(2);
+    expect(setCwd).toHaveBeenLastCalledWith("/w");
+  });
+
+  it("从没打开过就不挂载（懒加载 chunk 不该为没开过的侧栏下载）", () => {
+    dock(false);
+    expect(screen.queryByLabelText("工作区侧栏")).toBeNull();
   });
 });
 

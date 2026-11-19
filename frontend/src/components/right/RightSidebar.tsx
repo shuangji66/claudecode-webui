@@ -84,6 +84,40 @@ export function useViewportWidth(): number {
 
 const KIND_ICON = { files: IconFolder, git: IconGitBranch, terminal: IconTerminal, subagent: IconSpark } as const;
 
+interface DockProps {
+  /** 用户是否打开着右侧栏。 */
+  open: boolean;
+  /** 功能区整页视图是否盖住了侧栏（侧栏被隐藏，但不要卸载）。 */
+  covered: boolean;
+  cwd: string;
+  onClose: () => void;
+}
+
+/**
+ * 右侧栏的挂载壳：**关掉只隐藏、不卸载**。
+ *
+ * 卸载等于把里面的标签全丢一遍：顶部标签、当前选中的那个、文件预览、终端 PTY
+ * （`TerminalView` 的清理会 `close()` 掉 WS，后端随之 SIGHUP shell）。移动端关抽屉
+ * 是高频动作，卸载一次就得从头开标签、重建终端，用户看到的就是「关一下标签就没了」。
+ * 所以这里用 `display: none` 保留整棵子树，PTY 与跑着的命令继续活着；`visible` 传
+ * false 让 Git 面板停掉 3 秒一次的订阅——看不见的屏幕上不该继续跑 git。
+ *
+ * 首次打开前不挂载（`RightSidebar` 是懒加载 chunk，没开过就不该下载）。
+ */
+export function RightSidebarDock({ open, covered, cwd, onClose }: DockProps) {
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => {
+    if (open) setMounted(true);
+  }, [open]);
+  if (!mounted) return null;
+  const shown = open && !covered;
+  return (
+    <div className={shown ? "contents" : "hidden"}>
+      <RightSidebar cwd={cwd} onClose={onClose} visible={shown} />
+    </div>
+  );
+}
+
 /**
  * 右侧栏：顶部一排标签页（文件 / Git / 每个终端各一个），桌面停靠、移动端全屏抽屉。
  *
@@ -125,28 +159,44 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subagentView, activeSession]);
 
-  // 工作区切换/侧栏重开只在这里触发一次；所有面板都读同一份 store。
+  // 工作区切换 / 侧栏重新可见时刷新一次数据；所有面板都读同一份 store。
   //
   // 换工作区时必须**结束**终端与子代理标签：旧 shell 的 cwd 已经不成立，
   // 而 TerminalView 的建连 effect 依赖 cwd，留着标签只会让它静默重启一个新 shell ——
   // scrollback 全丢，连隐藏的标签也会起一个用户没要求的新进程。
+  //
+  // 「重新可见」也要刷新：右侧栏收起现在是只隐藏不卸载（见 RightSidebarDock），
+  // 不再靠重新挂载来重拉数据。不补这一步的话，收着侧栏时文件变了、分支切了，
+  // 再打开看到的还是收起前那一屏。两件事合在一个 effect 里，是为了不重复请求——
+  // 换工作区的同时重开侧栏只会发一轮，而不是两轮。
   const firstCwd = useRef(true);
+  const seenCwd = useRef(cwd);
+  const seenVisible = useRef(visible);
   useEffect(() => {
+    const cwdChanged = seenCwd.current !== cwd;
+    const becameVisible = visible && !seenVisible.current;
+    seenCwd.current = cwd;
+    seenVisible.current = visible;
     if (firstCwd.current) {
       firstCwd.current = false;
       void setCwd(cwd);
       return;
     }
-    termSeq.current = 0;
-    let fallback = "";
-    setTabs((prev) => {
-      const kept = prev.filter((tab) => tab.kind === "files" || tab.kind === "git");
-      fallback = kept[0]?.id ?? "";
-      return kept;
-    });
-    setActive((prev) => (prev && (prev.startsWith("files") || prev.startsWith("git")) ? prev : fallback));
-    void setCwd(cwd);
-  }, [cwd, setCwd]);
+    if (!cwdChanged && !becameVisible) return;
+    if (cwdChanged) {
+      termSeq.current = 0;
+      let fallback = "";
+      setTabs((prev) => {
+        const kept = prev.filter((tab) => tab.kind === "files" || tab.kind === "git");
+        fallback = kept[0]?.id ?? "";
+        return kept;
+      });
+      setActive((prev) => (prev && (prev.startsWith("files") || prev.startsWith("git")) ? prev : fallback));
+    }
+    // 看不见的时候只收拾标签，不发请求：收着侧栏（或功能区盖着）时切工作区，
+    // 数据留给「重新可见」那一次，别让没人看的界面向 NAS 拉目录树和 git status。
+    if (visible) void setCwd(cwd);
+  }, [cwd, visible, setCwd]);
 
   const applyWidth = (next: number) => {
     const value = clampWidth(next, viewport);
@@ -437,27 +487,32 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
           </div>
         ) : (
           <div className="relative min-h-0 flex-1">
-            {/* 标签切走只隐藏：终端里挂着 PTY，卸载等于杀 shell。 */}
-            {tabs.map((tab) => (
-              <div key={tab.id} className={tab.id === active ? "absolute inset-0" : "hidden"}>
-                {tab.kind === "files" && <FilesPanel cwd={cwd} active={tab.id === active} pending={pendingOpen} />}
-                {tab.kind === "git" && <GitPanel cwd={cwd} active={tab.id === active && visible} />}
-                {tab.kind === "subagent" && tab.agentId && (
-                  <SubagentPanel sessionId={tab.sessionId ?? ""} agentId={tab.agentId} />
-                )}
-                {tab.kind === "terminal" && (
-                  <Suspense
-                    fallback={
-                      <div className="flex h-full items-center justify-center text-[12px] text-muted">
-                        {t("正在加载终端…", "Loading terminal…")}
-                      </div>
-                    }
-                  >
-                    <TerminalView cwd={cwd} active={tab.id === active} />
-                  </Suspense>
-                )}
-              </div>
-            ))}
+            {/* 标签切走、甚至整条侧栏收起都只隐藏：终端里挂着 PTY，卸载等于杀 shell。
+                「激活」再与侧栏可见性相与——重新打开时要让它补一次 fit，收着的时候也别
+                让面板以为自己正被看着（Git 的订阅就是这个口径）。 */}
+            {tabs.map((tab) => {
+              const on = tab.id === active && visible;
+              return (
+                <div key={tab.id} className={tab.id === active ? "absolute inset-0" : "hidden"}>
+                  {tab.kind === "files" && <FilesPanel cwd={cwd} active={on} pending={pendingOpen} />}
+                  {tab.kind === "git" && <GitPanel cwd={cwd} active={on} />}
+                  {tab.kind === "subagent" && tab.agentId && (
+                    <SubagentPanel sessionId={tab.sessionId ?? ""} agentId={tab.agentId} />
+                  )}
+                  {tab.kind === "terminal" && (
+                    <Suspense
+                      fallback={
+                        <div className="flex h-full items-center justify-center text-[12px] text-muted">
+                          {t("正在加载终端…", "Loading terminal…")}
+                        </div>
+                      }
+                    >
+                      <TerminalView cwd={cwd} active={on} />
+                    </Suspense>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </aside>
