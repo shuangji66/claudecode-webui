@@ -771,6 +771,12 @@ src/
     （`MessageList` 传 `stick`、`ProcessGroup` 传自己的 `bodyStick`）。在
     `ResizeObserver` 回调里现算 `scrollHeight - scrollTop - clientHeight` 必然得出
     「不贴底」（内容变高的瞬间 `scrollHeight` 已经变大、`scrollTop` 还没动），于是永远不跟。
+  - **滚动容器自身的高度变化也要重新贴底**（`MessageList` 的 ResizeObserver）：输入区上方的
+    审批卡片、任务清单、「少女祈祷中」计时行出现/消失都会挤占它的高度。高度一变，`scrollTop`
+    停在原处就不再是最底部（内容没动、视口变矮了），表现是「回到底部」按钮自己冒出来、还带个
+    「有新内容」圆点，像是用户自己翻上去了。这里**不做**「已经在底部就跳过」的优化：回调的
+    触发原因就是几何变了，此刻按旧的 `scrollHeight/scrollTop` 判断会跳过写入。
+    判贴底仍然只认 `stick`（由 `onScroll` 的方向维护），不要在尺寸回调里现算几何。
   - **用户自己发消息时强行回到底部并恢复跟随**（`MessageList` 的 `lastUserSent`）：他往上翻着
     读历史、直接发一句话，界面却停在他读的那段——自己刚发的气泡和后面的回复全在视口外，
     看起来就是「发了没反应」。判定是「最后一条 item 是 user，且它的 id 与上一次见到的不一样」，

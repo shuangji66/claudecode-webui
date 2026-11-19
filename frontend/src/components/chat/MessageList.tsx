@@ -370,9 +370,24 @@ export function MessageList({
     if (!sc || typeof ResizeObserver === "undefined") return;
     let raf = 0;
     // 视口宽度/高度变化会改变换行与行高，缓存随之失效；合并到一帧里重量。
+    //
+    // **还要重新贴底**：这个滚动区的高度不是固定的——输入区上方的审批卡片、任务清单、
+    // 「少女祈祷中」计时行出现/消失都会挤占它的高度。高度一变，`scrollTop` 停在原处就
+    // 不再是最底部（内容没动、视口变矮了），于是「回到底部」按钮自己冒出来、还带个
+    // 「有新内容」的圆点，看起来像用户自己翻上去了。贴底时高度变化必须跟到底。
     const ro = new ResizeObserver(() => {
       window.cancelAnimationFrame(raf);
       raf = window.requestAnimationFrame(() => {
+        if (stick.current) {
+          // 高度变化本身不是「用户往上滚」，不要用它去判贴底——只认 `stick`（由
+          // onScroll 的方向判定维护）。这里**不做**「已经在底部就跳过」的优化：
+          // 这次回调的触发原因就是几何变了，此刻的 scrollHeight/scrollTop 恰好在
+          // 旧值上仍然自洽（视口变矮时差值是正的、变高时也可能是 0），按它们判断会
+          // 跳过写入，滚动位置就此停在离底部更远的地方。
+          sc.scrollTop = sc.scrollHeight;
+          setAtBottom(true);
+          setUnseen(false);
+        }
         measureTurns(true); // 尺寸变了行高就变了，必须重量
         syncActiveTurn();
       });
@@ -556,7 +571,9 @@ export function MessageList({
       >
         <div
           ref={content}
-          className={`mx-auto w-full max-w-[820px] px-4 py-6 md:px-6 md:py-8 ${turns.length >= 2 ? "md:pr-10" : ""}`}
+          // 上下内边距分开写：下方贴着输入区，`py-8` 的 32px 加上末尾的 spacer
+          // 会叠出一大片空白（底部跟随之后那片空白更显眼）。
+          className={`mx-auto w-full max-w-[820px] px-4 pb-2 pt-6 md:px-6 md:pb-3 md:pt-8 ${turns.length >= 2 ? "md:pr-10" : ""}`}
         >
           <div className={dense ? "" : "space-y-5"}>
             {hidden > 0 && (
@@ -649,7 +666,8 @@ export function MessageList({
               );
             })}
           </div>
-          <div className="h-6" />
+          {/* 末尾留一小段呼吸：最后一条回答的用量行贴着输入区会很挤，但不必再给 24px。 */}
+          <div className="h-1" />
         </div>
       </div>
 

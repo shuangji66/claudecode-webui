@@ -178,3 +178,61 @@ describe("MessageList 展开后贴底跟随", () => {
     expect(el.scrollTop).toBe(2400);
   });
 });
+
+// 滚动区的高度不是固定的：输入区上方的审批卡片、任务清单、「少女祈祷中」计时行
+// 出现/消失都会挤占它。高度一变，scrollTop 停在原处就不再是最底部（内容没动、视口
+// 变矮了），于是「回到底部」按钮自己冒出来、还带个「有新内容」的圆点。
+describe("MessageList 容器尺寸变化后贴底", () => {
+  /** 视口变高/变矮（内容不变）。jsdom 不会替我们 clamp scrollTop，这里要自己按几何摆。 */
+  function resizeViewport(el: HTMLElement, clientHeight: number) {
+    Object.defineProperty(el, "clientHeight", { value: clientHeight, configurable: true });
+  }
+
+  it("贴底时容器变矮（审批卡片/计时行挤进来）会重新贴到底", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    grow(el, 1000);
+    // 内容 1000、视口 500：贴底是 scrollTop = 500。
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
+
+    // 视口矮成 300（卡片挤进来 200px）：新的底部是 700，停在 500 就不再贴底。
+    resizeViewport(el, 300);
+    await fireResize();
+
+    expect(el.scrollTop).toBe(1000);
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
+  });
+
+  // 卡片消失、容器变高时同理：贴底状态下视口长高了，位置也要跟到新的底部。
+  it("贴底时容器变高（卡片消失）同样跟到底", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    grow(el, 1000);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+
+    resizeViewport(el, 800);
+    await fireResize();
+
+    // 代码写的是 scrollTop = scrollHeight（内容 1000）；真浏览器会自己夹到
+    // 1000-800=200。jsdom 不 clamp，所以这里只断言「往新的底部去了」。
+    expect(el.scrollTop).toBeGreaterThanOrEqual(200);
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
+  });
+
+  // 反过来：用户已经往上翻过，容器尺寸变化不该把他拽回底部。
+  it("用户往上翻过就不动：尺寸变化不抢滚动位置", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    grow(el, 1000);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+    el.scrollTop = 200;
+    fireEvent.scroll(el);
+
+    resizeViewport(el, 300);
+    await fireResize();
+
+    expect(el.scrollTop).toBe(200);
+    expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
+  });
+});
