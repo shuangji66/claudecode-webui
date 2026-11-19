@@ -247,6 +247,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		// 挂起审批要一起重放：刷新/重连后若拿不到它们，用户就再也点不到，
 		// 而 CLI 一直挂在 can_use_tool 上等回包。
 		"permissions": sess.PendingPermissions(),
+		// 还没结束的后台任务（task_id ↔ tool_use_id）。列表仍由前端从消息流现算，
+		// 但 task_id 只在实时的 task_started 里出现——中途连上来的设备只有转录回放，
+		// 拿不到它就没法中止「进行中」的后台操作。
+		"tasks": sess.LiveTasks(),
 	})
 	if err := c.SendJSON(WireEvent{Kind: "session.snapshot", SID: id, Data: snapshot}); err != nil {
 		return

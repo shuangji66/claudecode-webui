@@ -75,6 +75,15 @@ export interface ThinkingItem extends BaseItem {
 export interface SubagentInfo {
   /** claude 的任务 id，也是子代理 id（task_started 的 task_id）。 */
   taskId: string;
+  /**
+   * task_started 的 task_type：`local_agent`（子代理）/ `local_bash`（后台命令）/
+   * `mcp_task` 等。
+   *
+   * **这是区分「子代理」与「后台操作」的唯一可靠依据**：两者都发 task_* 事件、
+   * 都带 task_id 与 description，只有 task_type 不同。缺失（老版本 CLI、转录回放）
+   * 时按子代理处理——宁可多列在子智能体里，也不要把子代理错当成后台命令。
+   */
+  taskType?: string;
   /** 查看子代理转录要用的 id；没有 task 事件时从 tool_result 的 agentId 里补。 */
   agentId?: string;
   /** subagent_type，例如 general-purpose / Explore。 */

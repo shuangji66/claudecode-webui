@@ -9,6 +9,8 @@ export interface SubagentEntry {
   /** 描述优先，其次类型，最后回落到 id。 */
   label: string;
   type?: string;
+  /** task_type：`local_agent` 才是子代理，其余是后台操作（见 lib/backgroundTasks）。 */
+  taskType?: string;
   status: SubagentInfo["status"];
   usage?: SubagentInfo["usage"];
 }
@@ -40,6 +42,7 @@ export function subagentEntries(items: Item[]): SubagentEntry[] {
       taskId: sub.taskId,
       label: description || type || agentId,
       type,
+      taskType: sub.taskType,
       status: sub.status,
       usage: sub.usage,
     });

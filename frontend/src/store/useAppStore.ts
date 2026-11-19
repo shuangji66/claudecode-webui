@@ -39,6 +39,7 @@ import type {
   HostFile,
   GatewayModel,
   InitPayload,
+  LiveTask,
   ModelsResult,
   PermissionPayload,
   ProbeResult,
@@ -172,6 +173,14 @@ interface AppState {
   perms: Record<string, PermissionPayload[]>;
   inits: Record<string, InitPayload>;
   states: Record<string, string>;
+  /**
+   * 后端记的「还没结束的后台任务」：`liveTasks[sid]`（task_id ↔ tool_use_id）。
+   *
+   * 列表本身仍从消息流现算（见 lib/backgroundTasks），这一份只补一个东西：
+   * `task_id` 只出现在实时的 task_started 里，中途连上来的设备走转录回放拿不到它，
+   * 界面上「进行中」的条目就点不了中止。随 session.snapshot 一起来。
+   */
+  liveTasks: Record<string, LiveTask[]>;
   /**
    * 「待发送」队列：`queued[sid]`。回合进行中按 Enter 只入队（可编辑、可删），
    * 本轮结束后自动发队首；`Ctrl+Enter` 才立刻写进 stdin 并进本轮。
@@ -375,6 +384,7 @@ function purgeSession(state: {
   doneIds: Record<string, boolean>;
   modes: Record<string, string>;
   queued: Record<string, unknown>;
+  liveTasks: Record<string, unknown>;
 }, id: string) {
   delete state.items[id];
   delete state.subagentItems[id];
@@ -386,6 +396,7 @@ function purgeSession(state: {
   delete state.doneIds[id];
   delete state.modes[id];
   delete state.queued[id];
+  delete state.liveTasks[id];
 }
 
 /**
@@ -635,6 +646,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   perms: {},
   inits: {},
   states: {},
+  liveTasks: {},
   conns: {},
   queued: {},
   doneIds: {},
@@ -1506,6 +1518,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
           doneIds: { ...s.doneIds },
           modes: { ...s.modes },
           queued: { ...s.queued },
+          liveTasks: { ...s.liveTasks },
         };
         purgeSession(buckets, id);
         return buckets;
@@ -1890,6 +1903,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
               init?: InitPayload;
               info?: { state?: string; mode?: string };
               permissions?: PermissionPayload[];
+              tasks?: LiveTask[];
             }
           | undefined;
         if (data?.init) set((s) => ({ inits: { ...s.inits, [sid]: data.init! } }));
@@ -1903,6 +1917,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
           const pending = data.permissions.filter((p) => p?.request_id);
           set((s) => ({ perms: { ...s.perms, [sid]: pending } }));
         }
+        // 还没结束的后台任务：补 task_id（只在实时 task_started 里出现，转录回放没有）。
+        // 空数组也要覆盖——那条路径代表「确实一个都没在跑」，留着旧值会让中止入口
+        // 指向早就不存在的任务。
+        set((s) => ({ liveTasks: { ...s.liveTasks, [sid]: data?.tasks ?? [] } }));
         if (data?.info?.state) {
           const state = data.info.state;
           set((s) => ({

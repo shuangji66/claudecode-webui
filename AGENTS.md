@@ -521,6 +521,23 @@ hub ── manager ── session ── process ── claude (NDJSON)
   审批面板据此标「来自子代理 X」并能跳过去。丢掉它，用户就分不清是谁在申请权限。
 - **页头的「子智能体 N」从消息流现算**（`lib/subagents.ts` 的 `subagentEntries`），
   不额外存一份状态；点开列表用 `showSubagent` 打开右侧栏标签。
+- **「子代理」与「后台操作」是两套东西，不能混在一个列表里**（`lib/backgroundTasks.ts`）：
+  两者都发 `task_*`、都带 task_id 与 description，但子代理有转录可查看，后台命令
+  （`Bash` + `run_in_background`）与 MCP 调用没有——混在一起会让页头列出几十条
+  「Run full frontend tests」，把真正的子代理淹掉。
+  判定只看 `subagent.taskType`：`local_agent` 是子代理，其余（`local_bash` /
+  `mcp_task` …）归后台操作；**缺 taskType 时按子代理处理**（老 CLI 与转录回放给不出
+  它，宁可多列也不要把子代理错当成命令）。页头因此有两个独立入口：子智能体（数量徽章，
+  点开选对话）与后台操作（终端图标 + 数量，点开可中止）。
+  **后台操作只列还在跑的**：它是控制面板不是历史记录，跑完即从列表消失、全跑完后
+  入口图标自动隐藏；结束的后台命令仍在正文那张卡片上。
+- **`task_id` 只出现在实时的 `task_started` 里，必须由后端补**：中途连上来的设备只有
+  转录回放，拿不到它，界面上「进行中」的条目就发不出 `stop_task`（也是"两台设备数量
+  不一致"的来源之一）。`session.Session` 用 `noteTaskEvent` 维护
+  `task_id ↔ tool_use_id`（结束的摘掉），`LiveTasks()` 随 `session.snapshot` 的
+  `tasks` 下发；前端存在 `useAppStore.liveTasks[sid]`，`backgroundTasks` 按 `tool_use_id`
+  回填 task_id 与 description、并用它的 `task_type` 兜底分类（转录回放里没有 taskType）。
+  **列表本身仍从消息流现算**，后端只补这张表——不要在 gateway 里再存一份列表。
 - **重启后标题会「变成一串 agent id」是踩过的坑**：主转录里没有 `task_started`，
   `subagent.description` 拿不到；但 Agent 的 `tool_use` 入参一直带着 `description` /
   `subagent_type`，`subagentEntries` 必须回落到入参。状态/用量/agentId 则靠 tool_result

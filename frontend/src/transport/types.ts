@@ -230,6 +230,25 @@ export interface AgentInfo {
   description?: string;
 }
 
+/**
+ * 后端记的「还没结束的后台任务」（随 session.snapshot 下发）。
+ *
+ * 只补 `task_id` 这一类**只在实时事件里出现**的信息：中途连上来的设备走转录回放，
+ * 拿不到 task_started，因此也就不知道「进行中」的那条后台操作该往哪儿发 stop_task。
+ * 列表本身仍由前端从消息流现算（见 lib/backgroundTasks）。
+ */
+export interface LiveTask {
+  task_id: string;
+  tool_use_id?: string;
+  description?: string;
+  /** `local_agent` / `local_bash` / `mcp_task` …（只有 task_started 才带）。 */
+  task_type?: string;
+  subagent_type?: string;
+  background?: boolean;
+  /** 不算活动（观察者之类）：界面不该列出来。 */
+  ambient?: boolean;
+}
+
 /** 后端推来的权限请求（can_use_tool）。 */
 export interface PermissionPayload {
   request_id: string;

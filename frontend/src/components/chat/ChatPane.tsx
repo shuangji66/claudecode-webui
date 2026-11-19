@@ -21,7 +21,7 @@ import { copyText } from "../../lib/clipboard";
 import { downloadFile, sessionLogName } from "../../lib/download";
 import { useLocale, useT } from "../../lib/i18n";
 import { BrandMark, IconAlert, IconRetry } from "../common/Icons";
-import { subagentEntries } from "../../lib/subagents";
+import { backgroundTasks, subagentsOnly } from "../../lib/backgroundTasks";
 import { draftKeyFor } from "../../lib/drafts";
 import { MarkdownMediaContext, type MarkdownMedia } from "../common/Markdown";
 import { ImageLightbox } from "./ImageLightbox";
@@ -96,8 +96,12 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
   useEffect(() => setLightbox(null), [activeId]);
   // 待发送队列跟着对话走：换对话就换一批（后端在回合结束时自动发队首）。
   const queued = activeId ? (queuedMap[activeId] ?? []) : [];
-  // 页头「子智能体 N」：从消息流里现算，不额外存一份状态。
-  const subs = useMemo(() => subagentEntries(itemList), [itemList]);
+  // 页头两个入口：子代理（有对话可看）与后台操作（只能中止），都从消息流现算。
+  // 后台操作还要后端那份 liveTasks 补 task_id（中途接入的设备没有 task_started）。
+  const subs = useMemo(() => subagentsOnly(itemList), [itemList]);
+  const liveTasks = useAppStore((s) => (activeId ? s.liveTasks[activeId] : undefined));
+  const bgTasks = useMemo(() => backgroundTasks(itemList, liveTasks), [itemList, liveTasks]);
+  const stopTask = useAppStore((s) => s.stopTask);
   const init = activeId ? inits[activeId] : undefined;
   const conn = activeId ? (conns[activeId] ?? { state: "idle" as const }) : { state: "idle" as const };
   const state = activeId ? (states[activeId] ?? session?.state ?? "idle") : "idle";
@@ -267,6 +271,8 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
         session={session}
         subagents={subs}
         onOpenSubagent={showSubagent}
+        backgroundTasks={bgTasks}
+        onStopTask={stopTask}
         title={title}
         busy={busy}
         onToggleSidebar={onToggleSidebar}

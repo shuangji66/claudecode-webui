@@ -295,6 +295,29 @@ func IsTurnInit(raw []byte) bool {
 	return msg.Type == TypeSystem && msg.Subtype == "init"
 }
 
+// IsTaskEvent 判断一条 system 消息是不是后台任务的生命周期事件。
+//
+// 这几种 subtype 描述的是「一个后台任务」（子代理、后台命令、MCP 调用），
+// 它们和一条普通的 cli 消息走同一条流，但带着 task_id 与状态——会话据此维护
+// 「现在还能中止哪些任务」的表（见 Session.LiveTasks）。
+func IsTaskEvent(raw []byte) bool {
+	var msg struct {
+		Type    string `json:"type"`
+		Subtype string `json:"subtype"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return false
+	}
+	if msg.Type != TypeSystem {
+		return false
+	}
+	switch msg.Subtype {
+	case "task_started", "task_progress", "task_updated", "task_notification":
+		return true
+	}
+	return false
+}
+
 // SetPermissionMode 构造切换权限模式的控制请求。
 func SetPermissionMode(requestID, mode string) []byte {
 	return mustMarshal(map[string]any{

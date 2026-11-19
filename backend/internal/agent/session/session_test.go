@@ -985,3 +985,82 @@ func TestPermissionModeEventFromCLIStatus(t *testing.T) {
 		t.Fatalf("system 原文应继续作为 cli 事件转发，count=%d", rec.count(KindCLI))
 	}
 }
+
+// 后台任务的 task_id 只出现在实时的 task_* 事件里，转录回放里没有。
+// 会话要把「还没结束的」记下来随快照下发，否则中途连上的设备拿不到 task_id，
+// 界面上那些「进行中」的后台操作就中止不了。
+func TestLiveTasksTracksStartAndFinish(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	if got := sess.LiveTasks(); len(got) != 0 {
+		t.Fatalf("初始不应有后台任务: %v", got)
+	}
+
+	// 后台命令：local_bash，带 tool_use_id。
+	fc.send(map[string]any{
+		"type":            "system",
+		"subtype":         "task_started",
+		"task_id":         "task-1",
+		"tool_use_id":     "toolu_01",
+		"task_type":       "local_bash",
+		"description":     "npm test",
+		"is_backgrounded": true,
+	})
+	if _, ok := rec.wait(KindCLI, 2*time.Second); !ok {
+		t.Fatal("task_started 应继续作为 cli 事件转发")
+	}
+
+	got := sess.LiveTasks()
+	if len(got) != 1 || got[0].TaskID != "task-1" || got[0].ToolUseID != "toolu_01" {
+		t.Fatalf("后台任务表 = %+v", got)
+	}
+
+	// task_updated 不带 tool_use_id：不能把先前记下的那个清掉。
+	fc.send(map[string]any{
+		"type":    "system",
+		"subtype": "task_updated",
+		"task_id": "task-1",
+		"patch":   map[string]any{"status": "running"},
+	})
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if tasks := sess.LiveTasks(); len(tasks) == 1 && tasks[0].ToolUseID == "toolu_01" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if tasks := sess.LiveTasks(); tasks[0].ToolUseID != "toolu_01" {
+		t.Fatalf("task_updated 后 tool_use_id 丢了: %+v", tasks)
+	}
+
+	// 结束的任务要摘掉：这张表只回答「现在还能中止哪些」。
+	fc.send(map[string]any{
+		"type":    "system",
+		"subtype": "task_notification",
+		"task_id": "task-1",
+		"status":  "completed",
+		"summary": "ok",
+	})
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(sess.LiveTasks()) == 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("任务结束后仍在表里: %+v", sess.LiveTasks())
+}
+
+// 非 task_* 的 system 消息不能进这张表（否则每个 init/status 都会造出假任务）。
+func TestLiveTasksIgnoresOtherSystemMessages(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{"type": "system", "subtype": "status", "status": "ready"})
+	fc.send(map[string]any{"type": "system", "subtype": "init", "session_id": "s1"})
+	time.Sleep(50 * time.Millisecond)
+	if got := sess.LiveTasks(); len(got) != 0 {
+		t.Fatalf("非 task_* 消息不该进表: %+v", got)
+	}
+}

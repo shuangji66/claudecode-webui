@@ -405,6 +405,7 @@ function applyTaskEvent(items: Item[], m: Raw, at: number): Item[] | undefined {
 
   if (subtype === "task_started") {
     next.type = str(m.subagent_type) || prev.type;
+    next.taskType = str(m.task_type) || prev.taskType;
     next.description = str(m.description) || prev.description;
     next.prompt = str(m.prompt) || prev.prompt;
     if (typeof m.is_backgrounded === "boolean") next.background = m.is_backgrounded;

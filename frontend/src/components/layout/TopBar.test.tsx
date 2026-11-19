@@ -92,3 +92,47 @@ describe("TopBar 在飞牛打开工作区", () => {
     expect(screen.queryByRole("button", { name: label })).toBeNull();
   });
 });
+
+describe("TopBar 后台操作", () => {
+  const bg = [
+    { taskId: "task-1", toolUseId: "tu1", label: "npm test", toolName: "Bash", progress: 12 },
+    { taskId: "", toolUseId: "tu2", label: "看不到 task_id 的后台命令", toolName: "Bash" },
+  ];
+
+  it("与子智能体是两个入口：后台操作有自己的图标与列表", () => {
+    render(bar({ backgroundTasks: bg }));
+    // 两个触发器同时在：子智能体（数量 2）与后台操作（数量 2）。
+    expect(screen.getByLabelText("子智能体 2 个")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("后台操作 2 个进行中"));
+
+    expect(screen.getByText("npm test")).toBeInTheDocument();
+    expect(screen.getByText("看不到 task_id 的后台命令")).toBeInTheDocument();
+    // 后台操作的条目不会被当成子代理列进另一个菜单。
+    expect(screen.queryByLabelText(/子智能体 3 个/)).toBeNull();
+  });
+
+  it("进行中的可以手动中止", () => {
+    const onStop = vi.fn();
+    render(bar({ backgroundTasks: bg, onStopTask: onStop }));
+    fireEvent.click(screen.getByLabelText("后台操作 2 个进行中"));
+
+    const stop = screen.getAllByLabelText("中止");
+    // 只有拿得到 task_id 的那条才有中止按钮：点了只会报错的不摆。
+    expect(stop).toHaveLength(1);
+    fireEvent.click(stop[0]);
+    expect(onStop).toHaveBeenCalledWith("task-1");
+  });
+
+  it("列表清空后入口自动隐藏", () => {
+    const { rerender } = render(bar({ backgroundTasks: bg }));
+    expect(screen.getByLabelText("后台操作 2 个进行中")).toBeInTheDocument();
+
+    rerender(bar({ backgroundTasks: [] }));
+    expect(screen.queryByLabelText(/后台操作/)).toBeNull();
+  });
+
+  it("没有后台操作时不会有空入口", () => {
+    render(bar({ backgroundTasks: [] }));
+    expect(screen.queryByLabelText(/后台操作/)).toBeNull();
+  });
+});

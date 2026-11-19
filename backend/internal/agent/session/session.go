@@ -145,6 +145,36 @@ type Session struct {
 	// resultAt 是最近一条 result 的到达时间（unix nano，0 表示还没有）。
 	// 只用来判断「result 之后紧跟着的 init 是不是同一批投递」，见 TurnHandoffWindow。
 	resultAt atomic.Int64
+
+	// taskMu/tasks 记录「还没结束的后台任务」的 task_id ↔ tool_use_id。
+	//
+	// 前端从消息流现算任务列表，但 `task_id` 只出现在实时的 task_started 里：
+	// 中途连上来的设备只有转录回放，拿不到它，界面上那些「进行中」的后台操作
+	// 就没有 task_id 可以发 stop_task。所以后端按会话记一份，随 session.snapshot
+	// 下发（与挂起的审批同一类「重连也要能继续操作」的状态）。
+	taskMu sync.Mutex
+	tasks  map[string]taskRef
+	// taskOrder 保证下发顺序稳定（= 启动顺序），不依赖 map 遍历。
+	taskOrder []string
+}
+
+// taskRef 是一个后台任务的标识与展示信息。
+//
+// 带 description / task_type 而不只是 id：中途连上来的设备拿不到 task_started，
+// 只回 id 的话它那边只能显示一串 agent id，与一直在线的设备对不上。
+type taskRef struct {
+	TaskID    string `json:"task_id"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	// Description 是 task_started 给的「这件事在做什么」。
+	Description string `json:"description,omitempty"`
+	// TaskType 区分 local_agent（子代理）/ local_bash（后台命令）/ mcp_task 等。
+	TaskType string `json:"task_type,omitempty"`
+	// SubagentType 只有子代理任务才有。
+	SubagentType string `json:"subagent_type,omitempty"`
+	// Background 对应 task_started 的 is_backgrounded。
+	Background bool `json:"background,omitempty"`
+	// Ambient 是「不算活动」的后台任务（观察者之类），界面不该列出来。
+	Ambient bool `json:"ambient,omitempty"`
 }
 
 // New 构造一个尚未握手的会话。调用方随后必须调用 Handshake。
@@ -158,6 +188,7 @@ func New(id, cwd string, tr Transport, emit func(Event)) *Session {
 		send:      make(chan writeReq, 64),
 		pending:   make(map[string]*pendingCall),
 		perms:     make(map[string]json.RawMessage),
+		tasks:     make(map[string]taskRef),
 		done:      make(chan struct{}),
 	}
 	s.state.Store(StateStarting)
@@ -406,6 +437,93 @@ func (s *Session) PendingPermissions() []json.RawMessage {
 		}
 	}
 	return out
+}
+
+// LiveTasks 返回还没结束的后台任务（task_id ↔ tool_use_id），按启动顺序。
+//
+// 只给「重连/中途加入的连接」用：前端从消息流现算列表，但 task_id 只在实时的
+// task_started 里出现，转录回放里没有——不补这一份，中途进来的设备看到的
+// 「进行中」条目就没有 task_id 可发 stop_task，按钮点了也没用。
+func (s *Session) LiveTasks() []taskRef {
+	s.taskMu.Lock()
+	defer s.taskMu.Unlock()
+	if len(s.tasks) == 0 {
+		return nil
+	}
+	out := make([]taskRef, 0, len(s.tasks))
+	for _, id := range s.taskOrder {
+		if ref, ok := s.tasks[id]; ok {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+// noteTaskEvent 按 system/task_* 维护后台任务表。
+//
+// 结束的任务要摘掉而不是留着「最后一次状态」：这张表只回答「现在还能中止哪些」，
+// 留着的条目会让界面在中止按钮旁边一直挂着早就结束的 task_id。
+func (s *Session) noteTaskEvent(raw json.RawMessage) {
+	var msg struct {
+		Subtype      string `json:"subtype"`
+		TaskID       string `json:"task_id"`
+		ToolUseID    string `json:"tool_use_id"`
+		Status       string `json:"status"`
+		Description  string `json:"description"`
+		TaskType     string `json:"task_type"`
+		SubagentType string `json:"subagent_type"`
+		Background   *bool  `json:"is_backgrounded"`
+		Ambient      *bool  `json:"ambient"`
+		Patch        struct {
+			Status     string `json:"status"`
+			Background *bool  `json:"is_backgrounded"`
+		} `json:"patch"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return
+	}
+	if msg.TaskID == "" {
+		return
+	}
+	done := msg.Status != "" && msg.Status != "running" ||
+		msg.Patch.Status != "" && msg.Patch.Status != "running"
+	if done {
+		s.taskMu.Lock()
+		delete(s.tasks, msg.TaskID)
+		s.taskMu.Unlock()
+		return
+	}
+	s.taskMu.Lock()
+	if _, dup := s.tasks[msg.TaskID]; !dup {
+		s.taskOrder = append(s.taskOrder, msg.TaskID)
+	}
+	ref := s.tasks[msg.TaskID]
+	ref.TaskID = msg.TaskID
+	// task_updated 不带 tool_use_id：保留先前记下的那个，别把它清空。
+	if msg.ToolUseID != "" {
+		ref.ToolUseID = msg.ToolUseID
+	}
+	if msg.Description != "" {
+		ref.Description = msg.Description
+	}
+	if msg.TaskType != "" {
+		ref.TaskType = msg.TaskType
+	}
+	if msg.SubagentType != "" {
+		ref.SubagentType = msg.SubagentType
+	}
+	if msg.Background != nil {
+		ref.Background = *msg.Background
+	}
+	if msg.Ambient != nil {
+		ref.Ambient = *msg.Ambient
+	}
+	// 中途被转到后台（task_updated 的 patch.is_backgrounded）同样要记。
+	if msg.Patch.Background != nil {
+		ref.Background = *msg.Patch.Background
+	}
+	s.tasks[msg.TaskID] = ref
+	s.taskMu.Unlock()
 }
 
 func (s *Session) rememberPermission(requestID string, raw json.RawMessage) {
@@ -665,6 +783,11 @@ func (s *Session) handleLine(line []byte) {
 		if mode, ok := protocol.PermissionModeOf(env.Raw); ok {
 			s.setMode(mode)
 			s.emitData(KindSessionState, map[string]any{"mode": mode})
+		}
+		// 后台任务的 task_id 只在这条流里出现，记下来随快照发给后来连上的设备
+		// （它们靠转录回放拿不到，见 LiveTasks）。
+		if protocol.IsTaskEvent(env.Raw) {
+			s.noteTaskEvent(env.Raw)
 		}
 		// 刚结束一轮又来了一条 init：这是我们写进去的插话没赶上本轮，CLI 把它
 		// 当成新的一轮在跑。不认这个信号，界面会在整轮里显示「空闲」（发送按钮

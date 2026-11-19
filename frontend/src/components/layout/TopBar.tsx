@@ -2,8 +2,20 @@ import { useState } from "react";
 import type { SessionInfo } from "../../transport/types";
 import { useT } from "../../lib/i18n";
 import { runningSubagents, type SubagentEntry } from "../../lib/subagents";
+import type { BackgroundTaskEntry } from "../../lib/backgroundTasks";
 import { Menu } from "../common/Menu";
-import { IconCheck, IconCopy, IconDownload, IconFolder, IconMore, IconPanel, IconSidebarRight, IconSpark } from "../common/Icons";
+import {
+  IconCheck,
+  IconCopy,
+  IconDownload,
+  IconFolder,
+  IconMore,
+  IconPanel,
+  IconSidebarRight,
+  IconSpark,
+  IconStop,
+  IconTerminal,
+} from "../common/Icons";
 
 /** 子代理状态点配色（与侧栏对话状态点一致：进行中强调色、完成绿、失败红、停止琥珀）。 */
 const SUBAGENT_TONE = {
@@ -18,6 +30,15 @@ interface Props {
   /** 本会话的子代理（页头「子智能体 N」触发器）。 */
   subagents: SubagentEntry[];
   onOpenSubagent: (agentId: string, label: string) => void;
+  /**
+   * 还在后台跑、但不是子代理的操作（后台命令 / MCP 调用）。
+   *
+   * 与 `subagents` 是两套入口：这些没有对话可查看，只有「在跑什么 + 能不能中止」。
+   * 空数组时整个入口不渲染（跑完就消失，不留空按钮）。
+   */
+  backgroundTasks?: BackgroundTaskEntry[];
+  /** 中止一次后台操作；`taskId` 为空表示后端也查不到（按钮不给）。 */
+  onStopTask?: (taskId: string) => void;
   title: string;
   busy: boolean;
   onToggleSidebar: () => void;
@@ -32,10 +53,11 @@ interface Props {
 }
 
 
-export function TopBar({ session, title, busy, subagents, onOpenSubagent, onToggleSidebar, onCopySession, onDownloadSession, rightOpen, onToggleRight, showReveal, onRevealWorkspace }: Props) {
+export function TopBar({ session, title, busy, subagents, onOpenSubagent, backgroundTasks = [], onStopTask, onToggleSidebar, onCopySession, onDownloadSession, rightOpen, onToggleRight, showReveal, onRevealWorkspace }: Props) {
   const t = useT();
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [subAnchor, setSubAnchor] = useState<HTMLElement | null>(null);
+  const [taskAnchor, setTaskAnchor] = useState<HTMLElement | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "ok" | "fail">("idle");
   const [downloadState, setDownloadState] = useState<"idle" | "ok" | "fail">("idle");
 
@@ -99,6 +121,51 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, onTogg
           }))}
           onClose={() => setSubAnchor(null)}
           width={260}
+          align="end"
+        />
+
+        {/* 后台操作：与「子智能体」分开的第二个入口。这里的都是**还在跑**的非子代理任务
+            （后台命令 / MCP 调用），没有对话可查看，只能看它在做什么、中止它。
+            列表空了整个按钮就不渲染——跑完即消失，不留一个空入口。 */}
+        {backgroundTasks.length > 0 && (
+          <button
+            type="button"
+            onClick={(e) => setTaskAnchor((prev) => (prev ? null : e.currentTarget))}
+            className="flex items-center gap-1 rounded-lg px-1.5 py-1 text-brand hover:bg-brand/10"
+            aria-label={t(`后台操作 ${backgroundTasks.length} 个进行中`, `${backgroundTasks.length} background tasks running`)}
+            aria-haspopup="menu"
+            aria-expanded={taskAnchor !== null}
+            title={t("后台操作", "Background tasks")}
+          >
+            <IconTerminal size={15} />
+            <span className="text-[11.5px] font-medium">{backgroundTasks.length}</span>
+          </button>
+        )}
+        <Menu
+          open={taskAnchor !== null}
+          anchor={taskAnchor}
+          items={backgroundTasks.map((task) => ({
+            id: task.taskId || task.toolUseId,
+            label: task.label,
+            icon: <span className="h-1.5 w-1.5 rounded-full bg-brand" />,
+            hint: typeof task.progress === "number" ? `${task.progress}s` : undefined,
+            // 行尾的中止按钮：不关闭菜单，可以连续停几个。拿不到 task_id 时不给——
+            // 点了只会报错（后端表里也没有，说明这个任务已经不在 CLI 那里了）。
+            ...(task.taskId && onStopTask
+              ? {
+                  trailing: {
+                    label: t("中止", "Stop"),
+                    icon: <IconStop size={12} />,
+                    onSelect: () => onStopTask(task.taskId),
+                  },
+                }
+              : {}),
+            onSelect: () => {
+              /* 面板里的条目本身没有可打开的目标：后台命令没有转录。 */
+            },
+          }))}
+          onClose={() => setTaskAnchor(null)}
+          width={300}
           align="end"
         />
 
