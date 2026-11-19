@@ -20,7 +20,10 @@ function setup() {
   return { onClose };
 }
 
-const openMenu = () => fireEvent.click(screen.getByRole("button", { name: "新建标签" }));
+const openStart = () => fireEvent.click(screen.getByRole("button", { name: "回到开始页" }));
+const openFiles = () => fireEvent.click(screen.getByRole("button", { name: /工作区文件/ }));
+const openGit = () => fireEvent.click(screen.getByRole("button", { name: /^Git/ }));
+const openTerminal = () => fireEvent.click(screen.getByRole("button", { name: /新建终端/ }));
 
 describe("RightSidebar 开始页栅格", () => {
   // 列数按容器宽度切，不看视口：右侧栏是拖出来的，宽度和 viewport 没关系。
@@ -53,9 +56,9 @@ describe("RightSidebar 收起侧栏", () => {
   it("关掉再打开时已打开的标签还在，当前选中的也没变", () => {
     const { onClose, shell, set } = dock(true);
     expect(shell().className).toBe("contents");
-    fireEvent.click(screen.getByRole("button", { name: /工作区文件/ }));
-    openMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Git/ }));
+    openFiles();
+    openStart();
+    openGit();
     expect(screen.getByText("GIT")).toBeInTheDocument();
 
     set(false);
@@ -101,39 +104,42 @@ describe("RightSidebar 收起侧栏", () => {
 });
 
 describe("RightSidebar 标签页", () => {
-  it("默认停在开始页：三张功能卡片，不自动打开「文件」", () => {
+  it("默认停在开始页：三张功能卡片，不自动打开「文件」，也不显示 +", () => {
     setup();
     expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Git/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /新建终端/ })).toBeInTheDocument();
     expect(screen.queryByText("FILES")).toBeNull();
     expect(screen.queryByText("GIT")).toBeNull();
+    // 已经在开始页了，+ 点了不会有任何变化，不摆。
+    expect(screen.queryByRole("button", { name: "回到开始页" })).toBeNull();
   });
 
   it("点开始页的卡片才打开对应标签", () => {
     setup();
-    fireEvent.click(screen.getByRole("button", { name: /工作区文件/ }));
+    openFiles();
     expect(screen.getByText("FILES")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^文件$/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "回到开始页" })).toBeInTheDocument();
+  });
+
+  it("+ 直接回到开始页，不弹下拉菜单；标签只隐藏不卸载", () => {
+    setup();
+    openFiles();
+    openStart();
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
+    // 文件面板仍在 DOM 里（开始页只是盖在上面），标签按钮也还在。
+    expect(screen.getByText("FILES").closest("div[class='hidden']")).not.toBeNull();
     expect(screen.getByRole("button", { name: /^文件$/ })).toBeInTheDocument();
   });
 
-  it("+ 菜单打开 Git 标签，切走时文件标签仍在 DOM 里（只隐藏）", () => {
+  it("从开始页可以开第二个终端，每个终端各自一个标签", async () => {
     setup();
-    fireEvent.click(screen.getByRole("button", { name: /工作区文件/ }));
-    openMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Git/ }));
-
-    expect(screen.getByText("GIT")).toBeInTheDocument();
-    const files = screen.getByText("FILES");
-    expect(files.closest("div[class='hidden']")).not.toBeNull();
-  });
-
-  it("终端每次打开都是独立标签", async () => {
-    setup();
-    openMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /终端/ }));
-    openMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /终端/ }));
+    openTerminal();
+    openStart();
+    openTerminal();
 
     expect(screen.getByRole("button", { name: /^bash$/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^bash 2$/ })).toBeInTheDocument();
@@ -143,9 +149,9 @@ describe("RightSidebar 标签页", () => {
 
   it("关掉当前标签后切到相邻标签", () => {
     setup();
-    fireEvent.click(screen.getByRole("button", { name: /工作区文件/ }));
-    openMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Git/ }));
+    openFiles();
+    openStart();
+    openGit();
 
     fireEvent.click(screen.getByRole("button", { name: "关闭 Git" }));
 
@@ -157,7 +163,7 @@ describe("RightSidebar 标签页", () => {
 
   it("关掉所有标签后回到开始页", () => {
     setup();
-    fireEvent.click(screen.getByRole("button", { name: /工作区文件/ }));
+    openFiles();
     fireEvent.click(screen.getByRole("button", { name: "关闭 文件" }));
 
     expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
@@ -213,8 +219,7 @@ describe("RightSidebar 换工作区", () => {
       return { rerender: (cwd: string) => r.rerender(<RightSidebar cwd={cwd} onClose={onClose} />) };
     })();
 
-    openMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /终端/ }));
+    openTerminal();
     await waitFor(() => expect(screen.getAllByText("TERM")).toHaveLength(1));
 
     rerender("/w2");

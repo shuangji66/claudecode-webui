@@ -3,7 +3,6 @@ import { useT } from "../../lib/i18n";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { FilesPanel } from "./FilesPanel";
 import { GitPanel } from "./GitPanel";
-import { Menu, type MenuItem } from "../common/Menu";
 import { IconClose, IconFolder, IconGitBranch, IconPanel, IconPlus, IconSpark, IconTerminal } from "../common/Icons";
 import { SubagentPanel } from "./SubagentPanel";
 import { useAppStore } from "../../store/useAppStore";
@@ -135,10 +134,12 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
   const viewport = useViewportWidth();
   const docked = viewport >= DOCK_MIN;
   const width = clampWidth(preferredWidth, viewport);
-  // 初始停在开始页：不自动开「文件」标签，由用户点卡片或 + 决定。
+  // 初始停在开始页：不自动开「文件」标签，由用户点卡片决定。
+  //
+  // `active === ""` 就是「开始页」这个视图：顶部 `+` 是回到它的入口，标签行不卸载，
+  // 否则终端里的 PTY 会被 SIGHUP（见下面的渲染分支）。
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState("");
-  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const termSeq = useRef(0);
   const drag = useRef<{ startX: number; startWidth: number } | null>(null);
   const subagentView = useAppStore((s) => s.subagentView);
@@ -334,20 +335,6 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     },
   ];
 
-  const terminals = tabs.filter((tab) => tab.kind === "terminal").length;
-  const openItems: MenuItem[] = [
-    { id: "files", group: t("打开", "Open"), label: t("文件", "Files"), icon: <IconFolder size={13} />, onSelect: () => openTab("files") },
-    { id: "git", label: t("Git", "Git"), icon: <IconGitBranch size={13} />, onSelect: () => openTab("git") },
-    {
-      id: "terminal",
-      label: t("终端", "Terminal"),
-      hint: "bash",
-      icon: <IconTerminal size={13} />,
-      disabled: terminals >= MAX_TERMINALS,
-      onSelect: () => openTab("terminal"),
-    },
-  ];
-
   const style = { "--right-w": `${width}px` } as CSSProperties;
 
   return (
@@ -386,7 +373,7 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
 
         <div className="flex h-14 shrink-0 items-center gap-1 border-b border-line px-1.5">
           <div className="dsh-scroll flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
-            {tabs.length === 0 && <span className="shrink-0 px-1.5 text-[12.5px] font-medium text-ink">{t("开始", "Start")}</span>}
+            {active === "" && <span className="shrink-0 px-1.5 text-[12.5px] font-medium text-ink">{t("开始", "Start")}</span>}
             {tabs.map((tab) => {
               const Icon = KIND_ICON[tab.kind];
               const on = tab.id === active;
@@ -419,21 +406,19 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
                 </span>
               );
             })}
-            <button
-              type="button"
-              onClick={(e) => {
-                const anchor = e.currentTarget;
-                setMenuAnchor((prev) => (prev ? null : anchor));
-              }}
-              className="ml-0.5 shrink-0 rounded-md p-1 text-muted hover:bg-black/5 hover:text-ink"
-              aria-label={t("新建标签", "New tab")}
-              aria-haspopup="menu"
-              aria-expanded={menuAnchor !== null}
-              title={t("新建标签", "New tab")}
-            >
-              <IconPlus size={15} />
-            </button>
-            <Menu open={menuAnchor !== null} anchor={menuAnchor} items={openItems} onClose={() => setMenuAnchor(null)} width={180} align="start" />
+            {/* `+` = 回到开始页，不是下拉菜单：三个入口（文件 / Git / 终端）已经在那三张卡片上，
+                再摆一份菜单等于同一件事两个入口。开始页本身不显示它，否则点了不会有任何变化。 */}
+            {active !== "" && (
+              <button
+                type="button"
+                onClick={() => setActive("")}
+                className="ml-0.5 shrink-0 rounded-md p-1 text-muted hover:bg-black/5 hover:text-ink"
+                aria-label={t("回到开始页", "Back to start")}
+                title={t("回到开始页", "Back to start")}
+              >
+                <IconPlus size={15} />
+              </button>
+            )}
           </div>
           <button
             type="button"
@@ -456,36 +441,11 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
               {t("先在左侧选择或添加一个授权目录，右侧栏会显示它的文件与 Git 状态。", "Choose or add an authorized directory first; this sidebar shows its files and Git state.")}
             </p>
           </div>
-        ) : tabs.length === 0 ? (
-          // 开始页：三张功能卡片，点哪张就开哪个标签。
-          //
-          // 列数按**容器宽度**切（`@container`），不是视口：右侧栏宽度由拖动与停靠规则决定，
-          // 跟 viewport 无关。窄的时候排成一列（对齐 DSH）——两列塞不下时描述会被折成
-          // 「浏览工作区文 / 件」这种断字，很难看。
-          <div className="@container dsh-scroll flex min-h-0 flex-1 flex-col justify-center overflow-y-auto px-3 py-6">
-            <div className="grid grid-cols-1 gap-2 @min-[21rem]:grid-cols-2">
-              {startCards.map((card) => {
-                const Icon = card.icon;
-                return (
-                  <button
-                    key={card.kind}
-                    type="button"
-                    onClick={() => openTab(card.kind)}
-                    className="flex h-full min-w-0 items-start gap-2.5 rounded-2xl border border-line bg-canvas px-3 py-3 text-left transition hover:border-line-strong hover:bg-panel/60"
-                  >
-                    <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-panel-strong">
-                      <Icon size={15} className={card.tone} />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-[12.5px] font-medium text-ink">{card.title}</span>
-                      <span className="mt-0.5 block text-[10.5px] leading-relaxed text-muted">{card.desc}</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
         ) : (
+          // 开始页与标签页是**同一层**里的两块：`active === ""` 就是开始页。
+          //
+          // 标签面板不能因为回开始页就卸载：终端里挂着 PTY，卸载等于杀 shell
+          // （与「标签切走只隐藏」同一条理由）。所以这里只把开始页盖在上面。
           <div className="relative min-h-0 flex-1">
             {/* 标签切走、甚至整条侧栏收起都只隐藏：终端里挂着 PTY，卸载等于杀 shell。
                 「激活」再与侧栏可见性相与——重新打开时要让它补一次 fit，收着的时候也别
@@ -513,6 +473,36 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
                 </div>
               );
             })}
+            {active === "" && (
+              // 开始页：三张功能卡片，点哪张就开哪个标签。
+              //
+              // 列数按**容器宽度**切（`@container`），不是视口：右侧栏宽度由拖动与停靠规则决定，
+              // 跟 viewport 无关。窄的时候排成一列（对齐 DSH）——两列塞不下时描述会被折成
+              // 「浏览工作区文 / 件」这种断字，很难看。
+              <div className="@container dsh-scroll absolute inset-0 flex flex-col justify-center overflow-y-auto bg-canvas px-3 py-6">
+                <div className="grid grid-cols-1 gap-2 @min-[21rem]:grid-cols-2">
+                  {startCards.map((card) => {
+                    const Icon = card.icon;
+                    return (
+                      <button
+                        key={card.kind}
+                        type="button"
+                        onClick={() => openTab(card.kind)}
+                        className="flex h-full min-w-0 items-start gap-2.5 rounded-2xl border border-line bg-canvas px-3 py-3 text-left transition hover:border-line-strong hover:bg-panel/60"
+                      >
+                        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-panel-strong">
+                          <Icon size={15} className={card.tone} />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate text-[12.5px] font-medium text-ink">{card.title}</span>
+                          <span className="mt-0.5 block text-[10.5px] leading-relaxed text-muted">{card.desc}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </aside>
