@@ -1331,6 +1331,24 @@ describe("appendPromptEcho（别的设备发的提示词）", () => {
     const items = appendPromptEcho([], { text: "跑一遍测试" });
     expect(items[0].kind === "user" && items[0].interjected).toBeFalsy();
   });
+
+  // 发送方自己也会收到自己的广播，靠「本机气泡命中」丢弃。但补进来的 echo 不能
+  // 反过来参与这条去重：同一个设备连发两次「继续」，第二条广播会命中第一条补进来的
+  // 气泡被吞掉，另一台设备上就少一条。
+  it("别的设备连发两次同一句话：本机补两条", () => {
+    let items: Item[] = [];
+    items = appendPromptEcho(items, { text: "继续" });
+    items = appendPromptEcho(items, { text: "继续" });
+    expect(items.filter((i) => i.kind === "user")).toHaveLength(2);
+    expect(items.filter((i) => i.kind === "user" && i.echoed)).toHaveLength(2);
+  });
+
+  it("本机发的那条仍然去重（发送方也会收到自己的广播）", () => {
+    let items = appendUser([], "继续");
+    items = appendPromptEcho(items, { text: "继续" });
+    expect(items.filter((i) => i.kind === "user")).toHaveLength(1);
+    expect(items.some((i) => i.kind === "user" && i.echoed)).toBe(false);
+  });
 });
 
 describe("applyCLI 跳过 sidechain / meta 行", () => {

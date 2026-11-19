@@ -707,12 +707,17 @@ function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): 
  *
  * `hasImages` 为真时，两条都没有正文的空文本消息也算同一条（图片消息两边都可能
  * 没有文字，只能靠「都有图」认）。
+ *
+ * `localOnly` 为真时只看**本机插入的**气泡（没有 `echoed` 标记）。`prompt.echo`
+ * 的去重必须这样：补进来的那条也是 echo，把它算作候选的话，同一个设备连发两次同一句
+ * 话时第二条广播会被吞掉，另一台设备上就少一条气泡。
  */
-function echoAlreadyShown(items: Item[], text: string, hasImages = false): boolean {
+function echoAlreadyShown(items: Item[], text: string, hasImages = false, localOnly = false): boolean {
   for (let i = items.length - 1; i >= 0; i -= 1) {
     const it = items[i];
     if (it.kind === "result") return false; // 出了这一轮：不跨轮比对
     if (it.kind !== "user") continue;
+    if (localOnly && it.echoed) continue;
     if (samePromptEcho(it.text, text)) return true;
     if (hasImages && it.text === "" && (it.images?.length ?? 0) > 0) return true;
   }
@@ -1052,9 +1057,12 @@ export function appendUser(items: Item[], text: string, images?: UserImage[], in
  * 用户气泡是本地乐观插入的，CLI 又不回显 stdin 里的消息：不补这一步，另一台设备
  * 上只会看到模型突然开始思考，用户发的那句话不见了。
  *
- * 去重规则与 CLI 回显那条路一致（`samePromptEcho`）：本机自己发的连接也会收到这条
- * 广播，它最后一条气泡就是这句话，命中后原样返回。`label` 是本机界面的「附件：」文案
- * （发送方那台设备的语言可能不同，所以文案由收到的一方决定）。
+ * 去重规则与 CLI 回显那条路一致（`samePromptEcho`），但**只认本机插入的那条**
+ * （没有 `echoed` 标记）：发送方自己也会收到这条广播，命中本机气泡后丢弃。
+ * 补进来的 echo 带 `echoed: true`，所以「同一个设备连发两次同一句话」时，第二条
+ * 广播不会命中第一条补进来的气泡被吞掉——另一台设备上就少一条。
+ * `label` 是本机界面的「附件：」文案（发送方那台设备的语言可能不同，所以文案由
+ * 收到的一方决定）。
  */
 export function appendPromptEcho(
   items: Item[],
@@ -1071,7 +1079,7 @@ export function appendPromptEcho(
   // **往回找整轮**而不是只看最后一条，理由同 `echoAlreadyShown`：插话发生在回合
   // 进行中，本地气泡早被后续的 thinking / tool 顶走了，只看尾巴会把广播当成新消息
   // 再插一条——那条没有 `interjected` 标记，于是把这一轮切成两半。
-  if (echoAlreadyShown(items, prompt, images.length > 0)) return items;
+  if (echoAlreadyShown(items, prompt, images.length > 0, true)) return items;
   return [
     ...items,
     {
@@ -1083,6 +1091,8 @@ export function appendPromptEcho(
       ...(images.length > 0 ? { images } : {}),
       // 别的设备插的一句话：同样并进当前回合，不切轮（跟本机发送那条一个口径）。
       ...(echo.interjected ? { interjected: true } : {}),
+      // 标出来源：下一次广播不能再被这条吞掉（见上面的注释）。
+      echoed: true,
     },
   ];
 }
