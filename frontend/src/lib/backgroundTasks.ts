@@ -54,16 +54,25 @@ export function isSubagentTask(taskType: string | undefined): boolean {
  */
 export function backgroundTasks(items: Item[], live: LiveTask[] = []): BackgroundTaskEntry[] {
   const byToolUse = new Map<string, LiveTask>();
+  const byTaskId = new Map<string, LiveTask>();
   for (const t of live) {
-    // ambient 是「不算活动」的任务（观察者之类），不能出现在活动指示里。
-    if (t.ambient || !t.tool_use_id) continue;
-    byToolUse.set(t.tool_use_id, t);
+    // ambient（不算活动的观察者之类）**也要进索引**：它的作用是在下面出列表时把这
+    // 一条挡掉，索引里直接跳过就等于「查不到 → 当成普通任务照列」。两张索引都建：
+    // 实时路径上卡片自己就带 taskId（不需要 live 回填），只按 tool_use_id 索引的话
+    // `known` 会取不到。
+    if (t.tool_use_id) byToolUse.set(t.tool_use_id, t);
+    if (t.task_id) byTaskId.set(t.task_id, t);
   }
   const out: BackgroundTaskEntry[] = [];
   for (const it of items) {
     if (it.kind !== "tool" || !it.subagent) continue;
     const sub = it.subagent;
-    const known = byToolUse.get(it.toolUseId);
+    // 卡片自己带 taskId 时也要认 live 那条：ambient 与 task_type 都只在那张表里，
+    // 而实时路径下 `task_started` 已经把 taskId 写进了卡片。
+    const known = byToolUse.get(it.toolUseId) ?? (sub.taskId ? byTaskId.get(sub.taskId) : undefined);
+    // ambient（不算活动的观察者之类）不列。**必须在出列表时再挡一次**：索引里跳过它
+    // 只保证「不回填」，卡片自己带着 taskId 时照样会走到这里（实时路径的常态）。
+    if (known?.ambient) continue;
     // 类型以"消息流优先、后端表兜底"：转录回放里没有 task_started，卡片上没有
     // taskType，此时只有后端表能告诉我们它是后台命令还是子代理。
     const taskType = sub.taskType || known?.task_type;

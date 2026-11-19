@@ -111,6 +111,29 @@ describe("backgroundTasks", () => {
     const live: LiveTask[] = [{ task_id: "task-watch", tool_use_id: "tu_watch", ambient: true, task_type: "local_bash" }];
     expect(backgroundTasks([replay], live)).toEqual([]);
   });
+
+  // 实时路径上卡片自己就带 taskId（`task_started` 写进去的），所以不能只靠
+  // 「live 里查不到 → 当成子代理」来挡 ambient：必须按 task_id 也建索引，并在出
+  // 列表时再挡一次。否则观察者类任务会出现在页头的「后台操作」里。
+  it("卡片自带 taskId 时，ambient 仍然不列", () => {
+    const live = tool({
+      id: "i9",
+      toolUseId: "tu_watch",
+      subagent: { taskId: "task-watch", taskType: "local_bash", status: "running" },
+    });
+    const table: LiveTask[] = [{ task_id: "task-watch", tool_use_id: "tu_watch", ambient: true }];
+    expect(backgroundTasks([live], table)).toEqual([]);
+  });
+
+  it("live 里没有 tool_use_id 时也能按 task_id 补描述", () => {
+    const live = tool({
+      id: "i9",
+      toolUseId: "tu_bg",
+      subagent: { taskId: "task-bg", taskType: "local_bash", status: "running" },
+    });
+    const table: LiveTask[] = [{ task_id: "task-bg", description: "跑测试" }];
+    expect(backgroundTasks([live], table)[0].label).toBe("跑测试");
+  });
 });
 
 describe("subagentsOnly", () => {
