@@ -12,6 +12,13 @@ export type WireEventKind =
   | "permission"
   // 这条审批已经有结论（可能是别的设备/标签做掉的），收到就撤掉卡片。
   | "permission.resolved"
+  /**
+   * 同一会话的别的连接发出了一条提示词（后端在写 stdin 成功后广播）。
+   *
+   * CLI 不带 `--replay-user-messages` 时不回显 stdin 里的消息，而用户气泡是发送方
+   * 本地乐观插入的：不补这条，另一台设备上只会看到模型突然开始思考。
+   */
+  | "prompt.echo"
   | "error"
   | "closed"
   | "claude.update"

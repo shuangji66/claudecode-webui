@@ -35,6 +35,44 @@ export function turnsOf(items: Item[]): Turn[] {
 }
 
 /**
+ * 「只渲染最近一批」的窗口起点（按条数切，但**不切在轮中间**）。
+ *
+ * 切点绝不能落在某一轮的过程里：一轮的工具调用与思考轻松超过 80 条，按条数直接切
+ * 会把这一轮的用户消息整个切出去，界面上只剩一屏「正在分析请求」——用户看到的就是
+ * 「我刚发的话不见了，只剩思考过程」，而且内容塌成两三行、下面大片空白。
+ *
+ * 规则与 `turnsOf` 一致：**每条用户消息是一轮的起点**（一次发送里的图片与附件是
+ * 同一条消息里的多个 content block，不是多条 user 行）。
+ *
+ *   ① 当前这一轮整轮保留（无论多少条）；
+ *   ② 原始切点落在某一轮中间时，往回退到那一轮的用户消息。
+ *
+ * 返回的是起点下标，同时也是「被隐藏的条数」。
+ */
+export function windowStart(items: Item[], limit: number): number {
+  const raw = items.length - limit;
+  if (raw <= 0) return 0;
+  const isTurnHead = (item: Item | undefined): boolean => item?.kind === "user";
+
+  // 当前这一轮的开头。没有用户消息时没有「轮」，按条数切。
+  let lastUser = -1;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (isTurnHead(items[i])) {
+      lastUser = i;
+      break;
+    }
+  }
+  if (lastUser < 0) return raw;
+  // 切点落在当前这一轮里（或更靠后）：整轮保留，从这一轮的轮头开始。
+  if (raw > lastUser) return lastUser;
+
+  // 否则往回退到既不早于 0、也是某一轮起点的那一条。
+  let cut = raw;
+  while (cut > 0 && !isTurnHead(items[cut])) cut -= 1;
+  return cut;
+}
+
+/**
  * 当前视口顶部落在哪一轮：最后一个「顶部已滚过阈值」的轮。
  *
  * tops 与 turns 一一对应（元素相对滚动容器的顶部距离）；都还没滚到时返回第一轮。

@@ -13,6 +13,7 @@ import { apiFetch, setToken } from "../lib/runtime";
 import {
   appendError,
   settleStreaming,
+  appendPromptEcho,
   appendUser,
   applyCLI,
   attachTurnUsage,
@@ -1987,6 +1988,27 @@ export const useAppStore = create<AppState>()((set, get) => ({
         const data = ev.data as { message?: string } | undefined;
         set((s) => ({
           items: { ...s.items, [sid]: appendError(s.items[sid] ?? [], data?.message ?? "未知错误") },
+        }));
+        return;
+      }
+      case "prompt.echo": {
+        // 别的设备/标签发出的提示词：CLI 不回显 stdin，本机又没做这次乐观插入，
+        // 不补这条气泡的话界面上就只剩模型突然开始思考。
+        const data = ev.data as
+          | { text?: string; files?: string[]; images?: { name: string; media_type: string; data: string }[] }
+          | undefined;
+        if (!data) return;
+        const echo = {
+          text: data.text,
+          files: data.files,
+          images: (data.images ?? []).map((img) => ({
+            name: img.name,
+            mediaType: img.media_type,
+            data: img.data,
+          })),
+        };
+        set((s) => ({
+          items: { ...s.items, [sid]: appendPromptEcho(s.items[sid] ?? [], echo, s.settings?.locale === "en" ? "File: " : "附件：") },
         }));
         return;
       }

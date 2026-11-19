@@ -72,6 +72,19 @@ describe("MessageList 长对话", () => {
     expect(screen.getByRole("button", { name: /加载更早的 40 条/ })).toBeInTheDocument();
   });
 
+  // 回归：一轮的过程（工具调用）轻易超过 80 条，按条数硬切会把这一轮的
+  // 用户消息整个切出去——界面上只剩「正在分析请求」，用户以为刚发的话丢了。
+  it("长过程的那一轮：用户消息必须还在窗口里", () => {
+    const items: Item[] = [{ id: "keep", seq: 0, ts: 0, kind: "user", text: "这一轮的问题" }];
+    for (let i = 0; i < 200; i += 1) {
+      items.push({ id: `t${i}`, seq: i + 1, ts: 0, kind: "tool", toolUseId: `tu${i}`, name: "Bash", input: {} } as Item);
+    }
+    render(<MessageList items={items} />);
+    expect(screen.getByText("这一轮的问题")).toBeInTheDocument();
+    // 整轮都在窗口里，没有「加载更早」的入口。
+    expect(screen.queryByRole("button", { name: /加载更早/ })).toBeNull();
+  });
+
   it("往上翻时出现回到底部按钮，点击后消失", () => {
     render(<MessageList items={many(5)} />);
     const el = sizedScroller();

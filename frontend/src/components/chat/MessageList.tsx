@@ -7,7 +7,7 @@ import { UserBubble } from "./UserBubble";
 import { ToolCardHost } from "../tools/ToolCardHost";
 import { IconAlert, IconChevronDown, IconSpark } from "../common/Icons";
 import { useT } from "../../lib/i18n";
-import { activeTurnIndex, turnsOf, type Turn } from "../../lib/turns";
+import { activeTurnIndex, turnsOf, windowStart, type Turn } from "../../lib/turns";
 import { buildProcessRows, hiddenReplyIds, isProcessItem, turnRunning } from "../../lib/process";
 import { useCollapseTiming, useFoldedReplies, useProcessView } from "../../lib/viewMode";
 import { useFollowGrowth } from "../../lib/scrollFollow";
@@ -178,8 +178,8 @@ export function MessageList({
     scrollToItem(turn.id);
   };
 
-  const hidden = Math.max(0, items.length - limit);
-  const shown = useMemo(() => (hidden > 0 ? items.slice(-limit) : items), [items, hidden, limit]);
+  const hidden = useMemo(() => windowStart(items, limit), [items, limit]);
+  const shown = useMemo(() => (hidden > 0 ? items.slice(hidden) : items), [items, hidden]);
   /** 过程展示偏好：detailed 走改造前的完整卡片，另两档压成单行。 */
   const view = useProcessView();
   const dense = view !== "detailed";

@@ -134,6 +134,12 @@ export function isTurnResult(msg: unknown): boolean {
 export function applyCLI(items: Item[], msg: unknown, at = Date.now(), usageHint?: UsageSnapshot): Item[] {
   const m = asRecord(msg);
   if (!m) return items;
+  // sidechain（子代理）与 meta 行一律不进主消息流。实时流里 store 已分流子代理帧，
+  // 但**转录回放**是把 jsonl 逐行喂进来：CLI 会给同一句话补一条 `isMeta: true` 的
+  // 伴随行（`turnCompanion`，例如把附加的图片/路径写成一句 `[Image: source: …]`），
+  // 不挡的话它会被当成用户又发了一句，气泡里凭空多出一条 `[Image: source: /tmp/…]`，
+  // 而且轮次刻度也跟着多一格。
+  if (m.isSidechain === true || m.isMeta === true) return items;
   switch (m.type) {
     case "stream_event":
       return applyStreamEvent(items, m, at);
@@ -984,6 +990,48 @@ export function appendUser(items: Item[], text: string, images?: UserImage[]): I
     ...(images !== undefined && images.length > 0 ? { images } : {}),
   };
   return [...items, item];
+}
+
+/**
+ * 把「别的设备发出的提示词」补进本机消息流（后端 `prompt.echo`）。
+ *
+ * 用户气泡是本地乐观插入的，CLI 又不回显 stdin 里的消息：不补这一步，另一台设备
+ * 上只会看到模型突然开始思考，用户发的那句话不见了。
+ *
+ * 去重规则与 CLI 回显那条路一致（`samePromptEcho`）：本机自己发的连接也会收到这条
+ * 广播，它最后一条气泡就是这句话，命中后原样返回。`label` 是本机界面的「附件：」文案
+ * （发送方那台设备的语言可能不同，所以文案由收到的一方决定）。
+ */
+export function appendPromptEcho(
+  items: Item[],
+  echo: { text?: string; files?: string[]; images?: UserImage[] },
+  label = "附件：",
+): Item[] {
+  const prompt = (echo.text ?? "").trim();
+  const files = (echo.files ?? []).filter((name) => name !== "");
+  const images = echo.images ?? [];
+  const text = [prompt, ...files.map((name) => `${label}${name}`)].filter(Boolean).join("\n");
+  if (!text && images.length === 0) return items;
+  const last = items[items.length - 1];
+  // 本机刚插过同一条：不重复。图片消息两边都可以没有正文，靠「都有图片」认出来。
+  if (
+    last &&
+    last.kind === "user" &&
+    (samePromptEcho(last.text, prompt) || (images.length > 0 && last.text === "" && (last.images?.length ?? 0) > 0))
+  ) {
+    return items;
+  }
+  return [
+    ...items,
+    {
+      id: nextId(),
+      seq: seqOf(items),
+      ts: Date.now(),
+      kind: "user",
+      text,
+      ...(images.length > 0 ? { images } : {}),
+    },
+  ];
 }
 
 /** 在列表开头插一条系统提示（例如「更早的消息已省略」）。 */

@@ -4,6 +4,7 @@ import {
   attachTurnUsage,
   turnsFromTranscript,
   appendUser,
+  appendPromptEcho,
   __resetIds,
   imagesOfContent,
   isInterruptMarker,
@@ -1273,5 +1274,52 @@ describe("上游 API 错误", () => {
       result: "API Error: 429 rate limit",
     });
     expect(items[0]).toMatchObject({ kind: "result", isError: true, text: "API Error: 429 rate limit" });
+  });
+});
+
+describe("appendPromptEcho（别的设备发的提示词）", () => {
+  // CLI 不回显 stdin 里的消息，而气泡是发送方本地乐观插入的：不补这一步，
+  // 另一台设备上只会看到模型突然开始思考。
+  it("补一条用户气泡，带上附件名", () => {
+    const items = appendPromptEcho([], { text: "跑一遍测试", files: ["a.log"] });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "user", text: "跑一遍测试\n附件：a.log" });
+  });
+
+  it("已有同一条（本机自己发的也收到广播）时不重复", () => {
+    const local = appendUser([], "跑一遍测试");
+    expect(appendPromptEcho(local, { text: "跑一遍测试" })).toBe(local);
+  });
+
+  it("只有图片时按图片成条", () => {
+    const image = { name: "a.png", mediaType: "image/png", data: "AAAA" };
+    const items = appendPromptEcho([], { text: "", images: [image] });
+    expect(items[0]).toMatchObject({ kind: "user", text: "", images: [image] });
+  });
+
+  it("空载荷原样返回", () => {
+    const items: Item[] = [];
+    expect(appendPromptEcho(items, { text: "", files: [], images: [] })).toBe(items);
+  });
+});
+
+describe("applyCLI 跳过 sidechain / meta 行", () => {
+  // 转录回放是逐行喂进来的：CLI 会给同一句话补一条 isMeta 的伴随行
+  // （turnCompanion，把附图写成 `[Image: source: …]`）。不挡的话它会变成一个
+  // 用户气泡，轮次刻度也跟着多一格。
+  function userRow(text: string, extra: Record<string, unknown> = {}) {
+    return { type: "user", message: { role: "user", content: [{ type: "text", text }] }, ...extra };
+  }
+
+  it("isMeta 的伴随行不进消息流", () => {
+    let items = applyCLI([], userRow("看这张图"));
+    items = applyCLI(items, userRow("[Image: source: /tmp/a.png]", { isMeta: true, turnCompanion: true }));
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "user", text: "看这张图" });
+  });
+
+  it("isSidechain 的帧同样不进主消息流", () => {
+    const items = applyCLI([], userRow("子代理说的话", { isSidechain: true }));
+    expect(items).toHaveLength(0);
   });
 });

@@ -169,6 +169,28 @@ type clientCmd struct {
 	Message            string           `json:"message,omitempty"`
 }
 
+// promptEcho 是广播给同一会话其他连接的「这条提示词已经发出去了」。
+//
+// 为什么需要它：用户气泡是**本地乐观插入**的（sendPrompt 先 appendUser 再等 CLI），
+// 而 CLI 不带 `--replay-user-messages` 时不会回显 stdin 里的消息。于是别的设备/
+// 标签只看到模型突然开始思考，用户发的那句话凭空消失——这正是「另一台设备上看不到
+// 我刚发的内容」。这里在写进 stdin 成功后把它广播出去，别的连接按内容去重后补一条
+// 气泡（已经本地插过的连接会命中 samePromptEcho，不会重复）。
+//
+// 带上附件名与图片：图片本体走 data URL（与 UserBubble 的渲染输入一致），
+// 不带的话对方只能看到「图片」占位。「附件：」这类文案由前端按自己的界面语言拼。
+type promptEcho struct {
+	Text  string      `json:"text"`
+	Files []string    `json:"files,omitempty"`
+	Image []echoImage `json:"images,omitempty"`
+}
+
+type echoImage struct {
+	Name      string `json:"name"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+}
+
 // handleWS 处理 /ws。
 //
 //	/ws?id=<session>  会话通道：该会话的事件（当前唯一的业务通道）
@@ -368,6 +390,10 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 			if info, ok := s.conversationInfo(id); ok {
 				s.touchConversation(info)
 			}
+			// 同一会话的别的连接看不到这条提示词（CLI 不回显 stdin）：广播一份，
+			// 它们按内容去重后补上气泡。发送方自己也会收到，命中 samePromptEcho
+			// 后丢弃——不靠「谁发的」，多标签页同时开同一条对话时更省事。
+			s.broadcastPromptEcho(id, promptEchoOf(cmd))
 		}
 	case "interrupt":
 		err = sess.Interrupt()
@@ -461,6 +487,39 @@ func decodeAttachments(in []wireAttachment) ([]protocol.Attachment, error) {
 		out = append(out, protocol.Attachment{Name: name, MediaType: mediaType, Data: data})
 	}
 	return out, nil
+}
+
+// broadcastPromptEcho 把一条刚写进 stdin 的提示词广播给同一会话的其他连接。
+//
+// 前端的气泡是本地乐观插入的，而 CLI 不带 `--replay-user-messages` 时不会把 stdin
+// 里的消息回显回来：不广播的话，另一台设备/另一个标签只会看到模型突然开始思考，
+// 用户刚发的那句话凭空消失。
+//
+// 只在写 stdin 成功后调用；发送方自己的连接也会收到，前端按内容去重（已经本地插过
+// 那条气泡）直接丢弃，所以不需要区分「除我之外」。
+func (s *Server) broadcastPromptEcho(id string, echo promptEcho) {
+	if s.d.Hub == nil || id == "" {
+		return
+	}
+	b, err := json.Marshal(echo)
+	if err != nil {
+		return
+	}
+	s.d.Hub.Broadcast(id, WireEvent{Kind: "prompt.echo", SID: id, Data: b})
+}
+
+// promptEchoOf 把上行命令里的正文与附件整理成广播载荷。
+func promptEchoOf(cmd clientCmd) promptEcho {
+	echo := promptEcho{Text: cmd.Text}
+	for _, a := range cmd.Attachments {
+		mediaType := strings.ToLower(strings.TrimSpace(a.MediaType))
+		if strings.HasPrefix(mediaType, "image/") {
+			echo.Image = append(echo.Image, echoImage{Name: a.Name, MediaType: mediaType, Data: a.Data})
+			continue
+		}
+		echo.Files = append(echo.Files, a.Name)
+	}
+	return echo
 }
 
 func (s *Server) sendError(c *wsClient, msg string) {
