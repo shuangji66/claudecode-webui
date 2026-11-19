@@ -49,6 +49,21 @@ export interface UsageSnapshot {
   /** 会话累计消耗：所有已发生请求的输出合计。 */
   sessionOutputTokens?: number;
   /**
+   * **当前回合里已经发出去的请求**的输入侧 / 输出合计（含缓存）。
+   *
+   * 会话累计只在 `result` 到达时才有权威值，首轮跑完之前弹层里就没有「合计 / 输入 /
+   * 输出」这三行（手机上第一轮尤其明显：整轮都在跑，只能看到一个光秃秃的占用条）。
+   * 所以流式阶段先把每一次请求的量计在这里，由 `sessionTotals` 与会话累计一起显示；
+   * `result` 一到，`result.usage`（整轮汇总）折进 `session*Tokens`，这两个归零——
+   * 不归零同一批 token 会被算两遍。
+   */
+  turnCountedInputTokens?: number;
+  turnCountedOutputTokens?: number;
+  /** 内部：当前这次请求的输入侧是否已经计进 `turnCountedInputTokens`（start / delta 只算一遍）。 */
+  requestInputCounted?: boolean;
+  /** 内部：当前这次请求已经计进 `turnCountedOutputTokens` 的输出（个别中转会连发多条 delta）。 */
+  requestOutputCounted?: number;
+  /**
    * 最近一次请求的**纯生成耗时**（message_start → message_delta，毫秒）与那一次请求的输出。
    * tok/s 只认这一对：整轮输出 ÷ 整轮 API 耗时会把每次请求的首字延迟一起摊进去，
    * 长任务里能低到实际速度的三分之一。
@@ -168,6 +183,49 @@ export function formatTokens(n: number): string {
 const MAX_GENERATION_TPS = 1000;
 
 /**
+ * 把「这次请求的输入侧」计进本回合的即时累计（只算一次）。
+ *
+ * `message_start` 与 `message_delta` 都可能带输入侧（官方形状在 start、自建中转常反过来），
+ * 同一次请求两帧都带时不能加两遍，所以用一个标记认「这次请求已经记过了」。
+ */
+function countRequestInput(snap: UsageSnapshot, inputSide: number): void {
+  if (snap.requestInputCounted || inputSide <= 0) return;
+  snap.requestInputCounted = true;
+  snap.turnCountedInputTokens = (snap.turnCountedInputTokens ?? 0) + inputSide;
+}
+
+/**
+ * 把「这次请求的输出」计进本回合的即时累计。
+ *
+ * `output_tokens` 在同一次请求里是**累计值**（start 给 1、delta 给最终值），所以只加增量；
+ * 个别中转会连发多条 delta，增量口径天然不会重复。
+ */
+function countRequestOutput(snap: UsageSnapshot, output: number): void {
+  const counted = snap.requestOutputCounted ?? 0;
+  if (output <= counted) return;
+  snap.requestOutputCounted = output;
+  snap.turnCountedOutputTokens = (snap.turnCountedOutputTokens ?? 0) + (output - counted);
+}
+
+/**
+ * 弹层要显示的会话累计（输入 / 输出 / 合计）。
+ *
+ * 权威值是 `session*Tokens`，但它只在 `result` 到达时才有——首轮跑完之前弹层里
+ * 「合计 / 输入 / 输出」那三行是空的，手机上整轮在跑时就只剩一根占用条。所以再加一份
+ * **本回合已经发出去的请求**的即时累计；`result` 一到即时累计归零、数值并进会话累计，
+ * 同一批 token 不会算两遍。
+ */
+export function sessionTotals(snap: UsageSnapshot | undefined): {
+  input: number;
+  output: number;
+  total: number;
+} {
+  const input = (snap?.sessionInputTokens ?? 0) + (snap?.turnCountedInputTokens ?? 0);
+  const output = (snap?.sessionOutputTokens ?? 0) + (snap?.turnCountedOutputTokens ?? 0);
+  return { input, output, total: input + output };
+}
+
+/**
  * 从一条 CLI 原始消息更新快照。
  *
  * - `stream_event` 的 message_start / message_delta：流式期间就能更新上下文与输出
@@ -195,7 +253,12 @@ export function applyUsageMessage(
       const totals = totalsFromUsage(usage);
       // 新请求开始了：记下时刻，等 message_delta 到达时量这一段生成花了多久。
       // 只有 output 占位的 start 也要记（官方形状的输入侧全在 delta 里）。
-      const started = { ...(prev ?? { contextTokens: 0 }), requestStartedAt: at };
+      const started = {
+        ...(prev ?? { contextTokens: 0 }),
+        requestStartedAt: at,
+        requestInputCounted: false,
+        requestOutputCounted: 0,
+      };
       if (!totals) return started;
       // 只有带输入侧时才更新上下文（start 里只有 output 的时候别把已知的上下文抹成 0）。
       // 已知窗口时再挡一层：超过窗口的数不可能是「这次请求的上下文」（自建中转可能把
@@ -206,7 +269,9 @@ export function applyUsageMessage(
         next.contextTokens = context;
         next.cacheHitRate = cacheHitRate(totals);
         Object.assign(next, inputParts(totals));
+        countRequestInput(next, context);
       }
+      countRequestOutput(next, totals.output);
       const thinking = thinkingTokensOf(usage);
       if (thinking !== undefined) next.thinkingTokens = thinking;
       return next;
@@ -227,7 +292,9 @@ export function applyUsageMessage(
         next.contextTokens = context;
         next.cacheHitRate = cacheHitRate(totals);
         Object.assign(next, inputParts(totals));
+        countRequestInput(next, context);
       }
+      countRequestOutput(next, totals.output);
       // 纯生成耗时：start 帧到 delta 帧（start 是上游开始回话，已含首字延迟之外的部分）。
       const started = prev?.requestStartedAt;
       delete next.requestStartedAt;
@@ -279,13 +346,20 @@ export function applyUsageMessage(
       apiMs: apiMs ?? prev?.apiMs,
     };
     delete next.requestStartedAt;
+    delete next.requestInputCounted;
+    delete next.requestOutputCounted;
     if (turnInput !== undefined) {
       next.turnInputTokens = turnInput;
       // 会话累计：只在本进程里滚（`prev` 在就说明这一路的事件都看到了）。`prev` 空着
       // 说明这是刚接上的半场，宁可不给数，也不要给一个从 0 起跳的假总量。
       if (prev) {
+        // `result.usage` 是本回合的权威汇总：流式阶段按请求攒下的即时累计（`turnCounted*`）
+        // 在这里被它取代，**不能相加**，否则同一批 token 会被算两遍。
         next.sessionInputTokens = (prev.sessionInputTokens ?? 0) + turnInput;
         if (totals) next.sessionOutputTokens = (prev.sessionOutputTokens ?? 0) + totals.output;
+        // 即时累计清空：回合已经结束，数并进会话累计了。
+        delete next.turnCountedInputTokens;
+        delete next.turnCountedOutputTokens;
       }
     }
     if (context === 0) {

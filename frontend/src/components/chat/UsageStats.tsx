@@ -10,7 +10,7 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
-import { contextPercent, formatCacheHit, formatTokens, tokensPerSecond, type UsageSnapshot } from "../../lib/usage";
+import { contextPercent, formatCacheHit, formatTokens, sessionTotals, tokensPerSecond, type UsageSnapshot } from "../../lib/usage";
 import { POPUP_PANEL, PORTAL_ATTR, useAnchoredPanel, useDismiss } from "../common/Menu";
 
 interface SummaryProps {
@@ -69,16 +69,20 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 /**
  * 底栏那行文字：轮数 / 会话累计 token / tok/s（对齐 DSH 的「7 轮 · 65M · 189 tok/s」）。
  *
- * 工具数与事件数不在这里——它们在弹层的「累计」里，底栏只留最短的几项；
- * 窄屏更只留轮数（输入框那一行本来就挤）。
+ * 工具数与事件数不在这里——它们在弹层的「累计」里，底栏只留最短的几项。
  *
  * 中间那个总量是**会话累计**（输入含缓存 + 输出），与弹层「合计」同一个数：
  * 它回答的是「这条路花了多少」，与 tok/s 只报最近一次请求不是一回事。
+ * 首轮还没跑完（没有 `result`）时取本回合已发出去请求的即时累计（`sessionTotals`），
+ * 否则底栏在整轮里只有一个「1 轮」。
+ *
+ * **窄屏不再折叠成只剩轮数**：手机上底部这一行是唯一能看到用量的地方，
+ * 折叠掉总量与速度等于「移动端永远看不到这两个数」，与桌面模式对不齐。
  */
 export function UsageSummary({ snap, turns, events }: SummaryProps) {
   const t = useT();
   const tps = snap ? tokensPerSecond(snap.genTokens ?? 0, snap.genMs) : undefined;
-  const total = (snap?.sessionInputTokens ?? 0) + (snap?.sessionOutputTokens ?? 0);
+  const total = sessionTotals(snap).total;
 
   const parts: string[] = [];
   if (turns > 0) parts.push(t(`${turns} 轮`, `${turns} turns`));
@@ -91,12 +95,7 @@ export function UsageSummary({ snap, turns, events }: SummaryProps) {
     return <span className="shrink-0 tabular-nums">{fallback}</span>;
   }
 
-  return (
-    <span className="shrink-0 tabular-nums">
-      <span className="hidden sm:inline">{parts.join(" · ")}</span>
-      {turns > 0 && <span className="sm:hidden">{t(`${turns} 轮`, `${turns} turns`)}</span>}
-    </span>
-  );
+  return <span className="shrink-0 whitespace-nowrap tabular-nums">{parts.join(" · ")}</span>;
 }
 
 const PANEL_WIDTH = 264;
@@ -122,9 +121,9 @@ export function UsageStats({ snap, turns, tools, events }: StatsProps) {
   const pct = snap ? contextPercent(snap.contextTokens, snap.contextWindow) : undefined;
   // tok/s 只认「最近一次请求的输出 ÷ 它自己的生成耗时」：整轮平均会把首字延迟摊进分母。
   const tps = snap ? tokensPerSecond(snap.genTokens ?? 0, snap.genMs) : undefined;
-  const sessionInput = snap?.sessionInputTokens;
-  const sessionOutput = snap?.sessionOutputTokens;
-  const sessionTotal = (sessionInput ?? 0) + (sessionOutput ?? 0);
+  // 会话累计与本回合的即时累计合在一起（见 lib/usage 的 sessionTotals）：
+  // 首轮 `result` 还没到、或者中途接进来的会话，都能报出合计 / 输入 / 输出。
+  const session = sessionTotals(snap);
   const cacheRead = snap?.cacheReadTokens;
   const cacheWrite = snap?.cacheCreationTokens;
   const cacheHit = snap?.cacheHitRate;
@@ -180,11 +179,11 @@ export function UsageStats({ snap, turns, tools, events }: StatsProps) {
             {/* 一块整体：上面是会话累计（合计 / 输入 / 输出），下面是最近一次请求的缓存明细
                 （未命中 / 读取 / 写入 / 命中）。中间不切分隔线，也不挂分组标题。 */}
             <div className="mt-1.5 border-t border-line pt-1.5 space-y-1 text-[11px]">
-              {sessionTotal > 0 && (
+              {session.total > 0 && (
                 <>
-                  <Row label={t("合计", "Total")}>{formatTokens(sessionTotal)} tok</Row>
-                  <Row label={t("输入", "Input")}>{formatTokens(sessionInput ?? 0)}</Row>
-                  <Row label={t("输出", "Output")}>{formatTokens(sessionOutput ?? 0)}</Row>
+                  <Row label={t("合计", "Total")}>{formatTokens(session.total)} tok</Row>
+                  <Row label={t("输入", "Input")}>{formatTokens(session.input)}</Row>
+                  <Row label={t("输出", "Output")}>{formatTokens(session.output)}</Row>
                 </>
               )}
               {snap.inputTokens !== undefined && (

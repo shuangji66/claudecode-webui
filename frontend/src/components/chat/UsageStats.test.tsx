@@ -30,6 +30,27 @@ describe("UsageSummary", () => {
     expect(screen.queryByText(/工具/)).toBeNull();
   });
 
+  // 以前窄屏（`sm:hidden`）把这一行折叠成只剩「N 轮」：手机上没有任何地方能看到
+  // 会话总量与速度，与桌面模式对不上。现在两种视口是同一段文字。
+  it("窄屏也显示完整的三段，不再折叠成只剩轮数", () => {
+    const { container } = render(<UsageSummary snap={SNAP} turns={3} events={40} />);
+    expect(container.querySelector(".sm\\:hidden")).toBeNull();
+    expect(container.textContent).toBe("3 轮 · 2M · 210 tok/s");
+  });
+
+  // 首轮还没跑完（result 未到）时只有流式阶段按请求攒下的即时累计，
+  // 底栏同样要报出总量，不能只有一个「1 轮」。
+  it("回合进行中就用本回合已发请求的即时累计报总量", () => {
+    render(
+      <UsageSummary
+        snap={{ contextTokens: 9312, contextWindow: 200000, turnCountedInputTokens: 10_000, turnCountedOutputTokens: 500 }}
+        turns={1}
+        events={3}
+      />,
+    );
+    expect(screen.getByText("1 轮 · 10.3K")).toBeInTheDocument();
+  });
+
   it("没有 usage 时退回事件计数，不编造 token 数", () => {
     render(<UsageSummary snap={undefined} turns={0} events={5} />);
     expect(screen.getByText("共 5 条事件")).toBeInTheDocument();
@@ -84,6 +105,31 @@ describe("ContextUsage", () => {
     // 本轮消耗只出现在回答下面那行小字里，弹层不重复；也没有解释性小字。
     expect(panel).not.toHaveTextContent("本轮消耗");
     expect(panel).not.toHaveTextContent("下一轮要发的上下文");
+  });
+
+  // 首轮还在跑（没有 result → 没有 session*Tokens）时，弹层以前只剩一根占用条：
+  // 会话累计那三行整块消失，手机上会以为「这个版本没有这三个数」。
+  it("回合进行中（还没有 result）也显示合计 / 输入 / 输出", () => {
+    render(
+      <UsageStats
+        snap={{
+          contextTokens: 61_500,
+          contextWindow: 1_000_000,
+          inputTokens: 2600,
+          cacheReadTokens: 58_900,
+          turnCountedInputTokens: 61_500,
+          turnCountedOutputTokens: 1200,
+        }}
+        turns={1}
+        tools={16}
+        events={25}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "上下文占用 6%" }));
+    const panel = screen.getByRole("dialog", { name: "上下文占用" });
+    expect(panel).toHaveTextContent("合计61.2K tok");
+    expect(panel).toHaveTextContent("输入60.1K");
+    expect(panel).toHaveTextContent("输出1.2K");
   });
 
   it("再点一次、按 Esc、点外部都会关闭详情", () => {

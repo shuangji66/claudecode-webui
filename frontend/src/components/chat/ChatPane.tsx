@@ -194,28 +194,32 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
 
   const footer = (
     <>
-      <span className="truncate">
+      {/* 左边这行是操作提示：`min-w-0` + truncate 才有收缩的余地——没有 `min-w-0` 时
+          flex 子项按内容宽度撑开，右侧用量行（窄屏也不再折叠）会被挤出屏幕。 */}
+      <span className="min-w-0 flex-1 truncate">
         {starting ? t("正在启动 Claude…", "Starting Claude…")
           : effortPending
             ? t("本轮结束后按新的推理等级重开（上下文保留）", "Reopening with the new reasoning level after this turn")
             : effortMismatch ? t("推理等级将在重开会话后生效", "Reasoning level applies after the session reopens")
             : busy ? (
+              // 「Claude 正在工作」不写：这一行左边是操作提示、右边是用量，而「在不在跑」
+              // 已经由上面的计时行（少女祈祷中）和发送键的形态说清楚了，再挂一遍只是噪音。
               <>
                 <span className="hidden sm:inline">
                   {t(
                     queued.length > 0
-                      ? `Claude 正在工作 · ${queued.length} 条待发送`
-                      : "Claude 正在工作 · Enter 排队 · Ctrl+Enter 立即插话",
+                      ? `${queued.length} 条待发送 · Enter 排队 · Ctrl+Enter 立即插话`
+                      : "Enter 排队 · Ctrl+Enter 立即插话",
                     queued.length > 0
-                      ? `Claude is working · ${queued.length} queued`
-                      : "Claude is working · Enter queues · Ctrl+Enter interjects",
+                      ? `${queued.length} queued · Enter queues · Ctrl+Enter interjects`
+                      : "Enter queues · Ctrl+Enter interjects",
                   )}
                 </span>
                 {/* 手机键盘的回车是换行，只能点按钮：提示写清楚按钮的作用。 */}
                 <span className="sm:hidden">
                   {t(
-                    queued.length > 0 ? `Claude 正在工作 · ${queued.length} 条待发送` : "Claude 正在工作 · 发送＝排队等本轮结束",
-                    queued.length > 0 ? `Claude is working · ${queued.length} queued` : "Claude is working · send queues for this turn",
+                    queued.length > 0 ? `${queued.length} 条待发送` : "发送＝排队等本轮结束",
+                    queued.length > 0 ? `${queued.length} queued` : "send queues for this turn",
                   )}
                 </span>
               </>

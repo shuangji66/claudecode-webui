@@ -8,6 +8,7 @@ import {
   contextTokens,
   formatCacheHit,
   formatTokens,
+  sessionTotals,
   tokensPerSecond,
   totalsFromUsage,
 } from "./usage";
@@ -248,6 +249,88 @@ describe("applyUsageMessage", () => {
     })!;
     expect(snap.turnInputTokens).toBe(10_810);
     expect(snap.sessionInputTokens).toBeUndefined();
+  });
+
+  // 会话累计只在 result 到达时才有权威值：首轮跑完之前，弹层的「合计 / 输入 / 输出」
+  // 本来整块都不显示（手机上整轮只能看到一根占用条）。流式阶段按请求记一份即时累计。
+  it("流式阶段按请求累计本回合的输入 / 输出（供回合进行中显示）", () => {
+    let snap = applyUsageMessage(
+      undefined,
+      {
+        type: "stream_event",
+        event: { type: "message_start", message: { usage: { input_tokens: 100, cache_read_input_tokens: 900, output_tokens: 1 } } },
+      },
+      1_000,
+    )!;
+    expect(snap.turnCountedInputTokens).toBe(1000);
+    expect(snap.turnCountedOutputTokens).toBe(1);
+
+    // 同一次请求的 delta 只补增量：输入侧已经记过（不能加第二遍），输出按最终值替换。
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 400 } } },
+      3_000,
+    )!;
+    expect(snap.turnCountedInputTokens).toBe(1000);
+    expect(snap.turnCountedOutputTokens).toBe(400);
+
+    // 同一回合的第二次请求（工具调用之后）：输入侧再计一次，输出继续累加。
+    snap = applyUsageMessage(
+      snap,
+      {
+        type: "stream_event",
+        event: { type: "message_start", message: { usage: { input_tokens: 20, cache_read_input_tokens: 2000, output_tokens: 1 } } },
+      },
+      4_000,
+    )!;
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 50 } } },
+      4_500,
+    )!;
+    expect(snap.turnCountedInputTokens).toBe(3020);
+    expect(snap.turnCountedOutputTokens).toBe(450);
+    expect(sessionTotals(snap)).toEqual({ input: 3020, output: 450, total: 3470 });
+  });
+
+  it("result 到达后即时累计清空、并进会话累计（同一批 token 不算两遍）", () => {
+    const streaming = {
+      contextTokens: 3020,
+      turnCountedInputTokens: 3020,
+      turnCountedOutputTokens: 450,
+    };
+    const snap = applyUsageMessage(streaming, {
+      type: "result",
+      duration_api_ms: 3000,
+      usage: { input_tokens: 120, cache_read_input_tokens: 2900, output_tokens: 450 },
+    })!;
+    expect(snap.turnCountedInputTokens).toBeUndefined();
+    expect(snap.turnCountedOutputTokens).toBeUndefined();
+    // 会话累计 = result.usage 的整轮汇总（不是 3020 + 3020）
+    expect(snap.sessionInputTokens).toBe(3020);
+    expect(snap.sessionOutputTokens).toBe(450);
+    expect(sessionTotals(snap)).toEqual({ input: 3020, output: 450, total: 3470 });
+  });
+
+  // 自建中转会把完整 usage 落在 message_delta、start 只给全 0 占位：不能因为
+  // start 没数就漏掉输入侧，也不能两帧都带时加两遍。
+  it("输入侧落在 message_delta 时照样计入即时累计", () => {
+    let snap = applyUsageMessage(
+      undefined,
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 0, output_tokens: 0 } } } },
+      1_000,
+    )!;
+    expect(snap.turnCountedInputTokens).toBeUndefined();
+    snap = applyUsageMessage(
+      snap,
+      {
+        type: "stream_event",
+        event: { type: "message_delta", usage: { input_tokens: 6781, cache_read_input_tokens: 1792, output_tokens: 10 } },
+      },
+      2_000,
+    )!;
+    expect(snap.turnCountedInputTokens).toBe(8573);
+    expect(snap.turnCountedOutputTokens).toBe(10);
   });
 
   it("窗口已知时，超过窗口的旧上下文在回合末被清掉", () => {
