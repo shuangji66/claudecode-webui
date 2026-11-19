@@ -14,7 +14,7 @@
 //
 // 分组只影响渲染：Item 本身、seq、id、转录回放都不动。
 import { tr, type Locale } from "./i18n";
-import type { Item, ThinkingItem, ToolItem } from "./model";
+import type { AssistantItem, Item, ThinkingItem, ToolItem } from "./model";
 import { toolSummary } from "./tools";
 
 /** 工具按「用户在做什么」归类，组头文案与图标都用它。 */
@@ -277,6 +277,37 @@ export function liveDetail(items: Item[]): string {
   const running = runningTool(items);
   if (running) return toolSummary(running);
   return reasoningPreview(items);
+}
+
+/**
+ * 一轮里「谁拿复制按钮」以及「复制什么」。
+ *
+ * 判定只认**本条是不是这一轮最后一条有正文的回答**：一轮里模型会写好几段过渡正文
+ * （夹在思考与工具调用之间），每段都挂复制按钮只是噪音，复制出来的也只是半句话。
+ * 真正值得复制的入口只有最终回答那一处。
+ *
+ * 复制内容则是**整轮的正文输出**：按顺序把这一轮所有 assistant 正文拼起来（过渡正文
+ * + 最终回答）。用户要的是「这一轮说了什么」；过渡正文在收起态下多半看不见，不带上
+ * 就等于复制不全。**思考过程（thinking）不进复制内容**——那是推理，不是输出；CLI 包的
+ * API 错误消息也不算正文。
+ *
+ * 返回 `undefined` 表示「这条不给复制入口」；否则返回它该复制的文本。
+ * 纯函数：`items` 传一整轮的切片（`turnSpans` 的 `[start, end)`）。
+ */
+export function replyCopy(items: Item[], id: string): string | undefined {
+  let lastReply: AssistantItem | undefined;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const item = items[i];
+    if (item.kind !== "assistant" || item.apiError || !item.text.trim()) continue;
+    lastReply = item;
+    break;
+  }
+  if (!lastReply || lastReply.id !== id) return undefined;
+  const text = items
+    .filter((item): item is AssistantItem => item.kind === "assistant" && !item.apiError && item.text.trim() !== "")
+    .map((item) => item.text.trim())
+    .join("\n\n");
+  return text === "" ? undefined : text;
 }
 
 /**

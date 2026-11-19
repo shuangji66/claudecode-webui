@@ -30,15 +30,34 @@ export function AssistantBubble({
   text,
   streaming,
   turn,
+  showCopy = true,
+  copyText,
 }: {
   text: string;
   streaming: boolean;
   ts?: number;
   /** 回合结束时 normalize 回填的用量（只挂在该回合最后一条回答上）。 */
   turn?: TurnUsage;
+  /**
+   * 是否给复制入口。
+   *
+   * 一轮里模型会写好几段过渡正文（夹在思考与工具调用之间），它们各自挂一个复制按钮
+   * 只是噪音：**只有这一轮的最终回答给**（`MessageList` 按「是不是本轮最后一条回答」
+   * 判断）。复制的内容也不是这一条，见 `copyText`。
+   */
+  showCopy?: boolean;
+  /**
+   * 复制到剪贴板的文本，默认就是本条正文。
+   *
+   * 最终回答传的是**整轮的正文输出**（过渡正文 + 最终回答，按顺序拼接）：用户要的是
+   * 「这一轮说了什么」，而不是最后那一段；而过渡正文在收起态下多半是看不见的，
+   * 不带上就等于复制不到。思考过程（thinking）不进来——它是推理，不是输出。
+   */
+  copyText?: string;
 }) {
   const t = useT();
   const parts = turn && !streaming ? turnParts(turn, t) : [];
+  const canCopy = showCopy && text.trim() !== "";
   return (
     <div className="relative">
       <div className="text-ink">
@@ -47,9 +66,9 @@ export function AssistantBubble({
       </div>
       {/* 复制与本轮用量常驻可见，不再只靠 group-hover：触屏没有 hover，
           手机上等于没有入口。这行始终占高度，出现与否不会让消息上下跳。 */}
-      {!streaming && (text.trim() || parts.length > 0) && (
+      {!streaming && (canCopy || parts.length > 0) && (
         <div className="mt-1 flex items-center gap-1 text-[10.5px] text-faint">
-          {text.trim() && <CopyButton text={text} label={t("复制回复", "Copy reply")} />}
+          {canCopy && <CopyButton text={copyText ?? text} label={t("复制回复", "Copy reply")} />}
           {parts.length > 0 && (
             <span
               className="ml-0.5 min-w-0 truncate tabular-nums"

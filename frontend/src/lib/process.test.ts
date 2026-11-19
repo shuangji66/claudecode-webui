@@ -10,6 +10,7 @@ import {
   liveDetail,
   reasoningPreview,
   runningTool,
+  replyCopy,
   toolCategory,
   turnSpans,
 } from "./process";
@@ -210,5 +211,34 @@ describe("turnSpans", () => {
     const spans = turnSpans([tool("x1"), reply("a1"), user2("u2"), tool("x2")], false);
     expect(spans.map((s) => s.start)).toEqual([0, 2]);
     expect(spans[0].process.map((i) => i.id)).toEqual(["x1"]);
+  });
+});
+
+// 复制入口只给最终回答，但复制的是**整轮的正文输出**：一轮里模型会写好几段过渡正文，
+// 它们各自挂一个复制按钮是噪音，而收起态下那些过渡正文又多半看不见。
+describe("replyCopy", () => {
+  const say = (id: string, text = id): Item => ({ id, seq: 0, ts: 0, kind: "assistant", text, streaming: false });
+
+  it("只有最后一条回答给复制入口", () => {
+    const turn = [thinking("t1"), say("a1", "先看目录"), tool("x1"), say("a2", "改好了")];
+    expect(replyCopy(turn, "a1")).toBeUndefined();
+    expect(replyCopy(turn, "a2")).toBe("先看目录\n\n改好了");
+  });
+
+  it("复制内容按顺序拼起整轮正文，思考过程不进", () => {
+    const turn = [thinking("t1", "不该被复制"), say("a1", "第一段"), tool("x1"), say("a2", "第二段")];
+    expect(replyCopy(turn, "a2")).toBe("第一段\n\n第二段");
+  });
+
+  it("空正文与 CLI 包的 API 错误不算正文", () => {
+    const apiError: Item = { id: "e1", seq: 0, ts: 0, kind: "assistant", text: "API Error: 400", streaming: false, apiError: true };
+    const turn = [say("a1", "   "), apiError, say("a2", "真正的答案")];
+    expect(replyCopy(turn, "a2")).toBe("真正的答案");
+    expect(replyCopy(turn, "e1")).toBeUndefined();
+  });
+
+  it("不是回答的条目一律不给", () => {
+    const turn = [thinking("t1"), say("a1", "答案")];
+    expect(replyCopy(turn, "t1")).toBeUndefined();
   });
 });

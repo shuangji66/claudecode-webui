@@ -216,6 +216,41 @@ describe("MessageList 本轮用量", () => {
   });
 });
 
+describe("MessageList 复制入口", () => {
+  // 一轮里模型会写好几段过渡正文（夹在思考与工具调用之间）：只给最终回答一个复制按钮。
+  const user = (): Item => ({ id: "u1", seq: 0, ts: 0, kind: "user", text: "问题" });
+  const stage = (text: string): Item => ({ id: "a1", seq: 0, ts: 0, kind: "assistant", text, streaming: false });
+  const final = (text: string): Item => ({ id: "a2", seq: 0, ts: 0, kind: "assistant", text, streaming: false });
+  const thinking = (): Item => ({ id: "th1", seq: 0, ts: 0, kind: "thinking", text: "推理内容" });
+  const bash: Item = {
+    id: "t1",
+    seq: 0,
+    ts: 0,
+    kind: "tool",
+    toolUseId: "tu1",
+    name: "Bash",
+    input: { command: "ls" },
+    result: "a",
+  };
+  const done: Item = { id: "r1", seq: 0, ts: 0, kind: "result", durationMs: 9000 };
+
+  it("过渡正文没有复制按钮，只有最终回答有", () => {
+    setSessionRunning(false);
+    setProcessView("detailed");
+    render(<MessageList items={[user(), stage("先看看目录"), thinking(), bash, final("改好了"), done]} />);
+    expect(screen.getAllByRole("button", { name: "复制回复" })).toHaveLength(1);
+  });
+
+  it("收起态下复制入口仍在（过程都收起来了，答案还得能复制）", () => {
+    setSessionRunning(false);
+    render(<MessageList items={[user(), stage("先看看目录"), thinking(), bash, final("改好了"), done]} />);
+    // 收起的是过程（思考与工具调用）；正文输出照留。
+    expect(screen.queryByText("推理内容")).toBeNull();
+    expect(screen.getByText("改好了")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "复制回复" })).toBeInTheDocument();
+  });
+});
+
 describe("MessageList 过程展示", () => {
   const thinking = (text: string): Item => ({ id: "th1", seq: 0, ts: 0, kind: "thinking", text });
   const read = (): Item => ({

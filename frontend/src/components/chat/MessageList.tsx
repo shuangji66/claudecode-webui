@@ -22,6 +22,7 @@ import {
   buildProcessRows,
   hiddenReplyIds,
   isProcessItem,
+  replyCopy,
   turnSpans,
   type ProcessEntry,
   type TurnSpan,
@@ -66,10 +67,17 @@ const MessageRow = memo(function MessageRow({
   item,
   dense = false,
   offscreen = true,
+  copyText,
 }: {
   item: Item;
   /** 紧凑模式：思考与工具压成一行，正文/用户消息不受影响。 */
   dense?: boolean;
+  /**
+   * 这一条回答该复制的整轮正文（`lib/process.replyCopy`）；`undefined` 表示不给复制入口。
+   *
+   * 只有本轮最终回答会拿到值：过渡正文各挂一个复制按钮是噪音，而且复制出来只是半句话。
+   */
+  copyText?: string;
   /**
    * 是否允许「离屏跳过渲染」。过程组内部一律关掉：那一整块是用户主动展开的，
    * 里面的行又便宜，跳过只会让展开瞬间的高度估算反复回缩。
@@ -91,7 +99,14 @@ const MessageRow = memo(function MessageRow({
     case "assistant":
       return (
         <div {...box(false)}>
-          <AssistantBubble text={item.text} streaming={item.streaming} ts={item.ts} turn={item.turn} />
+          <AssistantBubble
+            text={item.text}
+            streaming={item.streaming}
+            ts={item.ts}
+            turn={item.turn}
+            showCopy={copyText !== undefined}
+            copyText={copyText}
+          />
         </div>
       );
     case "thinking":
@@ -264,6 +279,22 @@ export function MessageList({
       ),
     [spans, shown, grouping],
   );
+  /**
+   * 每条回答该复制的整轮正文（`lib/process.replyCopy`）：只有本轮最终回答拿得到值，
+   * 过渡正文拿不到——它们也就不用渲染复制按钮。
+   */
+  const copies = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const span of spans) {
+      const slice = shown.slice(span.start, span.end);
+      for (const item of slice) {
+        if (item.kind !== "assistant") continue;
+        const text = replyCopy(slice, item.id);
+        if (text !== undefined) map.set(item.id, text);
+      }
+    }
+    return map;
+  }, [spans, shown]);
 
   /**
    * 每一轮用户消息相对「滚动内容顶部」的距离，缓存给滚动帧用。
@@ -564,7 +595,11 @@ export function MessageList({
                           data-item-id={entry.item.id}
                           className={dense ? (isProcessItem(entry.item) ? "mt-1" : "mt-5") : undefined}
                         >
-                          <MessageRow item={entry.item} dense={dense} />
+                          <MessageRow
+                            item={entry.item}
+                            dense={dense}
+                            copyText={entry.item.kind === "assistant" ? copies.get(entry.item.id) : undefined}
+                          />
                         </div>
                       );
                     }

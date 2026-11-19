@@ -77,4 +77,19 @@ describe("AssistantBubble 复制回复", () => {
     render(<AssistantBubble text="   " streaming={false} />);
     expect(screen.queryByRole("button", { name: "复制回复" })).toBeNull();
   });
+
+  // 一轮里的过渡正文不配复制按钮（见 MessageList 的 replyCopy），只有最终回答给。
+  it("showCopy=false 时不渲染复制按钮，撤回耗时行照常", () => {
+    render(<AssistantBubble text="过渡正文" streaming={false} showCopy={false} turn={{ durationMs: 42_100 }} />);
+    expect(screen.queryByRole("button", { name: "复制回复" })).toBeNull();
+    expect(screen.getByText("00:42")).toBeInTheDocument();
+  });
+
+  it("copyText 给了就复制它（整轮正文），不是这一条自己的正文", async () => {
+    render(
+      <AssistantBubble text="最终答案" streaming={false} copyText={"先看目录\n\n最终答案"} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "复制回复" }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith("先看目录\n\n最终答案"));
+  });
 });
