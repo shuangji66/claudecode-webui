@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   authorizeFnosDir,
   canPickFnos,
@@ -7,7 +7,30 @@ import {
   classifyPickResult,
   folderOf,
   isFnosApp,
+  openFnosFile,
 } from "./fnos";
+
+// 宿主 SDK 只在「在飞牛里」时可用，这里替换成假实现，专测 openFnosFile 的
+// 成功 / 回退 / 失败三条路径（真机行为只能在 NAS 上验）。
+const host = vi.hoisted(() => ({
+  ready: vi.fn(),
+  openFile: vi.fn(),
+  openFileManager: vi.fn(),
+}));
+
+vi.mock("@trimjs/web-app", () => ({
+  TrimApp: class {
+    ready() {
+      return host.ready();
+    }
+    openFile(path: string) {
+      return host.openFile(path);
+    }
+    openFileManager(path: string) {
+      return host.openFileManager(path);
+    }
+  },
+}));
 
 describe("classifyAuthorizeResult", () => {
   it("code 0 + data true 视为授权成功", () => {
@@ -131,5 +154,50 @@ describe("folderOf", () => {
     expect(folderOf("/a.docx")).toBe("/");
     // 目录本身没有尾斜杠时不要退到上一级（宿主只递文件路径，这里只防误用）。
     expect(folderOf("/vol1/1000/ws/dir/")).toBe("/vol1/1000/ws/dir");
+  });
+});
+
+const HOST_UA = "Mozilla/5.0 (Linux; Android 13) FNAppType/android FNAppVer/1.38.0";
+
+function setHostUA(value: string): void {
+  Object.defineProperty(navigator, "userAgent", { value, configurable: true });
+}
+
+describe("openFnosFile", () => {
+  beforeEach(() => {
+    setHostUA(HOST_UA);
+    host.ready.mockReset().mockResolvedValue(undefined);
+    host.openFile.mockReset().mockResolvedValue(undefined);
+    host.openFileManager.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("宿主支持时直接把文件交给默认应用", async () => {
+    expect(await openFnosFile("/vol1/1000/ws/a.docx")).toEqual({ ok: true });
+    expect(host.openFile).toHaveBeenCalledWith("/vol1/1000/ws/a.docx");
+    expect(host.openFileManager).not.toHaveBeenCalled();
+  });
+
+  it("宿主回 false 时静默退回文件管理器（只能给所在目录）", async () => {
+    host.openFile.mockResolvedValue(false);
+    expect(await openFnosFile("/vol1/1000/ws/a.docx")).toEqual({ ok: true, fallback: true });
+    expect(host.openFileManager).toHaveBeenCalledWith("/vol1/1000/ws");
+  });
+
+  it("老宿主没有 openFile（抛 TypeError）同样退回文件管理器", async () => {
+    host.openFile.mockRejectedValue(new TypeError("t.openFile is not a function"));
+    expect(await openFnosFile("/a/b.txt")).toEqual({ ok: true, fallback: true });
+    expect(host.openFileManager).toHaveBeenCalledWith("/a");
+  });
+
+  it("两条路都失败时把宿主原因原样带出来", async () => {
+    host.openFile.mockRejectedValue(new Error("unsupported"));
+    host.openFileManager.mockRejectedValue(new Error("host down"));
+    expect(await openFnosFile("/a/b.txt")).toEqual({ ok: false, reason: "host down" });
+  });
+
+  it("非绝对路径直接拒绝，不去碰宿主", async () => {
+    const r = await openFnosFile("b.txt");
+    expect(r.ok).toBe(false);
+    expect(host.openFile).not.toHaveBeenCalled();
   });
 });

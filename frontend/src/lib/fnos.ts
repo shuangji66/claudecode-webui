@@ -362,6 +362,8 @@ export function folderOf(path: string): string {
  * 调用方不需要为 `fallback` 再弹一次提示。
  */
 export async function openFnosFile(path: string): Promise<FnosOpenFileOutcome> {
+  // 宿主只认 NAS 绝对路径；相对路径递过去会打开一个和用户想的不相干的位置。
+  if (!path.startsWith("/")) return { ok: false, reason: "路径必须是绝对路径" };
   if (!inHost()) return { ok: false, reason: "standalone" };
   const sdk = await trimReady();
   if (!sdk) return { ok: false, reason: "bridge" };
