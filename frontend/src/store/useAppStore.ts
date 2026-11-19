@@ -408,6 +408,21 @@ function markApplied(sid: string, seq: number): boolean {
 }
 
 /**
+ * 换会话对象（`epoch` 变了）时把水位与去重集合一起重置。
+ *
+ * 新进程的序号从 1 重新开始，而旧集合里装的是上一个进程的 1..N：不清的话新进程的
+ * 前 N 条事件全部命中「已处理」被丢掉——正是「重启之后那一轮只剩后半截」。
+ * 缓冲里的实时事件同理，它们属于旧 epoch 的序号空间，留着会按旧水位乱序应用。
+ */
+function resetSyncWatermark(sid: string, seq: number, epoch: string): void {
+  eventSeq.set(sid, seq);
+  eventEpoch.set(sid, epoch);
+  appliedSeq.delete(sid);
+  pendingLive.delete(sid);
+  endSyncWindow(sid);
+}
+
+/**
  * 已经发出 `sync`、还没收到 `session.replay` 的会话。
  *
  * 这段时间里到达的实时事件**不能立即应用**：它可能比补发的那一段还晚，先落地就会
@@ -702,15 +717,19 @@ function syncMissedEvents(sid: string, epoch: string | undefined, seq: number | 
   if (!epoch || typeof seq !== "number") return;
   const knownEpoch = eventEpoch.get(sid);
   const knownSeq = eventSeq.get(sid);
+  if (knownEpoch !== undefined && knownEpoch !== epoch) {
+    // 会话对象换过了（进程被回收/重启后用同一个 UUID 又起来了）：旧 epoch 的序号
+    // 没有可比性。水位对齐到新值，**去重集合也要清掉**——新进程的序号从 1 重新
+    // 开始，而旧集合里全是 1..N，不清的话新进程的前 N 条事件会被当成「已经处理过」
+    // 直接丢掉，界面上就是「重启之后那一轮只有后半截」。
+    resetSyncWatermark(sid, seq, epoch);
+    // 补不齐就整份重放转录：本地那份消息流属于上一个进程，接不上。
+    void replayTranscript(sid, () => useAppStore.getState());
+    return;
+  }
   eventEpoch.set(sid, epoch);
   if (knownEpoch === undefined || knownSeq === undefined) {
     eventSeq.set(sid, seq);
-    return;
-  }
-  if (knownEpoch !== epoch) {
-    // 会话对象换过了：旧的 seq 没有可比性。先对齐水位，再整份重放转录。
-    eventSeq.set(sid, seq);
-    void replayTranscript(sid, () => useAppStore.getState());
     return;
   }
   if (seq <= knownSeq) return;
@@ -2140,9 +2159,19 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // 补不齐了（缓冲淘汰 / 进程重开过）：本地那份消息流中间有缺口，只能整份重放
         // 转录。水位对齐到后端当前序号——不对齐的话下次重连还拿同一个过时的 since
         // 去问，又被判为补不齐，来回 resync。
+        //
+        // `epoch` 变了（后端换过会话对象）时去重集合也要清：新进程的序号从 1 重新
+        // 开始，旧集合里的 1..N 会把它们全判成重复。缓冲里压着的实时事件同属旧序号
+        // 空间，一并丢掉——它们要么会从转录里回来，要么本来就对不上。
         endSyncWindow(sid);
         const data = ev.data as { seq?: number; epoch?: string } | undefined;
-        if (typeof data?.seq === "number") eventSeq.set(sid, data.seq);
+        if (typeof data?.seq === "number") {
+          if (data.epoch && data.epoch !== eventEpoch.get(sid)) {
+            resetSyncWatermark(sid, data.seq, data.epoch);
+          } else {
+            eventSeq.set(sid, data.seq);
+          }
+        }
         if (data?.epoch) eventEpoch.set(sid, data.epoch);
         void replayTranscript(sid, get).then(() => flushLive(sid));
         return;

@@ -173,3 +173,54 @@ describe("重连补齐", () => {
     });
   });
 });
+
+// 进程被回收/重启后用同一个 UUID 重新 --resume：后端换了一条会话对象（epoch 变），
+// 序号从 1 重新开始，而本地的去重集合里装的是上一个进程的 1..N。不清集合的话新进程
+// 的前 N 条事件全部命中「已处理」被丢掉，界面上就是「重启之后那一轮只剩后半截」。
+describe("会话对象换过（epoch 变了）之后", () => {
+  beforeEach(() => {
+    __resetIds();
+    __resetSyncState();
+    transcriptCalls.length = 0;
+    useAppStore.setState({
+      activeId: "c1",
+      conversations: [{ id: "c1", cwd: "/w", title: "对话", messages: 3 }] as never,
+      workspaces: [],
+      sessions: [],
+      items: {},
+      usage: {},
+      states: {},
+      perms: {},
+      liveTasks: {},
+      error: null,
+    });
+  });
+
+  it("新进程的低序号事件不会被旧 epoch 的去重集合吞掉", () => {
+    // 老进程：处理到第 10 条。
+    useAppStore.getState().applyEvent("c1", {
+      kind: "session.snapshot",
+      data: { info: { state: "busy" }, seq: 10, epoch: "old" },
+    });
+    for (let s = 1; s <= 10; s += 1) {
+      useAppStore.getState().applyEvent("c1", {
+        kind: "cli",
+        seq: s,
+        data: assistantLine(`old-${s}`),
+      });
+    }
+    expect((useAppStore.getState().items.c1 ?? []).filter((i) => i.kind === "assistant")).toHaveLength(10);
+
+    // 新进程：同一个 UUID，新 epoch，序号从 1 重新开始。
+    useAppStore.getState().applyEvent("c1", {
+      kind: "session.snapshot",
+      data: { info: { state: "busy" }, seq: 1, epoch: "new" },
+    });
+    useAppStore.getState().applyEvent("c1", { kind: "cli", seq: 2, data: assistantLine("重启后的回答") });
+
+    const texts = (useAppStore.getState().items.c1 ?? [])
+      .filter((i) => i.kind === "assistant")
+      .map((i) => ("text" in i ? i.text : ""));
+    expect(texts).toContain("重启后的回答");
+  });
+});
