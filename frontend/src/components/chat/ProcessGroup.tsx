@@ -11,6 +11,7 @@ import {
   IconWrench,
 } from "../common/Icons";
 import type { Item } from "../../lib/model";
+import { useFollowGrowth } from "../../lib/scrollFollow";
 import { useLocale, useT } from "../../lib/i18n";
 import { dominantCategory, groupTitle, liveDetail, reasoningPreview, type ProcessMode, type ToolCategory } from "../../lib/process";
 
@@ -71,6 +72,8 @@ export function ProcessGroup({
   const active = useRef(live || keepOpen);
   /** 正文还能往哪个方向滚：只有真能滚的方向才给渐隐，否则一屏放得下也会糊一条边。 */
   const body = useRef<HTMLDivElement | null>(null);
+  /** 正文内容（ResizeObserver 的观察对象）：展开里面的思考 / 工具卡片时高度就是它在变。 */
+  const inner = useRef<HTMLDivElement | null>(null);
   const [fade, setFade] = useState({ top: false, bottom: false });
   // 详细模式在「运行中」与「下次发送时收起」的保留期里都平铺正文、不显示组头。
   const flat = view === "detailed" && (live || keepOpen);
@@ -92,6 +95,7 @@ export function ProcessGroup({
     setOpen(live ? view === "detailed" : true);
   }, [live, view, keepOpen]);
 
+  // 边缘渐隐：正文自身滚动 + 里面内容变高都要重算。
   useEffect(() => {
     const el = body.current;
     if (!el || !open) return;
@@ -104,11 +108,17 @@ export function ProcessGroup({
     el.addEventListener("scroll", update, { passive: true });
     const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
     ro?.observe(el);
+    if (inner.current) ro?.observe(inner.current);
     return () => {
       el.removeEventListener("scroll", update);
       ro?.disconnect();
     };
   }, [open, capped]);
+
+  // 展开组里的某一步（思考过程 / 工具卡片）时，组正文这个限高滚动区也要贴底跟随：
+  // 新露出来的内容留在视口外，等于「点了没反应」。规则与对话区一致——正文被往上
+  // 划过就不跟，滑回底部自然恢复，不显示额外状态。
+  useFollowGrowth(body, inner, () => true, capped && open);
 
   // 组头文案看的是「这一组自己有没有结束」（后面还有没有内容），不是整轮。
   const phase = atTail ? "running" : "done";
@@ -145,13 +155,16 @@ export function ProcessGroup({
       {open && (
         <div
           ref={body}
+          data-testid="process-body"
           className={`dsh-scroll overflow-x-clip px-1 pb-1 ${
             capped ? "md:max-h-[min(400px,50vh)] md:overflow-y-auto" : ""
-          } ${view === "detailed" ? "space-y-2" : "space-y-1"} ${
+          } ${
             fade.top && fade.bottom ? "process-fade-both" : fade.bottom ? "process-fade-bottom" : fade.top ? "process-fade-top" : ""
           }`}
         >
-          {children}
+          <div ref={inner} className={view === "detailed" ? "space-y-2" : "space-y-1"}>
+            {children}
+          </div>
         </div>
       )}
     </div>

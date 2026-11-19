@@ -10,6 +10,7 @@ import { useT } from "../../lib/i18n";
 import { activeTurnIndex, turnsOf, type Turn } from "../../lib/turns";
 import { buildProcessRows, hiddenReplyIds, isProcessItem, turnRunning } from "../../lib/process";
 import { useCollapseTiming, useFoldedReplies, useProcessView } from "../../lib/viewMode";
+import { useFollowGrowth } from "../../lib/scrollFollow";
 import { useAppStore } from "../../store/useAppStore";
 import { ProcessGroup } from "./ProcessGroup";
 
@@ -137,6 +138,8 @@ export function MessageList({
 }) {
   const t = useT();
   const scroller = useRef<HTMLDivElement>(null);
+  /** 滚动内容的外层：它的高度变化（展开折叠块、图片加载）触发贴底跟随。 */
+  const content = useRef<HTMLDivElement>(null);
   /** 贴底跟随：用户往上翻就停下，回到底部再恢复。 */
   const stick = useRef(true);
   const [limit, setLimit] = useState(VISIBLE_STEP);
@@ -312,6 +315,14 @@ export function MessageList({
     }
   }, [items]);
 
+  // 内容变高（展开思考过程 / 工具卡片、图片加载完）也跟随贴底。
+  //
+  // 上面那个 effect 只认条数变化：展开一个折叠块不改 items，新露出来的正文就留在
+  // 视口外，点开像没反应。这里按内容容器的高度变化补上，规则与滚动本身一致——
+  // 用户往上翻过（不贴底）就不跟，手动划回底部自然恢复，不额外给状态。
+  // 阈值与 onScroll 的 `near`（100px）保持一致，否则会出现「新消息会跟、展开不跟」。
+  useFollowGrowth(scroller, content, () => stick.current, true, 100);
+
   // 展开更早的消息后把视口钉在原来那条消息上，别让它「跳一下」。
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -407,7 +418,10 @@ export function MessageList({
         className={`dsh-scroll h-full overflow-y-auto ${turns.length >= 2 ? "dsh-scroll-none-md" : ""}`}
         onScroll={onScroll}
       >
-        <div className={`mx-auto w-full max-w-[820px] px-4 py-6 md:px-6 md:py-8 ${turns.length >= 2 ? "md:pr-10" : ""}`}>
+        <div
+          ref={content}
+          className={`mx-auto w-full max-w-[820px] px-4 py-6 md:px-6 md:py-8 ${turns.length >= 2 ? "md:pr-10" : ""}`}
+        >
           <div className={dense ? "" : "space-y-5"}>
             {hidden > 0 && (
               <div className={`flex justify-center ${dense ? "mt-3" : ""}`}>
