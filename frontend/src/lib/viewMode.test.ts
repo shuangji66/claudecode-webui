@@ -43,12 +43,12 @@ describe("过程展示偏好", () => {
     expect(processView()).toBe("standard");
   });
 
-  it("旧版本写下的 compact/grouped 按「标准」读，且不改写磁盘上的值", () => {
-    expect(parseProcessView("compact")).toBe("standard");
-    expect(parseProcessView("grouped")).toBe("standard");
+  it("旧版本写下的 compact/grouped 按「简洁」读（当年就是折成一行），且不改写磁盘上的值", () => {
+    expect(parseProcessView("compact")).toBe("concise");
+    expect(parseProcessView("grouped")).toBe("concise");
     localStorage.setItem("ccweb-process-view", "grouped");
     resetProcessViewCache();
-    expect(processView()).toBe("standard");
+    expect(processView()).toBe("concise");
     expect(localStorage.getItem("ccweb-process-view")).toBe("grouped");
   });
 

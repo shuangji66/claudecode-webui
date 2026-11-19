@@ -11,6 +11,7 @@ import {
   reasoningPreview,
   runningTool,
   toolCategory,
+  turnSpans,
 } from "./process";
 
 const thinking = (id: string, text = id): ThinkingItem => ({ id, seq: 0, ts: 0, kind: "thinking", text });
@@ -25,7 +26,6 @@ const tool = (id: string, name = "Bash", result?: string): ToolItem => ({
   ...(result !== undefined ? { result } : {}),
 });
 const reply = (id: string): Item => ({ id, seq: 0, ts: 0, kind: "assistant", text: id, streaming: false });
-const result = (id: string): Item => ({ id, seq: 0, ts: 0, kind: "result" });
 
 describe("toolCategory", () => {
   it("按「用户在做什么」归类，未收录的落到 tools", () => {
@@ -55,27 +55,9 @@ describe("buildProcessRows", () => {
     expect(rows[0].items.map((i) => i.id)).toEqual(["a", "b", "c"]);
   });
 
-  it("进行中看「这一轮结束没有」，不看「是不是列表末尾」：中途写回复不算结束", () => {
-    const running = buildProcessRows([tool("a"), tool("b")]);
-    expect(running[0].type === "process" && running[0].live).toBe(true);
-    expect(running[0].type === "process" && running[0].tail).toBe(true);
-
-    // 模型写完一段过渡回复、接着还要调工具：这一组已经不是末尾，但这一轮没结束。
-    const mid = buildProcessRows([tool("a"), tool("b"), reply("r")]);
-    expect(mid[0].type === "process" && mid[0].live).toBe(true);
-    expect(mid[0].type === "process" && mid[0].tail).toBe(false);
-
-    // result 才是整轮的结束信号。
-    const done = buildProcessRows([tool("a"), tool("b"), reply("r"), result("res")]);
-    expect(done[0].type === "process" && done[0].live).toBe(false);
-  });
-
-  it("同一轮的几组共享同一个「这一轮还在跑」判断：一起收起，不是一组一组折", () => {
-    const rows = buildProcessRows([tool("a"), tool("b"), reply("r"), tool("c"), tool("d")]);
-    const groups = rows.filter((r) => r.type === "process");
-    expect(groups).toHaveLength(2);
-    expect(groups.every((g) => g.type === "process" && g.live)).toBe(true);
-    expect(groups.map((g) => (g.type === "process" ? g.tail : null))).toEqual([false, true]);
+  it("只有含工具的连续过程才成组：纯思考另有合并行", () => {
+    const rows = buildProcessRows([thinking("a"), thinking("b")]);
+    expect(rows.map((r) => r.type)).toEqual(["thinking"]);
   });
 
   it("单独一步不折组：省掉一次点击", () => {
@@ -193,5 +175,40 @@ describe("hiddenReplyIds（仅最终回答）", () => {
   it("只有一条回答的轮次不动", () => {
     const items = [user("u1"), say("a1")];
     expect(hiddenReplyIds(items, false).size).toBe(0);
+  });
+});
+
+// 收起是**轮级**的（对齐 DSH）：整轮的过程一起收进轮首一行，正文照常留着。
+describe("turnSpans", () => {
+  const user2 = (id: string): Item => ({ id, seq: 0, ts: 0, kind: "user", text: id });
+  const result2 = (id: string, ms?: number): Item => ({ id, seq: 0, ts: 0, kind: "result", durationMs: ms });
+
+  it("按用户消息切轮，并捞出每轮的过程条目", () => {
+    const spans = turnSpans([user2("u1"), thinking("t1"), tool("x1"), result2("r1"), user2("u2"), tool("x2")]);
+    expect(spans).toHaveLength(2);
+    expect(spans[0].process.map((i) => i.id)).toEqual(["t1", "x1"]);
+    expect(spans[1].process.map((i) => i.id)).toEqual(["x2"]);
+  });
+
+  it("正文与用户消息不算过程：收起只藏过程，留下的正是这些", () => {
+    const spans = turnSpans([user2("u1"), thinking("t1"), reply("a1"), result2("r1")]);
+    expect(spans[0].process.map((i) => i.id)).toEqual(["t1"]);
+  });
+
+  it("本轮有 result 才算结束；会话空闲时历史轮次（回放没有 result）也算结束", () => {
+    expect(turnSpans([user2("u1"), tool("x1")], true)[0].finished).toBe(false);
+    expect(turnSpans([user2("u1"), tool("x1")], false)[0].finished).toBe(true);
+    expect(turnSpans([user2("u1"), tool("x1"), result2("r1")], true)[0].finished).toBe(true);
+  });
+
+  it("带上本轮耗时（没有 result 时为 undefined）", () => {
+    expect(turnSpans([user2("u1"), result2("r1", 9000)], true)[0].durationMs).toBe(9000);
+    expect(turnSpans([user2("u1")], false)[0].durationMs).toBeUndefined();
+  });
+
+  it("列表开头没有用户消息时也算一轮，否则那段过程无处可收", () => {
+    const spans = turnSpans([tool("x1"), reply("a1"), user2("u2"), tool("x2")], false);
+    expect(spans.map((s) => s.start)).toEqual([0, 2]);
+    expect(spans[0].process.map((i) => i.id)).toEqual(["x1"]);
   });
 });

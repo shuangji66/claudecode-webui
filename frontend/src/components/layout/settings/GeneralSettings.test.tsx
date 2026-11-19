@@ -33,7 +33,7 @@ describe("设置 → 通用", () => {
       expect(screen.getByText(title)).toBeInTheDocument();
     }
     // 说明跟着当前值走：默认「标准」档的说明文字。
-    expect(screen.getByText("过程收成一行，带上正在做什么与思考首行；点开看每一步。")).toBeInTheDocument();
+    expect(screen.getByText("不分组：每一步各占一行，工具操作折成一行，点开看正文。")).toBeInTheDocument();
   });
 
   it("过程展示走下拉，选中后写本机偏好并换掉这一行的说明", async () => {
@@ -45,7 +45,7 @@ describe("设置 → 通用", () => {
       screen.getByRole("option", { name: "简洁" }).click();
     });
     expect(localStorage.getItem("ccweb-process-view")).toBe("concise");
-    expect(screen.getByText("一轮里的思考与工具调用只留一行摘要，点开才看每一步。")).toBeInTheDocument();
+    expect(screen.getByText("连续的过程折成一行摘要（已读取文件并运行了命令），点开才看每一步。")).toBeInTheDocument();
   });
 
   it("字号用 ± 按钮，落的是 font_size 补丁", async () => {

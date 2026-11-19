@@ -116,14 +116,20 @@ export function GeneralSettings() {
   // 分段控件下面再挂一行解释（那正是排版稀疏的来源）。
   const viewHint =
     view === "concise"
-      ? t("一轮里的思考与工具调用只留一行摘要，点开才看每一步。", "Reasoning and tool calls collapse into one summary line; click to see each step.")
+      ? t(
+          "连续的过程折成一行摘要（已读取文件并运行了命令），点开才看每一步。",
+          "Consecutive steps fold into one summary line; click to see each step.",
+        )
       : view === "standard"
-        ? t("过程收成一行，带上正在做什么与思考首行；点开看每一步。", "Steps fold into one line showing the current activity and the first line of reasoning; click to see each step.")
-        : t("运行中直接铺开每一步的卡片，回答一出现就自动收起成一行。", "Each step shows as a full card while running, then folds into one line as soon as the answer arrives.");
+        ? t(
+            "不分组：每一步各占一行，工具操作折成一行，点开看正文。",
+            "No grouping: each step keeps its own line, tool calls fold into one line you can open.",
+          )
+        : t("每一步都是完整卡片，命令、diff 与输出直接铺在对话里。", "Every step is a full card: command, diff and output laid out inline.");
   const timingHint =
     timing === "onComplete"
-      ? t("回复一出现，这一轮的过程就折回一行。", "The process folds back to one line as soon as the reply arrives.")
-      : t("回复出现后过程仍然展开，等你发出下一条消息再收起。", "The process stays expanded after the reply until you send the next message.");
+      ? t("一轮跑完就把这一轮的过程收进开头一行，只留正文输出。", "When a turn finishes, its process folds into one line at the top, leaving only the replies.")
+      : t("一轮跑完后过程仍然展开，等你发出下一条消息再收起来。", "A finished turn stays expanded until you send the next message.");
   const repliesHint =
     replies === "all"
       ? t("阶段回复与最终答案都保留，只收起过程。", "Intermediate replies and the final answer both stay; only the process folds.")

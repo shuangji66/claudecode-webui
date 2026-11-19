@@ -1,4 +1,14 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { Item } from "../../lib/model";
 import { AssistantBubble } from "./AssistantBubble";
 import { ResultBar } from "./ResultBar";
@@ -8,11 +18,30 @@ import { ToolCardHost } from "../tools/ToolCardHost";
 import { IconAlert, IconChevronDown, IconSpark } from "../common/Icons";
 import { useT } from "../../lib/i18n";
 import { activeTurnIndex, turnsOf, windowStart, type Turn } from "../../lib/turns";
-import { buildProcessRows, hiddenReplyIds, isProcessItem, turnRunning } from "../../lib/process";
+import {
+  buildProcessRows,
+  hiddenReplyIds,
+  isProcessItem,
+  turnSpans,
+  type ProcessEntry,
+  type TurnSpan,
+} from "../../lib/process";
 import { useCollapseTiming, useFoldedReplies, useProcessView } from "../../lib/viewMode";
 import { useFollowGrowth } from "../../lib/scrollFollow";
 import { useAppStore } from "../../store/useAppStore";
 import { ProcessGroup } from "./ProcessGroup";
+import { TurnCollapse } from "./TurnCollapse";
+
+/**
+ * 这一行是不是「过程」（收起时要藏掉的东西）。
+ *
+ * 过程组与合并后的思考块都是过程；单条的思考 / 工具也是。正文（assistant）、用户消息、
+ * result / interrupt / error 都不算——收起只收过程，正文本就是收起来之后要留下的东西。
+ */
+function entryTouchesProcess(entry: ProcessEntry): boolean {
+  if (entry.type === "process" || entry.type === "thinking") return true;
+  return isProcessItem(entry.item);
+}
 
 /**
  * 长对话只渲染最近这一批，往上翻时再按批展开。
@@ -36,17 +65,11 @@ const OFFSCREEN_ROW = { contentVisibility: "auto", containIntrinsicSize: "auto 3
 const MessageRow = memo(function MessageRow({
   item,
   dense = false,
-  preview = true,
-  live = false,
   offscreen = true,
 }: {
   item: Item;
   /** 紧凑模式：思考与工具压成一行，正文/用户消息不受影响。 */
   dense?: boolean;
-  /** 是否显示思考首行预览（「简洁」不显示）。 */
-  preview?: boolean;
-  /** 这一条是否属于仍在进行中的尾部（回答一出现就自动折起思考）。 */
-  live?: boolean;
   /**
    * 是否允许「离屏跳过渲染」。过程组内部一律关掉：那一整块是用户主动展开的，
    * 里面的行又便宜，跳过只会让展开瞬间的高度估算反复回缩。
@@ -74,7 +97,7 @@ const MessageRow = memo(function MessageRow({
     case "thinking":
       return (
         <div {...box(dense)}>
-          <ThinkingBlock text={item.text} dense={dense} preview={preview} live={live} />
+          <ThinkingBlock text={item.text} dense={dense} />
         </div>
       );
     case "tool":
@@ -180,20 +203,24 @@ export function MessageList({
 
   const hidden = useMemo(() => windowStart(items, limit), [items, limit]);
   const shown = useMemo(() => (hidden > 0 ? items.slice(hidden) : items), [items, hidden]);
-  /** 过程展示偏好：detailed 走改造前的完整卡片，另两档压成单行。 */
+  /**
+   * 过程展示偏好决定「展开之后每一步怎么画」：detailed 完整卡片、standard 一步一行、
+   * concise 把连续的过程折成一行摘要。**收起是另一条轴、且是轮级的**（见下面的 `spans`）。
+   */
   const view = useProcessView();
   const dense = view !== "detailed";
+  const grouping = view === "concise";
   /**
-   * 「下次发送时收起」：最新一轮的过程在回答出现后仍然展开，等发下一条消息才收。
-   * 这里只算「哪一组属于最新一轮」——最后一条用户消息之后的组。
+   * 收起时机：整轮过程什么时候收进轮首那一行。
+   *
+   *   - `onComplete`（默认）：这一轮一结束（有 `result`，或会话已经空闲的回放）就收；
+   *   - `onNextSend`：最新一轮结束后仍保持展开，等用户发出下一条消息才收——那时它不再是
+   *     最新一轮，于是自动落进上一条。
+   *
+   * **跑到一半的轮永远不收**：把正在执行的步骤藏起来等于让人不知道它在干什么。
+   * 用户手动点过的那一轮记在 `manual` 里，自动逻辑不再改它（点开历史轮就该一直开着）。
    */
   const timing = useCollapseTiming();
-  const lastUserIndex = useMemo(() => {
-    for (let i = shown.length - 1; i >= 0; i -= 1) {
-      if (shown[i].kind === "user") return i;
-    }
-    return -1;
-  }, [shown]);
   /**
    * 「仅最终回答」：只有**最新一轮**在过程仍展开时才保留全部回复；
    * 其余轮次（以及已完成的最新一轮）只留最后一条回答。
@@ -211,7 +238,32 @@ export function MessageList({
     () => (folded === "final" ? hiddenReplyIds(shown, keepTail) : null),
     [folded, shown, keepTail],
   );
-  const rows = useMemo(() => buildProcessRows(shown, running), [shown, running]);
+  /**
+   * 轮级收起。键用轮首那条的 id：数组下标会随「加载更早」整体平移，用它当键会把
+   * 展开态错配到别的轮上。
+   */
+  const spans = useMemo(() => turnSpans(shown, running), [shown, running]);
+  const [manual, setManual] = useState<Record<string, boolean>>({});
+  /** 某一轮此刻是不是收起态。 */
+  const isCollapsed = (span: TurnSpan, index: number): boolean => {
+    if (span.process.length === 0) return false; // 没有过程可收：纯问答不该多一行
+    if (!span.finished) return false; // 还在跑：过程必须看得见
+    const key = shown[span.start].id;
+    const touched = manual[key];
+    if (touched !== undefined) return !touched;
+    return !(timing === "onNextSend" && index === spans.length - 1);
+  };
+  /** 每轮各自成行：分组只在轮内发生，跨轮的分组没有意义。 */
+  const rows = useMemo(
+    () =>
+      spans.map((span) =>
+        buildProcessRows(shown.slice(span.start, span.end), grouping).map((row) => ({
+          ...row,
+          start: row.start + span.start,
+        })),
+      ),
+    [spans, shown, grouping],
+  );
 
   /**
    * 每一轮用户消息相对「滚动内容顶部」的距离，缓存给滚动帧用。
@@ -455,59 +507,78 @@ export function MessageList({
                 </button>
               </div>
             )}
-            {rows.map((entry) => {
-              // 「仅最终回答」：阶段回复整行跳过，不缩成一行占位。
-              if (entry.type === "item" && hiddenReplies?.has(entry.item.id)) return null;
-              if (entry.type === "process") {
-                return (
-                  <div key={entry.key} className={dense ? "mt-1" : undefined}>
-                    <ProcessGroup
-                      items={entry.items}
-                      live={entry.live}
-                      atTail={entry.tail}
-                      view={view}
-                      keepOpen={timing === "onNextSend" && entry.start > lastUserIndex}
-                    >
-                      {entry.items.map((item) => (
-                        <MessageRow
-                          key={item.id}
-                          item={item}
-                          dense={dense}
-                          preview={view !== "concise"}
-                          offscreen={false}
-                        />
-                      ))}
-                    </ProcessGroup>
-                  </div>
-                );
-              }
-              if (entry.type === "thinking") {
-                const live = timing === "onComplete" && turnRunning(shown, entry.start + entry.items.length - 1, running);
-                return (
-                  <div key={entry.key} className={dense ? "mt-1" : undefined}>
-                    <ThinkingBlock
-                      text={entry.items.map((it) => it.text).join("\n\n")}
-                      dense={dense}
-                      preview={view !== "concise"}
-                      live={live}
-                    />
-                  </div>
-                );
-              }
-              const live = timing === "onComplete" && turnRunning(shown, entry.start, running);
+            {spans.map((span, index) => {
+              const collapsed = isCollapsed(span, index);
+              const turnRows = rows[index];
+              /**
+               * 收起/展开那一行（DSH 的「已完成，用时 …」）。
+               *
+               * **位置在用户消息下方、这一轮第一条答复上方**：放到轮首会跑到用户气泡
+               * 上方，一进来只看见一行「已完成」还以为自己刚发的话被折没了。
+               * 有过程才出现——纯问答不该多一行。
+               */
+              const collapseRow = span.process.length > 0 && span.finished && (
+                <TurnCollapse
+                  durationMs={span.durationMs}
+                  open={!collapsed}
+                  onToggle={() => {
+                    // `manual` 记的是「用户要它展开吗」：点一下就是取反当前的收起态。
+                    const key = shown[span.start].id;
+                    setManual((prev) => ({ ...prev, [key]: collapsed }));
+                  }}
+                />
+              );
+              // 只有窗口截断把用户消息切掉时，第一行才不是用户消息：那种情况放在最前面。
+              const head = turnRows[0];
+              const headIsUser = head?.type === "item" && head.item.kind === "user";
               return (
-                <div
-                  key={entry.key}
-                  data-item-id={entry.item.id}
-                  className={dense ? (isProcessItem(entry.item) ? "mt-1" : "mt-5") : undefined}
-                >
-                  <MessageRow
-                    item={entry.item}
-                    dense={dense}
-                    preview={view !== "concise"}
-                    live={live}
-                  />
-                </div>
+                <Fragment key={shown[span.start].id}>
+                  {!headIsUser && collapseRow}
+                  {turnRows.map((entry, rowIndex) => {
+                    // 过程收起来了：整批跳过，只留正文。正文与用户消息是「结果」，
+                    // 收起要藏的只有过程（思考与工具调用）。
+                    if (collapsed && entryTouchesProcess(entry)) return null;
+                    // 「仅最终回答」：阶段回复整行跳过，不缩成一行占位。
+                    if (entry.type === "item" && hiddenReplies?.has(entry.item.id)) return null;
+                    let row: ReactNode = null;
+                    if (entry.type === "process") {
+                      row = (
+                        <div key={entry.key} className={dense ? "mt-1" : undefined}>
+                          <ProcessGroup items={entry.items}>
+                            {entry.items.map((item) => (
+                              <MessageRow key={item.id} item={item} dense={dense} offscreen={false} />
+                            ))}
+                          </ProcessGroup>
+                        </div>
+                      );
+                    } else if (entry.type === "thinking") {
+                      row = (
+                        <div key={entry.key} className={dense ? "mt-1" : undefined}>
+                          <ThinkingBlock text={entry.items.map((it) => it.text).join("\n\n")} dense={dense} />
+                        </div>
+                      );
+                    } else {
+                      row = (
+                        <div
+                          key={entry.key}
+                          data-item-id={entry.item.id}
+                          className={dense ? (isProcessItem(entry.item) ? "mt-1" : "mt-5") : undefined}
+                        >
+                          <MessageRow item={entry.item} dense={dense} />
+                        </div>
+                      );
+                    }
+                    if (rowIndex === 0 && headIsUser) {
+                      return (
+                        <Fragment key={entry.key}>
+                          {row}
+                          {collapseRow}
+                        </Fragment>
+                      );
+                    }
+                    return <Fragment key={entry.key}>{row}</Fragment>;
+                  })}
+                </Fragment>
               );
             })}
           </div>
