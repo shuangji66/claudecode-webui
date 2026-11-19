@@ -2167,6 +2167,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // 开始，旧集合里的 1..N 会把它们全判成重复。缓冲里压着的实时事件同属旧序号
         // 空间，一并丢掉——它们要么会从转录里回来，要么本来就对不上。
         endSyncWindow(sid);
+        // 窗口里压着的实时事件直接丢掉：它们的内容已经在刚重放的转录里（转录是磁盘上
+        // 的权威版本，断线期间产生的都写了进去），再应用一遍就是同一段正文出现两三遍。
+        // 不丢的话它们还会留在 `pendingLive` 里，等下一次补发帧到达时一起被冲出去。
+        pendingLive.delete(sid);
         const data = ev.data as { seq?: number; epoch?: string } | undefined;
         if (typeof data?.seq === "number") {
           if (data.epoch && data.epoch !== eventEpoch.get(sid)) {
@@ -2176,7 +2180,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
           }
         }
         if (data?.epoch) eventEpoch.set(sid, data.epoch);
-        void replayTranscript(sid, get).then(() => flushLive(sid));
+        // **不 flushLive**：窗口里压着的那些实时事件，内容已经在刚重放的转录里了
+        // （转录是磁盘上的权威版本，断线期间产生的都写了进去）。再应用一遍就是同一段
+        // 正文出现两三遍。缓冲本身也在上面 `endSyncWindow` 之后被丢弃了——
+        // 它们属于「补不齐」的那段序号空间，留着只会叠。
+        void replayTranscript(sid, get);
         return;
       }
       case "session.ready": {

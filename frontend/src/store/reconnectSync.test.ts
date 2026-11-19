@@ -224,3 +224,52 @@ describe("会话对象换过（epoch 变了）之后", () => {
     expect(texts).toContain("重启后的回答");
   });
 });
+
+// resync 之前压在对齐窗口里的实时事件，内容已经在刚重放的转录里（转录是磁盘上的
+// 权威版本，断线期间产生的都写了进去）。resync 之后再 flushLive 一遍，同一段正文
+// 会出现两三遍——这是「重连后回答重复」的来源之一。
+describe("resync 之后不再重复应用窗口里压着的实时事件", () => {
+  beforeEach(() => {
+    __resetIds();
+    __resetSyncState();
+    transcriptCalls.length = 0;
+    useAppStore.setState({
+      activeId: "c1",
+      conversations: [{ id: "c1", cwd: "/w", title: "对话", messages: 3 }] as never,
+      workspaces: [],
+      sessions: [],
+      items: {},
+      usage: {},
+      states: {},
+      perms: {},
+      liveTasks: {},
+      error: null,
+    });
+  });
+
+  it("压着的那几条实时事件不会叠到转录上", async () => {
+    // 第一次快照：水位 2。
+    useAppStore.getState().applyEvent("c1", {
+      kind: "session.snapshot",
+      data: { info: { state: "busy" }, seq: 2, epoch: "e1" },
+    });
+    // 重连：后端说已经到 5 → 前端发 sync，进入对齐窗口。
+    useAppStore.getState().applyEvent("c1", {
+      kind: "session.snapshot",
+      data: { info: { state: "busy" }, seq: 5, epoch: "e1" },
+    });
+    // 窗口期间到达的实时事件（补发帧还没来，先压着）。
+    useAppStore.getState().applyEvent("c1", { kind: "cli", seq: 3, data: assistantLine("断线期间跑完了") });
+    useAppStore.getState().applyEvent("c1", { kind: "cli", seq: 4, data: assistantLine("断线期间跑完了") });
+    // 后端回 resync（缓冲淘汰）：改走整份重放转录。
+    useAppStore.getState().applyEvent("c1", { kind: "session.resync", data: { seq: 5, epoch: "e1" } });
+
+    await vi.waitFor(() => {
+      expect((useAppStore.getState().items.c1 ?? []).some((i) => i.kind === "assistant")).toBe(true);
+    });
+    const texts = (useAppStore.getState().items.c1 ?? [])
+      .filter((i) => i.kind === "assistant")
+      .map((i) => ("text" in i ? i.text : ""));
+    expect(texts.filter((t) => t === "断线期间跑完了")).toHaveLength(1);
+  });
+});
