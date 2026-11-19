@@ -276,7 +276,7 @@ export function useDismiss(
 ): void {
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: Event) => {
       const target = e.target as Node | null;
       if (!target) return;
       if (layer.current?.contains(target)) return;
@@ -289,9 +289,15 @@ export function useDismiss(
       if (onEscape?.()) return;
       onClose();
     };
+    // pointerdown **和** mousedown 都要听：拖拽手柄（右侧栏分隔线）在 pointerdown 里
+    // preventDefault 挡住文字选中，而取消 pointerdown 会连带吞掉浏览器合成的兼容
+    // mousedown —— 只听 mousedown 时点/拖分隔线浮层既不关、也不跟随，卡片变宽了菜单
+    // 还停在旧坐标上。两个事件都注册在最外层，重复触发只是再 setState 一次同一个值。
+    document.addEventListener("pointerdown", onDown);
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
     return () => {
+      document.removeEventListener("pointerdown", onDown);
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };

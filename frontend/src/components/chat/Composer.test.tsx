@@ -124,6 +124,29 @@ describe("Composer 添加菜单", () => {
     expect(readHostFile).not.toHaveBeenCalled();
   });
 
+  it("pointerdown 点外部就关：分隔线在 pointerdown 里 preventDefault，收不到 mousedown", () => {
+    // 右侧栏分隔线的 onResizeStart 会 preventDefault，浏览器随即不再合成兼容的
+    // mousedown；只听 mousedown 时拖分隔线菜单既不关也不跟随宽度。
+    setup();
+    openMenu();
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    fireEvent.pointerDown(document.body);
+
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("pointerdown 落在菜单或「+」按钮上时不关", () => {
+    setup();
+    openMenu();
+
+    fireEvent.pointerDown(screen.getByRole("menuitem", { name: /本地文件/ }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "添加" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
   it("不在飞牛宿主里时给出提示，不新增附件", async () => {
     pickFnosFiles.mockResolvedValue({ state: "skipped", reason: "standalone" });
     setup();

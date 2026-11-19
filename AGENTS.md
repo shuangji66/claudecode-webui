@@ -447,6 +447,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
   折叠块 `common/Collapsible`、文件图标 `common/FileIcon`。
   原生 `window.confirm/prompt/alert` 与 `<select>` 一律不用：它们的配色/圆角/字号由系统决定，
   在飞牛桌面 iframe 里和主题对不上。
+- **「点外部关闭」必须听 `pointerdown`，不能只听 `mousedown`**（`Menu.useDismiss` 两个都注册）：
+  拖拽手柄（右侧栏分隔线）在 `pointerdown` 里 `preventDefault` 挡住文字选中，浏览器随即不再
+  合成兼容的 `mousedown`——只听 `mousedown` 时点/拖分隔线浮层既不关、也不重新定位，输入卡被
+  拖宽了添加菜单还停在旧坐标（踩过）。新增浮层一律复用 `useDismiss`。
 
 ### 4.8 子代理（Agent / Task 工具）
 
