@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -48,6 +49,22 @@ type wsClient struct {
 	wmu       sync.Mutex
 	closed    atomic.Bool
 	closeOnce sync.Once
+
+	// watchMu 保护 watchCancel：系统通道上的 Git 订阅（git.watch）。
+	// 一个连接同时只盯一个仓库——Git 面板是单例，换仓库就是换订阅。
+	watchMu     sync.Mutex
+	watchCancel context.CancelFunc
+}
+
+// setWatch 替换这条连接上的仓库观察者；nil 表示取消订阅。
+func (c *wsClient) setWatch(cancel context.CancelFunc) {
+	c.watchMu.Lock()
+	prev := c.watchCancel
+	c.watchCancel = cancel
+	c.watchMu.Unlock()
+	if prev != nil {
+		prev()
+	}
 }
 
 // newWSClient 建一条连接并启动写循环。
@@ -139,6 +156,7 @@ type wireAttachment struct {
 // clientCmd 是前端上行命令。
 type clientCmd struct {
 	Kind               string           `json:"kind"`
+	Cwd                string           `json:"cwd,omitempty"`
 	Text               string           `json:"text,omitempty"`
 	Priority           string           `json:"priority,omitempty"`
 	Attachments        []wireAttachment `json:"attachments,omitempty"`
@@ -154,7 +172,8 @@ type clientCmd struct {
 // handleWS 处理 /ws。
 //
 //	/ws?id=<session>  会话通道：该会话的事件（当前唯一的业务通道）
-//	/ws               系统通道：只收应用级事件（目前是 claude 更新提示）
+//	/ws               系统通道：只收应用级事件（claude 更新、对话列表变化），
+//	                  并接受 git.watch / git.unwatch 两条订阅命令（推送 git.changed）
 //
 // 系统通道是独立一条连接，而不是把系统事件挂到会话通道上：会话连接随对话开关
 // （关掉对话、换工作区、删对话都会断），而「有新版本」这件事与对话无关，
@@ -188,6 +207,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.d.Hub.Subscribe(topic, c)
 	defer func() {
 		s.d.Hub.Unsubscribe(topic, c)
+		// 连接断了就没人看图了：不停掉观察者，它会一直每几秒 spawn 一次 git。
+		c.setWatch(nil)
 		c.close()
 	}()
 
@@ -289,10 +310,27 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 		return
 	}
 	if sess == nil {
-		// 系统通道没有会话：只认心跳。其余命令一律报错，绝不能让 prompt 之类
-		// 落到 nil 会话上——那是 panic，会带走整个网关进程。
-		if cmd.Kind == "ping" {
+		// 系统通道没有会话：只认心跳与 Git 订阅。其余命令一律报错，绝不能让
+		// prompt 之类落到 nil 会话上——那是 panic，会带走整个网关进程。
+		//
+		// Git 订阅挂在系统通道而不是会话通道：Git 面板与「打开的是哪个对话」无关，
+		// 而会话连接会随对话开关（关对话、换工作区、删对话）断开重连，
+		// 那时订阅要重新建立一遍，面板会短暂失去推送。
+		switch cmd.Kind {
+		case "ping":
 			_ = c.SendJSON(WireEvent{Kind: "pong"})
+			return
+		case "git.watch":
+			// 与 /api/git/* 同一条围栏：只有授权目录里的仓库能被盯。
+			cwd, cwdErr := s.authorizedCwd(cmd.Cwd)
+			if cwdErr != nil {
+				s.sendError(c, cwdErr.Error())
+				return
+			}
+			s.startGitWatch(c, cwd)
+			return
+		case "git.unwatch":
+			c.setWatch(nil)
 			return
 		}
 		s.sendError(c, fmt.Sprintf("系统通道不接受命令 %q", cmd.Kind))

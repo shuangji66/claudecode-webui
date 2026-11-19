@@ -76,6 +76,13 @@ interface SidebarState {
   loadRepos: () => Promise<void>;
   selectRepo: (root: string) => Promise<void>;
   refreshGit: () => Promise<void>;
+  /**
+   * 后端推来的「仓库变了」（系统通道的 `git.changed`）。
+   *
+   * 传事件里的 cwd：刚换过仓库时旧仓库的推送可能还在路上，拿它刷新只会把
+   * 新仓库的面板刷成旧仓库的数据。
+   */
+  gitChanged: (cwd: string) => Promise<void>;
   loadBranches: () => Promise<void>;
   loadLog: () => Promise<void>;
   loadDiff: (path: string, staged: boolean) => Promise<string>;
@@ -288,6 +295,17 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     return promise;
   },
 
+  gitChanged: async (cwd) => {
+    const current = gitCwd(get());
+    if (!current || (cwd && cwd !== current)) return;
+    await get().refreshGit();
+    // 已经不是仓库了（被删掉 .git）：别再往下拉分支与历史，那两条只会各报一次错。
+    if (!get().git?.is_repo) return;
+    // 分支/上游会随 pull、终端里的 checkout 变化，历史也会多出新的提交：
+    // 原来只刷新状态，拉取成功后「历史」页签停在旧列表上。
+    await Promise.all([get().loadBranches(), get().loadLog()]);
+  },
+
   loadBranches: async () => {
     const cwd = gitCwd(get());
     if (!cwd) return;
@@ -419,6 +437,10 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
       set({ actionError: "" });
       await get().refreshGit();
       await get().loadBranches();
+      // 拉下来的提交必须立刻出现在「历史」里：只刷新状态的话，用户得手动点刷新
+      // 才知道这次到底拉到了什么（而且 push 事件也会被指纹判成「变过」再刷一遍，
+      // 这里主动刷新是为了不依赖轮询时机）。
+      await get().loadLog();
       return true;
     } catch (reason) {
       set({ actionError: errorText(reason) });

@@ -147,7 +147,11 @@ src/
     点卡片或 `+` 菜单才开标签。顶部一排标签（文件 / Git / 每个终端各一个），
     标签自带 × 关闭；文件与 Git 是单例，终端每次都新建（上限 8，标签名 `bash`、`bash 2`…）。
     **切标签只切 `hidden`、不卸载**：终端里挂着 PTY，卸载等于杀 shell；关标签才结束进程。
-    不要再加「启动页 + 返回」式的切换。Git 只拉不推（`/api/git/pull`，`pull --ff-only`）。
+    不要再加「启动页 + 返回」式的切换。Git 只拉不推（`/api/git/pull`，`pull --ff-only`），
+    拉取**直接执行、不弹确认**（成功安静刷新，失败由面板顶部错误条说明原因）。
+    **Git 状态不自己轮询**：面板可见时 `watchGitRepo(cwd)` 在系统通道上发 `git.watch`，
+    后端变了就推 `git.changed`，由 `useSidebarStore.gitChanged` 刷新状态/分支/历史；
+    切走标签或卸载时 `watchGitRepo(null)` 退订（后端会跟着停掉轮询）。
     **文件/目录行的「更多」菜单有「引用到对话」与「下载」**：引用只调
     `useAppStore.requestMention(绝对路径, "file"|"dir")`（带单调 `seq`；同一条点第二次
     值没变，没有 seq 就重放不了），格式化与插入由 `Composer` 负责（`mentionPath` 按会话
@@ -560,11 +564,13 @@ src/
   清本地令牌、整页重载回到鉴权页；后端不可达也要清本地凭据。unix socket 且未配令牌时
   不显示。
 - **系统通道**：`bootstrap` 里 `openSystemChannel()` 打开一条 **不带 id** 的 `/ws`
-  （`wsUrl("", token)`），只收应用级事件（`claude.update`）。它与会话连接分开：会话连接
-  随对话开关（关对话、换工作区、删对话都会断），更新提示跟对话无关，没有打开任何对话时
-  也要收到。系统通道的 `onEvent` 只放行 `claude.update` 再交给 `applyEvent("", ev)`——
-  别的 kind 带着空 sid 会写进各会话的桶里。重连成功后补拉一次 `/api/claude/status`
-  （断线期间可能发布了新版）。
+  （`wsUrl("", token)`），只收应用级事件（`claude.update` / `conversations.changed` /
+  `git.changed`）。它与会话连接分开：会话连接随对话开关（关对话、换工作区、删对话都会断），
+  更新提示与 Git 订阅跟对话无关，没有打开任何对话时也要收到。系统通道的 `onEvent` 只放行
+  这三类再交给 `applyEvent("", ev)`——别的 kind 带着空 sid 会写进各会话的桶里。
+  重连成功后补拉一次 `/api/claude/status`（断线期间可能发布了新版）；**Git 订阅要重发**
+  （服务端的观察者跟着连接走，`watchGitRepo` 记的 `gitWatchCwd` 在 `onStatus("open")`
+  时补一次，并顺手刷新那次断线期间错过的变化）。
 
 ## 4. 消息模型（Item）
 

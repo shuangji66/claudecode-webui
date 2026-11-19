@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseStatusPorcelainV2(t *testing.T) {
@@ -238,4 +239,49 @@ func TestGitEnvProxy(t *testing.T) {
 		t.Fatalf("继承的代理变量应被剔除：\n%s", joined)
 	}
 	SetProxySource(nil)
+}
+
+// Watch 是「面板不再轮询」的替代：文件一改就要推一次，基线那一轮不推。
+func TestWatchNotifiesOnChange(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("没有 git")
+	}
+	dir := t.TempDir()
+	runGitTest(t, dir, "init", "-q")
+	runGitTest(t, dir, "config", "user.email", "test@example.com")
+	runGitTest(t, dir, "config", "user.name", "Test")
+	file := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(file, []byte("one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, dir, "add", ".")
+	runGitTest(t, dir, "commit", "-qm", "init")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	changed := make(chan struct{}, 4)
+	go Watch(ctx, dir, 20*time.Millisecond, func() {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	})
+
+	// 未被修改时不该推送（基线那一轮与后续相同）。
+	select {
+	case <-changed:
+		t.Fatal("仓库没变却收到了推送")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	if err := os.WriteFile(file, []byte("two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("文件改动后没有收到推送")
+	}
+
+	cancel()
 }

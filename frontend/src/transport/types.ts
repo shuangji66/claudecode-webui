@@ -15,6 +15,8 @@ export type WireEventKind =
   | "error"
   | "closed"
   | "claude.update"
+  /** 系统通道：被盯住的那个仓库快照变了（git.watch 之后由后端推）。 */
+  | "git.changed"
   | "pong";
 
 export interface WireEvent {
@@ -288,6 +290,9 @@ export type ClientCommand =
       updated_permissions?: unknown;
       message?: string;
     }
+  // 系统通道专用：让后端盯住一个仓库（Git 面板可见时），有变化就推 git.changed。
+  | { kind: "git.watch"; cwd: string }
+  | { kind: "git.unwatch" }
   | { kind: "ping" };
 
 /** 单个模型的展示与能力元数据。 */

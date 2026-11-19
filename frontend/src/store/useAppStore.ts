@@ -62,6 +62,7 @@ import {
   updatePrompt,
   type QueuedPrompt,
 } from "../lib/queue";
+import { useSidebarStore } from "./useSidebarStore";
 
 export type { SessionInfo } from "../transport/types";
 
@@ -336,6 +337,12 @@ const clients = new Map<string, ClaudeClient>();
  *  复用 /ws 而不是再加一条 SSE：鉴权（?token=）、心跳、指数重连都已经在这里，
  *  而且 WS 已经过前置网关注入的验证。 */
 let systemClient: ClaudeClient | null = null;
+/** Git 面板当前盯着的仓库绝对路径；空串 = 不盯。
+ *
+ *  放在模块级而不是 store state：它只描述「系统通道该订阅什么」，没有任何组件
+ *  会因为它的变化重渲染。断线重连后要照这个值重新订阅（服务端订阅跟着连接走，
+ *  连接一断就取消了）。 */
+let gitWatchCwd = "";
 const resumePromises = new Map<string, Promise<boolean>>();
 /** 等这一轮结束后要按新档位重开的会话（`--effort` 只在进程启动时固定）。 */
 const effortRestarts = new Set<string>();
@@ -390,6 +397,26 @@ function token(): string {
   }
 }
 
+/**
+ * 让后端盯住 Git 面板正在看的仓库（null / 空串 = 取消订阅）。
+ *
+ * 只有面板可见时才订阅：后端会按固定间隔轮询这个仓库，没人看的时候不该跑。
+ * 订阅挂在系统通道上（与会话无关、常驻），所以换对话、关对话都不会丢；
+ * 连接断了服务端的订阅就没了，重连后由 onStatus 按同一个值补发。
+ */
+export function watchGitRepo(cwd: string | null): void {
+  const next = (cwd ?? "").trim();
+  if (next === gitWatchCwd) return;
+  gitWatchCwd = next;
+  sendGitWatch();
+}
+
+/** 把当前订阅值同步给服务端；连接不在时什么都不做，连上后会补发。 */
+function sendGitWatch(): void {
+  if (!systemClient) return;
+  systemClient.send(gitWatchCwd ? { kind: "git.watch", cwd: gitWatchCwd } : { kind: "git.unwatch" });
+}
+
 /** 打开系统通道（幂等）。系统通道只收应用级事件（claude 更新、对话列表变化），事件交给 applyEvent 统一处理。 */
 function openSystemChannel(): void {
   if (systemClient) return;
@@ -398,12 +425,15 @@ function openSystemChannel(): void {
     // 只放行应用级事件：别的 kind 落到 applyEvent 会带着空 sid 写进各会话的桶里。
     onEvent: (ev) => {
       // 自动化任务可能在没人看屏幕时新建对话，这里收到就刷新列表。
-      if (ev.kind === "claude.update" || ev.kind === "conversations.changed") {
+      if (ev.kind === "claude.update" || ev.kind === "conversations.changed" || ev.kind === "git.changed") {
         useAppStore.getState().applyEvent("", ev);
       }
     },
     onStatus: (status) => {
       if (status !== "open") return;
+      // 服务端的订阅跟着连接走，旧连接一断就没了：每次连上都要补发一次，
+      // 哪怕订阅值没变（watchGitRepo 里的去重只在本地生效）。
+      sendGitWatch();
       // 首次连接后的状态由 bootstrap 自己拉；重连成功后补一次——断线期间可能有新版，
       // 也可能有自动化任务新建/跑完了一条对话（不补拉的话侧栏停在「新对话 + 转圈」）。
       if (firstOpen) {
@@ -412,6 +442,8 @@ function openSystemChannel(): void {
       }
       void useAppStore.getState().loadClaudeStatus();
       void useAppStore.getState().refreshConversations();
+      // 断线期间的仓库变化不会有推送补上，重新连上时主动刷一次。
+      if (gitWatchCwd) void useSidebarStore.getState().gitChanged(gitWatchCwd);
     },
   });
   systemClient = client;
@@ -1803,6 +1835,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
       case "conversations.changed": {
         // 定时任务在后台新建/改动了对话：拉一次列表，别让侧栏停在旧状态。
         void get().refreshConversations();
+        return;
+      }
+      case "git.changed": {
+        // 后端盯着的仓库变了（agent 改了源码、终端里 commit/pull 都在内）。
+        // 状态/分支/历史由右侧栏 store 自己刷新，这里只转达 cwd 供它比对。
+        const data = ev.data as { cwd?: string } | undefined;
+        void useSidebarStore.getState().gitChanged(data?.cwd ?? "");
         return;
       }
       case "session.snapshot": {

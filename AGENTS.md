@@ -265,6 +265,16 @@ hub ── manager ── session ── process ── claude (NDJSON)
   - 解析失败一律显示原因（不吞成空白），用户还能用行菜单下载。
 - **Git 只拉不推**：`POST /api/git/pull` 只做 `pull --ff-only`（`gitctl.Push` 已删除）。
   推送是对外动作，不该由侧栏一个图标顺手完成；需要时用户自己开终端 `git push`。
+  拉取**没有二次确认**：它就是那颗同步图标的本意，成功安静刷新（状态 / 分支 / 历史
+  一起刷），失败由面板顶部的错误条给原因。别把确认框加回来。
+- **Git 状态靠推送，不靠前端轮询**：面板可见时前端在系统通道（`/ws`，不带 id）上发
+  `git.watch {cwd}`，后端用 `gitctl.Watch` 每 3 秒读一次完整快照（`ReadStatus` 的输出，
+  含两侧 numstat——只看 porcelain 的话「已标 M 的文件再改一次」不会变），变了就推
+  `git.changed {cwd}`；面板切走 / 连接断开即取消订阅（`git.unwatch` 或 defer 里的
+  `setWatch(nil)`，不取消的话 NAS 上会一直空跑 git）。**不要退回前端 setInterval 轮询**：
+  那是「拉取成功后历史不刷新、源码变了面板半天不动」的来源。
+  `cwd` 与 `/api/git/*` 走同一条 `authorizedCwd` 围栏；订阅是**按连接**的（多标签页各自
+  订阅各自路径），不做全局引用计数。
 - **Git 状态用 `--porcelain=v2 -z`**，并用 `--untracked-files=all` 列出未跟踪文件
   （`normal` 只给目录，点开无法 diff）。解析按 NUL 字段走，不能按空格 split，
   否则带空格的路径会被截断。

@@ -12,6 +12,7 @@ import {
   type GitTone,
 } from "../../lib/workspace";
 import { useSidebarStore } from "../../store/useSidebarStore";
+import { watchGitRepo } from "../../store/useAppStore";
 import { Select } from "../common/Select";
 import { FileIcon } from "../common/FileIcon";
 import { askConfirm } from "../common/SystemDialogs";
@@ -108,12 +109,24 @@ export function GitPanel({ cwd, active }: Props) {
     if (active && mode === "history" && log.length === 0 && !logLoading && !logError) void loadLog();
   }, [active, mode, log.length, logLoading, logError, loadLog]);
 
-  // 可见时轮询状态：agent 在会话里改文件，面板要能自己变。
+  // 可见时不再自己轮询：让后端盯住这个仓库，变了就推 `git.changed`
+  // （系统通道的 git.watch，见 useAppStore.watchGitRepo）。切走标签就退订，
+  // 否则关掉的侧栏也会一直让 NAS 上每几秒跑一次 git status。
+  const watchCwd = repoRoot || cwd;
+  useEffect(() => {
+    if (!active || !watchCwd) return;
+    watchGitRepo(watchCwd);
+    return () => watchGitRepo(null);
+  }, [active, watchCwd]);
+
+  // 推送只在「变了」时来：重新可见时要先把停用期间的变化补齐，不然面板停在旧数据上。
   useEffect(() => {
     if (!active) return;
-    const timer = window.setInterval(() => void refreshGit(), 15_000);
-    return () => window.clearInterval(timer);
-  }, [active, refreshGit]);
+    void refreshGit();
+    // loadLog 只补历史那一页；没打开过历史就不必为它跑一条 git log。
+    if (mode === "history") void loadLog();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
 
   const groups = useMemo(() => groupChanges(git?.entries ?? []), [git?.entries]);
   const stagedCount = groups.staged.length;
@@ -211,14 +224,11 @@ export function GitPanel({ cwd, active }: Props) {
   };
 
   // 只拉不推：推送是对外动作，交给用户自己在终端里做（见 AGENTS 的 Git 约定）。
-  const askPull = async () => {
-    if (!git?.upstream || git.detached) return;
-    const ok = await askConfirm({
-      title: t("拉取远端", "Pull from remote"),
-      message: t(`从「${git.upstream}」执行 pull --ff-only；本地不会推送任何提交。`, `Run pull --ff-only from "${git.upstream}"; nothing is pushed.`),
-      confirmText: t("拉取", "Pull"),
-    });
-    if (ok) void run(() => pull());
+  // 拉取不再二次确认：它就是右上角那颗同步图标的本意，失败时面板顶部的错误条
+  // 会给原因（ff 冲突、网络、没配上游），成功则安静刷新，不弹任何提示。
+  const pullRemote = () => {
+    if (!git?.upstream || git.detached || busy) return;
+    void run(() => pull());
   };
 
   const submit = async () => {
@@ -336,15 +346,12 @@ export function GitPanel({ cwd, active }: Props) {
         </button>
         <button
           type="button"
-          onClick={askPull}
+          onClick={pullRemote}
           disabled={busy || !git?.upstream || git?.detached || groups.conflicts.length > 0}
           className="ml-auto rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink disabled:opacity-35"
-          aria-label={t("拉取远端（不推送）", "Pull from remote (no push)")}
-          title={
-            !git?.upstream
-              ? t("没有上游分支，无法拉取", "No upstream branch to pull")
-              : t("从上游 pull --ff-only（不会 push）", "Pull --ff-only from upstream (never pushes)")
-          }
+          aria-label={t("拉取", "Pull")}
+          aria-busy={busy || undefined}
+          title={!git?.upstream ? t("没有上游分支，无法拉取", "No upstream branch to pull") : t("拉取", "Pull")}
         >
           <IconSync size={14} />
         </button>
