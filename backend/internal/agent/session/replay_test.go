@@ -159,3 +159,31 @@ func TestEmitDataConcurrentSeqIsUnique(t *testing.T) {
 		t.Fatalf("事件数 = %d, want 200", len(seen))
 	}
 }
+
+// 两个 goroutine 并发 emit 时，广播顺序必须与序号一致：前端按到达顺序应用事件，
+// 先收到 seq 6 再收到 seq 5 的话，后者会被当成「更早的事件」却排在后面。
+//
+// `setState`（写 stdin 的 goroutine）与审批结论（网关读循环）本来就会并发。
+func TestEmitOrderMatchesSeq(t *testing.T) {
+	var mu sync.Mutex
+	var got []uint64
+	s := New("s1", "/tmp", &duplex{}, func(ev Event) {
+		mu.Lock()
+		got = append(got, ev.Seq)
+		mu.Unlock()
+	})
+	var wg sync.WaitGroup
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.emitData(KindCLI, map[string]int{"n": 1})
+		}()
+	}
+	wg.Wait()
+	for i := 1; i < len(got); i++ {
+		if got[i] <= got[i-1] {
+			t.Fatalf("广播顺序与序号不一致：第 %d 条 seq=%d，前一条 seq=%d", i, got[i], got[i-1])
+		}
+	}
+}

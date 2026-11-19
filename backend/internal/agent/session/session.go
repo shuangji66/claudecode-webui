@@ -200,6 +200,12 @@ type Session struct {
 	// session.snapshot（状态/审批/后台任务），消息流是空的——于是"断网期间跑完的那一轮"
 	// 只在刷新页面（整份转录回放）之后才出现。这里把最近的事件留着，让网关能按
 	// 前端记下的 seq 把空缺补回去（见 Replay）。
+	// emitMu 把「分配序号」与「交给上层广播」合成一个原子动作。
+	//
+	// 只靠 replayMu 不够：那把锁只覆盖「编号 + 入缓冲」，出锁之后再 emit 时，
+	// 并发的两条事件可能反过来到达订阅者（读循环 seq 11 先发、网关侧 seq 10 后发）。
+	// 前端按到达顺序应用、按 seq 去重排序，顺序一乱消息流就错位。
+	emitMu    sync.Mutex
 	replayMu  sync.Mutex
 	replay    []Event
 	replaySeq uint64
@@ -976,12 +982,21 @@ func permPayload(p protocol.PermissionRequest) any {
 // **不管有没有上层订阅者都要记进重放缓冲**：emit 为空只说明这一刻没有人在听
 // （测试、或者网关还没接上），事件本身照样是会话历史的一部分，断线重连要补的
 // 正是这一段。
+//
+// **编号与广播必须在同一把锁里完成**（`emitMu`）。`record` 的锁只管「分配序号 +
+// 入缓冲」，出了锁再 emit 的话，两个 goroutine 的广播顺序可能与序号相反：读循环
+// 拿到 seq 11 先发、网关侧（Interrupt / forgetPermission / setState）的 seq 10
+// 后发，前端按到达顺序应用，消息流顺序就乱了——而序号是前端去重与排序的唯一依据。
+// 这不是理论问题：`setState` 由写 stdin 的 goroutine 触发，审批结论由网关的读循环
+// 触发，两者本来就会并发。
 func (s *Session) emitData(kind string, v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		b, _ = json.Marshal(map[string]string{"message": err.Error()})
 		kind = KindError
 	}
+	s.emitMu.Lock()
+	defer s.emitMu.Unlock()
 	ev := s.record(Event{Kind: kind, Data: b})
 	if s.emit == nil {
 		return
