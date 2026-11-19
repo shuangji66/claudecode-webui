@@ -213,4 +213,23 @@ describe("AskUserQuestionPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "上一页" }));
     expect(screen.getByRole("radio", { name: /SQLite/ }).getAttribute("aria-checked")).toBe("true");
   });
+
+  it("能收起成一行标题：只剩「模型提问 + 题目标签 + 页码」，展开后答案还在", () => {
+    render(<AskUserQuestionPanel perm={perm()} onReply={() => {}} />);
+    fireEvent.click(screen.getByRole("radio", { name: /SQLite/ }));
+    fireEvent.click(screen.getByRole("button", { name: "上一页" }));
+    fireEvent.click(screen.getByRole("button", { name: "收起提问" }));
+
+    // 头部三样都还在，正文（选项、输入框、底栏按钮）全收起。
+    expect(screen.getByText("模型提问")).toBeInTheDocument();
+    expect(screen.getByText("数据库")).toBeInTheDocument();
+    expect(screen.getByText("1 / 2")).toBeInTheDocument();
+    expect(screen.queryByText("用哪个数据库？")).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByText("下一题")).toBeNull();
+    // 收起不丢草稿：展开回来选项仍是选中的。
+    fireEvent.click(screen.getByRole("button", { name: "展开提问" }));
+    expect(screen.getByRole("radio", { name: /SQLite/ }).getAttribute("aria-checked")).toBe("true");
+  });
 });

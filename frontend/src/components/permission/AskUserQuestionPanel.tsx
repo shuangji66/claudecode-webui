@@ -31,7 +31,7 @@ import { loadAskProgress, saveAskProgress } from "../../lib/askDrafts";
 import { useT } from "../../lib/i18n";
 import { useAppStore } from "../../store/useAppStore";
 import { Button } from "../common/Button";
-import { IconAlert, IconChat, IconCheck, IconChevronLeft, IconChevronRight } from "../common/Icons";
+import { IconAlert, IconChat, IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconChevronUp } from "../common/Icons";
 import { Markdown } from "../common/Markdown";
 import { PermissionPanel, type PermissionReply } from "./PermissionPanel";
 
@@ -66,6 +66,9 @@ function AskCard({ perm, questions, onReply }: CardProps) {
     return saved ?? { index: 0, drafts: emptyAskDrafts(questions) };
   });
   const [error, setError] = useState<string | null>(null);
+  // 折叠：只能收起成一行标题。长卡（4 题）挡着对话时，用户要先读上面那段再回来答；
+  // 收起后草稿与页码原样留着（都在 progress 里），展开继续答。
+  const [collapsed, setCollapsed] = useState(false);
   const { index, drafts } = progress;
   const question = questions[index]!;
   const draft: AskDraft = drafts[index] ?? { selected: [], custom: "", refused: false };
@@ -153,7 +156,7 @@ function AskCard({ perm, questions, onReply }: CardProps) {
       aria-label={t("模型提问", "Claude asks")}
       className="flex max-h-[60dvh] flex-col overflow-hidden rounded-2xl border border-brand/30 bg-panel shadow-soft"
     >
-      <div className="flex shrink-0 items-center gap-2 px-3.5 pt-3 text-[13px] font-semibold text-ink">
+      <div className={`flex shrink-0 items-center gap-2 px-3.5 pt-3 ${collapsed ? "pb-3" : ""} text-[13px] font-semibold text-ink`}>
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand">
           <IconChat size={15} />
         </span>
@@ -166,164 +169,179 @@ function AskCard({ perm, questions, onReply }: CardProps) {
         <span className="ml-auto shrink-0 text-[11px] font-normal text-muted">
           {index + 1} / {questions.length}
         </span>
+        {/* 收起只改渲染，不碰 progress：页码、已选答案、自定义回答都还在。 */}
+        <button
+          type="button"
+          onClick={() => setCollapsed((v) => !v)}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? t("展开提问", "Expand the question") : t("收起提问", "Collapse the question")}
+          title={collapsed ? t("展开提问", "Expand the question") : t("收起提问，先看对话", "Collapse to see the conversation")}
+          className="-mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-panel-strong hover:text-ink"
+        >
+          {collapsed ? <IconChevronUp size={15} /> : <IconChevronDown size={15} />}
+        </button>
       </div>
 
-      {/* 题干、选项、输入框共用一个内部滚动区；头部（含 1/4 进度）与底栏固定。
-          卡片的 max-h 比外层浮层的 max-h（64dvh）小一点，单张卡片永远不会顶到
-          浮层的滚动条——边框一旦跟着滚，上下边就会被裁掉（踩过）。 */}
-      <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto pb-2">
-        {askTimeout && askTimeout !== "never" && (
-          <p className="px-3.5 pt-1 text-[10.5px] leading-relaxed text-warn">
-            {t(
-              `CLI 设置了提问超时（${askTimeout}）：不回答的话它会在超时后自己收尾`,
-              `The CLI has a question timeout (${askTimeout}): unanswered questions close on their own`,
-            )}
-          </p>
-        )}
+      {collapsed ? null : (
+        <>
+          {/* 题干、选项、输入框共用一个内部滚动区；头部（含 1/4 进度）与底栏固定。
+              卡片的 max-h 比外层浮层的 max-h（64dvh）小一点，单张卡片永远不会顶到
+              浮层的滚动条——边框一旦跟着滚，上下边就会被裁掉（踩过）。 */}
+        <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto pb-2">
+          {askTimeout && askTimeout !== "never" && (
+            <p className="px-3.5 pt-1 text-[10.5px] leading-relaxed text-warn">
+              {t(
+                `CLI 设置了提问超时（${askTimeout}）：不回答的话它会在超时后自己收尾`,
+                `The CLI has a question timeout (${askTimeout}): unanswered questions close on their own`,
+              )}
+            </p>
+          )}
 
-        <div className="px-3.5 pt-2 text-[12.5px] leading-relaxed text-ink">
-          <Markdown text={question.question} />
-        </div>
+          <div className="px-3.5 pt-2 text-[12.5px] leading-relaxed text-ink">
+            <Markdown text={question.question} />
+          </div>
 
-        <div className="px-3.5 pt-2">
-          {question.options.length > 0 ? (
-            <div
-              role={question.multiSelect ? "group" : "radiogroup"}
-              aria-label={question.question}
-              className="space-y-1.5"
-            >
-              {question.options.map((option, optionIndex) => {
-                const checked = draft.selected.includes(option.label);
-                return (
-                  <button
-                    key={`${optionIndex}-${option.label}`}
-                    type="button"
-                    role={question.multiSelect ? "checkbox" : "radio"}
-                    aria-checked={checked}
-                    onClick={() => choose(option.label)}
-                    className={`flex w-full items-start gap-2 rounded-xl border px-2.5 py-2 text-left transition ${
-                      checked
-                        ? "border-brand bg-brand-soft"
-                        : "border-line hover:bg-panel-strong/60"
-                    }`}
-                  >
-                    <span
-                      aria-hidden="true"
-                      className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border text-white ${
-                        question.multiSelect ? "rounded-[4px]" : "rounded-full"
-                      } ${checked ? "border-brand bg-brand" : "border-line-strong bg-canvas"}`}
+          <div className="px-3.5 pt-2">
+            {question.options.length > 0 ? (
+              <div
+                role={question.multiSelect ? "group" : "radiogroup"}
+                aria-label={question.question}
+                className="space-y-1.5"
+              >
+                {question.options.map((option, optionIndex) => {
+                  const checked = draft.selected.includes(option.label);
+                  return (
+                    <button
+                      key={`${optionIndex}-${option.label}`}
+                      type="button"
+                      role={question.multiSelect ? "checkbox" : "radio"}
+                      aria-checked={checked}
+                      onClick={() => choose(option.label)}
+                      className={`flex w-full items-start gap-2 rounded-xl border px-2.5 py-2 text-left transition ${
+                        checked
+                          ? "border-brand bg-brand-soft"
+                          : "border-line hover:bg-panel-strong/60"
+                      }`}
                     >
-                      {checked && <IconCheck size={11} />}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex flex-wrap items-center gap-1.5 text-[12px] font-medium text-ink">
-                        <span className="break-words">{option.display}</span>
-                        {option.recommended && (
-                          <span className="rounded-full bg-brand-soft px-1.5 py-0.5 text-[9.5px] font-normal text-brand">
-                            {t("推荐", "Recommended")}
-                          </span>
+                      <span
+                        aria-hidden="true"
+                        className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border text-white ${
+                          question.multiSelect ? "rounded-[4px]" : "rounded-full"
+                        } ${checked ? "border-brand bg-brand" : "border-line-strong bg-canvas"}`}
+                      >
+                        {checked && <IconCheck size={11} />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-1.5 text-[12px] font-medium text-ink">
+                          <span className="break-words">{option.display}</span>
+                          {option.recommended && (
+                            <span className="rounded-full bg-brand-soft px-1.5 py-0.5 text-[9.5px] font-normal text-brand">
+                              {t("推荐", "Recommended")}
+                            </span>
+                          )}
+                        </span>
+                        {option.description && (
+                          <span className="mt-0.5 block text-[11px] leading-relaxed text-muted">{option.description}</span>
                         )}
                       </span>
-                      {option.description && (
-                        <span className="mt-0.5 block text-[11px] leading-relaxed text-muted">{option.description}</span>
-                      )}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            // 没有选项的题：只能自由作答，输入框自动聚焦（对齐 DSH 的 block 变体）。
-            <p className="text-[11.5px] text-muted">{t("这题没有给出选项，直接写下你的回答。", "No options for this one; type your answer.")}</p>
-          )}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              // 没有选项的题：只能自由作答，输入框自动聚焦（对齐 DSH 的 block 变体）。
+              <p className="text-[11.5px] text-muted">{t("这题没有给出选项，直接写下你的回答。", "No options for this one; type your answer.")}</p>
+            )}
 
-          <label className="mt-2 block">
-            <span className="sr-only">{t("自定义回答", "Custom answer")}</span>
-            <textarea
-              value={draft.custom}
-              onChange={(e) => writeCustom(e.target.value)}
-              onKeyDown={onCustomKeyDown}
-              autoFocus={question.options.length === 0}
-              rows={2}
-              placeholder={
-                question.multiSelect
-                  ? t("也可以补充一句（可多选 + 补充）", "Add a note if you like (multi-select allowed)")
-                  : t("或者自己写一个回答…", "Or type your own answer…")
-              }
-              className="w-full resize-y rounded-xl border border-line bg-canvas px-2.5 py-2 text-[12px] leading-relaxed text-ink outline-none placeholder:text-faint focus:border-brand/60"
-            />
-          </label>
-          {draft.refused && (
-            <p className="mt-1.5 text-[10.5px] leading-relaxed text-warn">
-              {t(
-                "已跳过这题：模型会收到一句「用户跳过此题」，按它自己的判断继续。",
-                "Skipped: Claude is told you skipped this question and will use its own judgment.",
-              )}
+            <label className="mt-2 block">
+              <span className="sr-only">{t("自定义回答", "Custom answer")}</span>
+              <textarea
+                value={draft.custom}
+                onChange={(e) => writeCustom(e.target.value)}
+                onKeyDown={onCustomKeyDown}
+                autoFocus={question.options.length === 0}
+                rows={2}
+                placeholder={
+                  question.multiSelect
+                    ? t("也可以补充一句（可多选 + 补充）", "Add a note if you like (multi-select allowed)")
+                    : t("或者自己写一个回答…", "Or type your own answer…")
+                }
+                className="w-full resize-y rounded-xl border border-line bg-canvas px-2.5 py-2 text-[12px] leading-relaxed text-ink outline-none placeholder:text-faint focus:border-brand/60"
+              />
+            </label>
+            {draft.refused && (
+              <p className="mt-1.5 text-[10.5px] leading-relaxed text-warn">
+                {t(
+                  "已跳过这题：模型会收到一句「用户跳过此题」，按它自己的判断继续。",
+                  "Skipped: Claude is told you skipped this question and will use its own judgment.",
+                )}
+              </p>
+            )}
+            <p className="pb-1 pt-1 text-[10px] text-faint">
+              {t("Enter 下一题 / 提交，Shift+Enter 换行", "Enter for next / submit, Shift+Enter for a newline")}
             </p>
-          )}
-          <p className="pb-1 pt-1 text-[10px] text-faint">
-            {t("Enter 下一题 / 提交，Shift+Enter 换行", "Enter for next / submit, Shift+Enter for a newline")}
-          </p>
-          {duplicates.length > 0 && (
-            <p className="pb-1 text-[10px] text-warn">
-              {t(
-                "有两道题的文字完全相同，模型只会收到后一道的答案",
-                "Two questions share the same text; Claude will only receive the later answer",
-              )}
-            </p>
-          )}
-        </div>
-      </div>
-
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-line bg-panel px-3.5 py-3">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            aria-label={t("上一页", "Previous page")}
-            disabled={index === 0}
-            onClick={() => go(index - 1)}
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-panel-strong disabled:opacity-30"
-          >
-            <IconChevronLeft size={15} />
-          </button>
-          <button
-            type="button"
-            aria-label={t("下一页", "Next page")}
-            disabled={index === last}
-            onClick={() => go(index + 1)}
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-panel-strong disabled:opacity-30"
-          >
-            <IconChevronRight size={15} />
-          </button>
-          <span className="ml-1 text-[10.5px] text-faint">
-            {t(`${answered}/${questions.length} 已答`, `${answered}/${questions.length} answered`)}
-          </span>
+            {duplicates.length > 0 && (
+              <p className="pb-1 text-[10px] text-warn">
+                {t(
+                  "有两道题的文字完全相同，模型只会收到后一道的答案",
+                  "Two questions share the same text; Claude will only receive the later answer",
+                )}
+              </p>
+            )}
+          </div>
         </div>
 
-        {error && (
-          <span role="status" className="flex min-w-0 items-center gap-1 text-[11px] text-danger">
-            <IconAlert size={12} className="shrink-0" />
-            <span className="truncate">{error}</span>
-          </span>
-        )}
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-line bg-panel px-3.5 py-3">
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              aria-label={t("上一页", "Previous page")}
+              disabled={index === 0}
+              onClick={() => go(index - 1)}
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-panel-strong disabled:opacity-30"
+            >
+              <IconChevronLeft size={15} />
+            </button>
+            <button
+              type="button"
+              aria-label={t("下一页", "Next page")}
+              disabled={index === last}
+              onClick={() => go(index + 1)}
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-panel-strong disabled:opacity-30"
+            >
+              <IconChevronRight size={15} />
+            </button>
+            <span className="ml-1 text-[10.5px] text-faint">
+              {t(`${answered}/${questions.length} 已答`, `${answered}/${questions.length} answered`)}
+            </span>
+          </div>
 
-        <Button
-          size="sm"
-          variant={draft.refused ? "secondary" : "ghost"}
-          className="ml-auto"
-          aria-pressed={draft.refused}
-          title={t(
-            "只跳过这一题：模型会收到「用户跳过此题」，按它自己的判断继续",
-            "Skip only this question; Claude is told you skipped it and proceeds on its own",
+          {error && (
+            <span role="status" className="flex min-w-0 items-center gap-1 text-[11px] text-danger">
+              <IconAlert size={12} className="shrink-0" />
+              <span className="truncate">{error}</span>
+            </span>
           )}
-          onClick={toggleRefuse}
-        >
-          {draft.refused ? t("已跳过这题", "Skipped") : t("这题不答", "Skip this one")}
-        </Button>
-        <Button size="sm" variant="primary" onClick={continueFlow}>
-          {index === last ? t("提交回答", "Submit") : t("下一题", "Next")}
-        </Button>
-      </div>
+
+          <Button
+            size="sm"
+            variant={draft.refused ? "secondary" : "ghost"}
+            className="ml-auto"
+            aria-pressed={draft.refused}
+            title={t(
+              "只跳过这一题：模型会收到「用户跳过此题」，按它自己的判断继续",
+              "Skip only this question; Claude is told you skipped it and proceeds on its own",
+            )}
+            onClick={toggleRefuse}
+          >
+            {draft.refused ? t("已跳过这题", "Skipped") : t("这题不答", "Skip this one")}
+          </Button>
+          <Button size="sm" variant="primary" onClick={continueFlow}>
+            {index === last ? t("提交回答", "Submit") : t("下一题", "Next")}
+          </Button>
+        </div>
+      </>
+      )}
     </div>
   );
 }
