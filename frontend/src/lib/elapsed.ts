@@ -31,3 +31,25 @@ export function formatDuration(ms: number): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${pad(minutes)}:${pad(seconds)}`;
 }
+
+/**
+ * 已结束耗时 → 中文口语的「3 分 15 秒」（DSH 收起行那种写法）。
+ *
+ * 与 `formatDuration` 的区别只是可读性：`03:15` 要先在心里换算才知道是三分十五秒，
+ * 而收起行是一整轮的总括，读它的时候不想做算术。0 的位省掉（「45 秒」「2 分」），
+ * 一小时以上带小时位（「1 小时 2 分」）。
+ *
+ * 英文沿用 `formatDuration` 的 mm:ss：`3 min 15 sec` 在那一行会明显更长。
+ */
+export function formatDurationWords(ms: number): string {
+  const total = Number.isFinite(ms) ? Math.max(0, Math.round(ms / 1000)) : 0;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor(total / 60) % 60;
+  const seconds = total % 60;
+  const parts: string[] = [];
+  if (hours > 0) parts.push(`${hours} 小时`);
+  if (minutes > 0) parts.push(`${minutes} 分`);
+  // 有小时或分钟时不再报 0 秒（「3 分 0 秒」是噪音）；整段为 0 时给「0 秒」。
+  if (seconds > 0 || parts.length === 0) parts.push(`${seconds} 秒`);
+  return parts.join(" ");
+}

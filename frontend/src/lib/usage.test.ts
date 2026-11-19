@@ -78,11 +78,18 @@ describe("usage totals", () => {
     expect(tokensPerSecond(0, 22)).toBeUndefined();
   });
 
-  it("token 数用 K/M 紧凑写法", () => {
+  it("token 数用 K/M 紧凑写法（1024 进位）", () => {
     expect(formatTokens(999)).toBe("999");
     expect(formatTokens(1024)).toBe("1K");
     expect(formatTokens(9312)).toBe("9.1K");
     expect(formatTokens(62.1 * 1024 * 1024)).toBe("62.1M");
+  });
+
+  // 长任务的会话累计能到十亿级：没有 B 一档时会写成「1144.4M」，三位数加单位难读。
+  it("十亿级用 B 一档", () => {
+    expect(formatTokens(1.2 * 1024 ** 3)).toBe("1.2B");
+    expect(formatTokens(1024 ** 3)).toBe("1B");
+    expect(formatTokens(1024 ** 3 - 1)).toBe("1024M");
   });
 });
 

@@ -21,10 +21,12 @@ const SNAP = {
 };
 
 describe("UsageSummary", () => {
-  it("只显示轮数 / tok/s（工具数在弹层的累计里）", () => {
+  it("显示轮数 / 会话累计 / tok/s（工具数在弹层的累计里）", () => {
     render(<UsageSummary snap={SNAP} turns={3} events={40} />);
+    // 中间那个是**会话累计**（输入含缓存 + 输出）：2048K + 20.5K ≈ 2M，
+    // 不是上下文占用、也不是本轮消耗。
     // 840 tok ÷ 4s = 210 tok/s；不是整轮输出 ÷ 整轮 API 耗时。
-    expect(screen.getByText("3 轮 · 210 tok/s")).toBeInTheDocument();
+    expect(screen.getByText("3 轮 · 2M · 210 tok/s")).toBeInTheDocument();
     expect(screen.queryByText(/工具/)).toBeNull();
   });
 

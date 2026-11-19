@@ -147,12 +147,18 @@ export function contextPercent(context: number, window: number | undefined): num
   return Math.min(100, Math.round((context / window) * 100));
 }
 
-/** 12.4K / 1.2M 这种紧凑写法（按 1024 进位，和上下文窗口的习惯一致）。 */
+/**
+ * 12.4K / 1.2M / 1.2B 这种紧凑写法（按 1024 进位，和上下文窗口的习惯一致）。
+ *
+ * 长任务里会话累计能到十亿级（一轮几十次请求、每次输入侧几十万），没有 `B` 一档时
+ * 会写成 `1144.4M`——三位数加单位既难读又容易和 M 混淆。
+ */
 export function formatTokens(n: number): string {
   if (!Number.isFinite(n) || n < 0) return "0";
   if (n < 1024) return String(Math.round(n));
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1).replace(/\.0$/, "")}K`;
-  return `${(n / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")}M`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1).replace(/\.0$/, "")}M`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(1).replace(/\.0$/, "")}B`;
 }
 
 /**

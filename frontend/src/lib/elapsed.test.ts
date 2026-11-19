@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDuration, formatElapsed } from "./elapsed";
+import { formatDuration, formatDurationWords, formatElapsed } from "./elapsed";
 
 describe("formatElapsed", () => {
   it("不到 1 分钟按秒显示", () => {
@@ -50,5 +50,30 @@ describe("formatDuration（已结束的耗时）", () => {
   it("负值与非数值按 0 处理", () => {
     expect(formatDuration(-5000)).toBe("00:00");
     expect(formatDuration(Number.NaN)).toBe("00:00");
+  });
+});
+
+// 收起行那一句「已完成，用时 3 分 15 秒」：读它的时候不想做算术，所以用口语写法。
+describe("formatDurationWords（口语写法）", () => {
+  it("分秒按中文习惯拼", () => {
+    expect(formatDurationWords(195_000)).toBe("3 分 15 秒");
+    expect(formatDurationWords(45_000)).toBe("45 秒");
+    expect(formatDurationWords(120_000)).toBe("2 分");
+  });
+
+  it("0 的位省掉（有分钟就不再报「0 秒」）", () => {
+    expect(formatDurationWords(180_000)).toBe("3 分");
+    expect(formatDurationWords(0)).toBe("0 秒");
+  });
+
+  it("一小时以上带小时位", () => {
+    expect(formatDurationWords(3_723_000)).toBe("1 小时 2 分 3 秒");
+    expect(formatDurationWords(3_600_000)).toBe("1 小时");
+  });
+
+  it("毫秒四舍五入到秒，负数与非数值按 0", () => {
+    expect(formatDurationWords(195_600)).toBe("3 分 16 秒");
+    expect(formatDurationWords(-5000)).toBe("0 秒");
+    expect(formatDurationWords(Number.NaN)).toBe("0 秒");
   });
 });

@@ -1,5 +1,5 @@
 // 输入框下方的用量（对齐 DSH 底栏那套）：
-//   - `UsageSummary`：轮数 / tok/s 的纯文字（工具数与事件数只在弹层的「累计」里），细节留给弹层；
+//   - `UsageSummary`：轮数 / 会话累计 token / tok/s 的纯文字（工具数与事件数只在弹层的「累计」里），细节留给弹层；
 //   - `UsageStats`：上下文占用的圆环 + 百分比，点开是**同一个**弹层——占用、会话累计、
 //     缓存与生成速度都在里面。只有一个入口：token 详情不再单独拆一颗按钮（试过，两个
 //     入口互相重复）。本轮消耗只出现在回答下面那行小字里，弹层不重复报。
@@ -67,17 +67,22 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * 底栏那行文字：轮数 / tok/s。
+ * 底栏那行文字：轮数 / 会话累计 token / tok/s（对齐 DSH 的「7 轮 · 65M · 189 tok/s」）。
  *
  * 工具数与事件数不在这里——它们在弹层的「累计」里，底栏只留最短的几项；
  * 窄屏更只留轮数（输入框那一行本来就挤）。
+ *
+ * 中间那个总量是**会话累计**（输入含缓存 + 输出），与弹层「合计」同一个数：
+ * 它回答的是「这条路花了多少」，与 tok/s 只报最近一次请求不是一回事。
  */
 export function UsageSummary({ snap, turns, events }: SummaryProps) {
   const t = useT();
   const tps = snap ? tokensPerSecond(snap.genTokens ?? 0, snap.genMs) : undefined;
+  const total = (snap?.sessionInputTokens ?? 0) + (snap?.sessionOutputTokens ?? 0);
 
   const parts: string[] = [];
   if (turns > 0) parts.push(t(`${turns} 轮`, `${turns} turns`));
+  if (total > 0) parts.push(formatTokens(total));
   if (tps !== undefined) parts.push(`${Math.round(tps)} tok/s`);
 
   // 没有 usage 时只报事件数（老转录里没有 usage，别硬凑 token 数字）。

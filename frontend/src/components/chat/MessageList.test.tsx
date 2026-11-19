@@ -385,7 +385,7 @@ describe("MessageList 过程展示", () => {
     expect(screen.queryByText("/w/a.md")).toBeNull();
     expect(screen.queryByText("思考过程")).toBeNull();
     expect(screen.getByText("答案")).toBeInTheDocument();
-    expect(screen.getByText("已完成，用时 00:09")).toBeInTheDocument();
+    expect(screen.getByText("已完成，用时 9 秒")).toBeInTheDocument();
   });
 
   // 放到轮首会跑到用户气泡上方：一进来先看见「已完成」会以为刚发的话被折没了。
@@ -536,14 +536,14 @@ describe("MessageList 收起时机", () => {
     // 新一轮开始：上一轮不再是最新的一轮，于是收起来。
     rerender(<MessageList items={[...items, user("u2")]} />);
     expect(screen.queryByText("ls -la")).toBeNull();
-    expect(screen.getByText("已完成，用时 00:09")).toBeInTheDocument();
+    expect(screen.getByText("已完成，用时 9 秒")).toBeInTheDocument();
   });
 
   it("完成时收起：整轮结束就收（默认）", () => {
     setSessionRunning(false);
     render(<MessageList items={[user("u1"), thinking(), read(), bash(), answer, done]} />);
     expect(screen.queryByText("ls -la")).toBeNull();
-    expect(screen.getByText("已完成，用时 00:09")).toBeInTheDocument();
+    expect(screen.getByText("已完成，用时 9 秒")).toBeInTheDocument();
   });
 
   // 会话正在跑最新一轮时，前面的轮次必然早已结束——它们的思考与工具不该跟着摊开。

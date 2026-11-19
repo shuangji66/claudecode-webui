@@ -78,7 +78,10 @@ export function PermissionPanel({ perm, onReply }: Props) {
     <div
       role="dialog"
       aria-label={t("工具调用审批", "Tool permission request")}
-      className="overflow-hidden rounded-2xl border border-amber-300/70 bg-amber-50/80 shadow-soft dark:border-amber-800/60 dark:bg-amber-950/20"
+      // 背景**必须不透明**：这块浮在对话之上，半透明时下面的消息会透上来，和审批的
+      // 命令/JSON 叠在一起（截图里「需要授权：Bash」的正文与工具输出糊成一团）。
+      // 浅色用 amber-50、深色用 amber-950，别写 `/80`、`/20` 这类透明度。
+      className="overflow-hidden rounded-2xl border border-amber-300/70 bg-amber-50 shadow-soft dark:border-amber-800/60 dark:bg-amber-950"
     >
       <div className="flex items-center gap-2 px-3.5 pt-3 text-[13px] font-semibold text-amber-900 dark:text-amber-200">
         <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
@@ -107,11 +110,11 @@ export function PermissionPanel({ perm, onReply }: Props) {
       )}
 
       {planText ? (
-        <div className="dsh-scroll mx-3.5 mt-2 max-h-60 overflow-y-auto rounded-xl border border-amber-200/60 bg-white/70 p-3 dark:border-amber-900/40 dark:bg-black/20">
+        <div className="dsh-scroll mx-3.5 mt-2 max-h-60 overflow-y-auto rounded-xl border border-amber-200/60 bg-white p-3 dark:border-amber-900/40 dark:bg-black/40">
           <Markdown text={planText} />
         </div>
       ) : (
-        <pre className="mx-3.5 mt-2 max-h-40 overflow-auto rounded-xl border border-amber-200/60 bg-white/70 p-2.5 font-mono text-[11px] leading-relaxed text-ink-2 dark:border-amber-900/40 dark:bg-black/20">
+        <pre className="mx-3.5 mt-2 max-h-40 overflow-auto rounded-xl border border-amber-200/60 bg-white p-2.5 font-mono text-[11px] leading-relaxed text-ink-2 dark:border-amber-900/40 dark:bg-black/40">
           {safePretty(perm.input)}
         </pre>
       )}

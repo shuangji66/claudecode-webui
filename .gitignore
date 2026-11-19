@@ -5,7 +5,7 @@
 /.npmcache/
 
 # 前端依赖与产物
-/frontend/node_modules/
+frontend/node_modules/
 /frontend/dist/
 
 # 后端内嵌的前端产物（embed/ 目录本身由 .gitkeep 保留）
