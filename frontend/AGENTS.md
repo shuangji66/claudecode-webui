@@ -38,6 +38,9 @@ src/
   lib/sidebarView.ts   左侧栏视图偏好：分组/排序/归档筛选 + 手动顺序（纯函数 + localStorage）
   lib/fnosAuth.ts      飞牛路由授权：回调页路径判定、state、回包解析（纯函数）
   lib/dirs.ts          已授权目录页的受保护路径判定（等于/祖先/子路径，镜像后端）
+  lib/ooxml.ts         OOXML 公共件：fflate 解 zip、部位路径归一、rels 解析、按本地名找元素
+  lib/xlsx.ts          只读 Excel：共享字符串 / 日期格式 / 内联字符串 → 二维表（自写解析）
+  lib/pptx.ts          只读 PPT：按 presentation.xml 页序取文本框与图片（自写解析）
   lib/dragImage.ts     手动排序的拖影：自己造一块与行同宽的替身交给 setDragImage
   lib/subagents.ts     从消息流收集子代理（页头计数 / 审批归属，纯函数）
   lib/turns.ts         「轮」的切分与视口所在轮（对话区刻度跳转，纯函数）
@@ -396,6 +399,24 @@ src/
    容器不要 `min-w-max`）：右侧栏宽度是拖出来的，窄栏里横向滚动条基本没法用；
    只写 `break-words` 不够——无空格的长串（base64 / 长路径 / 长 URL）不会断。
    Git 面板的 diff 仍是横向滚动，那是另一块面板，别顺手改。
+
+33.1 **Office 预览是三条懒加载路径**（`components/right/preview/`）：
+
+   - `OfficePane` 是外壳：用 `store.readBytes`（→ `GET /api/fs/blob`）取字节，再渲染
+     `React.lazy` 的 `DocxPreview` / `XlsxPreview` / `PptxPreview`。**三个渲染器各自一个
+     chunk**，`OfficePane` 本身很轻、静态 import 到 `FilesPanel` 没问题（FilesPanel 在
+     右侧栏 chunk 里）。不要为了「少一个文件」把 docx-preview 这类重库提到静态 import。
+   - `FilePreview` 里**先判 Office 类型、再判 `file.binary`**：Office 文件的 binary 一定是
+     true，顺序反了显示成「二进制文件，不支持文本预览」。
+   - **docx 用 docx-preview**（样式还原值得体积，只解析不执行宏/不取外部关系）；它的
+     wrapper 灰底、`section.docx` 宽度、页边距的收敛都在 `styles.css` 的
+     `.docx-preview-host` 规则里——`section` 不给 100% 宽度时 flex 会按 max-content 撑开，
+     窄栏里正文右侧被裁；页边距不夹到 28px 时 A4 的 3.17cm 会让每行只剩四五个字。
+   - **xlsx / pptx 自己解**（`lib/ooxml.ts` + `lib/xlsx.ts` / `lib/pptx.ts`，zip 用 fflate）：
+     不引 SheetJS（npm 停在 0.18.5，有原型污染漏洞，7.5MB）与 pptx-preview（闭源混淆包）。
+     边界写死在解析层（200 行 × 50 列 / 100 页 / 单元格 300 字符），超了提示下载；
+     解析不执行公式、不访问外部关系，公式没有缓存值时显示 `=B2-C2` 本身。
+   - 解析失败要显示原因（不吞成空白）；用户还能用文件行菜单的「下载」打开。
 
 34. **输入框 `@` 是工作区文件引用**（`lib/mention.ts` + `components/chat/useMention.ts` +
    `MentionMenu.tsx`，对齐 DSH 的 `dsh-client-ui-input-trigger` + `dsh-client-ui-reference`）：

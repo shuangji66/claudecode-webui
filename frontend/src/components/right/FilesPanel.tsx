@@ -27,6 +27,7 @@ import {
 } from "../common/Icons";
 import { FileIcon, FolderIcon } from "../common/FileIcon";
 import { Menu, type MenuItem } from "../common/Menu";
+import { OfficePane } from "./preview/OfficePane";
 import { fnosHostAvailable, openFnosFileManager, showFnosFileDetails } from "../../lib/fnos";
 
 interface Props {
@@ -479,7 +480,10 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
   const togglable = kind === "markdown" || kind === "html";
   const [view, setView] = useState<"render" | "source">("source");
   const showSource = !togglable || view === "source";
-  const textLike = kind !== "image" && kind !== "pdf";
+  // Office 文件走字节 + 前端解析器（/api/fs/blob），既不进文本预览也不能当二进制占位：
+  // 它的 `binary` 一定为 true，先判类型再判 binary。
+  const isOffice = kind === "docx" || kind === "xlsx" || kind === "pptx";
+  const textLike = !isOffice && kind !== "image" && kind !== "pdf";
   // 源码行按面板宽度折行（下面用 whitespace-pre-wrap + overflow-wrap:anywhere）：
   // 右侧栏宽度是拖出来的，窄栏里的横向滚动条基本没法用。只写 break-words 不够，
   // 它在无空格的长串（base64 / 长路径 / 长 URL）上不给断点。
@@ -551,7 +555,9 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
         )}
         {file && !loading && !error && (
           <>
-            {file.binary && kind !== "image" && kind !== "pdf" ? (
+            {isOffice ? (
+              <OfficePane path={path} kind={kind} name={name} />
+            ) : file.binary && kind !== "image" && kind !== "pdf" ? (
               <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
                 <FileIcon name={name} size={26} />
                 <p className="text-[12px] font-medium text-ink">{t("二进制文件", "Binary file")}</p>

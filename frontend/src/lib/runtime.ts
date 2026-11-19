@@ -120,6 +120,30 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   return body as T;
 }
 
+/**
+ * 带鉴权头的原始字节请求（Office 预览用）。
+ *
+ * 与 apiFetch 的区别只在响应体：那条一律按 JSON 解析，而这里要把 zip 字节原样
+ * 交给解析器。错误仍是 JSON（后端 writeErr），所以失败时照样读一次 `error`。
+ */
+export async function apiFetchBytes(path: string, signal?: AbortSignal): Promise<ArrayBuffer> {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch(apiUrl(path), { headers, signal, cache: "no-store" });
+  if (!res.ok) {
+    let message = `HTTP ${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: unknown };
+      if (body && typeof body.error === "string" && body.error) message = body.error;
+    } catch {
+      // 不是 JSON 就用状态码。
+    }
+    throw new Error(message);
+  }
+  return res.arrayBuffer();
+}
+
 /** 内置终端的 WebSocket 地址（浏览器无法给 WS 设置自定义头，鉴权走 query）。 */
 export function terminalWsUrl(cwd: string, cols: number, rows: number, token: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";

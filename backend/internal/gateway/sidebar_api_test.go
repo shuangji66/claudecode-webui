@@ -423,3 +423,82 @@ func TestFsDownloadFileAndFolder(t *testing.T) {
 		t.Fatalf("Cache-Control = %q, want no-store", cache)
 	}
 }
+
+func TestFsBlobOfficeOnly(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	root := srv.d.ProjectsRoot
+	if err := os.WriteFile(filepath.Join(root, "报告.docx"), []byte("PK\x03\x04docx"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.md"), []byte("# hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "deck.pptx"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 稀疏文件造一份「超过上限」的 pptx，不真的写 32MB。
+	big := filepath.Join(root, "big.xlsx")
+	f, err := os.Create(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxOfficePreviewBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/fs/blob?cwd="+url.QueryEscape(root)+"&path="+url.QueryEscape(path), nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := get("报告.docx")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("docx code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/octet-stream" {
+		t.Fatalf("Content-Type = %q，不应让浏览器按 office 类型内联渲染", ct)
+	}
+	if body := rec.Body.String(); body != "PK\x03\x04docx" {
+		t.Fatalf("body = %q", body)
+	}
+	if cache := rec.Header().Get("Cache-Control"); cache != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", cache)
+	}
+
+	// 非 office 扩展名一律 415：这条不是通用的「读任意文件」口子。
+	if code := get("notes.md").Code; code != http.StatusUnsupportedMediaType {
+		t.Fatalf("md 应 415，实际 %d", code)
+	}
+	if code := get("missing.docx").Code; code != http.StatusBadRequest {
+		t.Fatalf("不存在的文件应 400，实际 %d", code)
+	}
+	if code := get("deck.pptx").Code; code != http.StatusBadRequest {
+		t.Fatalf("目录应 400，实际 %d", code)
+	}
+	if code := get("big.xlsx").Code; code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("超限应 413，实际 %d", code)
+	}
+
+	// 未授权目录与路径穿越同样要挡。
+	req := httptest.NewRequest(http.MethodGet, "/api/fs/blob?cwd="+url.QueryEscape(t.TempDir())+"&path=a.docx", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("未授权目录应 403，实际 %d", rec.Code)
+	}
+	if code := get("../etc/passwd.docx").Code; code != http.StatusForbidden {
+		t.Fatalf("路径穿越应 403，实际 %d", code)
+	}
+
+	// 无 token 一律 401。
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/fs/blob?cwd="+url.QueryEscape(root)+"&path=报告.docx", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("无 token 应 401，实际 %d", rec.Code)
+	}
+}

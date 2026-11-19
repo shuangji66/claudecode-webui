@@ -237,6 +237,82 @@ func (s *Server) handleFsFile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, file)
 }
 
+// officePreviewExts 是前端能在浏览器里就地渲染的 Office 扩展名（OOXML 三类 + 宏变体）。
+//
+// 老格式（.doc/.xls/.ppt）是 OLE 复合文档，浏览器端没有可用的解析库，不列进来：
+// 它们继续走 /api/fs/file 的 binary 占位 + 下载。
+var officePreviewExts = map[string]bool{
+	".docx": true, ".docm": true,
+	".xlsx": true, ".xlsm": true,
+	".pptx": true, ".pptm": true,
+}
+
+// maxOfficePreviewBytes 是 Office 预览读取上限。
+//
+// 字节会整份留在浏览器内存里（解析器需要完整的 zip），NAS 上一份几十 MB 的 pptx
+// 读进来就能把标签页拖垮。32MB 覆盖绝大多数字面文档，超限让用户下载后自己看。
+const maxOfficePreviewBytes = 32 << 20
+
+// handleFsBlob 返回 Office 文档的原始字节，供前端在浏览器里解析渲染。
+//
+// 与 /api/fs/raw 的分工：raw 是**同源 inline 预览**（图片/PDF 由浏览器自己渲染，
+// 带 CSP sandbox）；这条只回 `application/octet-stream` + nosniff，前端 fetch 成
+// ArrayBuffer 交给解析器，浏览器永远不会把它当页面执行，所以不需要 inline 那套 CSP。
+//
+// 仍然收在扩展名白名单里：前端只需要这三类字节，不要把这条接口做成「读工作区任意
+// 文件」的通道——那种需求走 /api/fs/download（attachment，不经过 DOM）。
+func (s *Server) handleFsBlob(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.openFsRoot(w, r)
+	if !ok {
+		return
+	}
+	rel := r.URL.Query().Get("path")
+	if strings.TrimSpace(rel) == "" {
+		writeErr(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	info, relPath, err := root.Stat(rel)
+	if err != nil {
+		code := http.StatusBadRequest
+		if errors.Is(err, fsapi.ErrOutside) {
+			code = http.StatusForbidden
+		}
+		writeErr(w, err.Error(), code)
+		return
+	}
+	if !info.Mode().IsRegular() {
+		writeErr(w, "目录不能预览", http.StatusBadRequest)
+		return
+	}
+	if !officePreviewExts[strings.ToLower(filepath.Ext(relPath))] {
+		writeErr(w, "该文件类型不支持内嵌预览", http.StatusUnsupportedMediaType)
+		return
+	}
+	if info.Size() > maxOfficePreviewBytes {
+		writeErr(w, "文件超过 32MB，请下载后打开", http.StatusRequestEntityTooLarge)
+		return
+	}
+	f, fileInfo, filePath, err := root.OpenDownload(rel)
+	if err != nil {
+		code := http.StatusBadRequest
+		if errors.Is(err, fsapi.ErrOutside) {
+			code = http.StatusForbidden
+		}
+		writeErr(w, err.Error(), code)
+		return
+	}
+	defer f.Close()
+	// Stat 与打开之间文件还可能变大，按打开后的真实大小再挡一次。
+	if fileInfo.Size() > maxOfficePreviewBytes {
+		writeErr(w, "文件超过 32MB，请下载后打开", http.StatusRequestEntityTooLarge)
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, path.Base(filePath), fileInfo.ModTime(), f)
+}
+
 // allowedRawTypes 是可直接 inline 预览的类型白名单。
 //
 // 绝不能把 HTML / SVG 当同源资源直接返回：工作区里的文件可能带脚本，

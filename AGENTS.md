@@ -231,6 +231,31 @@ hub ── manager ── session ── process ── claude (NDJSON)
   宿主里也是这个做法），超过 256MB 的文件与目录的 zip 走**隐藏 iframe**（导航只发生在
   子框架里，同样不碰应用页面）；文件名由后端的 `Content-Disposition` 给（blob 路径用
   侧栏传的名字）。不要改回「顶层锚点直链下载」。
+- **Office 文档能就地预览，但走的是另一条字节通道**：`previewKind` 把
+  docx/docm/xlsx/xlsm/pptx/pptm 分成三类，`FilePreview` 交给
+  `components/right/preview/OfficePane`，它用 `GET /api/fs/blob` 取原始字节再渲染。
+  **不要让这条接口变成通用读文件口**：后端白名单只认这六个扩展名、上限 32MB
+  （字节会整份进浏览器内存），响应固定 `application/octet-stream` + nosniff（浏览器
+  永远不会把它当页面执行）；也不用 `/api/fs/raw` 那条 inline 通道——它的 CSP/白名单
+  是给图片与 PDF 的。老格式（.doc/.xls/.ppt）是 OLE 复合文档，没有可信的前端解析器，
+  继续走「二进制占位 + 下载」，**不要拿 .docx 的解析器去硬解**。
+  `FilesPanel` **先判类型再判 `file.binary`**：Office 文件的 binary 一定是 true，
+  顺序反了会渲染成「不支持文本预览」。
+- **三个解析器各自是一个懒加载 chunk**（`components/right/preview/` 的
+  `DocxPreview` / `XlsxPreview` / `PptxPreview`）：docx-preview（含 jszip）约 50KB gz，
+  首屏不该为多数会话根本不会打开的文档买单。`OfficePane` 自身很轻，静态 import 没问题。
+  - **docx 用 docx-preview**：排版还原值得这份体积，它只解析 + 建 DOM，不执行宏、
+    不取外部关系。注入的 wrapper 灰底与页边距在 `styles.css` 的 `.docx-preview-host`
+    规则里抹平（`section.docx` 要吃满容器宽度，否则 flex 子项按 max-content 撑开、
+    右侧正文被裁）。
+  - **xlsx / pptx 自己解**（`lib/xlsx.ts`、`lib/pptx.ts` + `lib/ooxml.ts` 的 zip/XML
+    公共件，zip 用 fflate）。不引 SheetJS：npm 上停在 0.18.5（0.19.3 才修的原型污染
+    漏洞）、7.5MB，而我们要的只是「把值读出来」；不引 pptx-preview：它是闭源混淆包。
+    保真度明确不高（列宽/合并单元格/母版/主题/动画都不还原），边界写死：xlsx 200 行 ×
+    50 列、pptx 100 页、单元格 300 字符，超了显示提示让用户下载。
+  - **公式没有缓存值就显示公式本身**（`=B2-C2`）：openpyxl 与未重算的文件只有 `<f>`
+    没有 `<v>`，显示空格子会让人以为原来就没内容。
+  - 解析失败一律显示原因（不吞成空白），用户还能用行菜单下载。
 - **Git 只拉不推**：`POST /api/git/pull` 只做 `pull --ff-only`（`gitctl.Push` 已删除）。
   推送是对外动作，不该由侧栏一个图标顺手完成；需要时用户自己开终端 `git push`。
 - **Git 状态用 `--porcelain=v2 -z`**，并用 `--untracked-files=all` 列出未跟踪文件

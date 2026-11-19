@@ -4,7 +4,7 @@
 // 旧请求的迟到响应，避免 A 目录的树覆盖 B 目录。
 
 import { create } from "zustand";
-import { apiFetch } from "../lib/runtime";
+import { apiFetch, apiFetchBytes } from "../lib/runtime";
 import { pickRepo } from "../lib/workspace";
 import type {
   FsEntry,
@@ -44,6 +44,14 @@ interface SidebarState {
   loadDir: (path: string, force?: boolean) => Promise<void>;
   reloadTree: () => Promise<void>;
   readFile: (path: string) => Promise<FsFile>;
+  /**
+   * 读 Office 文件的原始字节（docx / xlsx / pptx 由前端解析）。
+   *
+   * 与 readFile 是两条路：那条回的是文本 JSON（二进制文件只给元数据），
+   * 这条拿 ArrayBuffer 交给预览器；后端只放行 Office 扩展名，不能让这里变成
+   * 「读工作区任意文件」的通用入口。
+   */
+  readBytes: (path: string, signal?: AbortSignal) => Promise<ArrayBuffer>;
 
   /**
    * 正文里点「在右侧栏打开」的请求。
@@ -231,6 +239,13 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     if (!cwd) throw new Error("未选择工作区");
     const query = new URLSearchParams({ cwd, path });
     return apiFetch<FsFile>(`/api/fs/file?${query.toString()}`);
+  },
+
+  readBytes: async (path, signal) => {
+    const { cwd } = get();
+    if (!cwd) throw new Error("未选择工作区");
+    const query = new URLSearchParams({ cwd, path });
+    return apiFetchBytes(`/api/fs/blob?${query.toString()}`, signal);
   },
 
   requestOpenFile: (path) => {

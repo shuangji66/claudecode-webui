@@ -198,9 +198,24 @@ export function asAddedDiff(text: string): string {
   return lines.map((line) => `+${line}`).join("\n");
 }
 
-export type FilePreviewKind = "markdown" | "html" | "image" | "pdf" | "text";
+export type FilePreviewKind = "markdown" | "html" | "image" | "pdf" | "text" | "docx" | "xlsx" | "pptx";
 
 const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
+/**
+ * 能在浏览器里就地解析的 Office OOXML 类型（含宏变体）。
+ *
+ * 老格式 .doc/.xls/.ppt 是 OLE 复合文档，没有可用且可信的前端解析器，
+ * 它们继续落到 "text" → 后端判 binary → 「二进制文件，请下载」。
+ * 后端 `/api/fs/blob` 的白名单必须与这里逐项一致。
+ */
+const OFFICE_EXT: Record<string, FilePreviewKind> = {
+  docx: "docx",
+  docm: "docx",
+  xlsx: "xlsx",
+  xlsm: "xlsx",
+  pptx: "pptx",
+  pptm: "pptx",
+};
 const TEXT_EXT = new Set([
   "txt", "md", "markdown", "json", "jsonl", "yaml", "yml", "toml", "ini", "conf", "env", "log",
   "go", "ts", "tsx", "js", "jsx", "mjs", "cjs", "css", "scss", "less", "html", "htm", "xml", "svg",
@@ -216,6 +231,8 @@ export function previewKind(name: string): FilePreviewKind {
   if (ext === "html" || ext === "htm") return "html";
   if (IMAGE_EXT.has(ext)) return "image";
   if (ext === "pdf") return "pdf";
+  const office = OFFICE_EXT[ext];
+  if (office) return office;
   if (TEXT_EXT.has(ext) || ext === "") return "text";
   return "text";
 }

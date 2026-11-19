@@ -501,3 +501,18 @@ pre {
   );
   mask-image: linear-gradient(to bottom, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
 }
+
+/* docx-preview 的 wrapper 默认铺一层灰底 + 30/40px 内边距（模拟 Word 页面外区域）。
+   右侧栏里那一圈会变成两条灰带，上下各压一块；页面本身（.docx）仍是白纸 + 阴影，
+   观感不受影响，所以只把 wrapper 抹平。 */
+.docx-preview-host .docx-wrapper {
+  background: transparent;
+  padding: 0;
+}
+
+/* ignoreWidth 只跳过「按文档页宽写死 width」，不会给 section 一个宽度；
+   wrapper 是 flex + align-items:center，于是页面按 max-content 撑开、超出的部分被
+   容器裁掉（右侧栏里表现为正文右边缺一截）。让页面吃满容器宽度即可。 */
+.docx-preview-host .docx-wrapper > section.docx {
+  width: 100%;
+}

@@ -109,6 +109,15 @@ describe("preview/format helpers", () => {
     expect(previewKind("manual.pdf")).toBe("pdf");
     expect(previewKind("main.go")).toBe("text");
     expect(previewKind("Makefile")).toBe("text");
+    // 无后缀/未知后缀一律先按文本试（后端再判二进制）。
+    expect(previewKind("LICENSE")).toBe("text");
+    expect(previewKind("data.unknownext")).toBe("text");
+    // Office OOXML 就地解析；老格式（.doc/.xls/.ppt）不认，仍走二进制占位。
+    expect(previewKind("方案.docx")).toBe("docx");
+    expect(previewKind("报表.XLSM")).toBe("xlsx");
+    expect(previewKind("deck.pptm")).toBe("pptx");
+    expect(previewKind("legacy.doc")).toBe("text");
+    expect(previewKind("legacy.xls")).toBe("text");
   });
 
   it("格式化字节与行数", () => {

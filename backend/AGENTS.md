@@ -242,7 +242,8 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - `fsapi.Root` 同时保存传入路径与 `EvalSymlinks` 后的真实路径；每次解析都要求真实路径
   仍在根内。不要为了「方便」改成纯词法判断——符号链接可以从工作区跳到 `/etc`。
 - 文本预览只读前 `MaxPreviewBytes`（1 MiB），截断时回退完整 rune；含 NUL 或非 UTF-8
-  标记 `binary`，不把内容塞进 JSON。
+  标记 `binary`，不把内容塞进 JSON。**Office 文档一定落进 binary**：它们由前端解析，
+  走的是 `blob` + `/api/fs/file` 的元数据，不要试图让 Read 认识 zip。
 - `gitctl` 每次 spawn 系统 `git`，固定 `-C <root> --no-pager -c color.ui=false
   -c core.quotePath=false`，环境加 `LC_ALL=C`、`GIT_OPTIONAL_LOCKS=0`、
   `GIT_TERMINAL_PROMPT=0`。输出上限 8 MiB，超限报错而不是截断解析。
@@ -350,10 +351,13 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   agent id 走 `[A-Za-z0-9_-]` 白名单，会话 id 走 `validSessionID`，不能拼路径。
   `POST /api/session` 带 `resume` 时：有转录走 `manager.Resume`，没有转录走
   `manager.StartFresh`（同 id `--session-id`），不带 `resume` 才 `Create`。
-- 右侧栏路由：`GET /api/fs/tree|file|raw|download`、`GET /api/git/repos|status|diff|show|log|branches`、
+- 右侧栏路由：`GET /api/fs/tree|file|raw|download|blob`、`GET /api/git/repos|status|diff|show|log|branches`、
   `POST /api/git/stage|unstage|discard|commit|checkout|pull`、`GET /ws/terminal`。
   全部先过 `authorizedCwd`（`project.Validate` + `workspace.Allows`），再做路径围栏；
   原始字节只放行图片/PDF 并带 `CSP: sandbox`，HTML/SVG 不得同源 inline。
+  `blob` 是给前端 Office 解析器取的字节：只放行 docx/docm/xlsx/xlsm/pptx/pptm、
+  ≤32MB、固定 `application/octet-stream` + nosniff（不走 inline 语义，也不扩 raw 白名单），
+  别把它做成第二个通用读文件口（那个需求是 `download`）。
 - `POST /api/settings/proxy` 是敏感路由；先 Apply 设置，再重启全部会话，并返回
   `{settings, sessions, warning}` 供前端直接切换。
 - 部署路由：`GET /api/claude/status`、`POST /api/claude/check|install|cancel|active|source`、
