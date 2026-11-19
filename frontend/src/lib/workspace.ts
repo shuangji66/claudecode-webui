@@ -251,19 +251,27 @@ export function formatBytes(n: number | undefined): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Git 数字徽标的显示文本：二进制/无统计返回空串，0 也如实显示。 */
-export function lineCountLabel(counts: { additions: number; deletions: number; binary?: boolean } | undefined): string {
-  if (!counts) return "";
-  if (counts.binary) return "bin";
-  return `+${counts.additions} −${counts.deletions}`;
+export interface LineCountPart {
+  text: string;
+  tone: string;
 }
 
-/** 行数徽标的色调（只加不减为绿、只删为红、混合为中性）。 */
-export function lineCountTone(counts: { additions: number; deletions: number; binary?: boolean } | undefined): string {
-  if (!counts || counts.binary) return "text-faint";
-  if (counts.additions > 0 && counts.deletions === 0) return "text-ok";
-  if (counts.deletions > 0 && counts.additions === 0) return "text-danger";
-  return "text-muted";
+/**
+ * Git 数字徽标的分段（每段自带色调，调用方逐段渲染）。
+ *
+ * 只增给一段绿色 `+N`、只删给一段红色 `−N`，**有增有删仍是两段各自着色**，
+ * 不能合并成一个灰色数字：灰色既读不出哪边是加、哪边是删，也和「无改动」混在一起。
+ * 没有改动（两侧都是 0）或没有统计时给空数组，调用方据此不渲染徽标——不要出现 `−0`。
+ */
+export function lineCountParts(
+  counts: { additions: number; deletions: number; binary?: boolean } | undefined,
+): LineCountPart[] {
+  if (!counts) return [];
+  if (counts.binary) return [{ text: "bin", tone: "text-faint" }];
+  const parts: LineCountPart[] = [];
+  if (counts.additions > 0) parts.push({ text: `+${counts.additions}`, tone: "text-ok" });
+  if (counts.deletions > 0) parts.push({ text: `−${counts.deletions}`, tone: "text-danger" });
+  return parts;
 }
 
 /** 分支/引用展示：`HEAD -> main, origin/main` → 去掉 HEAD 前缀。 */

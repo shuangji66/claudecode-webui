@@ -4,7 +4,7 @@ import {
   diffStat,
   formatBytes,
   groupChanges,
-  lineCountLabel,
+  lineCountParts,
   parseUnifiedDiff,
   pickRepo,
   previewKind,
@@ -124,9 +124,19 @@ describe("preview/format helpers", () => {
     expect(formatBytes(512)).toBe("512 B");
     expect(formatBytes(2048)).toBe("2.0 KB");
     expect(formatBytes(2 * 1024 * 1024)).toBe("2.0 MB");
-    expect(lineCountLabel({ additions: 1, deletions: 0 })).toBe("+1 −0");
-    expect(lineCountLabel({ additions: 0, deletions: 0, binary: true })).toBe("bin");
-    expect(lineCountLabel(undefined)).toBe("");
+    // 只增不减：只给一段绿色 `+N`，不出 `−0`。
+    expect(lineCountParts({ additions: 1, deletions: 0 })).toEqual([{ text: "+1", tone: "text-ok" }]);
+    // 只删不加：只给一段红色 `−N`。
+    expect(lineCountParts({ additions: 0, deletions: 3 })).toEqual([{ text: "−3", tone: "text-danger" }]);
+    // 有增有删：两段各自着色，不能合并成一个灰色数字。
+    expect(lineCountParts({ additions: 9, deletions: 3 })).toEqual([
+      { text: "+9", tone: "text-ok" },
+      { text: "−3", tone: "text-danger" },
+    ]);
+    // 两侧都是 0（有记录但无统计）与无统计都为空。
+    expect(lineCountParts({ additions: 0, deletions: 0 })).toEqual([]);
+    expect(lineCountParts({ additions: 0, deletions: 0, binary: true })).toEqual([{ text: "bin", tone: "text-faint" }]);
+    expect(lineCountParts(undefined)).toEqual([]);
   });
 
   it("refs 去掉 HEAD 前缀", () => {

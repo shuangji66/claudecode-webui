@@ -4,8 +4,7 @@ import {
   asAddedDiff,
   diffStat,
   groupChanges,
-  lineCountLabel,
-  lineCountTone,
+  lineCountParts,
   parseUnifiedDiff,
   refsLabel,
   type ChangeRow,
@@ -16,7 +15,7 @@ import { watchGitRepo } from "../../store/useAppStore";
 import { Select } from "../common/Select";
 import { FileIcon } from "../common/FileIcon";
 import { askConfirm } from "../common/SystemDialogs";
-import type { GitLogEntry } from "../../transport/types";
+import type { GitLineCounts, GitLogEntry } from "../../transport/types";
 import {
   IconChevronLeft,
   IconGitBranch,
@@ -56,6 +55,21 @@ const TONE_TEXT: Record<GitTone, string> = {
 };
 
 const MAX_DIFF_LINES = 4000;
+
+/** 增删行数：绿色 `+N` / 红色 `−N` 各自一段，为 0 的一侧不渲染（不出 `−0`）。 */
+function LineCounts({ counts }: { counts: GitLineCounts | undefined }) {
+  const parts = lineCountParts(counts);
+  return (
+    <>
+      {parts.map((part, i) => (
+        <span key={part.text} className={part.tone}>
+          {i > 0 ? " " : ""}
+          {part.text}
+        </span>
+      ))}
+    </>
+  );
+}
 
 /** 右侧栏 Git 面板：变更分组 + diff 预览 + 提交框 + 最近提交 + 分支底栏。 */
 export function GitPanel({ cwd, active }: Props) {
@@ -578,8 +592,8 @@ function ChangeGroup({ title, rows, side, busy, active, onOpen, onStage, onUnsta
           <span className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-wide text-muted">{title}</span>
           <span className="shrink-0 rounded-full bg-panel-strong px-1.5 text-[10px] text-muted">{rows.length}</span>
           {side !== "conflict" && (additions > 0 || deletions > 0) && (
-            <span className="shrink-0 font-mono text-[9.5px] text-faint">
-              <span className="text-ok">+{additions}</span> <span className="text-danger">−{deletions}</span>
+            <span className="shrink-0 font-mono text-[9.5px]">
+              <LineCounts counts={{ additions, deletions }} />
             </span>
           )}
         </button>
@@ -638,8 +652,8 @@ function ChangeGroup({ title, rows, side, busy, active, onOpen, onStage, onUnsta
                     <span className="text-ink">{name}</span>
                   </span>
                   {counts && (
-                    <span className={`ml-auto shrink-0 font-mono text-[9.5px] ${lineCountTone(counts)}`}>
-                      {lineCountLabel(counts)}
+                    <span className="ml-auto shrink-0 font-mono text-[9.5px]">
+                      <LineCounts counts={counts} />
                     </span>
                   )}
                 </button>
@@ -763,7 +777,7 @@ function DiffView({ state, busy, actions, onBack }: { state: DiffViewState; busy
             <span className="truncate">{state.subtitle}</span>
             {lines.length > 0 && (
               <span className="shrink-0 font-mono">
-                <span className="text-ok">+{stat.added}</span> <span className="text-danger">−{stat.removed}</span>
+                <LineCounts counts={{ additions: stat.added, deletions: stat.removed }} />
               </span>
             )}
           </p>

@@ -45,6 +45,11 @@ describe("editSummary", () => {
     expect(editSummary({ file_path: "/a.go" }, d)).toBe("/a.go  +1 −1");
   });
 
+  it("为 0 的一侧不出现（不出 `−0`）", () => {
+    expect(editSummary({ file_path: "/a.go" }, { lines: [], added: 3, removed: 0 })).toBe("/a.go  +3");
+    expect(editSummary({ file_path: "/a.go" }, { lines: [], added: 0, removed: 2 })).toBe("/a.go  −2");
+  });
+
   it("无 diff 时只显示路径", () => {
     expect(editSummary({ file_path: "/a.go" }, null)).toBe("/a.go");
   });

@@ -87,6 +87,14 @@ export function buildDiff(input: unknown, structured: unknown): DiffResult | nul
   return collectFromInput(input);
 }
 
+/** 增删计数文案：为 0 的那一侧不出现（避免 `+9 −0`）。 */
+export function countText(added: number, removed: number): string {
+  const parts: string[] = [];
+  if (added > 0) parts.push(`+${added}`);
+  if (removed > 0) parts.push(`−${removed}`);
+  return parts.join(" ");
+}
+
 /** Edit 的标题摘要：路径 + 增删行数。 */
 export function editSummary(input: unknown, diff: DiffResult | null): string {
   const path =
@@ -94,5 +102,6 @@ export function editSummary(input: unknown, diff: DiffResult | null): string {
       ? String((input as Record<string, unknown>).file_path)
       : "编辑文件";
   if (!diff) return path;
-  return `${path}  +${diff.added} −${diff.removed}`;
+  const counts = countText(diff.added, diff.removed);
+  return counts ? `${path}  ${counts}` : path;
 }
