@@ -191,7 +191,7 @@ describe("Composer 权限模式", () => {
 
   it("危险模式（跳过权限）先弹二次确认，确认后才切换", async () => {
     const { onPermissionMode } = setupMode();
-    fireEvent.click(screen.getByLabelText("权限模式"));
+    fireEvent.click(screen.getByLabelText(/^权限模式/));
     fireEvent.click(screen.getByRole("option", { name: "跳过权限" }));
 
     expect(await screen.findByText("切换到「跳过权限」？")).toBeInTheDocument();
@@ -203,7 +203,7 @@ describe("Composer 权限模式", () => {
 
   it("取消确认就不切换", async () => {
     const { onPermissionMode } = setupMode();
-    fireEvent.click(screen.getByLabelText("权限模式"));
+    fireEvent.click(screen.getByLabelText(/^权限模式/));
     fireEvent.click(screen.getByRole("option", { name: "不询问" }));
     expect(await screen.findByText("切换到「不询问」？")).toBeInTheDocument();
 
@@ -212,9 +212,19 @@ describe("Composer 权限模式", () => {
     expect(onPermissionMode).not.toHaveBeenCalled();
   });
 
+  it("窄屏折叠模式文本：标签带容器查询折叠类，当前模式进 aria-label", () => {
+    setupMode();
+    // jsdom 不做布局，只能钉住类名：折叠由工具条的 @container 驱动（宽度跟着实际可用
+    // 空间走，不是视口断点），标签在 ≤460px 时 display:none，图标与箭头留下。
+    const trigger = screen.getByLabelText(/^权限模式/);
+    expect(trigger).toHaveAccessibleName("权限模式 默认模式");
+    expect(within(trigger).getByText("默认模式").className).toContain("@max-[460px]:hidden");
+    expect(trigger.parentElement?.parentElement?.className).toContain("@container");
+  });
+
   it("安全模式直接切换，不弹窗", () => {
     const { onPermissionMode } = setupMode();
-    fireEvent.click(screen.getByLabelText("权限模式"));
+    fireEvent.click(screen.getByLabelText(/^权限模式/));
     fireEvent.click(screen.getByRole("option", { name: "计划模式" }));
     expect(onPermissionMode).toHaveBeenCalledWith("plan");
     expect(screen.queryByText(/切换到「/)).toBeNull();

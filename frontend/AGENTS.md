@@ -209,6 +209,11 @@ src/
     **「跳过权限」要求会话启动时带 `--allow-dangerously-skip-permissions`**
     （`process.Args` 里按版本探测后一直带；它只开能力、不会以 bypass 启动），
     没带的会话切过去会被 CLI 拒绝——后端现在已经等回包，错误会原样显示在对话里。
+    **工具条窄了先折权限模式的文本**（对齐 DSH）：输入框工具条是 `@container` 容器，
+    权限模式触发器在 `@max-[460px]` 下只留盾牌图标 + 箭头（`Select` 的 `labelClassName`，
+    文本 `display:none`）。用**容器查询而不是视口断点**：工具条宽度由侧栏拖动/分屏决定，
+    视口再宽也可能只有 360px。文本没了就得让 `aria-label` 带上当前模式
+    （`权限模式 接受编辑`），否则读屏只剩「权限模式」三个字。
 23. **左侧栏的「分组 / 排序 / 筛选」走 `lib/sidebarView.ts`**：分组（按工作区 / 按工作区树 /
     单列表）、排序（手动 / 最近更新）、筛选（隐藏已归档 / 全部 / 仅已归档）三种偏好存在
     localStorage（`ccweb-sidebar-view`），手动顺序存在 `ccweb-session-order`

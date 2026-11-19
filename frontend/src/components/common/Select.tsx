@@ -31,6 +31,8 @@ interface Props {
   leading?: ReactNode;
   /** 完全覆盖触发器内容（例如右侧还要跟一个「图片」徽标）。 */
   trigger?: ReactNode;
+  /** 当前值文本的额外类：窄屏折叠文本时用（`@max-[460px]:hidden`，需要祖先带 `@container`）。 */
+  labelClassName?: string;
   className?: string;
   menuWidth?: number;
 }
@@ -58,6 +60,7 @@ export function Select({
   variant = "field",
   leading,
   trigger,
+  labelClassName = "",
   className = "",
   menuWidth,
 }: Props) {
@@ -133,7 +136,9 @@ export function Select({
   const danger = current?.danger === true;
   // pill 变体的宽度由内容决定（自动宽度的 flex 容器），`flex-1` 会把文字挤成 0 宽。
   const triggerContent = trigger ?? (
-    <span className={`min-w-0 truncate ${variant === "pill" ? "" : "flex-1"}`}>{current?.label ?? placeholder ?? ""}</span>
+    <span className={`min-w-0 truncate ${variant === "pill" ? "" : "flex-1"} ${labelClassName}`}>
+      {current?.label ?? placeholder ?? ""}
+    </span>
   );
 
   return (

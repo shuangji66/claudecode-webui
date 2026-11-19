@@ -110,6 +110,8 @@ export function Composer({
 }: Props) {
   const t = useT();
   const locale = useLocale();
+  // 当前模式的显示名：窄屏下触发器只留图标，这个字符串还要给 aria-label 用。
+  const modeLabel = permissionLabel(permissionMode || "default", locale);
   const [text, setText] = useState("");
   // 光标是 `@` 补全的唯一输入：token 从光标往前扫，移动光标就要重新判断。
   const [caret, setCaret] = useState(0);
@@ -748,7 +750,9 @@ export function Composer({
           className="composer-textarea chat-text w-full bg-transparent px-1 leading-6 text-ink outline-none placeholder:text-faint disabled:cursor-not-allowed"
         />
 
-        <div className="mt-1.5 flex items-center gap-1 sm:gap-1.5">
+        {/* 工具条是容器查询的容器：权限模式按钮按**这一行的宽度**折叠文本（不是视口），
+            侧栏拖宽 / 分屏 / 手机上都跟着实际可用空间走。 */}
+        <div className="@container mt-1.5 flex items-center gap-1 sm:gap-1.5">
           <button
             type="button"
             onClick={(e) => {
@@ -774,9 +778,12 @@ export function Composer({
           />
 
           <span className="shrink-0" title={t("权限模式", "Permission mode")}>
+            {/* 窄屏只留盾牌图标 + 箭头（对齐 DSH）：中文「接受编辑」这类文本会把
+                模型名挤成省略号。文本隐藏时靠 aria-label 带上当前模式。 */}
             <Select
               variant="ghost"
-              ariaLabel={t("权限模式", "Permission mode")}
+              ariaLabel={`${t("权限模式", "Permission mode")} ${modeLabel}`}
+              labelClassName="@max-[460px]:hidden"
               value={permissionMode || "default"}
               onChange={(next) => void changeMode(next)}
               disabled={disabled}
