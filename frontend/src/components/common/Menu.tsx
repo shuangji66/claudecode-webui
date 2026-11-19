@@ -33,6 +33,24 @@ export function panelMaxHeight(): number {
 /** 向上/向下展开时都要留的最小高度，免得贴边时被压成一条缝。 */
 const MIN_PANEL_HEIGHT = 120;
 
+/** 贴住某个元素展开时与它之间的缝隙（对齐 DSH 的 `calc(100% + 4px)`）。 */
+const ATTACH_GAP = 4;
+
+/**
+ * 贴附面板的高度上限：通用上限的一半。
+ *
+ * 它贴在输入卡上方，按通用上限（80vh / 560px）开满就等于把整块对话区盖掉——
+ * 手机上刚好是整屏。只给一半，命令多时在面板内部滚动，剩下的对话仍然看得见。
+ */
+const ATTACH_MAX_HEIGHT_RATIO = 0.5;
+
+/**
+ * 贴住某个元素（输入卡）展开时，顶部至少给它上方的表头留出的空间。
+ *
+ * 与对话区表头的 `h-14`（56px）对齐：菜单再长也不要压到表头上，内容在面板内部滚动。
+ */
+const ATTACH_TOP_MARGIN = 64;
+
 export interface AnchoredPosition {
   left: number;
   /** 实际使用的宽度（已按视口收窄）。 */
@@ -75,6 +93,33 @@ export function anchoredPosition(
     : { left, width: w, bottom: window.innerHeight - rect.top + offset, maxHeight };
 }
 
+/**
+ * 贴住某个元素展开（输入框的添加菜单）：宽度与它一致、左右边缘对齐、朝上长。
+ *
+ * 与 anchoredPosition 的区别是**不按触发按钮定位**：按 `+` 按钮定位时面板底边只到按钮
+ * 上沿，会把输入框正文盖住；而宽度按 320 固定又和输入卡对不齐。这里整块贴在输入卡上方
+ * （对齐 DSH 的 `left:0; right:0; bottom:calc(100% + 4px)`），高度只给通用上限的一半。
+ */
+export function attachedPosition(rect: DOMRect, preferredHeight: number): AnchoredPosition {
+  const width = Math.max(160, Math.min(rect.width, window.innerWidth - VIEWPORT_MARGIN * 2));
+  const maxLeft = Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN);
+  const left = Math.min(Math.max(VIEWPORT_MARGIN, rect.left), maxLeft);
+
+  const height = Math.min(
+    preferredHeight,
+    Math.round(panelMaxHeight() * ATTACH_MAX_HEIGHT_RATIO),
+  );
+  const spaceAbove = rect.top - ATTACH_GAP - ATTACH_TOP_MARGIN;
+  const spaceBelow = window.innerHeight - rect.bottom - ATTACH_GAP - VIEWPORT_MARGIN;
+  // 默认朝上（不盖住输入卡）；只有上面确实塞不下、下面更宽裕时才翻到下面。
+  const above = spaceAbove >= MIN_PANEL_HEIGHT || spaceAbove >= spaceBelow;
+  const maxHeight = Math.max(MIN_PANEL_HEIGHT, Math.min(height, above ? spaceAbove : spaceBelow));
+
+  return above
+    ? { left, width, bottom: window.innerHeight - rect.top + ATTACH_GAP, maxHeight }
+    : { left, width, top: rect.bottom + ATTACH_GAP, maxHeight };
+}
+
 /** 浮层在打开期间跟随触发元素：滚动/缩放时重新定位，而不是让面板飘走。 */
 export function useAnchoredPosition(
   anchor: HTMLElement | null,
@@ -108,6 +153,41 @@ export function useAnchoredPosition(
       window.removeEventListener("scroll", update, true);
     };
   }, [open, anchor, update]);
+
+  return pos;
+}
+
+/** 贴在某个元素上展开的浮层位置：跟随它的尺寸与滚动（添加菜单用）。 */
+export function useAttachedPosition(
+  target: HTMLElement | null,
+  open: boolean,
+  preferredHeight: number,
+): AnchoredPosition | null {
+  const [pos, setPos] = useState<AnchoredPosition | null>(null);
+
+  const update = useCallback(() => {
+    if (!target) return;
+    setPos(attachedPosition(target.getBoundingClientRect(), preferredHeight));
+  }, [target, preferredHeight]);
+
+  useLayoutEffect(() => {
+    if (!open || !target) {
+      setPos(null);
+      return;
+    }
+    update();
+  }, [open, target, update]);
+
+  useEffect(() => {
+    if (!open || !target) return;
+    window.addEventListener("resize", update);
+    // 捕获阶段：输入卡自己在滚动容器里（新对话页），列表滚动时也要跟着走。
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open, target, update]);
 
   return pos;
 }
@@ -249,6 +329,11 @@ interface MenuProps {
   onClose: () => void;
   width?: number;
   align?: "start" | "end";
+  /**
+   * 贴在这个元素上展开（输入卡）：宽度与它一致、左右对齐、朝上长，不盖住它。
+   * 设置后 `width` / `align` 不再参与定位（触发按钮只负责开合与「点外部」判定）。
+   */
+  attachTo?: HTMLElement | null;
 }
 
 /**
@@ -274,9 +359,21 @@ export function menuHeight(items: Pick<MenuItem, "group">[]): number {
  * 关闭逻辑收在组件里：调用方只需要维护 open + anchor，
  * 不用再各写一套 document mousedown 监听（以前三个菜单各写一份，容易漏）。
  */
-export function Menu({ open, anchor, items, onClose, width = 176, align = "end" }: MenuProps) {
+export function Menu({
+  open,
+  anchor,
+  items,
+  onClose,
+  width = 176,
+  align = "end",
+  attachTo = null,
+}: MenuProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const pos = useAnchoredPosition(anchor, open, width, menuHeight(items), align);
+  const height = menuHeight(items);
+  // 两个定位 hook 都调用（hook 不能条件调用），没在用的那个收到 open=false 只返回 null。
+  const attached = useAttachedPosition(attachTo, open && attachTo !== null, height);
+  const anchored = useAnchoredPosition(anchor, open && attachTo === null, width, height, align);
+  const pos = attachTo === null ? anchored : attached;
   useDismiss(open, ref, anchor, onClose);
 
   if (!open || !pos) return null;

@@ -128,6 +128,8 @@ export function Composer({
   const ref = useRef<HTMLTextAreaElement>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // 添加菜单贴在这张卡上展开：同宽、左右对齐、朝上长（对齐 DSH），不盖住输入框。
+  const cardRef = useRef<HTMLDivElement>(null);
   // 菜单吃掉的按键（Tab/Enter/Esc）会在 keyup 时带回**旧的** DOM 光标位置：
   // 刚把 `@REA` 换成 `@README.md `，keyup 再用旧位置同步一次就会把菜单重新弹出来。
   const skipCaretSync = useRef(false);
@@ -645,7 +647,7 @@ export function Composer({
         </div>
       )}
 
-      <div className="composer-card px-3 pb-2.5 pt-2">
+      <div ref={cardRef} className="composer-card px-3 pb-2.5 pt-2">
         {/* 待发送：回合进行中提交的消息。放在输入框上方；点正文就地改，右侧箭头立刻发。 */}
         {queued.length > 0 && (
           <div className="mb-2 rounded-lg border border-line bg-panel/40">
@@ -771,10 +773,9 @@ export function Composer({
           <Menu
             open={menuAnchor !== null}
             anchor={menuAnchor}
+            attachTo={cardRef.current}
             items={[...addItems, ...commandItems]}
             onClose={() => setMenuAnchor(null)}
-            width={320}
-            align="start"
           />
 
           <span className="shrink-0" title={t("权限模式", "Permission mode")}>

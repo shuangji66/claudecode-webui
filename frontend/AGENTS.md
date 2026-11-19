@@ -113,7 +113,9 @@ src/
     **唯一例外**是对话「进行中」的进度环（`common/StateDot` 的 `ongoing`：1.5s 匀速旋转 +
     弧长呼吸，对齐 DSH 的 StateDot），它表达的是「正在干活」而不是装饰；必须在
     `prefers-reduced-motion: reduce` 下停成静态弧。新增任何循环动画前先想清楚这一点。
-12. 输入框 `+` 是**添加菜单**（`common/Menu`，宽 320、窄屏自适应）：本地文件/图片、
+12. 输入框 `+` 是**添加菜单**（`common/Menu` 的 `attachTo`：贴在输入卡上方、与它同宽且
+    左右对齐、朝上长，不盖住输入框；高度只给通用上限的一半，命令多时面板内部滚动）：
+    本地文件/图片、
     从飞牛选择、claude 指令（中文短说明见 `lib/labels.commandDescription`，未收录的回落
     CLI 原文）；
     " / " 仍由用户键入触发补全。从飞牛挑中的图片/PDF 走 `readHostFile`（`POST /api/fs/host-file`，
