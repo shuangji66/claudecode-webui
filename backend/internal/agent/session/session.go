@@ -382,10 +382,17 @@ func (s *Session) prompt(text string, attachments []protocol.Attachment, opt pro
 		return err
 	}
 	// 插话之后紧跟的 result 是交棒（CLI 把它留到下一轮），不该把状态标回 ready。
-	s.interjectMu.Lock()
-	s.interjected = opt.Priority == "now"
-	s.interjectSeq = s.contentSeq
-	s.interjectMu.Unlock()
+	//
+	// **只有插话才动这个标记**：普通 prompt 也在这里无条件赋值的话，用户「插一句、
+	// 紧接着又发一条」就会把刚写下的标记清成 false，随后 CLI 为插话发的那条交棒
+	// result 被当成真结束——界面先闪一下「已完成」再被新一轮推翻（正是这个标记要
+	// 解决的现象）。普通 prompt 不写标记，也就不该清它。
+	if opt.Priority == "now" {
+		s.interjectMu.Lock()
+		s.interjected = true
+		s.interjectSeq = s.contentSeq
+		s.interjectMu.Unlock()
+	}
 	s.setState(StateBusy)
 	return nil
 }

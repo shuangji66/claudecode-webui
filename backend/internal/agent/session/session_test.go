@@ -548,6 +548,35 @@ func TestInterjectFollowedByErrorResultSettles(t *testing.T) {
 	}
 }
 
+// 用户「插一句、紧接着又发一条」：后一条普通 prompt 不能把插话标记清掉。
+// 清了的话 CLI 为插话发的那条交棒 result 会被当成真结束——界面先闪一下「已完成」
+// 再被新一轮推翻，正是这个标记要解决的现象。
+func TestInterjectFlagSurvivesLaterPrompt(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.Prompt("开始干活"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	fc.next()
+	fc.send(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{}}})
+	waitContent(t, sess, 1)
+	if err := sess.PromptInterject("顺便看一眼日志", nil); err != nil {
+		t.Fatalf("PromptInterject: %v", err)
+	}
+	// 队列里的下一条普通消息紧接着也写进了 stdin。
+	if err := sess.PromptWithAttachments("再跑一遍测试", nil); err != nil {
+		t.Fatalf("PromptWithAttachments: %v", err)
+	}
+	fc.next()
+	fc.next()
+	fc.send(map[string]any{"type": "result", "subtype": "success"})
+	time.Sleep(50 * time.Millisecond)
+	if got := sess.State(); got != StateBusy {
+		t.Fatalf("交棒的 result 之后 state = %q, want busy", got)
+	}
+}
+
 // 空闲很久之后冒出来的 init 不能把会话标成忙碌，否则界面会一直显示「正在工作」。
 func TestStaleInitAfterLongIdleKeepsReady(t *testing.T) {
 	old := TurnHandoffWindow
