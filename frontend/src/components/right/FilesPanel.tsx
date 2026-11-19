@@ -28,7 +28,7 @@ import {
 import { FileIcon, FolderIcon } from "../common/FileIcon";
 import { Menu, type MenuItem } from "../common/Menu";
 import { OfficePane } from "./preview/OfficePane";
-import { fnosHostAvailable, openFnosFileManager, showFnosFileDetails } from "../../lib/fnos";
+import { fnosHostAvailable, openFnosFile, openFnosFileManager, showFnosFileDetails } from "../../lib/fnos";
 
 interface Props {
   cwd: string;
@@ -149,6 +149,16 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
   const entryMenuItems = (entry: FsEntry): MenuItem[] => {
     const host = fnosHostAvailable();
     const items: MenuItem[] = [];
+    // 「用默认应用打开」只对文件有意义，且只有宿主能办：容器里没有桌面环境，
+    // 由飞牛按扩展名挑应用（等同文件管理器里的「打开方式」）。
+    if (host && entry.type === "file") {
+      items.push({
+        id: "open",
+        label: t("用默认应用打开", "Open in default app"),
+        icon: <IconExternal size={13} className="text-muted" />,
+        onSelect: () => void openEntryWithApp(entry),
+      });
+    }
     // 「other」是软链/设备文件：引用进对话没有意义，下载也只会 400。
     if (entry.type === "file" || entry.type === "dir") {
       items.push(
@@ -214,6 +224,18 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
         ),
       );
     });
+  };
+
+  /** 用默认应用打开：宿主不支持时已静默降级到「在文件夹显示」，这里只报真错误。 */
+  const openEntryWithApp = async (entry: FsEntry) => {
+    const r = await openFnosFile(absolute(entry.path));
+    if (!r.ok) {
+      setActionError(
+        r.reason === "bridge"
+          ? t("飞牛宿主连接不可用，请稍后重试", "The fnOS host is not responding; retry later")
+          : t(`打开失败：${r.reason ?? "未知错误"}`, `Open failed: ${r.reason ?? "unknown error"}`),
+      );
+    }
   };
 
   const revealEntry = async (entry: FsEntry) => {

@@ -292,6 +292,11 @@ export interface FnosOpenOutcome {
   reason?: "standalone" | "bridge" | string;
 }
 
+/** `openFnosFile` 的结果：fallback 表示宿主不支持直接打开，已改为在文件夹里显示。 */
+export interface FnosOpenFileOutcome extends FnosOpenOutcome {
+  fallback?: boolean;
+}
+
 /**
  * 当前页面能不能调宿主能力（桌面 iframe / App WebView）。
  *
@@ -335,6 +340,43 @@ export async function showFnosFileDetails(paths: string[]): Promise<FnosOpenOutc
     return { ok: true };
   } catch (e) {
     return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * 文件所在目录（`/a/b.txt` → `/a`，根目录下的文件 → `/`）。
+ *
+ * 回退到文件管理器时只能定位目录：把文件路径原样递过去会落在错误的位置。
+ */
+export function folderOf(path: string): string {
+  const idx = path.lastIndexOf("/");
+  return idx > 0 ? path.slice(0, idx) : "/";
+}
+
+/**
+ * 用飞牛宿主登记的默认应用打开文件（等同文件管理器里的「打开方式」）。
+ *
+ * 与 `openFnosFileManager` 的分工：那个只认**目录**，所以这里无法直接打开时退回
+ * 文件所在目录——用户会落在文件夹里而不是文档里，但这比报错强：老宿主没有
+ * `openFile`、App 端没实现该方法时都会走到这条路，静默降级与 dsh 的插件一致。
+ * 调用方不需要为 `fallback` 再弹一次提示。
+ */
+export async function openFnosFile(path: string): Promise<FnosOpenFileOutcome> {
+  if (!inHost()) return { ok: false, reason: "standalone" };
+  const sdk = await trimReady();
+  if (!sdk) return { ok: false, reason: "bridge" };
+  try {
+    const result = await sdk.openFile(path);
+    // 宿主明确回 false 才表示不支持；undefined / null 是「收下了但没回包」。
+    if (result === false) throw new Error("宿主不支持直接打开文件");
+    return { ok: true };
+  } catch {
+    try {
+      await sdk.openFileManager(folderOf(path));
+      return { ok: true, fallback: true };
+    } catch (e) {
+      return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+    }
   }
 }
 

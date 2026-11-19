@@ -59,6 +59,8 @@ describe("FilesPanel 行菜单", () => {
     expect(screen.getByRole("menuitem", { name: /复制文件路径/ })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /在文件夹显示/ })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: /文件详情/ })).toBeNull();
+    // 宿主能力不可用时不摆「用默认应用打开」：点了只会报错。
+    expect(screen.queryByRole("menuitem", { name: /用默认应用打开/ })).toBeNull();
   });
 
   it("「引用到对话」把绝对路径与类型交给 store", () => {
@@ -100,14 +102,19 @@ describe("FilesPanel 行菜单", () => {
     expect(screen.getByRole("menuitem", { name: /复制文件夹路径/ })).toBeInTheDocument();
   });
 
-  it("在飞牛 App 里给全三项", () => {
+  it("在飞牛宿主里给全宿主专属项", () => {
     setUA(APP_UA);
     render(<FilesPanel cwd={CWD} active />);
     fireEvent.click(screen.getByLabelText("更多操作 README.md"));
 
+    expect(screen.getByRole("menuitem", { name: /用默认应用打开/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /在文件夹显示/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /复制文件路径/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /文件详情/ })).toBeInTheDocument();
+
+    // 目录不摆这一项：打开目录就是「在文件夹显示」，两条入口会让人不知道点哪条。
+    fireEvent.click(screen.getByLabelText("更多操作 src"));
+    expect(screen.queryByRole("menuitem", { name: /用默认应用打开/ })).toBeNull();
   });
 });
 

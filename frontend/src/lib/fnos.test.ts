@@ -5,6 +5,7 @@ import {
   canRevealInFnos,
   classifyAuthorizeResult,
   classifyPickResult,
+  folderOf,
   isFnosApp,
 } from "./fnos";
 
@@ -121,5 +122,14 @@ describe("canRevealInFnos", () => {
   it("还没有工作区路径时不显示", () => {
     expect(canRevealInFnos({ path: "", channel: "unix", inHost: true })).toBe(false);
     expect(canRevealInFnos({ path: "   ", channel: "unix", inHost: true })).toBe(false);
+  });
+});
+
+describe("folderOf", () => {
+  it("取文件所在目录，根目录下的文件回 /", () => {
+    expect(folderOf("/vol1/1000/ws/a.docx")).toBe("/vol1/1000/ws");
+    expect(folderOf("/a.docx")).toBe("/");
+    // 目录本身没有尾斜杠时不要退到上一级（宿主只递文件路径，这里只防误用）。
+    expect(folderOf("/vol1/1000/ws/dir/")).toBe("/vol1/1000/ws/dir");
   });
 });
