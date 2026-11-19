@@ -410,11 +410,16 @@ export function turnSpans(items: Item[], running = true): TurnSpan[] {
     const settledByResult = !handoff && lastResult >= 0 && lastResult > lastActivity;
     // 一条 result 都没有（转录回放）时才看会话状态。
     const settledByState = lastResult < 0 && !running;
+    // **交棒只在尾轮才作数**：交棒说的是「这一轮没完，CLI 接着把插话当下一轮跑」，
+    // 而后面已经开了新的一轮（`!isTail`）就说明这一段确实收尾了——再判成「还在跑」
+    // 会让它永远收起不了，界面上那一段的过程一直摊着。实测：插话交棒之后用户又发了
+    // 一句，前面那段的「已完成」就再也不出现。
+    const finished = !isTail ? true : handoff ? false : settledByResult || settledByState;
     spans.push({
       start,
       end,
       process,
-      finished: handoff ? false : !isTail || settledByResult || settledByState,
+      finished,
       durationMs,
     });
     start = end;

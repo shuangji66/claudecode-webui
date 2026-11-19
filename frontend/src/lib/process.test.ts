@@ -222,6 +222,25 @@ describe("turnSpans", () => {
     expect(spans.map((s) => s.start)).toEqual([0, 2]);
     expect(spans[0].process.map((i) => i.id)).toEqual(["x1"]);
   });
+
+  // 插话没赶上当前回合时 CLI 先 result 收尾、再开一轮跑插话——那条 result 是交棒，
+  // 尾轮不该据此判成「已完成」（收起行会先闪一下再被推翻）。但**后面已经开了新的
+  // 一轮**（!isTail）就说明这一段确实收尾了：再判「还在跑」会让它的过程永远摊着。
+  it("交棒 result 只在尾轮才推迟「结束」，非尾轮照常算结束", () => {
+    const handoff = (next: Item[]): Item[] => [
+      user2("u1"),
+      tool("x1"),
+      reply("a1"),
+      result2("r1"),
+      { id: "u2", seq: 0, ts: 0, kind: "user", text: "插话", interjected: true } as Item,
+      result2("r2"),
+      ...next,
+    ];
+    // 尾轮：交棒，还不算结束。
+    expect(turnSpans(handoff([]), true)[0].finished).toBe(false);
+    // 后面又发了一句（新的一轮）：前一段确实结束了。
+    expect(turnSpans(handoff([user2("u3"), tool("x3")]), true).map((s) => s.finished)).toEqual([true, false]);
+  });
 });
 
 // 复制入口只给最终回答，但复制的是**整轮的正文输出**：一轮里模型会写好几段过渡正文，
