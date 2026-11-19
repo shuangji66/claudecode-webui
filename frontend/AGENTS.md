@@ -845,6 +845,10 @@ src/
 - **不许用浏览器原生控件承载 UI**：
   - 模态统一 `components/common/Dialog.tsx`（遮罩、标题区、滚动体、底部栏、Esc/遮罩关闭、
     背景滚动锁、移动端底部安全区都在里面）。不要再手写 `fixed inset-0 … rounded-t-2xl`。
+    **它必须 `createPortal` 到 body，不要改成就地渲染**：`position: fixed` 相对最近的
+    包含块定位，而消息行的 `content-visibility: auto`（隐含 `contain: paint`）就会造出
+    一个——浮层被关进那一条消息（小方块遮罩 + 关闭按钮被裁掉 + 桌面上关不掉，图片灯箱
+    踩过）。`Dialog.test.tsx` 的「挂载位置」用例钉住这条。
     默认移动端是底部 sheet（表单类）；纯展示类（图片灯箱）传 `centered` 改成视口居中 +
     四角圆角，此时 `max-h` 用 85dvh——留出的上下空间同时兜住刘海与 Home Indicator。
   - 下拉统一 `components/common/Select.tsx`（自绘 listbox + 键盘 ↑↓/Enter/Esc），

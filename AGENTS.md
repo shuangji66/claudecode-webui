@@ -504,6 +504,13 @@ hub ── manager ── session ── process ── claude (NDJSON)
   折叠块 `common/Collapsible`、文件图标 `common/FileIcon`。
   原生 `window.confirm/prompt/alert` 与 `<select>` 一律不用：它们的配色/圆角/字号由系统决定，
   在飞牛桌面 iframe 里和主题对不上。
+- **模态必须 `createPortal` 到 body**（`Dialog` 已这么做，改回去就会复现老 bug）：
+  `position: fixed` 相对最近一个「建立了包含块」的祖先定位，而 `contain: paint`
+  （`content-visibility: auto` 隐含它）、`transform`、`filter`、`will-change` 都算。
+  消息行为离屏跳过绘制带着 `content-visibility: auto`，就地渲染的浮层会被关进**那一条消息**：
+  遮罩缩成一个小方块、面板与关闭按钮一起被 `contain: paint` 裁掉，桌面上也关不掉
+  （用户气泡里点开图片就是这个症状，截图复现过）。`Menu` / `Select` / `HoverPreview`
+  本来就挂在 body 上，浮层一律走这条路。
 - **「点外部关闭」必须听 `pointerdown`，不能只听 `mousedown`**（`Menu.useDismiss` 两个都注册，
   但**同一次按下只处理第一条**）：拖拽手柄（右侧栏分隔线）在 `pointerdown` 里 `preventDefault`
   挡住文字选中，浏览器随即不再合成兼容的 `mousedown`——只听 `mousedown` 时点/拖分隔线浮层

@@ -86,12 +86,12 @@ describe("Dialog 叠加", () => {
 
 describe("Dialog 的居中模式", () => {
   it("centered 时移动端也居中、四角圆角（不再从底部升起）", () => {
-    const { container } = render(
+    const { baseElement } = render(
       <Dialog open onClose={() => {}} label="图" centered>
         <img src="/a.png" alt="图" />
       </Dialog>,
     );
-    const overlay = container.querySelector(".fixed") as HTMLElement;
+    const overlay = baseElement.querySelector(".fixed") as HTMLElement;
     expect(overlay.className).toContain("items-center");
     expect(overlay.className).not.toContain("items-end");
     // 四角圆角：不能是只圆上面两角
@@ -100,25 +100,49 @@ describe("Dialog 的居中模式", () => {
   });
 
   it("默认（表单类）仍是底部 sheet", () => {
-    const { container } = render(
+    const { baseElement } = render(
       <Dialog open onClose={() => {}} label="表单">
         <p>内容</p>
       </Dialog>,
     );
-    const overlay = container.querySelector(".fixed") as HTMLElement;
+    const overlay = baseElement.querySelector(".fixed") as HTMLElement;
     expect(overlay.className).toContain("items-end");
   });
 
   // 设置页这类 fullScreen 面板在桌面端有确定高度（md:h-[82vh]）：
   // 只用 items-stretch 会让它退化成 flex-start，面板顶在上沿、纵向不居中。
   it("fullScreen 移动端铺满、桌面端纵向居中", () => {
-    const { container } = render(
+    const { baseElement } = render(
       <Dialog open onClose={() => {}} label="设置" fullScreen panelClassName="h-[100dvh] md:h-[82vh]">
         <p>内容</p>
       </Dialog>,
     );
-    const overlay = container.querySelector(".fixed") as HTMLElement;
+    const overlay = baseElement.querySelector(".fixed") as HTMLElement;
     expect(overlay.className).toContain("items-stretch");
     expect(overlay.className).toContain("md:items-center");
   });
 });
+
+// 回归：模态必须挂在 body 上，不能就地渲染在触发它的那棵子树里。
+//
+// 消息行为离屏跳过绘制带着 `content-visibility: auto`（隐含 `contain: paint`），
+// 它会让所在元素成为 `position: fixed` 后代的**包含块**并裁掉溢出。就地渲染时
+// 用户气泡里点开的图片灯箱被关进那一条消息：遮罩缩成一个小方块、关闭按钮被裁掉，
+// 桌面模式也关不掉（截图复现）。Portal 是这类问题唯一的通用解。
+describe("Dialog 挂载位置", () => {
+  it("渲染到 body，不出现在调用方子树里", () => {
+    const { container, baseElement } = render(
+      <div style={{ contentVisibility: "auto" }}>
+        <Dialog open onClose={() => {}} label="弹窗">
+          <p>内容</p>
+        </Dialog>
+      </div>,
+    );
+    expect(container.querySelector("[role=dialog]")).toBeNull();
+    const panel = baseElement.querySelector("[role=dialog]") as HTMLElement;
+    expect(panel).toBeTruthy();
+    // 直接子级就是遮罩，遮罩的父节点是 body。
+    expect(panel.parentElement?.parentElement).toBe(document.body);
+  });
+});
+

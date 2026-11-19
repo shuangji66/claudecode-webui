@@ -1,17 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { ImageLightbox } from "./ImageLightbox";
+import { UserBubble } from "./UserBubble";
 
 describe("ImageLightbox", () => {
   it("渲染图片与标题", () => {
-    const { container } = render(<ImageLightbox src="/api/fs/raw?x=1" alt="四色图" onClose={() => {}} />);
-    expect(container.querySelector("img")?.getAttribute("src")).toBe("/api/fs/raw?x=1");
+    const { baseElement } = render(<ImageLightbox src="/api/fs/raw?x=1" alt="四色图" onClose={() => {}} />);
+    expect(baseElement.querySelector("img")?.getAttribute("src")).toBe("/api/fs/raw?x=1");
     expect(screen.getByText("四色图")).toBeTruthy();
   });
 
   it("没有 src 时不渲染", () => {
-    const { container } = render(<ImageLightbox src={null} alt="x" onClose={() => {}} />);
-    expect(container.querySelector("[role=dialog]")).toBeNull();
+    const { baseElement } = render(<ImageLightbox src={null} alt="x" onClose={() => {}} />);
+    expect(baseElement.querySelector("[role=dialog]")).toBeNull();
   });
 
   it("给了 onOpenSidebar 才出现「在右侧栏打开」，点击后回调", () => {
@@ -70,17 +71,33 @@ describe("ImageLightbox 缩放", () => {
 
 describe("ImageLightbox 预览窗口", () => {
   it("预览区是固定 1:1 的正方形（边长取容器短边）", () => {
-    const { container } = render(<ImageLightbox src="/a.png" alt="图" onClose={() => {}} />);
-    const box = container.querySelector("[style*='aspect-ratio']") as HTMLElement;
+    const { baseElement } = render(<ImageLightbox src="/a.png" alt="图" onClose={() => {}} />);
+    const box = baseElement.querySelector("[style*='aspect-ratio']") as HTMLElement;
     expect(box).toBeTruthy();
     expect(box.style.aspectRatio).toBe("1 / 1");
     expect(box.style.width).toBe("min(100cqw, 100cqh)");
   });
 
   it("桌面端尺寸与设置弹窗一致（82vh / 900px）", () => {
-    const { container } = render(<ImageLightbox src="/a.png" alt="图" onClose={() => {}} />);
-    const panel = container.querySelector("[role=dialog]") as HTMLElement;
+    const { baseElement } = render(<ImageLightbox src="/a.png" alt="图" onClose={() => {}} />);
+    const panel = baseElement.querySelector("[role=dialog]") as HTMLElement;
     expect(panel.className).toContain("md:h-[82vh]");
     expect(panel.className).toContain("md:max-w-[900px]");
+  });
+
+  // 回归：灯箱曾被关在单条消息里（消息行有 content-visibility: auto → contain: paint
+  // 建立 fixed 包含块并裁剪溢出），表现为一个很小的窗口、遮罩缺一块、桌面上也关不掉。
+  it("挂在 body 上，不嵌在触发它的消息行里", () => {
+    const { container, baseElement } = render(
+      <div style={{ contentVisibility: "auto" }}>
+        <UserBubble text="带图的消息" images={[{ name: "a.png", mediaType: "image/png", data: "AAA" }]} />
+      </div>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /预览图片/ }));
+    expect(container.querySelector("[role=dialog]")).toBeNull();
+    expect(baseElement.querySelector("[role=dialog]")).toBeTruthy();
+    // 关闭按钮就在面板里，能点到。
+    fireEvent.click(screen.getByRole("button", { name: /关闭|Close/ }));
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
