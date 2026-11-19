@@ -663,17 +663,34 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
   // 纯用户文本：本地发送时已经插过一条，这里按内容去重，避免重复。
   const text = textOfContent(content);
   if (!text) return items;
-  const last = items[items.length - 1];
-  if (
-    last &&
-    last.kind === "user" &&
-    (last.text === text ||
-      last.text.startsWith(`${text}\n附件：`) ||
-      last.text.startsWith(`${text}\nFile: `))
-  ) {
-    return items;
-  }
+  if (echoAlreadyShown(items, text)) return items;
   return [...items, { id: nextId(), seq: seqOf(items), ts: at, kind: "user", text }];
+}
+
+/**
+ * 本地是不是已经插过这条用户消息了（CLI 回显 / 后端广播都走这一份判定）。
+ *
+ * **不能只看最后一条**：`items` 尾项是 thinking / tool 时（回合已经跑起来了）
+ * 原来的判定直接失效。这在本机发的消息上不明显——那种情况回显紧跟着本地插入，
+ * 尾巴就是那条气泡；但**插话**恰恰发生在回合进行中，本地气泡后面已经跟了一堆
+ * 过程内容，于是回显被当成「又一条用户消息」插进来，把这一轮切成两半（前半截被
+ * 当成「已完成」收起来、还冒出复制按钮）。
+ *
+ * 往回找的边界是**上一条 `result`**：一轮之内的本地气泡才算候选。跨过 result
+ * 就是上一轮的事了，那里出现同样的话是用户真的又发了一遍，不能吞。
+ *
+ * `hasImages` 为真时，两条都没有正文的空文本消息也算同一条（图片消息两边都可能
+ * 没有文字，只能靠「都有图」认）。
+ */
+function echoAlreadyShown(items: Item[], text: string, hasImages = false): boolean {
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const it = items[i];
+    if (it.kind === "result") return false; // 出了这一轮：不跨轮比对
+    if (it.kind !== "user") continue;
+    if (samePromptEcho(it.text, text)) return true;
+    if (hasImages && it.text === "" && (it.images?.length ?? 0) > 0) return true;
+  }
+  return false;
 }
 
 /** 转录里推导出来的一轮用量；ts 与该回合最后一条回答的 item.ts 对齐。 */
@@ -1023,15 +1040,12 @@ export function appendPromptEcho(
   const images = echo.images ?? [];
   const text = [prompt, ...files.map((name) => `${label}${name}`)].filter(Boolean).join("\n");
   if (!text && images.length === 0) return items;
-  const last = items[items.length - 1];
-  // 本机刚插过同一条：不重复。图片消息两边都可以没有正文，靠「都有图片」认出来。
-  if (
-    last &&
-    last.kind === "user" &&
-    (samePromptEcho(last.text, prompt) || (images.length > 0 && last.text === "" && (last.images?.length ?? 0) > 0))
-  ) {
-    return items;
-  }
+  // 本机刚发过同一条：不重复。图片消息两边都可以没有正文，靠「都有图片」认出来。
+  //
+  // **往回找整轮**而不是只看最后一条，理由同 `echoAlreadyShown`：插话发生在回合
+  // 进行中，本地气泡早被后续的 thinking / tool 顶走了，只看尾巴会把广播当成新消息
+  // 再插一条——那条没有 `interjected` 标记，于是把这一轮切成两半。
+  if (echoAlreadyShown(items, prompt, images.length > 0)) return items;
   return [
     ...items,
     {

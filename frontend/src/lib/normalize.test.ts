@@ -1352,3 +1352,70 @@ describe("applyCLI 跳过 sidechain / meta 行", () => {
     expect(items).toHaveLength(0);
   });
 });
+
+// 插话发生在**回合进行中**：本地气泡后面已经跟了 thinking / tool，CLI 回显那条
+// 用户消息时尾巴不是 user。原来只看最后一条，去重失效 → 回显被当成新的一条用户
+// 消息插进来 → 这一轮被切成两半（前半截被当成「已完成」收起来、还冒出复制按钮）。
+describe("插话回显去重（回合进行中）", () => {
+  const thinking: Item = { id: "th", seq: 0, ts: 0, kind: "thinking", text: "想一下" };
+
+  it("尾巴是过程内容时，仍能认出这条回显", () => {
+    // 本地发一条、插一句，中间插进了思考。
+    let items: Item[] = appendUser([], "开始干活", undefined, false);
+    items = [...items, thinking];
+    items = appendUser(items, "顺便看看日志", undefined, true);
+
+    items = applyCLI(items, {
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "顺便看看日志" }] },
+    });
+
+    // 没有多出第三条用户消息。
+    expect(items.filter((i) => i.kind === "user")).toHaveLength(2);
+  });
+
+  it("插话之前那条的尾巴也是过程内容时同理", () => {
+    let items: Item[] = appendUser([], "开始干活", undefined, false);
+    items = [...items, thinking];
+    items = applyCLI(items, {
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "开始干活" }] },
+    });
+    expect(items.filter((i) => i.kind === "user")).toHaveLength(1);
+  });
+
+  // 跨过 result 就是上一轮：用户真的又说了一遍同样的话，不能被吞。
+  it("不跨轮去重：上一轮说过同样的话，这一轮仍保留", () => {
+    const result: Item = { id: "r1", seq: 0, ts: 0, kind: "result", durationMs: 1000 };
+    let items: Item[] = appendUser([], "跑测试", undefined, false);
+    items = [...items, result];
+    items = applyCLI(items, {
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "跑测试" }] },
+    });
+    expect(items.filter((i) => i.kind === "user")).toHaveLength(2);
+  });
+});
+
+// 后端 `prompt.echo` 走的是另一条去重（`appendPromptEcho`）。插话时本地气泡后面
+// 已经跟上了 thinking，尾项不是 user——旧实现只看尾巴，于是广播被当成新消息补进来，
+// 那条没有 interjected 标记，把这一轮切成两半。
+describe("prompt.echo 插话去重（回合进行中）", () => {
+  it("尾巴是 thinking 时，广播不再补一条用户消息", () => {
+    let items: Item[] = appendUser([], "开始干活", undefined, false);
+    items = [...items, { id: "th", seq: 0, ts: 0, kind: "thinking", text: "想一下" }];
+    items = appendUser(items, "顺便看看日志", undefined, true);
+    // 插话写进 stdin 之后、广播到达之前，CLI 已经在往下跑了。
+    items = [...items, { id: "th2", seq: 0, ts: 0, kind: "thinking", text: "接着想" }];
+
+    items = appendPromptEcho(items, { text: "顺便看看日志", interjected: true });
+    expect(items.filter((i) => i.kind === "user")).toHaveLength(2);
+  });
+
+  it("别的设备发来的插话确实会补一条，并带上 interjected", () => {
+    // 本机没有这条气泡：必须补，否则界面上只剩模型突然开始思考。
+    const items = appendPromptEcho([], { text: "另一台设备插的话", interjected: true });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "user", interjected: true });
+  });
+});

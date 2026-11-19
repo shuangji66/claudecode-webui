@@ -713,6 +713,13 @@ src/
     那一段——收起态下过渡正文多半看不见，不带上就等于复制不全。**思考过程（thinking）不进
     复制内容**（那是推理不是输出），CLI 包的 API 错误消息也不算正文。过渡正文本身在收起时
     照常显示：收起藏的是「过程」（思考 + 工具调用），正文输出一直留着。
+  - **回显去重必须往回找整轮，不能只看最后一条**（`normalize.echoAlreadyShown`）：
+    `applyUser`（CLI 回显）与 `appendPromptEcho`（后端广播）原来都只在「最后一条是 user」
+    时才去重。插话发生在**回合进行中**，本地气泡后面早就跟上了 thinking / tool，尾巴不是
+    user，于是去重失效——回显/广播被当成新的一条用户消息插进来，那条**没有 `interjected`
+    标记**，这一轮就被切成两半（前半截当成「已完成」收起、还冒出复制按钮）。
+    现在的边界是**上一条 `result`**：一轮之内的本地气泡才算候选；跨过 result 就是上一轮的
+    事，用户真的又说了一遍同样的话，不能吞。`hasImages` 允许两条空正文的图片消息互认。
   - **插话（`priority=now`）不切轮**（`UserItem.interjected`）：它是往正在跑的这一轮里补一句，
     不是新的一轮。所有「按用户消息切轮」的地方都必须跳过它——`lib/process.turnSpans`、
     `lib/turns.turnsOf`/`windowStart`、`lib/process.hiddenReplyIds`、`normalize.stampTurnUsage`。
