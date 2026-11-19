@@ -578,7 +578,7 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
         {file && !loading && !error && (
           <>
             {isOffice ? (
-              <OfficePane path={path} kind={kind} name={name} />
+              <OfficePane cwd={cwd} path={path} kind={kind} name={name} />
             ) : file.binary && kind !== "image" && kind !== "pdf" ? (
               <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
                 <FileIcon name={name} size={26} />

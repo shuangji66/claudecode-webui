@@ -50,8 +50,11 @@ interface SidebarState {
    * 与 readFile 是两条路：那条回的是文本 JSON（二进制文件只给元数据），
    * 这条拿 ArrayBuffer 交给预览器；后端只放行 Office 扩展名，不能让这里变成
    * 「读工作区任意文件」的通用入口。
+   *
+   * `cwd` 由调用方显式给（侧栏面板的 cwd prop）：切工作区的那一瞬间 store 里的
+   * 当前工作区可能已经换了，而面板还挂着上一个目录的选中路径。
    */
-  readBytes: (path: string, signal?: AbortSignal) => Promise<ArrayBuffer>;
+  readBytes: (path: string, opts?: { signal?: AbortSignal; cwd?: string }) => Promise<ArrayBuffer>;
 
   /**
    * 正文里点「在右侧栏打开」的请求。
@@ -241,11 +244,11 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     return apiFetch<FsFile>(`/api/fs/file?${query.toString()}`);
   },
 
-  readBytes: async (path, signal) => {
-    const { cwd } = get();
+  readBytes: async (path, opts) => {
+    const cwd = opts?.cwd ?? get().cwd;
     if (!cwd) throw new Error("未选择工作区");
     const query = new URLSearchParams({ cwd, path });
-    return apiFetchBytes(`/api/fs/blob?${query.toString()}`, signal);
+    return apiFetchBytes(`/api/fs/blob?${query.toString()}`, opts?.signal);
   },
 
   requestOpenFile: (path) => {

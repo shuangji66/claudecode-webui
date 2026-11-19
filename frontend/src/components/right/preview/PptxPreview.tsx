@@ -4,6 +4,7 @@
 // 页面固定白底深字，模拟幻灯片本身：主题令牌在深色模式下会把内容变成浅字浅底。
 import { useEffect, useMemo, useState } from "react";
 import { useT } from "../../../lib/i18n";
+import { OoxmlTooLargeError } from "../../../lib/ooxml";
 import { PPTX_MAX_SLIDES, parsePptx, type PptxDoc } from "../../../lib/pptx";
 
 interface Props {
@@ -14,7 +15,7 @@ interface Props {
 type State =
   | { status: "loading" }
   | { status: "ready"; doc: PptxDoc }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string; tooLarge: boolean };
 
 export default function PptxPreview({ bytes, name }: Props) {
   const t = useT();
@@ -28,7 +29,11 @@ export default function PptxPreview({ bytes, name }: Props) {
       try {
         setState({ status: "ready", doc: parsePptx(new Uint8Array(bytes)) });
       } catch (reason) {
-        setState({ status: "error", message: reason instanceof Error ? reason.message : String(reason) });
+        setState({
+          status: "error",
+          message: reason instanceof Error ? reason.message : String(reason),
+          tooLarge: reason instanceof OoxmlTooLargeError,
+        });
       }
     }, 0);
     return () => {
@@ -53,7 +58,12 @@ export default function PptxPreview({ bytes, name }: Props) {
   if (state.status === "error") {
     return (
       <div className="m-3 rounded-lg border border-danger/25 bg-danger/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-danger">
-        {t(`无法解析幻灯片：${state.message}`, `Cannot parse slides: ${state.message}`)}
+        {state.tooLarge
+          ? t(
+              "文档解压后体积过大（超过 128MB），侧栏无法预览，请下载后用桌面应用打开。",
+              "This document expands beyond 128MB; download it and open it in a desktop app.",
+            )
+          : t(`无法解析幻灯片：${state.message}`, `Cannot parse slides: ${state.message}`)}
       </div>
     );
   }

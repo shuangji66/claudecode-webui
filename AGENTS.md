@@ -241,6 +241,13 @@ hub ── manager ── session ── process ── claude (NDJSON)
   继续走「二进制占位 + 下载」，**不要拿 .docx 的解析器去硬解**。
   `FilesPanel` **先判类型再判 `file.binary`**：Office 文件的 binary 一定是 true，
   顺序反了会渲染成「不支持文本预览」。
+  **解压要另算预算**：32MB 的请求上限管不到解压后的体积（zip 能到 1000:1，一个
+  32MB 的 xlsx 可以解出几十 GB XML）。`lib/ooxml.unzipParts` 在解压前按条目的
+  `originalSize` 计价，单条 >48MB 或总量 >128MB 抛 `OoxmlTooLargeError`，界面给
+  「解压后体积过大，请下载」而不是白屏/OOM；pptx 的 `ppt/media/*` 只解压位图
+  （`isPptxPreviewPart`），视频/音频/EMF 在解压前就挡掉。
+  `OfficePane` 用**面板传下来的 `cwd`**（不是 store 的全局当前工作区）取字节：
+  切工作区的一瞬间两者可能不一致，预览会去读另一个目录里的同名相对路径。
 - **三个解析器各自是一个懒加载 chunk**（`components/right/preview/` 的
   `DocxPreview` / `XlsxPreview` / `PptxPreview`）：docx-preview（含 jszip）约 50KB gz，
   首屏不该为多数会话根本不会打开的文档买单。`OfficePane` 自身很轻，静态 import 没问题。

@@ -14,12 +14,14 @@ const PptxPreview = lazy(() => import("./PptxPreview"));
 export type OfficeKind = "docx" | "xlsx" | "pptx";
 
 interface Props {
+  /** 工作区绝对路径；由面板传进来，不用 store 的全局当前工作区。 */
+  cwd: string;
   path: string;
   kind: OfficeKind;
   name: string;
 }
 
-export function OfficePane({ path, kind, name }: Props) {
+export function OfficePane({ cwd, path, kind, name }: Props) {
   const t = useT();
   const readBytes = useSidebarStore((s) => s.readBytes);
   const [bytes, setBytes] = useState<ArrayBuffer | null>(null);
@@ -29,7 +31,7 @@ export function OfficePane({ path, kind, name }: Props) {
     const controller = new AbortController();
     setBytes(null);
     setError("");
-    readBytes(path, controller.signal)
+    readBytes(path, { signal: controller.signal, cwd })
       .then((next) => {
         if (!controller.signal.aborted) setBytes(next);
       })
@@ -38,7 +40,7 @@ export function OfficePane({ path, kind, name }: Props) {
         setError(reason instanceof Error ? reason.message : String(reason));
       });
     return () => controller.abort();
-  }, [path, readBytes]);
+  }, [cwd, path, readBytes]);
 
   if (error) {
     return (

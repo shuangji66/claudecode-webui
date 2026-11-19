@@ -4,6 +4,7 @@
 // sharedStrings 解析在手机上要几百毫秒，同步跑会让点击看起来像没反应。
 import { useEffect, useState } from "react";
 import { useT } from "../../../lib/i18n";
+import { OoxmlTooLargeError } from "../../../lib/ooxml";
 import { XLSX_MAX_COLS, XLSX_MAX_ROWS, parseXlsx, type XlsxDoc } from "../../../lib/xlsx";
 
 interface Props {
@@ -14,7 +15,7 @@ interface Props {
 type State =
   | { status: "loading" }
   | { status: "ready"; doc: XlsxDoc }
-  | { status: "error"; message: string };
+  | { status: "error"; message: string; tooLarge: boolean };
 
 export default function XlsxPreview({ bytes, name }: Props) {
   const t = useT();
@@ -31,7 +32,11 @@ export default function XlsxPreview({ bytes, name }: Props) {
         const doc = parseXlsx(new Uint8Array(bytes));
         setState({ status: "ready", doc });
       } catch (reason) {
-        setState({ status: "error", message: reason instanceof Error ? reason.message : String(reason) });
+        setState({
+          status: "error",
+          message: reason instanceof Error ? reason.message : String(reason),
+          tooLarge: reason instanceof OoxmlTooLargeError,
+        });
       }
     }, 0);
     return () => {
@@ -46,7 +51,12 @@ export default function XlsxPreview({ bytes, name }: Props) {
   if (state.status === "error") {
     return (
       <div className="m-3 rounded-lg border border-danger/25 bg-danger/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-danger">
-        {t(`无法解析表格：${state.message}`, `Cannot parse spreadsheet: ${state.message}`)}
+        {state.tooLarge
+          ? t(
+              "文档解压后体积过大（超过 128MB），侧栏无法预览，请下载后用桌面应用打开。",
+              "This document expands beyond 128MB; download it and open it in a desktop app.",
+            )
+          : t(`无法解析表格：${state.message}`, `Cannot parse spreadsheet: ${state.message}`)}
       </div>
     );
   }
