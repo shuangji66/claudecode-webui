@@ -357,11 +357,19 @@ export function applyUsageMessage(
         // 在这里被它取代，**不能相加**，否则同一批 token 会被算两遍。
         next.sessionInputTokens = (prev.sessionInputTokens ?? 0) + turnInput;
         if (totals) next.sessionOutputTokens = (prev.sessionOutputTokens ?? 0) + totals.output;
-        // 即时累计清空：回合已经结束，数并进会话累计了。
-        delete next.turnCountedInputTokens;
-        delete next.turnCountedOutputTokens;
       }
+    } else if (prev && totals === undefined) {
+      // 这条 result 没带 `usage`（中断 / 进程收尾时常见，有的版本只给 modelUsage）。
+      // 那一轮**确实发过请求**，流式阶段按请求攒下的即时累计就是唯一的数：并进会话
+      // 累计再清掉，别把它留在 `turnCounted*` 里——下一轮的即时累计会接着往上加，
+      // 弹层里「合计 / 输入 / 输出」在整轮里都虚高上一轮那一截（复现过：1000 + 2000
+      // 报成 3000）。并进去而不是直接丢，是因为那些 token 真的花掉了。
+      next.sessionInputTokens = (prev.sessionInputTokens ?? 0) + (prev.turnCountedInputTokens ?? 0);
+      next.sessionOutputTokens = (prev.sessionOutputTokens ?? 0) + (prev.turnCountedOutputTokens ?? 0);
     }
+    // 回合结束，即时累计一律清空（不管上面走了哪条分支）：它的生命周期就是「一个回合」。
+    delete next.turnCountedInputTokens;
+    delete next.turnCountedOutputTokens;
     if (context === 0) {
       // 明细与命中率都是从那个不可能的上下文算出来的，一起摘掉。
       delete next.cacheHitRate;

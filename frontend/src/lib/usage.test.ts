@@ -333,6 +333,36 @@ describe("applyUsageMessage", () => {
     expect(snap.turnCountedOutputTokens).toBe(10);
   });
 
+  // 中断 / 进程收尾时 CLI 有时只给 modelUsage、不给 usage：那一轮确实发过请求，
+  // 即时累计是唯一的数。不并进会话累计、也不清空的话，下一轮的即时累计会接着往上
+  // 加，弹层里「合计 / 输入 / 输出」整轮都虚高上一轮那一截。
+  it("result 没带 usage 时，即时累计并进会话累计后清空（不留给下一轮）", () => {
+    let snap = applyUsageMessage(
+      undefined,
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 1000, output_tokens: 5 } } } },
+      1_000,
+    )!;
+    expect(sessionTotals(snap).input).toBe(1000);
+
+    snap = applyUsageMessage(
+      snap,
+      { type: "result", subtype: "error_during_execution", modelUsage: { m: { contextWindow: 200_000 } } },
+      2_000,
+    )!;
+    // 那一轮的 1000 已经并进会话累计，即时累计归零。
+    expect(snap.turnCountedInputTokens).toBeUndefined();
+    expect(snap.sessionInputTokens).toBe(1000);
+
+    // 第二轮：即时累计只算这一轮的 2000，不叠上一轮。
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 2000, output_tokens: 5 } } } },
+      3_000,
+    )!;
+    expect(sessionTotals(snap).input).toBe(3000);
+    expect(snap.turnCountedInputTokens).toBe(2000);
+  });
+
   it("窗口已知时，超过窗口的旧上下文在回合末被清掉", () => {
     const snap = applyUsageMessage(
       { contextTokens: 9_100_000, cacheHitRate: 0.98, inputTokens: 141_100, cacheReadTokens: 8_900_000 },
