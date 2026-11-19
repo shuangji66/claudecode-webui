@@ -87,6 +87,14 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `protocol.IsTurnInit` + `state==ready` + `justFinishedTurn()`（`TurnHandoffWindow`，15s）。
   不认这条信号，界面会在整轮里显示空闲（发送按钮而不是中断按钮），前端的待发送队列也会
   被提前放出去。`TurnHandoffWindow` 是变量，测试会调小它。
+- **交棒那条 `result` 不标 ready**（`takeInterjected`）：插话没赶上本轮时，CLI 先发的
+  `result` 只是给被打断的那一段作个了结，几十毫秒后 init 才会把状态推回 busy。中间那一帧
+  前端要画发送键、计时行、收起行，还要判待发送队列该不该发——标了 ready 就会先闪一下
+  「已完成 / 可以发送」（实测约 1 秒，截图复现过）。判定用**计数**而不是布尔：插话写下那
+  一刻记 `contentSeq`，`result` 到达时 `contentSeq` 没变才算交棒；期间产出过 assistant /
+  stream_event 就说明这轮又跑起来了，后面那条 result 是真的收尾。**出错 / 被中断的 result
+  照常标 ready**（`resultStopped`：is_error、`[ede_diagnostic]`、subtype 带
+  interrupt/abort/cancel）——那是真的停了。
 - **权限模式可以会话内热切换**（`SetPermissionMode` → 控制请求 `set_permission_mode`，
   实测 2.1.325 在接受请求后立刻回 success；进行中的回合不受影响，之后按新模式判定）。
   回包**必须等**：非法取值时 CLI 只在回包里给原因（`must be one of …`），不等就等于

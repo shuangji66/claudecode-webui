@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -145,6 +146,24 @@ type Session struct {
 	// resultAt 是最近一条 result 的到达时间（unix nano，0 表示还没有）。
 	// 只用来判断「result 之后紧跟着的 init 是不是同一批投递」，见 TurnHandoffWindow。
 	resultAt atomic.Int64
+
+	// interjected 记录「上一次写 stdin 的是一条插话」，用来识别紧随其后的交棒 result。
+	//
+	// 插话没赶上当前回合时，CLI 会先把被打断的这一段收尾（发 result）、再开新一轮跑
+	// 插话。那条 result 到达时，界面上的会话状态不该立刻回到 ready：前端据此画发送键、
+	// 计时行、收起行，还会让待发送队列以为「这一轮完了」而把队首发出去。正常几十毫秒
+	// 内就会来 system/init 把状态推回 busy，但那一帧已经够跳一下了。
+	//
+	// **用计数器而不是布尔**：设标记发生在写 stdin 的 goroutine，清标记在读循环，
+	// 两者没有先后保证——普通 prompt 那条路径事后到达的 assistant 帧会把一条刚写下
+	// 的插话标记清掉。现在记下写插话那一刻已经处理过的内容序号，result 到达时只要
+	// 序号没变，就说明插话之后确实什么都没产出。
+	interjectMu sync.Mutex
+	interjected bool
+	// contentSeq 是读循环已处理的内容帧计数（assistant / stream_event）。
+	contentSeq uint64
+	// interjectSeq 是写插话那一刻的 contentSeq。
+	interjectSeq uint64
 
 	// taskMu/tasks 记录「还没结束的后台任务」的 task_id ↔ tool_use_id。
 	//
@@ -327,8 +346,35 @@ func (s *Session) prompt(text string, attachments []protocol.Attachment, opt pro
 	if err := s.writeLine(protocol.UserMessageWith(text, attachments, opt)); err != nil {
 		return err
 	}
+	// 插话之后紧跟的 result 是交棒（CLI 把它留到下一轮），不该把状态标回 ready。
+	s.interjectMu.Lock()
+	s.interjected = opt.Priority == "now"
+	s.interjectSeq = s.contentSeq
+	s.interjectMu.Unlock()
 	s.setState(StateBusy)
 	return nil
+}
+
+// takeInterjected 取出「刚写过一条插话、且之后还没产出任何内容」的判定结果。
+//
+// 调用方是 result 分支：只有紧跟在插话之后、且插话之后还没产出内容的那条 result 才算
+// 交棒。判完就地清掉——同一个标记不能被后面第二条 result 再认一次。
+func (s *Session) takeInterjected() bool {
+	s.interjectMu.Lock()
+	defer s.interjectMu.Unlock()
+	was := s.interjected && s.contentSeq == s.interjectSeq
+	s.interjected = false
+	return was
+}
+
+// noteContent 记录「读循环又处理了一条内容帧」（assistant / stream_event）。
+//
+// 插话之后只要产出了内容，就说明这一轮又跑起来了（CLI 把它并进了当前回合）：那时
+// 标记必须失效，否则这一轮真正的 result 会被误判成交棒，收起行永远不出现。
+func (s *Session) noteContent() {
+	s.interjectMu.Lock()
+	s.contentSeq += 1
+	s.interjectMu.Unlock()
 }
 
 // Interrupt 中断当前回合。
@@ -773,7 +819,16 @@ func (s *Session) handleLine(line []byte) {
 
 	case protocol.TypeResult:
 		s.resultAt.Store(time.Now().UnixNano())
-		s.setState(StateReady)
+		// 紧跟在插话之后、且这一轮还没再产出任何内容的 result 是**交棒**：CLI 把插话
+		// 留到下一轮了，几十毫秒后会来一条 system/init 把状态推回 busy（见下方 TypeSystem）。
+		// 这一帧不标 ready：前端的发送键、计时行、收起行、待发送队列全都读这个状态，
+		// 标了就会先闪一下「已完成 / 可以发送」，然后被 init 推翻（实测约 1 秒）。
+		//
+		// 出错 / 被中断的 result 是真的停了（用户按 Esc、API 报错）：照常标 ready，
+		// 否则界面会一直以为还在跑。
+		if !s.takeInterjected() || resultStopped(env.Raw) {
+			s.setState(StateReady)
+		}
 		s.emitData(KindCLI, env.Raw)
 
 	case protocol.TypeSystem:
@@ -798,8 +853,44 @@ func (s *Session) handleLine(line []byte) {
 		s.emitData(KindCLI, env.Raw)
 
 	default:
+		// assistant / stream_event：插话之后又产出了内容，说明这一轮跑起来了（CLI 把
+		// 插话并进了当前回合）。记下来，让后续那条 result 不被当成交棒。
+		if env.Type == protocol.TypeAssistant || env.Type == protocol.TypeStreamEvent {
+			s.noteContent()
+		}
 		s.emitData(KindCLI, env.Raw)
 	}
+}
+
+// resultStopped 表示一条 result 是「真的停了」（出错 / 被中断），不是插话交棒。
+//
+// 判据与前端 `lib/queue.shouldFlushAfter`、`lib/normalize.applyResult` 同一套：
+// is_error、中断诊断文本、或者 subtype 带 interrupt/abort/cancel。
+func resultStopped(raw []byte) bool {
+	var msg struct {
+		IsError bool     `json:"is_error"`
+		Subtype string   `json:"subtype"`
+		Result  string   `json:"result"`
+		Errors  []string `json:"errors"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return false
+	}
+	if msg.IsError {
+		return true
+	}
+	sub := strings.ToLower(msg.Subtype)
+	if strings.Contains(sub, "interrupt") || strings.Contains(sub, "abort") || strings.Contains(sub, "cancel") {
+		return true
+	}
+	texts := append([]string{msg.Result}, msg.Errors...)
+	for _, t := range texts {
+		trimmed := strings.TrimSpace(t)
+		if strings.HasPrefix(trimmed, "[ede_diagnostic]") || strings.HasPrefix(trimmed, "[Request interrupted by user") {
+			return true
+		}
+	}
+	return false
 }
 
 func permPayload(p protocol.PermissionRequest) any {

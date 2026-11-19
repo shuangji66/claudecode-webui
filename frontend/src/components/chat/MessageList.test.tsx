@@ -598,6 +598,56 @@ describe("MessageList 收起时机", () => {
     expect(screen.getByText("顺便看一下日志")).toBeInTheDocument();
   });
 
+  // 实测（2.1.328）：插话没赶上当前回合时，CLI 先把这一轮收尾（result）、再开一轮跑
+  // 插话。消息流因此是 `… result → 插话 → 新的思考/工具`。按「本段里有 result 就算
+  // 结束」的话，插话之后的过程会和前半截一起收进「已完成」那一行——截图复现过。
+  it("插话落在 result 之后：后半段过程仍铺开，不挂「已完成」", () => {
+    setSessionRunning(true);
+    const done: Item = { id: "r1", seq: 0, ts: 0, kind: "result", durationMs: 15000 };
+    const items: Item[] = [
+      user("u1"),
+      thinking(),
+      done,
+      { id: "i1", seq: 0, ts: 0, kind: "user", text: "开始页隐藏+号", interjected: true },
+      { id: "th2", seq: 0, ts: 0, kind: "thinking", text: "插话后的思考" },
+      bash(),
+    ];
+    render(<MessageList items={items} />);
+    expect(screen.queryByRole("button", { name: /已完成/ })).toBeNull();
+    expect(screen.getByText("思考中")).toBeInTheDocument();
+    expect(screen.getByText("插话后的思考")).toBeInTheDocument();
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+  });
+
+  // 实测（2.1.328）真实顺序：本地气泡先落地，CLI 交棒补发的 result 随后到，新一轮的
+  // 思考再晚一帧。那一瞬间 result 是段里最后一条内容 → 判据成立 → 收起行闪一下
+  // 「已完成」，约 1 秒后又被推翻（截图复现过）。
+  it("插话之后紧跟的 result 是交棒：不闪「已完成」，过程一直铺开", () => {
+    setSessionRunning(true);
+    const bridge: Item = { id: "r1", seq: 0, ts: 0, kind: "result", durationMs: 16000 };
+    const items: Item[] = [
+      user("u1"),
+      thinking(),
+      bash(),
+      { id: "i1", seq: 0, ts: 0, kind: "user", text: "来点国际新闻", interjected: true },
+      bridge,
+    ];
+    const { rerender } = render(<MessageList items={items} />);
+    // 交棒那一帧：这一轮没结束，不挂收起行。
+    expect(screen.queryByRole("button", { name: /已完成/ })).toBeNull();
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+
+    // 新一轮的思考到达：状态不变，过程照旧铺着（没有折起再展开的跳变）。
+    rerender(
+      <MessageList
+        items={[...items, { id: "th2", seq: 0, ts: 0, kind: "thinking", text: "插话后的思考" }]}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /已完成/ })).toBeNull();
+    expect(screen.getByText("ls -la")).toBeInTheDocument();
+    expect(screen.getByText("插话后的思考")).toBeInTheDocument();
+  });
+
   it("跑到一半永远不收，哪怕选的是「完成时收起」", () => {
     setSessionRunning(true);
     render(<MessageList items={[user("u1"), thinking(), read(), bash(), answer]} />);

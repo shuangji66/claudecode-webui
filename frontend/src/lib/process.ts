@@ -98,9 +98,20 @@ export interface TurnSpan {
   end: number;
   /** 这一轮的过程条目（思考 + 工具）：收起时整批隐藏，展开时按档位还原回原位。 */
   process: Item[];
-  /** 这一轮结束没有：本轮里有 `result`，或者这条会话此刻根本不在跑（转录回放）。 */
+  /**
+   * 这一轮结束没有：`result` 之后**本段里再没有过程**，或者这条会话此刻根本不在跑
+   * （转录回放）。
+   *
+   * 不能只看「本段里有 result」：插话有时赶不上当前回合，CLI 会先把这一轮收尾
+   * （发 `result`）、再开一轮把插话跑完。那两条 result 之间还夹着正在产生的思考与
+   * 工具，按「有 result 就算结束」会把它们一起收进「已完成」那一行——用户看到的
+   * 就是「插了一句，后面的思考突然折起来了」。
+   */
   finished: boolean;
-  /** 本轮耗时（result.duration_ms）；还在跑或者历史里没有 result 时为空。 */
+  /**
+   * 本轮耗时：本段各条 `result.duration_ms` 之和（一段里可能有多条：插话把一轮
+   * 拆成了多个子回合）。还在跑或者历史里没有 result 时为空。
+   */
   durationMs?: number;
 }
 
@@ -314,6 +325,37 @@ export function replyCopy(items: Item[], id: string, finished = true): string | 
 }
 
 /**
+ * 这条 `result` 是不是「插话交棒」留下的那条（不是这一轮真的结束）。
+ *
+ * **插话没赶上当前回合时，CLI 会把它留到下一轮**：先把被打断的这一段收尾（发 `result`），
+ * 紧接着开新一轮跑插话。前端看到的顺序是「插话气泡（本地先落地）→ result → 新一轮的
+ * init 与思考」，中间那条 result 就成了「最后一条内容之后有 result」——按它判结束的话，
+ * 收起行会先闪一下「已完成」再被推翻（实测约 1 秒）。
+ *
+ * 判据：这条 `result` 之前**紧挨着**一条插话，中间什么内容都没有。插话之后还有回答 /
+ * 思考 / 工具，就说明那一段真的跑完了（那一轮的活干完了），该收就收。
+ *
+ * **出错 / 被中断的 `result` 不算交棒**：那种情况下这一轮是真的停了，收起行该出来，
+ * 耗时也该报。
+ *
+ * 纯函数，`resultIndex` 是这条 result 在同一个 `items` 里的下标。
+ */
+export function handoffResult(items: Item[], resultIndex: number): boolean {
+  const result = items[resultIndex];
+  if (result?.kind !== "result") return false;
+  if (result.isError === true) return false;
+  const sub = (result.subtype ?? "").toLowerCase();
+  if (sub.includes("interrupt") || sub.includes("abort") || sub.includes("cancel")) return false;
+  // 从 result 往前找第一条「有内容」的条目：必须是插话，中间隔着思考/工具/回答都不算。
+  for (let i = resultIndex - 1; i >= 0; i -= 1) {
+    const item = items[i];
+    if (isProcessItem(item) || item.kind === "assistant" || item.kind === "result") return false;
+    if (item.kind === "user") return item.interjected === true;
+  }
+  return false;
+}
+
+/**
  * 把列表切成「轮」，并标出每轮的过程条目。
  *
  * 轮 = 两条用户消息之间的一段（与 `lib/turns.turnsOf` 同一套锚点）。**收起是轮级的**：
@@ -322,6 +364,10 @@ export function replyCopy(items: Item[], id: string, finished = true): string | 
  *
  * **插话（`interjected`）不切轮**：它并进当前回合，不是新的一轮。按它切的话，一句话
  * 就把这一轮的思考与工具调用劈成两半，前半截被当成「已完成」收起来、后半截重新铺开。
+ *
+ * **插话可能落在 result 之后**：它没赶上当前回合时，CLI 会先把这一轮收尾（发 result）、
+ * 再开一轮把它跑完。所以一段里的 result 不是「结束」的充分条件——result 之后还有过程，
+ * 就说明这一段又跑起来了（见 `finished`）。
  *
  * `running` 是「这条会话此刻在不在跑」：转录回放里没有 result 行，只靠扫列表会把历史
  * 轮次全判成没结束。
@@ -337,21 +383,50 @@ export function turnSpans(items: Item[], running = true): TurnSpan[] {
   const bounds = [...heads, items.length];
   for (const end of bounds) {
     const process: Item[] = [];
-    let hasResult = false;
+    /** 最后一条「有内容的」条目与最后一条 result 的下标：判断收尾之后有没有再跑起来。 */
+    let lastActivity = -1;
+    let lastResult = -1;
     let durationMs: number | undefined;
     for (let i = start; i < end; i += 1) {
       const item = items[i];
-      if (isProcessItem(item)) process.push(item);
-      else if (item.kind === "result") {
-        hasResult = true;
-        if (typeof item.durationMs === "number") durationMs = item.durationMs;
+      if (isProcessItem(item)) {
+        process.push(item);
+        lastActivity = i;
+      } else if (item.kind === "assistant" && item.text.trim() !== "") {
+        lastActivity = i;
+      } else if (item.kind === "user") {
+        // 段内只剩插话这一种 user（非插话的都已切轮）：它也算「有内容」，
+        // 后面紧跟的 result 属于交棒，见 handoffResult。
+        lastActivity = i;
+      } else if (item.kind === "result") {
+        lastResult = i;
+        // 一段里可能有多条 result（插话把它拆成了几个子回合），整轮耗时按它们累加。
+        if (typeof item.durationMs === "number") durationMs = (durationMs ?? 0) + item.durationMs;
       }
     }
     // 只有**最后一轮**才可能还在跑：前面的轮次后面已经开了新一轮，必然结束。
     // 转录回放里没有 result 行，按「会话在不在跑」一刀切的话，历史轮次会全被判成
     // 进行中——整段历史的思考与工具都摊在外面，而会话明明正在跑最新那一轮。
     const isTail = end === items.length;
-    spans.push({ start, end, process, finished: hasResult || !running || !isTail, durationMs });
+    // 结束的判据是「**最后一条内容之后**有 result」，不是「本段里有 result」：插话
+    // 没赶上当前回合时，CLI 先发 result 收尾、再开一轮跑插话，那之后的内容属于仍在
+    // 进行的部分。按「有 result 就算结束」的话，插话之后的思考与工具会连同前半截
+    // 一起被收进「已完成」那一行（用户看到的是「插了一句，后面的思考突然折起来了」）。
+    //
+    // 而「插话之后**没有**任何回答就来了一条 result」是交棒，不是收尾：CLI 把插话留到
+    // 下一轮了，那条 result 只是给被插话打断的这一段作个了结。按结束处理的话，收起行
+    // 会先闪一下「已完成」再被新一轮的内容推翻（实测约 1 秒）。
+    const handoff = lastResult > lastActivity && handoffResult(items, lastResult);
+    const settledByResult = !handoff && lastResult >= 0 && lastResult > lastActivity;
+    // 一条 result 都没有（转录回放）时才看会话状态。
+    const settledByState = lastResult < 0 && !running;
+    spans.push({
+      start,
+      end,
+      process,
+      finished: handoff ? false : !isTail || settledByResult || settledByState,
+      durationMs,
+    });
     start = end;
   }
   return spans;

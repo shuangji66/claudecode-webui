@@ -108,11 +108,13 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
   const busy = state === "busy";
   // 本回合的起点取「最后一条用户消息的时间」：local 插入与转录回放都带时间戳，
   // 不再另存一份「回合开始时间」，免得重连、切对话后两份状态对不上。
+  // **插话不是起点**：它并进当前回合（与 `lib/process.turnSpans` 同一套锚点），
+  // 按它算会让计时在插一句之后倒回去，像「刚才等的那几十秒白等了」。
   const turnStartedAt = useMemo(() => {
     if (!busy) return 0;
     for (let i = itemList.length - 1; i >= 0; i -= 1) {
       const it = itemList[i];
-      if (it.kind === "user") return it.ts;
+      if (it.kind === "user" && !it.interjected) return it.ts;
     }
     return 0;
   }, [busy, itemList]);
@@ -190,7 +192,9 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
       ? { ...base, contextWindow: windowFromSettings }
       : base;
   // 「轮」用用户消息数：重开对话时转录里没有 result 行，用 result 计数会归零。
-  const turns = itemList.filter((i) => i.kind === "user").length;
+  // **插话不算一轮**（与 `lib/turns.turnsOf`、`lib/process.turnSpans` 同一套锚点）：
+  // 它并进当前回合，算进去的话底栏写着「2 轮」、右侧刻度却只有一格。
+  const turns = itemList.filter((i) => i.kind === "user" && !i.interjected).length;
 
   const footer = (
     <>

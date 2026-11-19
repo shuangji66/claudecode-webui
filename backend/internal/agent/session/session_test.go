@@ -475,6 +475,79 @@ func TestTurnInitAfterResultMarksBusy(t *testing.T) {
 	waitState(t, sess, StateBusy)
 }
 
+// 插话没赶上当前回合时，CLI 先发 result 收尾、再开新一轮跑插话（实测 2.1.328）。
+// 那条 result 到达时不能把状态标回 ready：前端据此画发送键、计时行与收起行，
+// 标了就会先闪一下「已完成 / 可以发送」，然后被紧随其后的 init 推翻。
+func TestInterjectHandoffResultKeepsBusy(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.Prompt("开始干活"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	fc.next()
+	fc.send(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{}}})
+	// 等读循环把这一帧算进 contentSeq：插话记的是「写下那一刻已经处理过几条内容」。
+	waitContent(t, sess, 1)
+	if err := sess.PromptInterject("顺便看一眼日志", nil); err != nil {
+		t.Fatalf("PromptInterject: %v", err)
+	}
+	fc.next()
+	// 交棒：result 紧跟插话，这一轮其实还没完。
+	fc.send(map[string]any{"type": "result", "subtype": "success"})
+	time.Sleep(50 * time.Millisecond)
+	if got := sess.State(); got != StateBusy {
+		t.Fatalf("交棒的 result 之后 state = %q, want busy（界面会闪一下「已完成」）", got)
+	}
+
+	// init 到了本来就是 busy；跑起来之后第一次真正的 result 才把状态放开。
+	fc.send(map[string]any{"type": "system", "subtype": "init", "permissionMode": "default"})
+	fc.send(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{}}})
+	fc.send(map[string]any{"type": "result", "subtype": "success"})
+	waitState(t, sess, StateReady)
+}
+
+// 插话被 CLI 并进当前回合时，那条 result 是真正的收尾（不是交棒）：状态必须回到
+// ready，否则界面会一直显示「正在工作」，收起行也永远不出来。
+func TestInterjectAbsorbedStillSettlesOnResult(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.Prompt("开始干活"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	fc.next()
+	if err := sess.PromptInterject("顺便看一眼日志", nil); err != nil {
+		t.Fatalf("PromptInterject: %v", err)
+	}
+	fc.next()
+	// 并进了当前回合：插话之后还有内容，说明这一轮继续在跑。
+	fc.send(map[string]any{"type": "assistant", "message": map[string]any{"content": []any{}}})
+	fc.send(map[string]any{"type": "result", "subtype": "success"})
+	waitState(t, sess, StateReady)
+}
+
+// 出错 / 被中断的 result 是真停了：哪怕它紧挨着一条插话，状态也要回到 ready。
+func TestInterjectFollowedByErrorResultSettles(t *testing.T) {
+	for _, result := range []map[string]any{
+		{"type": "result", "subtype": "success", "is_error": true},
+		{"type": "result", "subtype": "error_during_execution", "errors": []string{"[ede_diagnostic] result_type=user stop_reason=null"}},
+	} {
+		sess, fc, _ := startSession(t)
+		if err := sess.Prompt("开始干活"); err != nil {
+			t.Fatalf("Prompt: %v", err)
+		}
+		fc.next()
+		if err := sess.PromptInterject("顺便看一眼日志", nil); err != nil {
+			t.Fatalf("PromptInterject: %v", err)
+		}
+		fc.next()
+		fc.send(result)
+		waitState(t, sess, StateReady)
+		sess.Close()
+	}
+}
+
 // 空闲很久之后冒出来的 init 不能把会话标成忙碌，否则界面会一直显示「正在工作」。
 func TestStaleInitAfterLongIdleKeepsReady(t *testing.T) {
 	old := TurnHandoffWindow
@@ -497,6 +570,25 @@ func TestStaleInitAfterLongIdleKeepsReady(t *testing.T) {
 	if sess.State() != StateReady {
 		t.Fatalf("state = %q, want ready", sess.State())
 	}
+}
+
+// waitContent 等读循环把指定条数的内容帧处理完。
+//
+// 插话标记记的是「写下那一刻已处理过几条内容」（见 Session.contentSeq）：测试里刚
+// send 完的帧可能还没被读循环看到，不等一下会让标记记成旧值。
+func waitContent(t *testing.T, s *Session, want uint64) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s.interjectMu.Lock()
+		got := s.contentSeq
+		s.interjectMu.Unlock()
+		if got >= want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("等待内容帧 %d 超时", want)
 }
 
 func waitState(t *testing.T, s *Session, want string) {

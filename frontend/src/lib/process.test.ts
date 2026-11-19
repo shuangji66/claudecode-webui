@@ -302,4 +302,70 @@ describe("插话不切轮", () => {
     expect(spans[0].finished).toBe(true);
     expect(spans[0].durationMs).toBe(9000);
   });
+
+  // 实测（2.1.328）：插话没赶上当前回合时，CLI 先把这一轮收尾（发 result）、再发一条
+  // system/init 开新一轮把插话跑完。消息流因此是 `... result → 插话 → 新的思考 → 新 result`。
+  // 只判「本段里有 result」就会把插话之后的思考与工具一起收进「已完成」那一行——用户
+  // 看到的就是「插了一句，后面的过程突然折起来了」。
+  it("插话落在 result 之后：这一轮没结束，后半段过程仍然铺开", () => {
+    const turn = [user("u1"), thinking("t1"), result("r1", 9000), user("i1", true), thinking("t2"), tool("x2")];
+    const spans = turnSpans(turn, true);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].finished).toBe(false);
+    // 还是不给复制：这一轮的下半截正在写。
+    expect(replyCopy(turn, "t1", spans[0].finished)).toBeUndefined();
+  });
+
+  it("插话之后 CLI 又跑完一轮：整轮才算结束，耗时把两段加起来", () => {
+    const spans = turnSpans(
+      [user("u1"), thinking("t1"), result("r1", 9000), user("i1", true), thinking("t2"), result("r2", 4000)],
+      true,
+    );
+    expect(spans).toHaveLength(1);
+    expect(spans[0].finished).toBe(true);
+    expect(spans[0].durationMs).toBe(13000);
+  });
+
+  // 实测（2.1.328）的**真实顺序**：本地气泡先落地，CLI 交棒时补发的 result 随后到，
+  // 新一轮的思考再晚一帧。那一瞬间 result 确实是段里最后一条内容，判据立刻成立——
+  // 界面上收起行闪一下「已完成」、约 1 秒后又被新一轮的内容推翻（截图复现过）。
+  it("插话之后紧跟的 result 是交棒，不该让整轮闪一下「已完成」", () => {
+    const turn = [user("u1"), thinking("t1"), tool("x1"), user("i1", true), result("r1", 16000)];
+    const spans = turnSpans(turn, true);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].finished).toBe(false);
+  });
+
+  it("交棒的 result 之后接着跑起来：这一轮从头到尾都是一段、都在跑", () => {
+    const turn = [
+      user("u1"),
+      thinking("t1"),
+      user("i1", true),
+      result("r1", 16000),
+      { id: "th2", seq: 0, ts: 0, kind: "thinking", text: "插话后的思考" } as Item,
+    ];
+    const spans = turnSpans(turn, true);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].finished).toBe(false);
+    expect(spans[0].process.map((i) => i.id)).toEqual(["t1", "th2"]);
+  });
+
+  // 出错 / 被中断的 result 是真的停了：收起行该出来，哪怕它紧挨着一条插话。
+  it("插话之后紧跟的 result 若是出错/中断，这一轮确实结束", () => {
+    for (const extra of [{ isError: true }, { subtype: "interrupt" }]) {
+      const spans = turnSpans(
+        [user("u1"), thinking("t1"), user("i1", true), { id: "r1", seq: 0, ts: 0, kind: "result", ...extra } as Item],
+        true,
+      );
+      expect(spans[0].finished).toBe(true);
+    }
+  });
+
+  it("插话之后还有内容才收尾：那是这一轮真的跑完了", () => {
+    const spans = turnSpans(
+      [user("u1"), thinking("t1"), user("i1", true), reply("a1"), result("r1", 9000)],
+      true,
+    );
+    expect(spans[0].finished).toBe(true);
+  });
 });
