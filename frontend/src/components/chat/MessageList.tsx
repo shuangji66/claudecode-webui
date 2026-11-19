@@ -290,6 +290,9 @@ export function MessageList({
   /**
    * 每条回答该复制的整轮正文（`lib/process.replyCopy`）：只有本轮最终回答拿得到值，
    * 过渡正文拿不到——它们也就不用渲染复制按钮。
+   *
+   * **这一轮没结束就一个都不给**：跑到一半时「最后一条正文」只是半句话，挂个复制按钮
+   * 既没意义，又会在过程里冒出来（用户看到的就是「思考过程下面多了一个复制按钮」）。
    */
   const copies = useMemo(() => {
     const map = new Map<string, string>();
@@ -297,7 +300,7 @@ export function MessageList({
       const slice = shown.slice(span.start, span.end);
       for (const item of slice) {
         if (item.kind !== "assistant") continue;
-        const text = replyCopy(slice, item.id);
+        const text = replyCopy(slice, item.id, span.finished);
         if (text !== undefined) map.set(item.id, text);
       }
     }

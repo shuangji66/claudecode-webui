@@ -207,6 +207,18 @@ describe("turnSpans", () => {
     expect(turnSpans([user2("u1")], false)[0].durationMs).toBeUndefined();
   });
 
+  // 会话正在跑最新一轮时，前面的轮次**必然已经结束**（后面已经开了新一轮，否则它们
+  // 到不了这里）。按「会话在不在跑」一刀切会把整段历史的思考与工具全摊开。
+  it("只有最后一轮才可能还在跑：历史轮次永远算结束", () => {
+    const spans = turnSpans([user2("u1"), thinking("t1"), user2("u2"), tool("x2")], true);
+    expect(spans.map((s) => s.finished)).toEqual([true, false]);
+  });
+
+  it("最后一轮里有 result 也算结束（会话还没切到空闲的那一瞬）", () => {
+    const spans = turnSpans([user2("u1"), thinking("t1"), user2("u2"), tool("x2"), result2("r2")], true);
+    expect(spans.map((s) => s.finished)).toEqual([true, true]);
+  });
+
   it("列表开头没有用户消息时也算一轮，否则那段过程无处可收", () => {
     const spans = turnSpans([tool("x1"), reply("a1"), user2("u2"), tool("x2")], false);
     expect(spans.map((s) => s.start)).toEqual([0, 2]);
@@ -235,6 +247,13 @@ describe("replyCopy", () => {
     const turn = [say("a1", "   "), apiError, say("a2", "真正的答案")];
     expect(replyCopy(turn, "a2")).toBe("真正的答案");
     expect(replyCopy(turn, "e1")).toBeUndefined();
+  });
+
+  it("这一轮没结束就一个都不给：跑到一半的最后一条只是半句话", () => {
+    const turn = [thinking("t1"), say("a1", "正在改"), tool("x1")];
+    expect(replyCopy(turn, "a1", false)).toBeUndefined();
+    // 同一份内容，轮次结束后就有了。
+    expect(replyCopy(turn, "a1", true)).toBe("正在改");
   });
 
   it("不是回答的条目一律不给", () => {

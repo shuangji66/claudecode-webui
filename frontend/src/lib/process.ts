@@ -282,9 +282,9 @@ export function liveDetail(items: Item[]): string {
 /**
  * 一轮里「谁拿复制按钮」以及「复制什么」。
  *
- * 判定只认**本条是不是这一轮最后一条有正文的回答**：一轮里模型会写好几段过渡正文
- * （夹在思考与工具调用之间），每段都挂复制按钮只是噪音，复制出来的也只是半句话。
- * 真正值得复制的入口只有最终回答那一处。
+ * 判定只认**本条是不是这一轮最后一条有正文的回答**，并且**这一轮已经结束**：
+ * 一轮跑着的时候最后一条正文只是半句话，给它一个复制按钮既没意义，又会跟着正文一起
+ * 出现在过程中间（用户看到的就是「思考过程下面冒出一个复制按钮」）。
  *
  * 复制内容则是**整轮的正文输出**：按顺序把这一轮所有 assistant 正文拼起来（过渡正文
  * + 最终回答）。用户要的是「这一轮说了什么」；过渡正文在收起态下多半看不见，不带上
@@ -294,7 +294,8 @@ export function liveDetail(items: Item[]): string {
  * 返回 `undefined` 表示「这条不给复制入口」；否则返回它该复制的文本。
  * 纯函数：`items` 传一整轮的切片（`turnSpans` 的 `[start, end)`）。
  */
-export function replyCopy(items: Item[], id: string): string | undefined {
+export function replyCopy(items: Item[], id: string, finished = true): string | undefined {
+  if (!finished) return undefined;
   let lastReply: AssistantItem | undefined;
   for (let i = items.length - 1; i >= 0; i -= 1) {
     const item = items[i];
@@ -331,17 +332,21 @@ export function turnSpans(items: Item[], running = true): TurnSpan[] {
   const bounds = [...heads, items.length];
   for (const end of bounds) {
     const process: Item[] = [];
-    let finished = !running;
+    let hasResult = false;
     let durationMs: number | undefined;
     for (let i = start; i < end; i += 1) {
       const item = items[i];
       if (isProcessItem(item)) process.push(item);
       else if (item.kind === "result") {
-        finished = true;
+        hasResult = true;
         if (typeof item.durationMs === "number") durationMs = item.durationMs;
       }
     }
-    spans.push({ start, end, process, finished, durationMs });
+    // 只有**最后一轮**才可能还在跑：前面的轮次后面已经开了新一轮，必然结束。
+    // 转录回放里没有 result 行，按「会话在不在跑」一刀切的话，历史轮次会全被判成
+    // 进行中——整段历史的思考与工具都摊在外面，而会话明明正在跑最新那一轮。
+    const isTail = end === items.length;
+    spans.push({ start, end, process, finished: hasResult || !running || !isTail, durationMs });
     start = end;
   }
   return spans;

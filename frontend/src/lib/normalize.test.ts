@@ -113,6 +113,23 @@ describe("normalize", () => {
     expect(items[0]).toMatchObject({ kind: "thinking", text: "先想想" });
   });
 
+  // 上游在工具调用之间常发一个纯空白的 thinking 块（实测一次会话里 57 条 `" "`）：
+  // 渲染出来是一行「思考过程 · 1 字」，点开只有个空格。
+  it("纯空白的 thinking 块直接丢掉", () => {
+    const items = applyCLI([], {
+      type: "assistant",
+      message: {
+        content: [
+          { type: "thinking", thinking: " " },
+          { type: "thinking", thinking: "\n  \t" },
+          { type: "thinking", thinking: "" },
+          { type: "text", text: "真正的回答" },
+        ],
+      },
+    });
+    expect(items.map((i) => i.kind)).toEqual(["assistant"]);
+  });
+
   // 上游中继（Anthropic 兼容代理）会把同一段内容重放多份：实测一次 /doctor 回复里
   // 一个 message 的 thinking 与 text 各被复制了三份，界面与导出就出现「同一段回答三遍」。
   // 同一条消息内「紧邻且逐字相同」的同类块只保留一份。

@@ -271,6 +271,30 @@ describe("MessageList 复制入口", () => {
     expect(screen.getAllByRole("button", { name: "复制回复" })).toHaveLength(1);
   });
 
+  it("对话进行中不渲染复制按钮：那时最后一条正文只是半句话", () => {
+    setSessionRunning(true);
+    setProcessView("detailed");
+    render(<MessageList items={[user(), stage("先看看目录"), thinking(), bash, final("改好了")]} />);
+    expect(screen.queryByRole("button", { name: "复制回复" })).toBeNull();
+  });
+
+  it("对话进行中，历史轮次的复制按钮照常有", () => {
+    setSessionRunning(true);
+    setProcessView("detailed");
+    // 上一轮已结束（后面开了新一轮），当前这一轮还在跑。
+    const prev: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "上一问" },
+      { id: "p1", seq: 1, ts: 0, kind: "assistant", text: "上一答", streaming: false },
+      { id: "pr1", seq: 2, ts: 0, kind: "result", durationMs: 3000 },
+    ];
+    const cur: Item[] = [
+      { id: "u2", seq: 3, ts: 0, kind: "user", text: "这一问" },
+      { id: "c1", seq: 4, ts: 0, kind: "assistant", text: "还没写完", streaming: false },
+    ];
+    render(<MessageList items={[...prev, ...cur]} />);
+    expect(screen.getAllByRole("button", { name: "复制回复" })).toHaveLength(1);
+  });
+
   it("收起态下复制入口仍在（过程都收起来了，答案还得能复制）", () => {
     setSessionRunning(false);
     render(<MessageList items={[user(), stage("先看看目录"), thinking(), bash, final("改好了"), done]} />);
@@ -520,6 +544,26 @@ describe("MessageList 收起时机", () => {
     render(<MessageList items={[user("u1"), thinking(), read(), bash(), answer, done]} />);
     expect(screen.queryByText("ls -la")).toBeNull();
     expect(screen.getByText("已完成，用时 00:09")).toBeInTheDocument();
+  });
+
+  // 会话正在跑最新一轮时，前面的轮次必然早已结束——它们的思考与工具不该跟着摊开。
+  it("对话进行中，历史轮次照常收起，只有当前这一轮铺开", () => {
+    setSessionRunning(true);
+    const prev: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "上一问" },
+      { id: "pth", seq: 1, ts: 0, kind: "thinking", text: "上一轮的思考" },
+      { id: "p1", seq: 2, ts: 0, kind: "assistant", text: "上一答", streaming: false },
+      { id: "pr1", seq: 3, ts: 0, kind: "result", durationMs: 3000 },
+    ];
+    const cur: Item[] = [
+      { id: "u2", seq: 4, ts: 0, kind: "user", text: "这一问" },
+      { id: "cth", seq: 5, ts: 0, kind: "thinking", text: "这一轮的思考" },
+      { id: "c1", seq: 6, ts: 0, kind: "assistant", text: "还没写完", streaming: false },
+    ];
+    render(<MessageList items={[...prev, ...cur]} />);
+    // 历史轮次的思考收起来了，当前这一轮的还在外面。
+    expect(screen.queryByText("上一轮的思考")).toBeNull();
+    expect(screen.getByText("这一轮的思考")).toBeInTheDocument();
   });
 
   it("跑到一半永远不收，哪怕选的是「完成时收起」", () => {

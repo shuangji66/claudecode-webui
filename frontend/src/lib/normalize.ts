@@ -300,7 +300,9 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
           ...(apiError ? { apiError } : {}),
         },
       ];
-    } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking) {
+    } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim()) {
+      // 只认**非空白**内容：上游在工具调用之间常发一个 `" "`（实测一次会话里 57 条），
+      // 渲染出来就是一行「思考过程 · 1 字」，点开是个空格——既没信息也点不动。
       if (prevKind === "thinking" && prevText === block.thinking) continue;
       prevKind = "thinking";
       prevText = block.thinking;
