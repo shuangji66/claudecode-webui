@@ -43,7 +43,16 @@ describe("activeTurnIndex", () => {
     expect(activeTurnIndex(tops, 2000)).toBe(2);
   });
 
+  // 回归：贴底那一刻视口顶部往往还停在上一轮的正文里（一轮的末尾可能就是整屏），
+  // 按 top 算会一直亮着上一轮——看起来「滚到底了刻度却没走到最后一个」。
+  it("贴底时直接取最后一轮", () => {
+    const tops = [0, 500, 1200];
+    expect(activeTurnIndex(tops, 900, undefined, true)).toBe(2);
+    expect(activeTurnIndex([0, 500], 120, undefined, true)).toBe(1);
+  });
+
   it("空刻度返回 -1", () => {
     expect(activeTurnIndex([], 100)).toBe(-1);
+    expect(activeTurnIndex([], 100, undefined, true)).toBe(-1);
   });
 });

@@ -251,11 +251,16 @@ export function MessageList({
     [turns, hidden],
   );
 
-  /** 视口顶部落在哪一轮：只读缓存，不碰 DOM。 */
+  /**
+   * 视口顶部落在哪一轮：只读缓存，不碰 DOM。
+   *
+   * 贴底时直接算最后一轮（`atBottom`）：贴底那一刻视口顶部通常还停在上一轮的正文里，
+   * 按位置算会一直亮着上一轮——「滚到底了刻度却没走到最后一个」。
+   */
   const syncActiveTurn = useCallback(() => {
     const sc = scroller.current;
     if (!sc || turnTops.current.length === 0) return;
-    setActiveTurn(activeTurnIndex(turnTops.current, sc.scrollTop));
+    setActiveTurn(activeTurnIndex(turnTops.current, sc.scrollTop, undefined, stick.current));
   }, []);
 
   // 内容、窗口或容器尺寸变化后重新量一次，并按当前滚动位置校准刻度。
@@ -315,13 +320,12 @@ export function MessageList({
     }
   }, [items]);
 
-  // 内容变高（展开思考过程 / 工具卡片、图片加载完）也跟随贴底。
+  // 内容变高（展开思考过程 / 工具卡片、图片加载完、流式追加一段）也跟随贴底。
   //
   // 上面那个 effect 只认条数变化：展开一个折叠块不改 items，新露出来的正文就留在
   // 视口外，点开像没反应。这里按内容容器的高度变化补上，规则与滚动本身一致——
-  // 用户往上翻过（不贴底）就不跟，手动划回底部自然恢复，不额外给状态。
-  // 阈值与 onScroll 的 `near`（100px）保持一致，否则会出现「新消息会跟、展开不跟」。
-  useFollowGrowth(scroller, content, () => stick.current, true, 100);
+  // 用户往上滚过（不贴底）就不跟，滚回底部自然恢复，不额外给状态。
+  useFollowGrowth(scroller, content, () => stick.current);
 
   // 展开更早的消息后把视口钉在原来那条消息上，别让它「跳一下」。
   useLayoutEffect(() => {
@@ -354,20 +358,37 @@ export function MessageList({
     };
   }, []);
 
+  /**
+   * 上一次 scroll 事件的 scrollTop：判断用户是在往上滚还是在往下滚。
+   *
+   * **贴底状态只认滚动方向，不认「距底多远」**（以前是 `距底 < 100`）。那个判法在流式
+   * 输出下会自己把跟随关掉：跟随把 scrollTop 推到底之后，内容往往在下一个 scroll 事件
+   * 被处理前又长高了一截，事件到达时距底已经 > 100，于是被判成「用户往上翻了」，
+   * 从此不再跟随——表现就是「滚着滚着突然不跟了，得手动点一次回到底部」。
+   * 内容变高只会让 scrollTop 不变或变大，不会伪装成「往上滚」。
+   */
+  const lastTop = useRef<number | null>(null);
+
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
+    const top = el.scrollTop;
+    const prev = lastTop.current;
+    lastTop.current = top;
     if (scrollSettle.current !== null) window.clearTimeout(scrollSettle.current);
     scrollSettle.current = window.setTimeout(() => {
       scrollSettle.current = null;
       measureTurns(true);
       syncActiveTurn();
     }, 150);
-    distFromBottom.current = el.scrollHeight - el.scrollTop;
-    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-    stick.current = near;
-    setAtBottom(near);
-    if (near) setUnseen(false);
+    distFromBottom.current = el.scrollHeight - top;
+    const bottom = el.scrollHeight - top - el.clientHeight;
+    // 往上滚 = 用户要离开底部；滚到底 = 恢复跟随。其余情况（内容长高导致的位置变化）
+    // 保持当前状态，不要拿它改判。阈值给 2px 抖动量，避免亚像素误差来回翻。
+    if (prev !== null && top < prev - 2) stick.current = false;
+    else if (bottom <= 2) stick.current = true;
+    setAtBottom(stick.current);
+    if (stick.current) setUnseen(false);
     if (rafPending.current === null) {
       rafPending.current = window.requestAnimationFrame(() => {
         rafPending.current = null;

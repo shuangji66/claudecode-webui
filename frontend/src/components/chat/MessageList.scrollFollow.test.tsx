@@ -109,9 +109,11 @@ describe("MessageList 展开后贴底跟随", () => {
     expect(el.scrollTop).toBe(1400);
   });
 
-  it("手动往上滑过就不再自动跟随（没有额外状态，只看位置）", async () => {
+  it("手动往上滑过就不再自动跟随（没有额外状态，只看方向）", async () => {
     const el = await mountAndSettle([thinking, answer]);
-    // 用户往上翻：离底部还有 300px。
+    // 先到底，再往上滚一次：贴底状态只认「往上滚」这个方向。
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
     el.scrollTop = 200;
     fireEvent.scroll(el);
 
@@ -122,8 +124,10 @@ describe("MessageList 展开后贴底跟随", () => {
     expect(el.scrollTop).toBe(200);
   });
 
-  it("滑回底部后恢复自动跟随", async () => {
+  it("滚回底部后恢复自动跟随", async () => {
     const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
     el.scrollTop = 200;
     fireEvent.scroll(el);
     fireEvent.click(screen.getByRole("button", { name: /思考过程/ }));
@@ -131,7 +135,7 @@ describe("MessageList 展开后贴底跟随", () => {
     await fireResize();
     expect(el.scrollTop).toBe(200);
 
-    // 手动划回底部：scrollHeight - scrollTop - clientHeight = 0，判定为贴底。
+    // 往下滚回底部：scrollHeight - scrollTop - clientHeight = 0。
     el.scrollTop = 900;
     fireEvent.scroll(el);
     grow(el, 1600);
@@ -149,5 +153,28 @@ describe("MessageList 展开后贴底跟随", () => {
     await fireResize();
 
     expect(el.scrollTop).toBe(1200);
+  });
+
+  // 回归（真实的「滚着滚着不跟了」）：跟随把 scrollTop 推到底之后，内容往往在
+  // 下一个 scroll 事件被处理前又长高了一截。此时距底已经 > 100px，但用户并没有
+  // 往上滚——按「距底多远」判会把跟随悄悄关掉。
+  it("内容长高造成的距底变大不算「用户离开底部」", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+
+    // 跟随把位置推到底（1400 - 500 = 900）。
+    fireEvent.click(screen.getByRole("button", { name: /思考过程/ }));
+    grow(el, 1400);
+    await fireResize();
+    expect(el.scrollTop).toBe(1400);
+
+    // 又长高了一大截，而 scrollTop 还停在旧位置：浏览器补发一次 scroll 事件。
+    grow(el, 2000);
+    fireEvent.scroll(el);
+
+    // 仍然跟随：再长高时继续跟到底，不需要用户点按钮。
+    grow(el, 2400);
+    await fireResize();
+    expect(el.scrollTop).toBe(2400);
   });
 });

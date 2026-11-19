@@ -38,9 +38,14 @@ export function turnsOf(items: Item[]): Turn[] {
  * 当前视口顶部落在哪一轮：最后一个「顶部已滚过阈值」的轮。
  *
  * tops 与 turns 一一对应（元素相对滚动容器的顶部距离）；都还没滚到时返回第一轮。
+ *
+ * `atBottom` 为真时直接取最后一轮：**贴底说明用户在看最新进展**。贴底那一刻视口顶部
+ * 通常还停在上一轮的正文里（一轮的末尾可能就是整屏），按 top 算会一直亮着上一轮，
+ * 看上去「滚到底了刻度却没走到最后一个」。
  */
-export function activeTurnIndex(tops: number[], scrollTop: number, threshold = 24): number {
+export function activeTurnIndex(tops: number[], scrollTop: number, threshold = 24, atBottom = false): number {
   if (tops.length === 0) return -1;
+  if (atBottom) return tops.length - 1;
   let active = 0;
   for (let i = 0; i < tops.length; i += 1) {
     if (tops[i] <= scrollTop + threshold) active = i;

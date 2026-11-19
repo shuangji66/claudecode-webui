@@ -42,7 +42,19 @@ function sizedScroller(scrollHeight = 1000, clientHeight = 500) {
   Object.defineProperty(el, "scrollHeight", { value: scrollHeight, configurable: true });
   Object.defineProperty(el, "clientHeight", { value: clientHeight, configurable: true });
   Object.defineProperty(el, "scrollTo", { value: vi.fn(), configurable: true });
+  Object.defineProperty(el, "scrollTop", { value: 0, writable: true, configurable: true });
   return el as HTMLElement;
+}
+
+/**
+ * 模拟用户往上滚：贴底状态只看**滚动方向**（往上滚 = 要离开底部），
+ * 所以必须真的造出一次 scrollTop 变小的过程，单次事件不算。
+ */
+function scrollUp(el: HTMLElement, to = 0) {
+  el.scrollTop = 1000 - 500; // 先到底
+  fireEvent.scroll(el);
+  el.scrollTop = to;
+  fireEvent.scroll(el);
 }
 
 describe("MessageList 长对话", () => {
@@ -64,8 +76,8 @@ describe("MessageList 长对话", () => {
     render(<MessageList items={many(5)} />);
     const el = sizedScroller();
 
-    // 远离底部：1000 - 0 - 500 = 500
-    fireEvent.scroll(el);
+    // 往上滚 = 要离开底部（贴底与否只看方向，不看距底多远）
+    scrollUp(el);
     const fab = screen.getByRole("button", { name: "回到底部" });
     expect(fab).toBeInTheDocument();
 
@@ -76,7 +88,7 @@ describe("MessageList 长对话", () => {
   it("不贴底时来了新消息，按钮提示「有新内容」", () => {
     const { rerender } = render(<MessageList items={many(5)} />);
     const el = sizedScroller();
-    fireEvent.scroll(el);
+    scrollUp(el);
     expect(screen.getByRole("button", { name: "回到底部" })).toBeInTheDocument();
 
     rerender(<MessageList items={[...many(5), userItem(99)]} />);
@@ -124,6 +136,23 @@ describe("MessageList 轮次刻度", () => {
     expect(screen.queryByText("问题 0")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /跳到第 1 轮/ }));
     expect(screen.getByText("问题 0")).toBeInTheDocument();
+  });
+
+  // 回归：滚到底时视口顶部还停在最后一条回答的开头（一轮的末尾可能就是整屏），
+  // 按「视口顶部落在哪一轮」算会一直亮着倒数第二轮。
+  it("滚到底时刻度高亮最后一轮", async () => {
+    render(<MessageList items={conversation(3)} />);
+    const el = sizedScroller();
+    // 先往上滚（刻度跟位置走），再滚回底部。
+    scrollUp(el);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    expect(screen.getByRole("button", { name: /跳到第 1 轮/ })).toHaveAttribute("aria-current", "true");
+
+    el.scrollTop = 500; // scrollHeight - clientHeight = 500，到底
+    fireEvent.scroll(el);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    expect(screen.getByRole("button", { name: /跳到第 3 轮/ })).toHaveAttribute("aria-current", "true");
   });
 });
 

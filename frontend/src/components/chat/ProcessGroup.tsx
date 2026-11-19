@@ -95,14 +95,26 @@ export function ProcessGroup({
     setOpen(live ? view === "detailed" : true);
   }, [live, view, keepOpen]);
 
-  // 边缘渐隐：正文自身滚动 + 里面内容变高都要重算。
+  /** 正文还没被往上滚过：展开里面的某一步时继续贴底跟随。 */
+  const bodyStick = useRef(true);
+
+  // 边缘渐隐 + 贴底状态：正文自身滚动、里面内容变高都要重算。
   useEffect(() => {
     const el = body.current;
     if (!el || !open) return;
+    // 上一次的 scrollTop，用来判断「用户往上滚」；展开那一刻按真实几何给初值。
+    let lastTop: number | null = null;
+    bodyStick.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 1;
     const update = () => {
       const top = el.scrollTop > 4;
       const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 4;
       setFade((prev) => (prev.top === top && prev.bottom === bottom ? prev : { top, bottom }));
+      // 贴底状态只认滚动方向，不认距底多远：内容长高时 scrollTop 还没动、
+      // scrollHeight 已经变大，按距离判会被误判成「用户离开了底部」。
+      const scrollTop = el.scrollTop;
+      if (lastTop !== null && scrollTop < lastTop - 2) bodyStick.current = false;
+      else if (el.scrollHeight - scrollTop - el.clientHeight <= 1) bodyStick.current = true;
+      lastTop = scrollTop;
     };
     update();
     el.addEventListener("scroll", update, { passive: true });
@@ -116,9 +128,9 @@ export function ProcessGroup({
   }, [open, capped]);
 
   // 展开组里的某一步（思考过程 / 工具卡片）时，组正文这个限高滚动区也要贴底跟随：
-  // 新露出来的内容留在视口外，等于「点了没反应」。规则与对话区一致——正文被往上
-  // 划过就不跟，滑回底部自然恢复，不显示额外状态。
-  useFollowGrowth(body, inner, () => true, capped && open);
+  // 新露出来的内容留在视口外，等于「点了没反应」。规则与对话区一致——往上滚过就不跟，
+  // 滚回底部自然恢复，不显示额外状态。
+  useFollowGrowth(body, inner, () => bodyStick.current, capped && open);
 
   // 组头文案看的是「这一组自己有没有结束」（后面还有没有内容），不是整轮。
   const phase = atTail ? "running" : "done";

@@ -96,12 +96,15 @@ describe("ProcessGroup 展开后贴底跟随", () => {
     expect(el.scrollTop).toBe(1000);
   });
 
-  it("组正文被往上划过就不跟（滑回底部再恢复）", async () => {
+  it("组正文被往上滚过就不跟（滚回底部再恢复）", async () => {
     renderGroup(<p>一步</p>);
     fireEvent.click(screen.getByRole("button", { expanded: false }));
     await mounted();
 
     const el = body();
+    // 先到底，再往上滚：贴底状态只看方向，不看距底多远。
+    sizeBody(el, 800, 200, 600);
+    fireEvent.scroll(el);
     sizeBody(el, 800, 200, 100);
     fireEvent.scroll(el);
 
@@ -109,7 +112,7 @@ describe("ProcessGroup 展开后贴底跟随", () => {
     await fireResize();
     expect(el.scrollTop).toBe(100);
 
-    // 滑回底部：scrollHeight - scrollTop - clientHeight = 0
+    // 往下滚回底部：scrollHeight - scrollTop - clientHeight = 0
     sizeBody(el, 1000, 200, 800);
     fireEvent.scroll(el);
     sizeBody(el, 1200, 200, 800);
