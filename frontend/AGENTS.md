@@ -33,6 +33,8 @@ src/
   lib/download.ts      带鉴权的文件下载（fetch → blob → <a download>，token 走头）
   lib/newChat.ts       「新对话」判定（按对话元数据，不是 items 是否为空）
   lib/drafts.ts        输入框草稿（按对话存 localStorage，重进前端不丢；只存正文）
+  lib/askQuestion.ts   模型提问（AskUserQuestion）：解析 questions、推荐标记、提交自检与答案编码（纯函数）
+  lib/askDrafts.ts     模型提问的作答草稿（按 request_id 存 localStorage，切对话/重载不丢）
   lib/permissionModes.ts 权限模式判定与危险模式标记（唯一入口）
   lib/sessionExport.ts 会话导出 Markdown（右上角「更多」菜单）
   lib/sidebarView.ts   左侧栏视图偏好：分组/排序/归档筛选 + 手动顺序（纯函数 + localStorage）
@@ -77,8 +79,10 @@ src/
                        / MentionMenu（@ 候选菜单）/ useMention（候选拉取、防抖与键盘仲裁）
                        / ImageLightbox（正文图片放大）
                        / UsageStats（环 + 用量弹层，另导出 UsageSummary）/ ResultBar / WorkspacePicker
-  components/tools/    ToolCardHost（注册表）/ AgentCard / BashCard / EditCard / GenericCard（兜底）
+  components/tools/    ToolCardHost（注册表）/ AgentCard / BashCard / EditCard / AskQuestionCard（提问回放）
+                       / GenericCard（兜底）
   components/permission/ PermissionPanel（按钮由 permission_suggestions 决定）
+                       / AskUserQuestionPanel（模型提问：翻页 + 单选多选 + 自定义回答 + 提交自检）
   components/right/    RightSidebar（标签页）/ FilesPanel / GitPanel / TerminalView / SubagentPanel
 ```
 
@@ -604,6 +608,53 @@ src/
 在其他设备/标签上做掉的那次由后端广播的 `permission.resolved{request_id}` 触发删除——
 两条路都不能省。事件缺失的表现不是报错，而是**卡片一直挂着、一轮里越攒越多**；
 `closed` 时整桶清空（进程没了，挂起的审批永远不可能被批准）。
+
+**卡片浮在输入框上方、覆盖对话区**（`ChatPane` 输入区外层 `relative` + 卡片层
+`absolute inset-x-0 bottom-full`）：待审批/提问**不参与布局**。占布局高度时，卡片一出现就把
+消息区顶上去、正在读的位置跳一下，长卡片（模型提问最多 4 题）还会把输入框挤出屏幕。
+四条细节：
+- 卡片层外层 `pointer-events-none`、卡片容器 `pointer-events-auto`：空白处的点击照常落到
+  下面的消息上，滚轮在卡片上照样能滚（卡片层自己 `max-h-[64dvh]` + `overflow-y-auto`，
+  只为「同时挂着多张卡」兜底）。
+- **待审批期间不渲染 `TurnTimer`**（「少女祈祷中 31s」那一行）：卡片会盖住它，露一半更难看；
+  而且「有待审批」本身就说明这一轮没结束，那行没有新信息。
+- 提问卡片**自己**定高、内部滚动（见下），所以它的边框不会跟着内容滚走；
+  卡片层的滚动只为「同时挂着多张卡」兜底。
+- 别把它改回「消息区末尾的流内块」：那样底栏要么被容器裁掉、要么把输入框顶走。
+
+**模型提问走另一张卡片**（`AskUserQuestionPanel`，`ChatPane` 按 `tool_name === "AskUserQuestion"`
+分流）。它**不是审批**：官方工具表里这个工具的 Permission required 是 No，所以不给「始终允许 /
+切到某模式」，标题写「模型提问」。三条不能改的：
+
+- **答案在 `updatedInput` 里**：`{questions: <原样回传>, answers: { [问题原文]: label | label[] }}`
+  （`lib/askQuestion.askUpdatedInput`）。只回 `{behavior:"allow"}` 等于没答——模型拿不到任何选择。
+  `response` 是整卡级自由回复，带上它 CLI 会替换掉整份 answers，逐题作答时不要用它。
+- **逐题拒绝**：`AskDraft.refused` 是每题独立的开关，提交时换成一句占位文本
+  （`ASK_SKIP_ZH` / `ASK_SKIP_EN`，按界面语言给）。claude 的 answers 没有空值语义，只能这么
+  表达「这题不答」；`allow:false` 的整批拒绝**已删除**——它让人以为只跳过了当前这题（踩过）。
+  整批放弃走输入框的「停止」。跳过之后再选选项/写文本会清掉 `refused`（和 DSH 一样）。
+- **提交前自检**：每题必须选一项、写非空文本、或明确跳过，否则 `firstUnanswered` 跳回第一道
+  未处理的题并内联提示，不发回包；「下一页」只是浏览，不校验。
+- **推荐项只加徽章、不预选**：`(Recommended)` / `（推荐）` 去后缀只用于展示，回给模型的仍是
+  原始 label；本地预选 CLI 拿不到（它的 idle 超时只提交对话框里已选中的），预选只会误导。
+
+**卡片自己就是「定高 + 内部滚动」的盒子**：`flex max-h-[60dvh] flex-col overflow-hidden`，
+头部（含 `1/4` 进度）与底栏 `shrink-0`，中间「题干 + 选项 + 输入框」一个
+`dsh-scroll min-h-0 flex-1 overflow-y-auto`。两条约束：
+- **单张卡片必须比外层浮层的上限小**（卡片 60dvh / 浮层 64dvh）。卡片如果是被浮层滚走的，
+  它的**边框会跟着内容一起滚**，上下边就被裁掉、看起来像「边框被盖住」——踩过两次：
+  先做成浮层里的流内块（底栏被裁），再做成 `sticky` 底栏（边框跟着滚）。
+- 底栏**不要**再加 `sticky`：卡片内部滚的是中间那块，底栏是 flex 子项，本来就是固定的；
+  加了只会和 `overflow-hidden` 打架。
+- 「不回答 / 下一题 / 提交」必须永远看得见，所以底栏不能进滚动区；
+  题干太长时让它跟着选项一起滚（对齐 DSH 的「问题正文、超长详情和选项共享内部滚动区」）。
+
+其他要点：单选点一下即自动翻页、「这题不答」也会翻页（回来还能取消）、最后一题停在原地等
+「提交」；`Enter` 继续 / `Shift+Enter` 换行，IME 组合期不拦（`nativeEvent.isComposing`）。草稿按 `request_id` 存 localStorage
+（`lib/askDrafts`），切对话 / 重载回来还在；提交成功、`permission.resolved`、中断、进程结束
+都要清掉。用户配了 `askUserQuestionTimeout` 时卡片顶部提示一句（值来自 `/api/info` 的
+`ask_question_timeout`）——**ccweb 不改用户设置**。历史回放交给 `AskQuestionCard`：从 result
+的 JSON 里认 `answers`，认不出就折叠显示原文。
 
 ## 6. 样式
 

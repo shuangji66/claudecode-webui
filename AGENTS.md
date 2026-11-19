@@ -153,6 +153,34 @@ hub ── manager ── session ── process ── claude (NDJSON)
   永远挂着、一轮里越攒越多（曾经的 bug）。回包之后前端**仍然**本地乐观删除一次，
   事件是给其他连接的。
 
+### 4.2.1 模型提问（`AskUserQuestion`）
+
+- **它走 `can_use_tool`，但不是审批**：官方工具表里 `AskUserQuestion` 的 Permission required 是 **No**。
+  前端按 `tool_name` 分流到 `AskUserQuestionPanel`，标题写「模型提问」，不给「始终允许 /
+  切到某模式」——那两颗按钮对提问没有语义（`permission_suggestions` 一般是空的）。
+- **答案必须放在 `updatedInput` 里**：`{questions: <原样回传>, answers: { [问题原文]: label | label[] }}`。
+  只回 `{behavior:"allow"}` 不带 `updatedInput`，模型拿不到任何选择（等于没答）。`response`
+  是整卡级的自由回复，带上它 CLI 会用「The user responded: …」替换整份答案——逐题作答时别用。
+- **逐题拒绝，不整批作废**：claude 的 answers 是 `{问题原文: label|label[]}`，没有 DSH 那种
+  空 `selected: []` 的合法值，所以「这题不答」以**一句占位文本**回给模型
+  （`（用户跳过此题，按你的最佳判断继续）`，`lib/askQuestion.ASK_SKIP_*`，按界面语言给），
+  模型读得懂、也不用改系统提示词解释「空值是什么意思」。**每题独立**：跳过某一题不影响
+  其他题，全跳过也能提交；别把「不回答」做成 `allow:false` 的整批拒绝——那会让人以为只跳过了
+  当前这题（踩过）。整批放弃走输入框的「停止」（中断整轮）。
+- **提交前自检**：每题必须选一项、写一段非空文本、或明确跳过，否则
+  `firstUnanswered` 跳回第一道未处理的题并内联提示，不发回包。
+- **推荐项只加徽章、不预选**：`(Recommended)` / `（推荐）` 只是标签，CLI 的 idle 超时只会提交
+  「对话框里已选中的」，我们本地的预选它根本拿不到；预选只会让人以为「已经答了」。
+- **`askUserQuestionTimeout` 只提示、不改**：默认 `never`（v2.1.200 起，2.1.198/199 曾短暂默认 60s），
+  取值 `60s` / `5m` / `10m`，**只在用户级 settings 生效**。后端读
+  `$CCWEB_CLAUDE_HOME/.claude/settings.json` 的同名顶层键，经 `/api/info` 的
+  `ask_question_timeout` 给前端，卡片上提示「不回答的话 CLI 到点会自己收尾」；ccweb 不替用户改设置。
+  它在 stream-json 路径上到底会不会触发、超时用什么答案结算**都未实测**，别当已知行为用。
+- **子代理不能提问**（官方限制），卡片因此不处理 agent 归属；`dontAsk`（不询问）模式下
+  `canUseTool` 不被调用，提问到不了前端，模型会自己往下走。
+- 作答草稿按 `request_id` 存浏览器本地（`lib/askDrafts.ts`）：切对话 / 重载回来还在；
+  提交成功、`permission.resolved`、进程结束、中断时清掉，避免下次同 id 的卡片带着过期答案回填。
+
 ### 4.3 Go 侧
 
 - `os.Pipe` 有内核缓冲，`net.Pipe` 没有 —— 测试里用 `net.Pipe` 很容易自锁。

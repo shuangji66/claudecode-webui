@@ -61,7 +61,10 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"tcp_error":     tcpErr,
 		"frontend":      webui.HasIndex(),
 		"max_sessions":  s.d.Cfg.MaxSessions,
-		"started_at":    s.d.StartedAt,
+		// claude 用户级 settings 的提问超时（never / 60s / 5m / 10m）：提问卡片据此提示
+		// 「不回答的话 CLI 到点会自己收尾」。没配就是空串。
+		"ask_question_timeout": askQuestionTimeout(s.d.Cfg.ClaudeHome),
+		"started_at":           s.d.StartedAt,
 	}
 	if s.d.Claude != nil {
 		st := s.d.Claude.Status()

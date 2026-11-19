@@ -83,6 +83,11 @@ function rawToolSummary(item: ToolItem): string {
     }
     case "Skill":
       return text(input.skill) || text(input.command);
+    // 提问：摘要取第一道题的正文（一次调用可能问 2–4 道题）。
+    case "AskUserQuestion": {
+      const first = Array.isArray(input.questions) ? input.questions[0] : undefined;
+      return first && typeof first === "object" ? text((first as Record<string, unknown>).question) : "";
+    }
     default:
       return fallback(input);
   }

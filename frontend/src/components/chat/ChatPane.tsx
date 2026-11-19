@@ -9,6 +9,7 @@ import { WorkspacePicker } from "./WorkspacePicker";
 import { UsageStats, UsageSummary } from "./UsageStats";
 import { TopBar } from "../layout/TopBar";
 import { PermissionPanel } from "../permission/PermissionPanel";
+import { AskUserQuestionPanel } from "../permission/AskUserQuestionPanel";
 import type { PermissionPayload } from "../../transport/types";
 import { conversationTitle } from "../../lib/labels";
 import { workspaceFor } from "../../lib/conversations";
@@ -318,25 +319,38 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
         </div>
       )}
 
-      {pending.length > 0 && (
-        <div className="dsh-scroll mx-auto max-h-[38vh] w-full max-w-[820px] shrink-0 overflow-y-auto px-3 pt-2 md:px-6">
-          <div className="space-y-2">
-            {pending.map((p) => (
-              <PermissionPanel key={p.request_id} perm={p} onReply={(opts) => handleReply(p, opts)} />
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* 新对话（含刚点「新对话」、一条消息都没发的空会话）：输入框居中（参照 DSH
           的新对话页），上方是品牌与工作区选择器；已经有消息时才回到贴底布局。 */}
       <div
         className={
           newChat
-            ? "dsh-scroll flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-[calc(env(safe-area-inset-bottom,0px)+24px)] pt-6 md:px-6"
-            : "shrink-0 px-3 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] pt-2 md:px-6 md:pb-4"
+            ? "dsh-scroll relative flex min-h-0 flex-1 flex-col overflow-y-auto px-3 pb-[calc(env(safe-area-inset-bottom,0px)+24px)] pt-6 md:px-6"
+            : "relative shrink-0 px-3 pb-[calc(env(safe-area-inset-bottom,0px)+8px)] pt-2 md:px-6 md:pb-4"
         }
       >
+        {/* 待审批 / 提问卡片吸附在输入框上方并**覆盖**对话区（不再占布局高度）。
+            新对话页不会有待审批：还没有回合就不会有 can_use_tool，所以这里不必为
+            「居中输入框」的布局单独算位置（真出现时这张卡会贴在容器上沿之外，不会被看到）。
+            卡片一出现就把消息区顶上去会让正在读的位置跳一下，长卡片（模型提问最多 4 题）
+            还会把输入框挤出屏幕。外层 pointer-events-none，只有卡片本身接收点击/滚轮，
+            空白处的点击照常落到下面的消息上。 */}
+        {pending.length > 0 && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-full z-20 px-3 pb-2 md:px-6">
+            <div className="dsh-scroll mx-auto max-h-[64dvh] w-full max-w-[820px] overflow-y-auto">
+              <div className="pointer-events-auto space-y-2">
+                {pending.map((p) =>
+                  // 提问不是审批：它有自己的翻页 / 单选多选 / 提交自检（见 AskUserQuestionPanel）。
+                  // 结构解析失败时那张卡片自己回落到通用审批面板。
+                  p.tool_name === "AskUserQuestion" ? (
+                    <AskUserQuestionPanel key={p.request_id} perm={p} onReply={(opts) => handleReply(p, opts)} />
+                  ) : (
+                    <PermissionPanel key={p.request_id} perm={p} onReply={(opts) => handleReply(p, opts)} />
+                  ),
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         <div className="mx-auto my-auto w-full max-w-[820px]">
           {newChat && (
             <div className="mb-6 flex flex-col items-center gap-2 text-center">
@@ -369,7 +383,9 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
             </div>
           )}
 
-          {!newChat && <TurnTimer startedAt={turnStartedAt} className="mb-1.5 px-1" />}
+          {/* 卡片浮在输入框上方时计时器会被它盖住/顶出来，直接不渲染：那行只说明「还在跑」，
+              而待审批本身就表示这一轮没结束。 */}
+          {!newChat && pending.length === 0 && <TurnTimer startedAt={turnStartedAt} className="mb-1.5 px-1" />}
 
           {/* 任务清单贴在输入框上方（对齐 DSH）：模型用 Tasks API 维护的长期任务
               一眼能看到还剩什么，不必去聊天记录里翻 TaskCreate 卡片。 */}

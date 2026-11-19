@@ -26,6 +26,19 @@ describe("toolSummary", () => {
     expect(toolSummary(tool({ name: "Edit", input: { file_path: "/w/c.ts" } }))).toBe("/w/c.ts");
   });
 
+  // 提问的行摘要要能看出「问了什么」：给数组长度没有任何信息量（兜底会返回 [2]）。
+  it("AskUserQuestion 取第一道题的正文", () => {
+    expect(
+      toolSummary(
+        tool({
+          name: "AskUserQuestion",
+          input: { questions: [{ question: "用哪个数据库？" }, { question: "要哪些章节？" }] },
+        }),
+      ),
+    ).toBe("用哪个数据库？");
+    expect(toolSummary(tool({ name: "AskUserQuestion", input: { questions: [] } }))).toBe("");
+  });
+
   it("Glob 给「模式 · 路径」", () => {
     expect(toolSummary(tool({ name: "Glob", input: { pattern: "**/*.ts", path: "src" } }))).toBe("**/*.ts · src");
   });

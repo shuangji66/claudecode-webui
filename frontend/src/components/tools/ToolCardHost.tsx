@@ -1,8 +1,9 @@
 import type { ToolItem } from "../../lib/model";
-import { IconFileText, IconSpark, IconTerminal, IconWrench } from "../common/Icons";
+import { IconChat, IconFileText, IconSpark, IconTerminal, IconWrench } from "../common/Icons";
 import { useT } from "../../lib/i18n";
 import { toolSummary } from "../../lib/tools";
 import { AgentBody, AgentCard, agentLabel } from "./AgentCard";
+import { AskQuestionBody, AskQuestionCard, askStatus } from "./AskQuestionCard";
 import { BashBody, BashCard } from "./BashCard";
 import { EditBody, EditCard } from "./EditCard";
 import { GenericBody, GenericCard } from "./GenericCard";
@@ -30,6 +31,9 @@ const registry: Record<string, ToolRegistration> = {
   Write: { icon: IconWrench, title: () => "Write", Card: WriteCard, Body: WriteBody },
   // 计划模式的最后一步：入参是一整份 Markdown 计划，按兜底卡片渲染等于让人读 JSON。
   ExitPlanMode: { icon: IconFileText, title: (_item, t) => t("计划", "Plan"), status: planStatus, Card: PlanCard, Body: PlanBody },
+  // 模型中途的提问：实时作答在审批位置的 AskUserQuestionPanel，这张卡片只做回放
+  // （问题、选项、用户的选择）。状态不复用「完成」——提问没有「运行」这回事。
+  AskUserQuestion: { icon: IconChat, title: (_item, t) => t("提问", "Question"), status: askStatus, Card: AskQuestionCard, Body: AskQuestionBody },
 };
 
 /**

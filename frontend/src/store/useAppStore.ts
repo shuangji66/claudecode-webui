@@ -62,6 +62,7 @@ import {
   updatePrompt,
   type QueuedPrompt,
 } from "../lib/queue";
+import { clearAskProgress } from "../lib/askDrafts";
 import { useSidebarStore } from "./useSidebarStore";
 
 export type { SessionInfo } from "../transport/types";
@@ -97,6 +98,11 @@ export interface InfoResponse {
   tcp_error?: string;
   frontend: boolean;
   max_sessions: number;
+  /**
+   * claude 用户级 settings 里的 `askUserQuestionTimeout`（`never` / `60s` / `5m` / `10m`），
+   * 没配就是空串。提问卡片据此提示「CLI 到点会自己收尾」——我们不改用户设置，只显示。
+   */
+  ask_question_timeout?: string;
   started_at: string;
 }
 
@@ -381,6 +387,15 @@ function purgeSession(state: {
   delete state.modes[id];
   delete state.queued[id];
 }
+
+/**
+ * 模型提问卡片的草稿跟着请求走：请求有结论（本机提交 / 别的设备答掉 / CLI 自己收尾 /
+ * 进程结束 / 中断）就把它清掉，否则下次同 id 的卡片会带着一份过期答案回填。
+ */
+function dropAskDrafts(perms: readonly { request_id: string }[] | undefined) {
+  for (const p of perms ?? []) clearAskProgress(p.request_id);
+}
+
 /** 正在创建的新对话；此时发送必须等它落定，不能发到上一个 active。 */
 let createTask: Promise<SessionInfo | null> | null = null;
 const recovering = new Set<string>();
@@ -1522,6 +1537,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
     get().disconnect(id);
     // 进程已经结束：审批、状态、用量快照都作废；消息历史保留（下次打开会重新回放）。
+    dropAskDrafts(get().perms[id]);
     set((s) => ({
       perms: { ...s.perms, [id]: [] },
       states: { ...s.states, [id]: "closed" },
@@ -1782,6 +1798,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     clients.get(id)?.send({ kind: "interrupt" });
     // 中断之后这轮的审批请求就作废了：不清掉的话卡片会一直挂在输入框上方，
     // 点「允许」只会把一条 request_id 早已失效的 control_response 写进 CLI。
+    dropAskDrafts(get().perms[id]);
     set((s) => ({ perms: { ...s.perms, [id]: [] } }));
   },
 
@@ -1840,6 +1857,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       set({ error: "连接已断开，正在自动重连；稍后再批准一次" });
       return;
     }
+    clearAskProgress(req.request_id);
     set((s) => ({
       perms: { ...s.perms, [id]: (s.perms[id] ?? []).filter((p) => p.request_id !== req.request_id) },
     }));
@@ -1941,6 +1959,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         const data = ev.data as { request_id?: string } | undefined;
         const rid = data?.request_id;
         if (!rid) return;
+        clearAskProgress(rid);
         set((s) => ({
           perms: { ...s.perms, [sid]: (s.perms[sid] ?? []).filter((p) => p.request_id !== rid) },
         }));
@@ -1954,6 +1973,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return;
       }
       case "closed": {
+        dropAskDrafts(get().perms[sid]);
         set((s) => {
           const cur = s.items[sid];
           return {
