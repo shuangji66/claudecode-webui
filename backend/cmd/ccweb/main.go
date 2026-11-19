@@ -132,7 +132,7 @@ func main() {
 	// 网关在 manager 之后才建出来（它自己依赖 manager），所以用原子指针接一下。
 	var srvRef atomic.Pointer[gateway.Server]
 	mgr := manager.New(cfg, resolveClaude, store, func(sid string, ev session.Event) {
-		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data})
+		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data, Seq: ev.Seq})
 		srv := srvRef.Load()
 		if srv == nil {
 			return

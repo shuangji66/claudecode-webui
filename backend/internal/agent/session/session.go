@@ -56,10 +56,28 @@ type Transport interface {
 }
 
 // Event 是会话向上层抛出的事件。
+//
+// Seq 是这条事件在**本会话**里的单调序号，供断线重连补发使用（见 Replay）：
+// 前端记住处理过的最大 Seq，重连时带上它，后端把这段空缺按原顺序补回去。
+// 只有会话自己产生的事件有 Seq；网关直发的错误回包之类不需要。
 type Event struct {
 	Kind string          `json:"kind"`
 	Data json.RawMessage `json:"data"`
+	Seq  uint64          `json:"seq,omitempty"`
 }
+
+// 事件重放缓冲的下限。
+//
+// 断线期间 CLI 照样在跑，一轮长任务能产出上百条事件（流式增量、工具调用与结果）。
+// 缓冲只回答一个问题：「刚才断的那一小会儿漏了什么」。超出上限就说明缺得太多，
+// 由调用方退回整份转录回放（Replay 返回 ok=false）——宁可重画一遍，也不要给出
+// 一段中间有空缺的消息流。
+//
+// 变量而非常量：测试要把它调小来验证淘汰行为。
+var (
+	replayMaxEvents = 4096
+	replayMaxBytes  = 4 << 20
+)
 
 // 事件类型。
 const (
@@ -166,7 +184,6 @@ type Session struct {
 	interjectSeq uint64
 
 	// taskMu/tasks 记录「还没结束的后台任务」的 task_id ↔ tool_use_id。
-	//
 	// 前端从消息流现算任务列表，但 `task_id` 只出现在实时的 task_started 里：
 	// 中途连上来的设备只有转录回放，拿不到它，界面上那些「进行中」的后台操作
 	// 就没有 task_id 可以发 stop_task。所以后端按会话记一份，随 session.snapshot
@@ -175,6 +192,23 @@ type Session struct {
 	tasks  map[string]taskRef
 	// taskOrder 保证下发顺序稳定（= 启动顺序），不依赖 map 遍历。
 	taskOrder []string
+
+	// replayMu/replay 是**有界的事件重放缓冲**，只给断线重连补空缺用。
+	//
+	// WS 断开期间 CLI 不会停：assistant 正文、工具结果、回合结束的 result（本轮用量
+	// 与耗时全在它上面）都照常产生，而 hub 只发给当前订阅者。前端重连后只拿到一份
+	// session.snapshot（状态/审批/后台任务），消息流是空的——于是"断网期间跑完的那一轮"
+	// 只在刷新页面（整份转录回放）之后才出现。这里把最近的事件留着，让网关能按
+	// 前端记下的 seq 把空缺补回去（见 Replay）。
+	replayMu  sync.Mutex
+	replay    []Event
+	replaySeq uint64
+	// replayBytes 是缓冲里 Data 的总字节数，用来给 replayMaxBytes 兜底。
+	replayBytes int
+	// epoch 标识「这条会话对象的身份」。前端把它和 seq 一起记着：进程被重启/回收后
+	// 用同一个 UUID 重新 --resume，seq 会从头开始，光比 seq 会把一次"新进程的第 5 条"
+	// 当成"老进程的第 5 条"补上去（内容完全对不上）。epoch 变了就整份重放转录。
+	epoch string
 }
 
 // taskRef 是一个后台任务的标识与展示信息。
@@ -209,6 +243,7 @@ func New(id, cwd string, tr Transport, emit func(Event)) *Session {
 		perms:     make(map[string]json.RawMessage),
 		tasks:     make(map[string]taskRef),
 		done:      make(chan struct{}),
+		epoch:     newEpoch(),
 	}
 	s.state.Store(StateStarting)
 	s.idle.Store(time.Now().UnixNano())
@@ -908,14 +943,88 @@ func permPayload(p protocol.PermissionRequest) any {
 }
 
 // emitData 把一个结构体编成 Event 交给上层；编码失败时降级为纯文本错误事件。
+//
+// **不管有没有上层订阅者都要记进重放缓冲**：emit 为空只说明这一刻没有人在听
+// （测试、或者网关还没接上），事件本身照样是会话历史的一部分，断线重连要补的
+// 正是这一段。
 func (s *Session) emitData(kind string, v any) {
-	if s.emit == nil {
-		return
-	}
 	b, err := json.Marshal(v)
 	if err != nil {
 		b, _ = json.Marshal(map[string]string{"message": err.Error()})
 		kind = KindError
 	}
-	s.emit(Event{Kind: kind, Data: b})
+	ev := s.record(Event{Kind: kind, Data: b})
+	if s.emit == nil {
+		return
+	}
+	s.emit(ev)
+}
+
+// record 给事件编号并放进重放缓冲，返回带 Seq 的事件。
+func (s *Session) record(ev Event) Event {
+	s.replayMu.Lock()
+	defer s.replayMu.Unlock()
+	s.replaySeq++
+	ev.Seq = s.replaySeq
+	s.replay = append(s.replay, ev)
+	s.replayBytes += len(ev.Data)
+	// 两头都要收：条数上限挡住"很多条小事件"，字节上限挡住"少数几条巨大事件"
+	// （一次工具结果可以是几百 KB）。切掉的都是最旧的那些。
+	for len(s.replay) > replayMaxEvents || (s.replayBytes > replayMaxBytes && len(s.replay) > 1) {
+		s.replayBytes -= len(s.replay[0].Data)
+		s.replay = s.replay[1:]
+	}
+	return ev
+}
+
+// newEpoch 生成一个会话对象身份串。
+//
+// 不用 UUID 库：这里只需要"同一个进程内不重复、跨进程重启也不同"。时间戳 + 计数器
+// 足够，而且它是给前端做等值比较用的，不参与任何安全判定。
+func newEpoch() string {
+	epochSeed.Add(1)
+	return fmt.Sprintf("%x-%x", time.Now().UnixNano(), epochSeed.Load())
+}
+
+var epochSeed atomic.Uint64
+
+// Epoch 返回这条会话对象的身份串（见 Session.epoch）。
+func (s *Session) Epoch() string { return s.epoch }
+
+// Replay 从 sinceSeq 之后开始补发事件。
+//
+// sinceEpoch 是前端记下的会话身份：与当前不一致（进程被重启过，seq 从头开始）时
+// 直接判为补不齐，调用方改为整份重放转录——否则会把新进程的前几条事件当成老进程
+// 的续集拼上去，消息流彻底对不上。
+func (s *Session) Replay(sinceEpoch string, sinceSeq uint64) ([]Event, bool) {
+	if sinceEpoch != s.epoch {
+		return nil, false
+	}
+	s.replayMu.Lock()
+	defer s.replayMu.Unlock()
+	// since 比当前序号还大：不是这条会话发出来的，同样不可信。
+	if sinceSeq > s.replaySeq {
+		return nil, false
+	}
+	if sinceSeq == s.replaySeq {
+		return nil, true
+	}
+	// 缓冲里最旧的一条必须是 since+1；否则中间那段已经被淘汰，补不齐。
+	if len(s.replay) == 0 || s.replay[0].Seq > sinceSeq+1 {
+		return nil, false
+	}
+	out := make([]Event, 0, len(s.replay))
+	for _, ev := range s.replay {
+		if ev.Seq > sinceSeq {
+			out = append(out, ev)
+		}
+	}
+	return out, true
+}
+
+// Seq 返回当前已发出的最大事件序号（前端据此判断要不要补发）。
+func (s *Session) Seq() uint64 {
+	s.replayMu.Lock()
+	defer s.replayMu.Unlock()
+	return s.replaySeq
 }

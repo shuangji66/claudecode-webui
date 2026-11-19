@@ -227,6 +227,34 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **claude 转录会包含 sidechain / meta / queue-operation 行**：回放只取
   user/assistant/system/result 且跳过 `isSidechain`/`isMeta`，否则子代理和系统提醒会混进主消息流。
 
+### 4.4.1 WS 重连要补齐断线期间的事件（`sync` / `session.replay`）
+
+- **断开期间 CLI 不会停**：正文、工具结果、回合结束的 `result`（本轮用量、耗时、tok/s
+  全在它上面）照常产生，而 hub 只发给**当时**的订阅者。重连后只发一份 `session.snapshot`
+  （状态/审批/后台任务）是不够的——消息流是空的，于是「断网时跑完的那一轮」永久缺一段，
+  只有整页刷新（重建 store → 整份转录回放）才恢复。曾经就是这个症状。
+- **`session.Session` 记一份有界事件缓冲**（`replayMaxEvents` / `replayMaxBytes`，
+  变量便于测试调小），每条事件带 `Seq`；`emitData` **在没有订阅者时也要 record**
+  （测试、网关未接上都算），否则缓冲里是空的。
+- **前端记 `eventSeq[sid]` 水位**，收到 `session.snapshot` 的 `seq`/`epoch` 后决定：
+  ① 本地没记过 → 只对齐，不补（消息流刚由转录铺好，补一遍会叠成两份）；
+  ② `epoch` 变了（进程被回收/重启后用同一 UUID 又起来，seq 从头开始）→ 整份重放转录；
+  ③ 有缺口 → 发 `sync {since, epoch}`。
+- **`session.snapshot` 与 `sync` 都不能省 `epoch`**：只比 seq 会把新进程的前几条当成
+  老进程的续集拼上去。`session.resync` 必须回当前 `seq`/`epoch`，否则前端下次重连
+  拿同一个过时的 since 来问，来回 resync。
+- **补发是一整帧 `session.replay`，不是逐条 SendJSON**：逐条会把补发历史与此刻的
+  实时广播交错（两者都只是入队），前端收到的事件顺序就不是产生顺序。
+- **前端有「对齐窗口」**（`awaitingReplay`）：sync 已发、replay 未到时到达的实时事件
+  先压着，等补发帧到了按 seq 合并应用——否则 result 可能抢在它对应的正文前面。
+  1 秒兜底计时器防止没回补发帧时消息一直不动。去重靠 `appliedSeq`（逐条的 seq 集合），
+  **不能只按水位跳过**：水位会被抢先到达的实时事件推高，而缺口恰恰在那之前。
+- **`session.resync` 的重建是「合并」不是「覆盖」**（`lib/normalize.mergeReplayed`）：
+  以转录为主，只接本地 `ts` 晚于转录最后一条的条目（断线时本地插的错误提示等），
+  并重排 seq。`settle=true` 顺手收掉本地残留的流式光标——那一轮早就结束了。
+- 只有 `/ws?id=` 会话通道有这套东西；系统通道没有会话，`sync` 走不到。
+
+
 ### 4.5 右侧栏 / 终端
 
 - **PTY 没有第三方依赖**：Linux 上直接开 `/dev/ptmx` + `TIOCSPTLCK/TIOCGPTN/TIOCSWINSZ`。

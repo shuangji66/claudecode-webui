@@ -167,6 +167,28 @@ type clientCmd struct {
 	UpdatedInput       json.RawMessage  `json:"updated_input,omitempty"`
 	UpdatedPermissions json.RawMessage  `json:"updated_permissions,omitempty"`
 	Message            string           `json:"message,omitempty"`
+	// Since 只用于 sync：前端已经处理过的最大事件序号，后端据此补发断线期间的缺口。
+	Since uint64 `json:"since,omitempty"`
+	// Epoch 只用于 sync：前端记下的会话身份（见 session.Session.Epoch）。
+	Epoch string `json:"epoch,omitempty"`
+}
+
+// replayPayload 把补发的事件包成一帧。
+//
+// 每条保留自己的 kind 与 seq：前端按顺序喂回原来那条 apply 路径，不需要为补发
+// 再写一套解析。逐条 SendJSON 会让它们与实时广播交错（都只是入队），顺序会乱。
+func replayPayload(events []session.Event) json.RawMessage {
+	type wireReplayEvent struct {
+		Kind string          `json:"kind"`
+		Seq  uint64          `json:"seq"`
+		Data json.RawMessage `json:"data,omitempty"`
+	}
+	out := make([]wireReplayEvent, 0, len(events))
+	for _, e := range events {
+		out = append(out, wireReplayEvent{Kind: e.Kind, Seq: e.Seq, Data: e.Data})
+	}
+	b, _ := json.Marshal(map[string]any{"events": out})
+	return b
 }
 
 // promptEcho 是广播给同一会话其他连接的「这条提示词已经发出去了」。
@@ -276,6 +298,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		// 但 task_id 只在实时的 task_started 里出现——中途连上来的设备只有转录回放，
 		// 拿不到它就没法中止「进行中」的后台操作。
 		"tasks": sess.LiveTasks(),
+		// seq/epoch 是会话的事件序号与身份：前端拿它当基准，下一次重连据此补空缺。
+		"seq":   sess.Seq(),
+		"epoch": sess.Epoch(),
 	})
 	if err := c.SendJSON(WireEvent{Kind: "session.snapshot", SID: id, Data: snapshot}); err != nil {
 		return
@@ -428,6 +453,26 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 		})
 	case "ping":
 		err = c.SendJSON(WireEvent{Kind: "pong", SID: id})
+	case "sync":
+		// 断线重连补空缺：前端带上会话身份与已经处理过的最大序号，后端把之后的事件
+		// 按原顺序补回。补不齐（缓冲淘汰 / 进程重开过）时回 session.resync，让前端
+		// 整份重放转录——宁可重画一遍，也不要给一段中间有空缺的消息流。
+		events, ok := sess.Replay(cmd.Epoch, cmd.Since)
+		if !ok {
+			// 必须带上当前序号与身份：前端要据此把水位对齐到今天，否则它下次重连
+			// 还会拿一个过时的 since 来，又被判为补不齐，来回 resync 死循环。
+			resync, _ := json.Marshal(map[string]any{"seq": sess.Seq(), "epoch": sess.Epoch()})
+			_ = c.SendJSON(WireEvent{Kind: "session.resync", SID: id, Data: resync})
+			return
+		}
+		// 一次一帧：逐条 SendJSON 会把补发的历史与此刻正在广播的实时事件交错在一起
+		// （两者都只是往发送队列里塞），前端收到的事件顺序就不再是产生顺序。
+		if len(events) > 0 {
+			if err := c.SendJSON(WireEvent{Kind: "session.replay", SID: id, Data: replayPayload(events)}); err != nil {
+				s.sendError(c, err.Error())
+			}
+		}
+		return
 	default:
 		s.sendError(c, fmt.Sprintf("未知命令 %q", cmd.Kind))
 		return

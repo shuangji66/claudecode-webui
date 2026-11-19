@@ -18,6 +18,7 @@ import {
   applyCLI,
   attachTurnUsage,
   isTurnResult,
+  mergeReplayed,
   prependSystem,
   subagentFrame,
   turnsFromTranscript,
@@ -359,6 +360,85 @@ let systemClient: ClaudeClient | null = null;
  *  会因为它的变化重渲染。断线重连后要照这个值重新订阅（服务端订阅跟着连接走，
  *  连接一断就取消了）。 */
 let gitWatchCwd = "";
+/**
+ * 每个会话已处理到的事件序号水位（`WireEvent.seq`）。
+ *
+ * 断线期间后端照样在产出事件（CLI 不会因为浏览器断开就停下），而 WS 只发给当前
+ * 订阅者。重连后用 `sync {since: 水位, epoch}` 把这中间的缺口补回来——没有它，
+ * 「断开期间跑完的那一轮」的正文、工具结果与结束时的 result（含本轮用量与速度）
+ * 全部丢失，只有整页刷新（重建 store → 整份转录回放）才恢复。
+ */
+const eventSeq = new Map<string, number>();
+/**
+ * 每个会话记下的「会话对象身份」（`session.Session.Epoch`）。
+ *
+ * 进程被空闲回收 / 换档位重启后再用同一个 UUID `--resume`，后端的 seq 会从头开始。
+ * 只比 seq 会把新进程的前几条当成老进程的续集拼上去，消息流彻底对不上，
+ * 所以两者一起带上；对不上就整份重放转录。
+ */
+const eventEpoch = new Map<string, string>();
+/**
+ * 已应用过的事件序号，用来去重「补发帧」与「实时广播」的重叠。
+ *
+ * 补发帧（`session.replay`）与实时广播是两条独立的路：从「后端生成快照 → 前端发
+ * sync → 后端回 replay」之间进来的实时事件会先落地，而它们同时也在补发的那一段里。
+ * 只按「水位」跳过会把补发整段丢掉（早于水位的那几条恰恰是缺口本身），
+ * 不去重则同一段正文出现两遍。所以逐条按序号认。
+ *
+ * 只留最近一段：序号单调递增，被淘汰的序号不会再出现（补发跨度受后端缓冲上限约束）。
+ */
+const appliedSeq = new Map<string, Set<number>>();
+
+/** 记录一条已应用的事件；返回 false 表示这条之前已经处理过（重复投递）。 */
+function markApplied(sid: string, seq: number): boolean {
+  let set = appliedSeq.get(sid);
+  if (!set) {
+    set = new Set<number>();
+    appliedSeq.set(sid, set);
+  }
+  if (set.has(seq)) return false;
+  set.add(seq);
+  if (set.size > 4096) {
+    // 只做一次线性扫描：序号单调，低于「最大序号 - 2048」的不会再出现。
+    let high = 0;
+    for (const v of set) if (v > high) high = v;
+    for (const v of set) if (v <= high - 2048) set.delete(v);
+  }
+  return true;
+}
+
+/**
+ * 已经发出 `sync`、还没收到 `session.replay` 的会话。
+ *
+ * 这段时间里到达的实时事件**不能立即应用**：它可能比补发的那一段还晚，先落地就会
+ * 让消息流的顺序颠倒（例如 result 抢在它对应的助手正文前面）。所以先压进
+ * `pendingLive`，等补发帧到了再把两边按序号合起来统一应用。
+ */
+const awaitingReplay = new Set<string>();
+/** 对齐窗口里暂存的实时事件（见 awaitingReplay）。 */
+const pendingLive = new Map<string, WireEvent[]>();
+/** sync 发出后的兜底计时器：后端没回补发帧时也不能让消息流一直卡着。 */
+const syncTimers = new Map<string, number>();
+
+/** 结束一次对齐窗口：清掉缓冲与计时器。 */
+function endSyncWindow(sid: string): void {
+  awaitingReplay.delete(sid);
+  const timer = syncTimers.get(sid);
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    syncTimers.delete(sid);
+  }
+}
+
+/** 把缓冲住的实时事件按序号顺序应用掉（兜底路径 / 补发帧之后的余量）。 */
+function flushLive(sid: string): void {
+  const buffered = pendingLive.get(sid) ?? [];
+  pendingLive.delete(sid);
+  // 按 seq 排序再应用：缓冲里是到达顺序，不是产生顺序（补发帧之后还可能追进来）。
+  buffered.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+  for (const ev of buffered) useAppStore.getState().applyEvent(sid, ev);
+}
+
 const resumePromises = new Map<string, Promise<boolean>>();
 /** 等这一轮结束后要按新档位重开的会话（`--effort` 只在进程启动时固定）。 */
 const effortRestarts = new Set<string>();
@@ -398,6 +478,11 @@ function purgeSession(state: {
   delete state.modes[id];
   delete state.queued[id];
   delete state.liveTasks[id];
+  eventSeq.delete(id);
+  eventEpoch.delete(id);
+  appliedSeq.delete(id);
+  pendingLive.delete(id);
+  endSyncWindow(id);
 }
 
 /**
@@ -561,6 +646,89 @@ function providerRef(form: ProviderForm) {
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** 把 `/api/history/transcript` 的原始事件行折成渲染用的消息列表。 */
+function itemsFromTranscript(tr: TranscriptPayload): Item[] {
+  let next: Item[] = [];
+  for (const line of tr.lines ?? []) {
+    const rec = line as { timestamp?: unknown };
+    const at = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : NaN;
+    next = applyCLI(next, line, Number.isFinite(at) ? at : Date.now());
+  }
+  // 转录里没有 result 行（claude 只把 result 写 stdout），所以「本轮耗时 ·
+  // 输出 tok」必须从 assistant / api-request 行自己推，否则刷新后全丢。
+  next = attachTurnUsage(next, turnsFromTranscript(tr.lines ?? []));
+  // 后端只回放最近 20k 行 / 16MB；被截断时必须说出来，否则用户会以为
+  // 这段对话本来就这么短。
+  if (tr.truncated) next = prependSystem(next, "更早的消息已被省略（只保留最近一段转录）");
+  return next;
+}
+
+/**
+ * 重连补不齐时整份重放转录（`session.resync` 的响应）。
+ *
+ * 与 `openConversation` 里的回放**不是同一份**：那里还负责起会话、切工作区、
+ * 处理失败；这里只做「把磁盘上的历史读回来，跟本地合并」，不碰进程。
+ * 也不能复用那里的短路（本地已有 items 就直接返回）——正是因为它有一份残缺的
+ * 本地列表才需要重建。
+ */
+async function replayTranscript(id: string, get: () => AppState): Promise<void> {
+  const conv = get().conversations.find((c) => c.id === id);
+  try {
+    const tr = await apiFetch<TranscriptPayload>(`/api/history/transcript?id=${encodeURIComponent(id)}`);
+    const next = itemsFromTranscript(tr);
+    const snap = mergeUsage(conv?.usage, usageFromTranscript(tr.lines ?? []));
+    useAppStore.setState((s) => ({
+      items: { ...s.items, [id]: mergeReplayed(next, s.items[id] ?? [], true) },
+      ...(snap ? { usage: { ...s.usage, [id]: snap } } : {}),
+    }));
+  } catch {
+    // 转录还没落盘（刚新建的对话）：本地那份就是全部，保持不动。
+  }
+}
+
+/**
+ * 收到 `session.snapshot` 之后决定要不要补拉断线期间漏掉的事件。
+ *
+ * 分三种情况：
+ *   ① 本地没记过身份（第一次连这条会话 / 刚换进程）：把水位对齐到快照里的序号，
+ *      不补——消息流刚由转录回放铺好，再补一遍会叠成两份。
+ *   ② 身份变了（进程被回收/重启后用同一 UUID 又起来了，序号从头开始）：光比序号
+ *      会把新进程的前几条当成老进程的续集拼上去，直接整份重放转录。
+ *   ③ 身份一致、序号有缺口：发 sync 把那段补回来。
+ */
+function syncMissedEvents(sid: string, epoch: string | undefined, seq: number | undefined): void {
+  if (!epoch || typeof seq !== "number") return;
+  const knownEpoch = eventEpoch.get(sid);
+  const knownSeq = eventSeq.get(sid);
+  eventEpoch.set(sid, epoch);
+  if (knownEpoch === undefined || knownSeq === undefined) {
+    eventSeq.set(sid, seq);
+    return;
+  }
+  if (knownEpoch !== epoch) {
+    // 会话对象换过了：旧的 seq 没有可比性。先对齐水位，再整份重放转录。
+    eventSeq.set(sid, seq);
+    void replayTranscript(sid, () => useAppStore.getState());
+    return;
+  }
+  if (seq <= knownSeq) return;
+  // 对齐窗口：补发帧到达前，实时事件先压着（见 awaitingReplay 的注释）。
+  // 上一次窗口的计时器要先撤掉：它会看到 awaitingReplay 里还有这个 sid
+  // （新窗口的），提前把缓冲冲掉。
+  const stale = syncTimers.get(sid);
+  if (stale !== undefined) window.clearTimeout(stale);
+  awaitingReplay.add(sid);
+  // 兜底：后端没回补发帧（连接又断了 / 版本不匹配）时，1 秒后自己把缓冲的实时事件
+  // 应用掉，别让界面一直卡在「已经连上但消息不动」。
+  const timer = window.setTimeout(() => {
+    if (!awaitingReplay.has(sid)) return;
+    endSyncWindow(sid);
+    flushLive(sid);
+  }, 1000);
+  syncTimers.set(sid, timer);
+  clients.get(sid)?.send({ kind: "sync", since: knownSeq, epoch });
 }
 
 /**
@@ -1363,18 +1531,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       try {
         const tr = await apiFetch<TranscriptPayload>(`/api/history/transcript?id=${encodeURIComponent(id)}`);
         if ((get().items[id] ?? []).length > 0) return;
-        let next: Item[] = [];
-        for (const line of tr.lines ?? []) {
-          const rec = line as { timestamp?: unknown };
-          const at = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : NaN;
-          next = applyCLI(next, line, Number.isFinite(at) ? at : Date.now());
-        }
-        // 转录里没有 result 行（claude 只把 result 写 stdout），所以「本轮耗时 ·
-        // 输出 tok」必须从 assistant / api-request 行自己推，否则刷新后全丢。
-        next = attachTurnUsage(next, turnsFromTranscript(tr.lines ?? []));
-        // 后端只回放最近 20k 行 / 16MB；被截断时必须说出来，否则用户会以为
-        // 这段对话本来就这么短。
-        if (tr.truncated) next = prependSystem(next, "更早的消息已被省略（只保留最近一段转录）");
+        const next = itemsFromTranscript(tr);
         // 转录里带着 usage（assistant 行），重开对话时据此还原底部统计；
         // 转录算不出的 API 耗时 / 窗口，用上次持久化的快照补。实时快照不覆盖。
         const snap = mergeUsage(conv.usage, usageFromTranscript(tr.lines ?? []));
@@ -1645,6 +1802,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
         set((s) => ({ conns: { ...s.conns, [id]: { state: status, ...detail } } }));
         if (status === "open") {
           // 重连后服务端可能已经重启并换了会话 id：核对一次。
+          //
+          // 断线期间漏掉的事件不在这里补：要等 session.snapshot 给出「会话对象身份 +
+          // 当前序号」之后才知道能不能补（见 applyEvent 的 session.snapshot 分支）。
+          // 提前按本地水位发 sync 会有两个问题：新页面第一次连上时水位是空的，
+          // 补回来的事件会和刚回放的转录叠成两份。
           void get()
             .refreshSessions()
             .then(() => {
@@ -1881,6 +2043,29 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   applyEvent: (sid, ev) => {
+    // 对齐窗口里到达的实时事件先压着：它可能比正在补发的那一段还晚，先落地就会
+    // 让消息流顺序颠倒（result 抢在它对应的正文前面）。补发帧到达后一并按序号应用。
+    // 补发帧 / resync 自己不受这条限制（它们是这个窗口的收尾者）。
+    if (
+      sid &&
+      awaitingReplay.has(sid) &&
+      ev.kind !== "session.replay" &&
+      ev.kind !== "session.resync" &&
+      typeof ev.seq === "number"
+    ) {
+      const buffered = pendingLive.get(sid) ?? [];
+      buffered.push(ev);
+      pendingLive.set(sid, buffered);
+      return;
+    }
+    // 序号是**会话内**单调的：先记水位（下次重连补这之后的部分），再按序号去重
+    // （同一条事件可能既在补发帧里、又在实时广播里）。网关自己发的事件
+    // （pong / 本地回错）没有 seq，直接放行。
+    if (sid && typeof ev.seq === "number") {
+      if (!markApplied(sid, ev.seq)) return;
+      const prev = eventSeq.get(sid) ?? 0;
+      if (ev.seq > prev) eventSeq.set(sid, ev.seq);
+    }
     switch (ev.kind) {
       case "claude.update": {
         // 系统通道推来的「有新版」信号。推送只带版本号，完整状态照旧走
@@ -1908,6 +2093,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
               info?: { state?: string; mode?: string };
               permissions?: PermissionPayload[];
               tasks?: LiveTask[];
+              seq?: number;
+              epoch?: string;
             }
           | undefined;
         if (data?.init) set((s) => ({ inits: { ...s.inits, [sid]: data.init! } }));
@@ -1932,6 +2119,32 @@ export const useAppStore = create<AppState>()((set, get) => ({
             conversations: s.conversations.map((c) => (c.id === sid ? { ...c, live: true, state } : c)),
           }));
         }
+        syncMissedEvents(sid, data?.epoch, data?.seq);
+        return;
+      }
+      case "session.replay": {
+        // 断线期间漏掉的事件：按原顺序逐条喂回同一条 apply 路径（补发的那几条里可能
+        // 就有本轮结束的 result，它的 duration/usage 只能从这条路径落到 items 上）。
+        // 逐条的 seq 去重在 applyEvent 头部，与这段时间里已经抢到的实时广播重叠时跳过。
+        endSyncWindow(sid);
+        const data = ev.data as { events?: { kind?: string; seq?: number; data?: unknown }[] } | undefined;
+        for (const e of data?.events ?? []) {
+          if (!e?.kind) continue;
+          get().applyEvent(sid, { kind: e.kind, data: e.data, seq: e.seq });
+        }
+        // 补发段之后的实时事件（窗口期间压住的那些）再接上。
+        flushLive(sid);
+        return;
+      }
+      case "session.resync": {
+        // 补不齐了（缓冲淘汰 / 进程重开过）：本地那份消息流中间有缺口，只能整份重放
+        // 转录。水位对齐到后端当前序号——不对齐的话下次重连还拿同一个过时的 since
+        // 去问，又被判为补不齐，来回 resync。
+        endSyncWindow(sid);
+        const data = ev.data as { seq?: number; epoch?: string } | undefined;
+        if (typeof data?.seq === "number") eventSeq.set(sid, data.seq);
+        if (data?.epoch) eventEpoch.set(sid, data.epoch);
+        void replayTranscript(sid, get).then(() => flushLive(sid));
         return;
       }
       case "session.ready": {
@@ -2096,4 +2309,21 @@ export const useAppStore = create<AppState>()((set, get) => ({
 export function connState(s: AppState, id: string | null): ConnInfo {
   if (!id) return { state: "idle" };
   return s.conns[id] ?? { state: "idle" };
+}
+
+/**
+ * 仅用于测试：清掉模块级的事件水位与补发窗口。
+ *
+ * 它们按会话 id 存在模块作用域里（不进 state：组件不会因为水位变化重渲染）。
+ * 同一个测试文件里多个用例复用同一个 id 时，前一个用例的水位会漏到下一个，
+ * 让「首次快照只对齐不补发」这类断言失效。
+ */
+export function __resetSyncState(): void {
+  for (const id of [...eventSeq.keys()]) endSyncWindow(id);
+  eventSeq.clear();
+  eventEpoch.clear();
+  appliedSeq.clear();
+  pendingLive.clear();
+  syncTimers.clear();
+  awaitingReplay.clear();
 }

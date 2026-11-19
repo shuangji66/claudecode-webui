@@ -8,6 +8,7 @@ import {
   __resetIds,
   imagesOfContent,
   isInterruptMarker,
+  mergeReplayed,
   isLocalCommandEcho,
   subagentFromResult,
   prependSystem,
@@ -1417,5 +1418,55 @@ describe("prompt.echo 插话去重（回合进行中）", () => {
     const items = appendPromptEcho([], { text: "另一台设备插的话", interjected: true });
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: "user", interjected: true });
+  });
+});
+
+// 重连补不齐时整份重放转录，需要跟本地那份合并：
+// 以转录为主（它完整、有序、带真实时间戳），只把本地 ts 晚于转录最后一条的接上。
+describe("mergeReplayed", () => {
+  const user = (text: string, ts: number): Item => ({ id: `u${ts}`, seq: 0, ts, kind: "user", text });
+  const asst = (text: string, ts: number): Item => ({
+    id: `a${ts}`,
+    seq: 0,
+    ts,
+    kind: "assistant",
+    text,
+    streaming: false,
+  });
+
+  it("本地空时直接用转录", () => {
+    const history = [user("问题", 100)];
+    expect(mergeReplayed(history, [])).toBe(history);
+  });
+
+  it("转录里已经有本地那条（乐观插入的提示词）时不会出现两遍", () => {
+    const history = [user("问题", 100), asst("回答", 200)];
+    // 本地那份只有那条乐观插入的提示词：ts 不晚于转录最后一条，所以不接。
+    const local = [user("问题", 90)];
+    expect(mergeReplayed(history, local)).toHaveLength(2);
+  });
+
+  it("只接转录之后的新条目（断线时本地插的错误提示等）", () => {
+    const history = [user("问题", 100), asst("回答", 200)];
+    const local = [user("问题", 90), { id: "e1", seq: 1, ts: 300, kind: "error" as const, text: "连接已断开" }];
+    const merged = mergeReplayed(history, local);
+    expect(merged.map((i) => i.kind)).toEqual(["user", "assistant", "error"]);
+  });
+
+  it("接上去的条目重排序号（两边的 seq 都是从 0 起算的独立计数）", () => {
+    // 真实转录回放出来的 seq 是递增的（applyCLI 逐条 +1）。
+    const history = [{ ...user("问题", 100), seq: 0 }, { ...asst("回答", 200), seq: 1 }];
+    const local = [{ id: "e1", seq: 0, ts: 300, kind: "error" as const, text: "连接已断开" }];
+    const merged = mergeReplayed(history, local);
+    const seqs = merged.map((i) => i.seq);
+    expect(new Set(seqs).size).toBe(seqs.length);
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+  });
+
+  it("settle=true 时收掉本地残留的流式光标（那一轮早就结束了）", () => {
+    const history = [user("问题", 100), asst("完整回答", 200)];
+    const local: Item[] = [{ id: "s1", seq: 0, ts: 50, kind: "assistant", text: "半截", streaming: true }];
+    const merged = mergeReplayed(history, local, true);
+    expect(merged.some((i) => i.kind === "assistant" && i.streaming)).toBe(false);
   });
 });

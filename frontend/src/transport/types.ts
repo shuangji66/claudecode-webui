@@ -8,6 +8,16 @@ export type WireEventKind =
   | "session.snapshot"
   | "session.ready"
   | "session.state"
+  /**
+   * 断线重连后的补发：`sync {since, epoch}` 的应答，把断开期间漏掉的会话事件按原顺序
+   * 一次性补回来（`data.events`）。补不齐时改回 `session.resync`。
+   */
+  | "session.replay"
+  /**
+   * 补不齐了（重放缓冲已淘汰，或后端重启过、序号对不上）：前端必须整份重放转录，
+   * 不能凭本地消息流继续追加——那样会留下中间有空缺、且永远缺一段的历史。
+   */
+  | "session.resync"
   | "cli"
   | "permission"
   // 这条审批已经有结论（可能是别的设备/标签做掉的），收到就撤掉卡片。
@@ -30,6 +40,14 @@ export interface WireEvent {
   kind: WireEventKind | string;
   sid?: string;
   data?: unknown;
+  /**
+   * 会话事件的单调序号（后端 `session.Event.Seq`）。
+   *
+   * 断线期间的事件会丢：重连时用 `sync {since, epoch}` 把这段空缺补回来，
+   * 前端按它去重（同一条事件可能既在补发帧里、又在实时广播里）。
+   * 网关自己产生的事件（pong / 本地回错）没有这个字段。
+   */
+  seq?: number;
 }
 
 /** initialize 回包（后端原样透传 CLI 的响应）。 */
@@ -291,6 +309,10 @@ export interface SessionInfo {
 export interface SnapshotPayload {
   info: { id: string; cwd: string; state: string };
   init?: InitPayload;
+  /** 会话当前的事件序号；前端以它为基础，下一次重连用它补空缺。 */
+  seq?: number;
+  /** 会话对象的身份（见 session.Session.Epoch）；与本地记的不一致就必须整份重放。 */
+  epoch?: string;
 }
 
 /** 随 prompt 发送的文件（base64）。 */
@@ -319,6 +341,15 @@ export type ClientCommand =
   // 系统通道专用：让后端盯住一个仓库（Git 面板可见时），有变化就推 git.changed。
   | { kind: "git.watch"; cwd: string }
   | { kind: "git.unwatch" }
+  /**
+   * 补齐断线期间漏掉的会话事件。
+   *
+   * `since` 是已经处理过的最大事件序号，`epoch` 是那次会话的身份（见
+   * `SessionSnapshot.epoch`）：后端对象换过（进程被重启/回收再 resume）时序号会从头
+   * 开始，只比 `since` 会把新进程的前几条当成老进程的续集拼上去。所以两者一起带上，
+   * 对不上就回 `session.resync`，由前端整份重放转录。
+   */
+  | { kind: "sync"; since: number; epoch?: string }
   | { kind: "ping" };
 
 /** 单个模型的展示与能力元数据。 */

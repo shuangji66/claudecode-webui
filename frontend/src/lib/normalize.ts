@@ -1061,6 +1061,35 @@ export function appendPromptEcho(
   ];
 }
 
+/**
+ * 把「整份转录回放」的结果与本地已有的消息流合并。
+ *
+ * 用在重连补不齐（`session.resync`）的时候：断开期间产生的事件要么已从后端缓冲里
+ * 淘汰、要么后端进程重启过，本地那份消息流中间缺了一段，只能整份重放转录。
+ * 但**不能直接拿转录覆盖本地**：
+ *   - 本地可能有转录里还没有的条目（刚发的提示词、断线期间本地插的错误提示）；
+ *   - 断线时正在流的增量气泡也没进转录（转录里是完整版本，位置相同但 ts 不同）。
+ *
+ * 合并规则：**以转录那份为主**（它完整、有序、带真实时间戳），只把本地 ts 晚于
+ * 转录最后一条的条目接在后面。这条界线天然把「转录已经收录的乐观条目」和「断线
+ * 时的半截流式气泡」都排除掉——它们的 ts 都早于转录的最后一条。
+ *
+ * `settle` 为真时顺手收掉本地残留的流式光标：整份重建意味着那一轮早就结束了
+ * （它的 result 在断线期间就产生过、转录里也有完整回答），光标不该继续闪。
+ */
+export function mergeReplayed(history: Item[], local: Item[], settle = false): Item[] {
+  if (history.length === 0) return settle ? settleStreaming(local) : local;
+  if (local.length === 0) return history;
+  const base = settle ? settleStreaming(local) : local;
+  const cut = history[history.length - 1].ts;
+  const tail = base.filter((it) => it.ts > cut);
+  if (tail.length === 0) return history;
+  // 两边的 seq 都是从 0 起算的独立计数：接上去之前要重排，否则轮次刻度的
+  // seq 会出现重复值（`lib/turns.ts` 拿它当稳定标识）。起点取转录里的最大 seq + 1。
+  let seq = history.reduce((max, it) => Math.max(max, it.seq ?? 0), 0) + 1;
+  return [...history, ...tail.map((it) => ({ ...it, seq: seq++ }))];
+}
+
 /** 在列表开头插一条系统提示（例如「更早的消息已省略」）。 */
 export function prependSystem(items: Item[], text: string): Item[] {
   const ts = items[0]?.ts ?? Date.now();

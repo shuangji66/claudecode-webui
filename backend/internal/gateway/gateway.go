@@ -40,6 +40,9 @@ type WireEvent struct {
 	Kind string          `json:"kind"`
 	SID  string          `json:"sid,omitempty"`
 	Data json.RawMessage `json:"data,omitempty"`
+	// Seq 是会话事件的单调序号（见 session.Event）。前端记住处理过的最大值，
+	// 重连时用 sync 命令把断线期间漏掉的事件补回来。
+	Seq uint64 `json:"seq,omitempty"`
 }
 
 // SessionManager 是网关对 agent 子域的最小依赖。
