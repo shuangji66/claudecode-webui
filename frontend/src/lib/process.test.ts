@@ -7,7 +7,6 @@ import {
   groupCategories,
   groupTitle,
   isProcessItem,
-  liveDetail,
   reasoningPreview,
   runningTool,
   replyCopy,
@@ -137,9 +136,8 @@ describe("组头详情与推理预览", () => {
     expect(reasoningPreview([tool("a")])).toBe("");
   });
 
-  it("标准模式的详情优先显示正在跑的工具，其次才是思考", () => {
-    expect(liveDetail([thinking("首行"), tool("a", "Read")])).toBe("/w/a.md");
-    expect(liveDetail([thinking("首行"), tool("a", "Read", "done")])).toBe("首行");
+  it("正在跑的工具只认还没拿到结果的那条", () => {
+    expect(runningTool([tool("a", "Read")])?.name).toBe("Read");
     expect(runningTool([tool("a", "Read", "done")])).toBeUndefined();
   });
 });

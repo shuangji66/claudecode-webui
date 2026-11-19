@@ -15,7 +15,6 @@
 // 分组只影响渲染：Item 本身、seq、id、转录回放都不动。
 import { tr, type Locale } from "./i18n";
 import type { AssistantItem, Item, ThinkingItem, ToolItem } from "./model";
-import { toolSummary } from "./tools";
 
 /** 工具按「用户在做什么」归类，组头文案与图标都用它。 */
 export type ToolCategory =
@@ -75,8 +74,6 @@ const CATEGORY_TEXT: Record<ToolCategory, { running: [string, string]; done: [st
   tools: { running: ["正在调用工具", "Calling tools"], done: ["已调用工具", "Called tools"] },
   analysis: { running: ["正在分析请求", "Analyzing the request"], done: ["已完成分析", "Finished analyzing"] },
 };
-
-export type ProcessMode = "concise" | "standard" | "detailed";
 
 export type ProcessEntry =
   | { type: "item"; key: string; start: number; item: Item }
@@ -283,13 +280,6 @@ export function hiddenReplyIds(items: Item[], keepTail: boolean): Set<string> {
     for (const reply of replies.slice(0, -1)) hidden.add(reply.id);
   });
   return hidden;
-}
-
-/** 组头在「简洁」模式追加的实时详情：正在跑的工具摘要，没有就用思考首行。 */
-export function liveDetail(items: Item[]): string {
-  const running = runningTool(items);
-  if (running) return toolSummary(running);
-  return reasoningPreview(items);
 }
 
 /**
