@@ -3,6 +3,7 @@ import { Collapsible } from "../common/Collapsible";
 import { IconChat, IconSpark, IconStop } from "../common/Icons";
 import type { SubagentInfo, ToolItem } from "../../lib/model";
 import { formatTokens } from "../../lib/usage";
+import { formatDuration } from "../../lib/elapsed";
 import { useT } from "../../lib/i18n";
 import { useAppStore } from "../../store/useAppStore";
 import { ToolImages } from "./ToolImages";
@@ -44,7 +45,7 @@ export function AgentBody({ item }: { item: ToolItem }) {
               <span>·</span>
               <span>{t(`${usage.toolUses} 次工具`, `${usage.toolUses} tool calls`)}</span>
               <span>·</span>
-              <span>{(usage.durationMs / 1000).toFixed(1)}s</span>
+              <span>{formatDuration(usage.durationMs)}</span>
             </div>
           )}
           {sub?.summary && <p className="line-clamp-3 text-[11.5px] leading-relaxed text-ink-2">{sub.summary}</p>}

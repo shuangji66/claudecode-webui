@@ -170,7 +170,7 @@ describe("MessageList 本轮用量", () => {
       { id: "r1", seq: 2, ts: 0, kind: "result", durationMs: 5000, denials: [], isError: false },
     ];
     render(<MessageList items={items} />);
-    expect(screen.getAllByText("5.0s")).toHaveLength(1);
+    expect(screen.getAllByText("00:05")).toHaveLength(1);
   });
 });
 

@@ -37,7 +37,8 @@ describe("AgentCard", () => {
     expect(screen.getByText("运行中…")).toBeInTheDocument();
     expect(screen.getByText("1.9K tokens")).toBeInTheDocument();
     expect(screen.getByText("3 次工具")).toBeInTheDocument();
-    expect(screen.getByText("2.5s")).toBeInTheDocument();
+    // 子代理耗时同样走分:秒（2.5s → 00:03，四舍五入）。
+    expect(screen.getByText("00:03")).toBeInTheDocument();
   });
 
   it("点「查看对话」把请求放进 store", () => {

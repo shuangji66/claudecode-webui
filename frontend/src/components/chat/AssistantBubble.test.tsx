@@ -49,7 +49,19 @@ describe("AssistantBubble 复制回复", () => {
         }}
       />,
     );
-    expect(screen.getByText("42.1s · 本轮 1.1M tok · 210 tok/s")).toBeInTheDocument();
+    // 耗时是时:分:秒，不是「42.1s」。
+    expect(screen.getByText("00:42 · 本轮 1.1M tok · 210 tok/s")).toBeInTheDocument();
+  });
+
+  it("几分钟的回合按分:秒显示，不再只报秒数", () => {
+    render(<AssistantBubble text="答案" streaming={false} turn={{ durationMs: 293_100 }} />);
+    // 293.1s → 04:53，不再是「293.1s」。
+    expect(screen.getByText("04:53")).toBeInTheDocument();
+  });
+
+  it("超过一小时的回合带小时位", () => {
+    render(<AssistantBubble text="答案" streaming={false} turn={{ durationMs: 3_723_000 }} />);
+    expect(screen.getByText("1:02:03")).toBeInTheDocument();
   });
 
   it("流式中不显示用量（还没结算）", () => {
