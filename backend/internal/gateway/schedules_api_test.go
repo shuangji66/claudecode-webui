@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -363,9 +364,11 @@ func TestScheduleRunNow(t *testing.T) {
 	f := newSchedServer(t)
 	task := f.createTask(t, nil)
 
-	var calls int
+	var calls atomic.Int32
 	f.srv.SetScheduleRunner(schedule.NewRunner(f.store, func(_ context.Context, _ schedule.Task, _ time.Time) (string, error) {
-		calls++
+		// 投递跑在后台 goroutine 里（接口立即返回），这里的计数必须原子：
+		// 普通 int 会让 `go test -race` 报数据竞争，把整套 race 检查废掉。
+		calls.Add(1)
 		return "", nil
 	}, nil))
 	rec := f.post(t, "/api/schedules/action", map[string]any{"id": task.ID, "action": "run"})
@@ -373,11 +376,11 @@ func TestScheduleRunNow(t *testing.T) {
 		t.Fatalf("立即执行 code = %d: %s", rec.Code, rec.Body.String())
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && calls == 0 {
+	for time.Now().Before(deadline) && calls.Load() == 0 {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if calls != 1 {
-		t.Fatalf("立即执行没有投递（calls=%d）", calls)
+	if calls.Load() != 1 {
+		t.Fatalf("立即执行没有投递（calls=%d）", calls.Load())
 	}
 	// 计划时间保持不变。
 	if got, _ := f.store.Get(task.ID); got.NextRun == nil {
