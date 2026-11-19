@@ -35,7 +35,9 @@ export function SubagentPanel({ sessionId, agentId }: { sessionId: string; agent
         for (const line of tr.lines ?? []) {
           const rec = line as { timestamp?: unknown };
           const at = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : NaN;
-          next = applyCLI(next, line, Number.isFinite(at) ? at : Date.now());
+          // 同样是转录回放：关掉「CLI 回显去重」（子代理转录里也没有本地乐观气泡，
+          // 每一条 user 行都是真的发过的）。
+          next = applyCLI(next, line, Number.isFinite(at) ? at : Date.now(), undefined, { replay: true });
         }
         if (!alive) return;
         setMeta(tr.meta);

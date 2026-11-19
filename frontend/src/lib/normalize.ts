@@ -125,13 +125,33 @@ export function isTurnResult(msg: unknown): boolean {
 }
 
 /**
+ * applyCLI 的调用方式选项。
+ *
+ * `replay` 表示「这是磁盘上的转录回放」，而不是实时流：**回显去重必须关掉**。
+ * 那套去重（`echoAlreadyShown`）存在的理由是「本地已经乐观插过一条气泡，CLI 又把
+ * 同一句回显了一遍」——只有实时路径有本地气泡。转录里的每一条 user 行都是真的发过的，
+ * 而且转录**没有 `result` 行**（claude 只把 result 写 stdout），按 result 划的轮边界
+ * 永远触发不到，于是「上一轮说过同样一句话」会被整段历史比对吞掉（实测一份真实转录里
+ * `提交修改` 发了 4 次，回放后只剩 1 条）。
+ */
+export interface ApplyOptions {
+  replay?: boolean;
+}
+
+/**
  * 处理一条 CLI 原始消息，返回新的列表（不修改入参）。
  *
  * `at` 用于回放历史转录时保留原始时间，不传则用当前时间。
  * `usageHint` 是实时流里已经攒下的用量快照（store 的 `usage[sid]`）：`result` 的整轮
  * 口径里没有「最近一次请求的生成速度」，tok/s 只能从流式阶段量到的 genMs/genTokens 借。
  */
-export function applyCLI(items: Item[], msg: unknown, at = Date.now(), usageHint?: UsageSnapshot): Item[] {
+export function applyCLI(
+  items: Item[],
+  msg: unknown,
+  at = Date.now(),
+  usageHint?: UsageSnapshot,
+  opts: ApplyOptions = {},
+): Item[] {
   const m = asRecord(msg);
   if (!m) return items;
   // sidechain（子代理）与 meta 行一律不进主消息流。实时流里 store 已分流子代理帧，
@@ -146,7 +166,7 @@ export function applyCLI(items: Item[], msg: unknown, at = Date.now(), usageHint
     case "assistant":
       return applyAssistant(items, m, at);
     case "user":
-      return applyUser(items, m, at);
+      return applyUser(items, m, at, opts);
     case "result":
       return applyResult(items, m, at, usageHint);
     case "system":
@@ -550,7 +570,7 @@ function userImagesOf(blocks: unknown[]): UserImage[] {
   return out;
 }
 
-function applyUser(items: Item[], m: Raw, at: number): Item[] {
+function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): Item[] {
   const message = asRecord(m.message);
   const content = message?.content;
   const blocks = Array.isArray(content) ? content : [];
@@ -643,9 +663,14 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
     // 比对只能比提示词前缀：CLI 的 image/document block 不带文件名，本地气泡对
     // 不可内联的附件写的是「附件：a.pdf」，回显只能拼出「附件：1 个图片/PDF」。
     // 只发了一张图、没有正文时两边 text 都是空串，只能靠「都有图片」认出来。
-    const onlyImages = prompt === "" && last?.kind === "user" && last.text === "" && (last.images?.length ?? 0) > 0;
-    if (last && last.kind === "user" && (samePromptEcho(last.text, prompt) || (images.length > 0 && onlyImages))) {
-      return items;
+    //
+    // **转录回放不做这套判定**（`opts.replay`）：那边没有本地乐观气泡，每一条 user 行
+    // 都是真的发过的，附件消息尤其容易被「上一轮同样那句话」吞掉。
+    if (!opts.replay) {
+      const onlyImages = prompt === "" && last?.kind === "user" && last.text === "" && (last.images?.length ?? 0) > 0;
+      if (last && last.kind === "user" && (samePromptEcho(last.text, prompt) || (images.length > 0 && onlyImages))) {
+        return items;
+      }
     }
     return [
       ...items,
@@ -661,9 +686,10 @@ function applyUser(items: Item[], m: Raw, at: number): Item[] {
   }
 
   // 纯用户文本：本地发送时已经插过一条，这里按内容去重，避免重复。
+  // 转录回放例外（见 `ApplyOptions.replay`）：那里的每条 user 行都是真的发过的。
   const text = textOfContent(content);
   if (!text) return items;
-  if (echoAlreadyShown(items, text)) return items;
+  if (!opts.replay && echoAlreadyShown(items, text)) return items;
   return [...items, { id: nextId(), seq: seqOf(items), ts: at, kind: "user", text }];
 }
 

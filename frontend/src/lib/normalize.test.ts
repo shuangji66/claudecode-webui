@@ -1354,6 +1354,42 @@ describe("applyCLI 跳过 sidechain / meta 行", () => {
   });
 });
 
+// 转录回放**不能**做回显去重：那套去重是给实时流用的（本地已经乐观插过一条气泡），
+// 转录里每条 user 行都是真的发过的。而且转录没有 result 行，`echoAlreadyShown` 按
+// result 划的轮边界永远触发不到，于是「上一轮说过同样一句话」会被整段历史比对吞掉
+// ——实测一份真实转录里 `提交修改` 发了 4 次，回放后只剩 1 条。
+describe("转录回放不做回显去重", () => {
+  const opts = { replay: true } as const;
+  const userRow = (text: string) => ({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
+  const answer = (text: string) => ({ type: "assistant", message: { content: [{ type: "text", text }] } });
+
+  it("重复发送的同一句话每次都要留下", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, userRow("提交修改"), 0, undefined, opts);
+    items = applyCLI(items, answer("好"), 1000, undefined, opts);
+    items = applyCLI(items, userRow("提交修改"), 2000, undefined, opts);
+    items = applyCLI(items, answer("再提交"), 3000, undefined, opts);
+    items = applyCLI(items, userRow("提交修改"), 4000, undefined, opts);
+    expect(items.filter((i) => i.kind === "user").map((i) => i.text)).toEqual(["提交修改", "提交修改", "提交修改"]);
+  });
+
+  it("带附件的重复消息也不被吞", () => {
+    const image = { type: "image", source: { type: "base64", media_type: "image/png", data: "AAA" } };
+    const withImage = { type: "user", message: { role: "user", content: [{ type: "text", text: "看看" }, image] } };
+    let items: Item[] = [];
+    items = applyCLI(items, withImage, 0, undefined, opts);
+    items = applyCLI(items, answer("看到了"), 1000, undefined, opts);
+    items = applyCLI(items, withImage, 2000, undefined, opts);
+    expect(items.filter((i) => i.kind === "user")).toHaveLength(2);
+  });
+
+  it("实时路径（不带 replay）仍然去重：本地气泡 + CLI 回显只留一条", () => {
+    let items = appendUser([], "跑一遍测试");
+    items = applyCLI(items, userRow("跑一遍测试"));
+    expect(items).toHaveLength(1);
+  });
+});
+
 // 插话发生在**回合进行中**：本地气泡后面已经跟了 thinking / tool，CLI 回显那条
 // 用户消息时尾巴不是 user。原来只看最后一条，去重失效 → 回显被当成新的一条用户
 // 消息插进来 → 这一轮被切成两半（前半截被当成「已完成」收起来、还冒出复制按钮）。
