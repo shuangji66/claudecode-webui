@@ -578,10 +578,22 @@ func (s *Session) noteTaskEvent(raw json.RawMessage) {
 	if done {
 		s.taskMu.Lock()
 		delete(s.tasks, msg.TaskID)
+		// taskOrder 里那条也要摘掉：留着的话同一个 id 会在下次 task_started 时被
+		// 当成「已存在」而不追加、却在 LiveTasks 里被遍历两次（map 查得到就发两份），
+		// 界面上的后台操作会凭空多出一条同名条目。
+		s.taskOrder = removeTaskID(s.taskOrder, msg.TaskID)
 		s.taskMu.Unlock()
 		return
 	}
+	// **已经结束过的任务不能被后续的 task_progress / task_updated 复活**：
+	// 结束（task_notification）之后可能还有排队的进度帧在路上，按「见到就记」
+	// 会把早就跑完的任务重新列进「进行中」，中止按钮指向一个已经不存在的 task。
+	// 表里没有、且这条也不是 task_started 的，一律忽略。
 	s.taskMu.Lock()
+	if _, known := s.tasks[msg.TaskID]; !known && msg.Subtype != "task_started" {
+		s.taskMu.Unlock()
+		return
+	}
 	if _, dup := s.tasks[msg.TaskID]; !dup {
 		s.taskOrder = append(s.taskOrder, msg.TaskID)
 	}
@@ -612,6 +624,16 @@ func (s *Session) noteTaskEvent(raw json.RawMessage) {
 	}
 	s.tasks[msg.TaskID] = ref
 	s.taskMu.Unlock()
+}
+
+// removeTaskID 从顺序表里摘掉一个 id（保持其余顺序）。
+func removeTaskID(order []string, id string) []string {
+	for i, v := range order {
+		if v == id {
+			return append(order[:i], order[i+1:]...)
+		}
+	}
+	return order
 }
 
 func (s *Session) rememberPermission(requestID string, raw json.RawMessage) {

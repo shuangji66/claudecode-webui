@@ -1185,3 +1185,56 @@ func TestLiveTasksIgnoresOtherSystemMessages(t *testing.T) {
 		t.Fatalf("非 task_* 消息不该进表: %+v", got)
 	}
 }
+
+// 结束之后可能还有排队的进度帧在路上：task_progress / task_updated 不能把早就跑完的
+// 任务重新列进「进行中」，否则中止按钮指向一个已经不存在的 task。
+func TestLiveTasksDoesNotResurrectFinishedTask(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{
+		"type": "system", "subtype": "task_started", "task_id": "task-1", "tool_use_id": "toolu_01",
+	})
+	waitTasks(t, sess, 1)
+	fc.send(map[string]any{
+		"type": "system", "subtype": "task_notification", "task_id": "task-1", "status": "completed",
+	})
+	waitTasks(t, sess, 0)
+
+	fc.send(map[string]any{"type": "system", "subtype": "task_progress", "task_id": "task-1"})
+	fc.send(map[string]any{"type": "system", "subtype": "task_updated", "task_id": "task-1", "patch": map[string]any{"status": "running"}})
+	time.Sleep(50 * time.Millisecond)
+	if got := sess.LiveTasks(); len(got) != 0 {
+		t.Fatalf("已结束的任务被后续进度帧复活了: %+v", got)
+	}
+}
+
+// 同一个 task 结束又重开时，顺序表里不能留重复 id（否则随快照下发两份）。
+func TestLiveTasksNoDuplicateAfterRestart(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	start := map[string]any{"type": "system", "subtype": "task_started", "task_id": "task-1", "tool_use_id": "toolu_01"}
+	fc.send(start)
+	waitTasks(t, sess, 1)
+	fc.send(map[string]any{"type": "system", "subtype": "task_notification", "task_id": "task-1", "status": "completed"})
+	waitTasks(t, sess, 0)
+	fc.send(start)
+	waitTasks(t, sess, 1)
+	if got := sess.LiveTasks(); len(got) != 1 {
+		t.Fatalf("重开后下发了 %d 条: %+v", len(got), got)
+	}
+}
+
+// waitTasks 等任务表的条数变成 want。
+func waitTasks(t *testing.T, sess *Session, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(sess.LiveTasks()) == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("任务表 = %+v，want %d 条", sess.LiveTasks(), want)
+}
