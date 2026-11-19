@@ -253,7 +253,9 @@ export function hiddenReplyIds(items: Item[], keepTail: boolean): Set<string> {
   const hidden = new Set<string>();
   const starts: number[] = [];
   items.forEach((item, index) => {
-    if (item.kind === "user" && index > 0) starts.push(index);
+    // 插话不切轮（与 turnSpans / turns.turnsOf 同一套锚点），否则同一轮会被劈成两段，
+    // 「只留最后一条回答」就会把插话前的那条也藏掉。
+    if (item.kind === "user" && !item.interjected && index > 0) starts.push(index);
   });
   const bounds = [0, ...starts];
   if (bounds.length === 0) return hidden;
@@ -318,6 +320,9 @@ export function replyCopy(items: Item[], id: string, finished = true): string | 
  * 一整轮的思考与工具调用一起收进轮首那一行，只剩正文输出；点开再按档位还原。
  * 所以这里要把每轮的过程条目单独捞出来——展开后的还原与「这一轮有没有过程可收」都靠它。
  *
+ * **插话（`interjected`）不切轮**：它并进当前回合，不是新的一轮。按它切的话，一句话
+ * 就把这一轮的思考与工具调用劈成两半，前半截被当成「已完成」收起来、后半截重新铺开。
+ *
  * `running` 是「这条会话此刻在不在跑」：转录回放里没有 result 行，只靠扫列表会把历史
  * 轮次全判成没结束。
  */
@@ -327,7 +332,7 @@ export function turnSpans(items: Item[], running = true): TurnSpan[] {
   // 列表开头没有用户消息（历史被窗口截断）时，这一段也算一轮，否则它的过程无处可收。
   const heads: number[] = [];
   items.forEach((item, index) => {
-    if (item.kind === "user" && index > 0) heads.push(index);
+    if (item.kind === "user" && !item.interjected && index > 0) heads.push(index);
   });
   const bounds = [...heads, items.length];
   for (const end of bounds) {

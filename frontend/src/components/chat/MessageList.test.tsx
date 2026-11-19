@@ -566,6 +566,38 @@ describe("MessageList 收起时机", () => {
     expect(screen.getByText("这一轮的思考")).toBeInTheDocument();
   });
 
+  // 插话（priority=now）是往正在跑的这一轮里补一句，不切轮：切了的话这一轮的思考
+  // 会被劈成两半——前半截当成「已完成」收起来（还冒出复制按钮），后半截重新铺开。
+  it("插话不切轮：整轮过程仍然铺开，也不冒复制按钮", () => {
+    setSessionRunning(true);
+    const items: Item[] = [
+      user("u1"),
+      thinking(),
+      bash(),
+      { id: "i1", seq: 0, ts: 0, kind: "user", text: "顺便看一下日志", interjected: true },
+      { id: "th2", seq: 0, ts: 0, kind: "thinking", text: "插话后的思考" },
+    ];
+    render(<MessageList items={items} />);
+    // 没有「已完成」那一行：这一轮还在跑，插话没把它劈开。
+    expect(screen.queryByRole("button", { name: /已完成/ })).toBeNull();
+    // 插话前后的过程都在。
+    expect(screen.getByText("思考中")).toBeInTheDocument();
+    expect(screen.getByText("插话后的思考")).toBeInTheDocument();
+    // 也没有复制入口（这一轮没结束）。
+    expect(screen.queryByRole("button", { name: "复制回复" })).toBeNull();
+  });
+
+  it("插话那一句本身照常显示成气泡", () => {
+    setSessionRunning(true);
+    const items: Item[] = [
+      user("u1"),
+      bash(),
+      { id: "i1", seq: 0, ts: 0, kind: "user", text: "顺便看一下日志", interjected: true },
+    ];
+    render(<MessageList items={items} />);
+    expect(screen.getByText("顺便看一下日志")).toBeInTheDocument();
+  });
+
   it("跑到一半永远不收，哪怕选的是「完成时收起」", () => {
     setSessionRunning(true);
     render(<MessageList items={[user("u1"), thinking(), read(), bash(), answer]} />);

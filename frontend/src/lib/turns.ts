@@ -28,7 +28,8 @@ function firstLine(text: string): string {
 export function turnsOf(items: Item[]): Turn[] {
   const out: Turn[] = [];
   items.forEach((item, index) => {
-    if (item.kind !== "user") return;
+    // 插话并进当前回合，不单独占一刻度（刻度是「跳到某一轮」的入口，插话不是一轮）。
+    if (item.kind !== "user" || item.interjected) return;
     out.push({ index, id: item.id, seq: item.seq, label: firstLine(item.text) || `#${index + 1}` });
   });
   return out;
@@ -52,7 +53,8 @@ export function turnsOf(items: Item[]): Turn[] {
 export function windowStart(items: Item[], limit: number): number {
   const raw = items.length - limit;
   if (raw <= 0) return 0;
-  const isTurnHead = (item: Item | undefined): boolean => item?.kind === "user";
+  // 插话不算轮头：它是往当前这一轮里补的一句，按它切会把这一轮腰斩。
+  const isTurnHead = (item: Item | undefined): boolean => item?.kind === "user" && !item.interjected;
 
   // 当前这一轮的开头。没有用户消息时没有「轮」，按条数切。
   let lastUser = -1;

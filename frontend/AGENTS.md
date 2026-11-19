@@ -713,6 +713,12 @@ src/
     那一段——收起态下过渡正文多半看不见，不带上就等于复制不全。**思考过程（thinking）不进
     复制内容**（那是推理不是输出），CLI 包的 API 错误消息也不算正文。过渡正文本身在收起时
     照常显示：收起藏的是「过程」（思考 + 工具调用），正文输出一直留着。
+  - **插话（`priority=now`）不切轮**（`UserItem.interjected`）：它是往正在跑的这一轮里补一句，
+    不是新的一轮。所有「按用户消息切轮」的地方都必须跳过它——`lib/process.turnSpans`、
+    `lib/turns.turnsOf`/`windowStart`、`lib/process.hiddenReplyIds`、`normalize.stampTurnUsage`。
+    切了的话一句话就把这一轮劈成两半：前半截被当成「已完成」收进一行（还冒出复制按钮），
+    后半截当新一轮重新铺开。本机发送由 `sendPrompt` 按 `priority` 标记，别的设备收到的
+    `prompt.echo` 带 `interjected`（后端 `promptEchoOf` 从 `cmd.Priority` 取）。
   - **「这一轮结束没有」在轮级判定里还要看「是不是最后一轮」**（`turnSpans` 的 `isTail`）：
     会话正在跑的时候，前面的轮次**必然已经结束**（后面已经开了新一轮）。只看「会话在不在跑」
     一刀切的话，历史轮次会被全判成进行中，于是对话进行中整段历史的思考与工具都摊在外面。

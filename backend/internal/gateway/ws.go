@@ -183,6 +183,9 @@ type promptEcho struct {
 	Text  string      `json:"text"`
 	Files []string    `json:"files,omitempty"`
 	Image []echoImage `json:"images,omitempty"`
+	// Interjected 标记这条是插话（priority=now）：别的设备收到后要把它并进当前回合，
+	// 而不是当成新的一轮——按它切轮会把这一轮的思考与工具调用劈成两半。
+	Interjected bool `json:"interjected,omitempty"`
 }
 
 type echoImage struct {
@@ -510,7 +513,7 @@ func (s *Server) broadcastPromptEcho(id string, echo promptEcho) {
 
 // promptEchoOf 把上行命令里的正文与附件整理成广播载荷。
 func promptEchoOf(cmd clientCmd) promptEcho {
-	echo := promptEcho{Text: cmd.Text}
+	echo := promptEcho{Text: cmd.Text, Interjected: cmd.Priority == "now"}
 	for _, a := range cmd.Attachments {
 		mediaType := strings.ToLower(strings.TrimSpace(a.MediaType))
 		if strings.HasPrefix(mediaType, "image/") {

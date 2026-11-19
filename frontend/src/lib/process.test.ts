@@ -261,3 +261,45 @@ describe("replyCopy", () => {
     expect(replyCopy(turn, "t1")).toBeUndefined();
   });
 });
+
+// 插话（priority=now）是往正在跑的这一轮里补一句，**不切轮**。按它切的话，一句话就把
+// 这一轮的思考与工具调用劈成两半：前半截被当成「已完成」收起来（还冒出复制按钮），
+// 后半截被当成新一轮重新铺开。
+describe("插话不切轮", () => {
+  const user = (id: string, interjected = false): Item => ({
+    id,
+    seq: 0,
+    ts: 0,
+    kind: "user",
+    text: id,
+    ...(interjected ? { interjected: true } : {}),
+  });
+  const result = (id: string, ms?: number): Item => ({ id, seq: 0, ts: 0, kind: "result", durationMs: ms });
+
+  it("插话留在当前这一轮里", () => {
+    const spans = turnSpans([user("u1"), thinking("t1"), tool("x1"), user("i1", true), tool("x2")], true);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].process.map((i) => i.id)).toEqual(["t1", "x1", "x2"]);
+  });
+
+  it("一轮还没跑完：插话之后仍是「进行中」，不给复制也不收起来", () => {
+    const turn = [user("u1"), thinking("t1"), reply("a1"), user("i1", true), tool("x2")];
+    const spans = turnSpans(turn, true);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].finished).toBe(false);
+    // 这一轮还没结束：一条复制入口都不给。
+    expect(replyCopy(turn, "a1", spans[0].finished)).toBeUndefined();
+  });
+
+  it("真正的下一条用户消息仍然切轮", () => {
+    const spans = turnSpans([user("u1"), tool("x1"), user("u2"), tool("x2")], true);
+    expect(spans).toHaveLength(2);
+  });
+
+  it("插话之后整轮结束，过程照常收进同一行", () => {
+    const spans = turnSpans([user("u1"), thinking("t1"), user("i1", true), tool("x2"), result("r1", 9000)], true);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].finished).toBe(true);
+    expect(spans[0].durationMs).toBe(9000);
+  });
+});

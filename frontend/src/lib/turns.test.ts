@@ -32,6 +32,16 @@ describe("turnsOf", () => {
     const turns = turnsOf([user("u1", "x".repeat(80), 0)]);
     expect(turns[0].label).toHaveLength(41); // 40 + 省略号
   });
+
+  it("插话不占刻度：它不是一轮，跳转列表里不该多一条", () => {
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "第一问" },
+      { id: "a1", seq: 1, ts: 0, kind: "assistant", text: "回答", streaming: false },
+      { id: "i1", seq: 2, ts: 0, kind: "user", text: "插一句", interjected: true },
+      { id: "a2", seq: 3, ts: 0, kind: "assistant", text: "继续", streaming: false },
+    ];
+    expect(turnsOf(items).map((t) => t.id)).toEqual(["u1"]);
+  });
 });
 
 describe("activeTurnIndex", () => {

@@ -1724,8 +1724,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // 图片进气泡本体（可点开预览），其余附件仍以「附件：名字」的正文出现。
     const bubble = userBubblePayload(text, attachments, attachmentLabel);
     const now = new Date().toISOString();
+    // `priority=now` 是插话：它并入当前回合，**不切轮**（切了会把这一轮的思考与工具
+    // 劈成两半，前半截被当成「已完成」收起来）。
+    const interjected = opts?.priority === "now";
     set((s) => ({
-      items: { ...s.items, [id!]: appendUser(s.items[id!] ?? [], bubble.text, bubble.images) },
+      items: { ...s.items, [id!]: appendUser(s.items[id!] ?? [], bubble.text, bubble.images, interjected) },
       conversations: s.conversations.map((c) => (c.id === id ? { ...c, last_active: now } : c)),
     }));
     window.setTimeout(() => void get().refreshConversations(), 600);
@@ -1995,12 +1998,19 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // 别的设备/标签发出的提示词：CLI 不回显 stdin，本机又没做这次乐观插入，
         // 不补这条气泡的话界面上就只剩模型突然开始思考。
         const data = ev.data as
-          | { text?: string; files?: string[]; images?: { name: string; media_type: string; data: string }[] }
+          | {
+              text?: string;
+              files?: string[];
+              images?: { name: string; media_type: string; data: string }[];
+              interjected?: boolean;
+            }
           | undefined;
         if (!data) return;
         const echo = {
           text: data.text,
           files: data.files,
+          // 插话标记要跟着走：少了它这条会被当成新的一轮，把发送方那一轮的思考劈成两半。
+          interjected: data.interjected,
           images: (data.images ?? []).map((img) => ({
             name: img.name,
             mediaType: img.media_type,

@@ -1318,6 +1318,18 @@ describe("appendPromptEcho（别的设备发的提示词）", () => {
     const items: Item[] = [];
     expect(appendPromptEcho(items, { text: "", files: [], images: [] })).toBe(items);
   });
+
+  // 别的设备「立即插话」发来的那一句：标记必须跟着走，否则收到的一方会把它当成
+  // 新的一轮，把发送方那一轮的思考劈成两半。
+  it("插话带上 interjected 标记", () => {
+    const items = appendPromptEcho([], { text: "顺便看一下日志", interjected: true });
+    expect(items[0]).toMatchObject({ kind: "user", interjected: true });
+  });
+
+  it("普通消息不带这个标记", () => {
+    const items = appendPromptEcho([], { text: "跑一遍测试" });
+    expect(items[0].kind === "user" && items[0].interjected).toBeFalsy();
+  });
 });
 
 describe("applyCLI 跳过 sidechain / meta 行", () => {

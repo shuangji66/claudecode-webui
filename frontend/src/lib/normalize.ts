@@ -827,7 +827,10 @@ function stampTurnUsage(items: Item[], turn: { durationMs?: number; usage?: Usag
   if (turn.durationMs === undefined && turn.usage === undefined) return items;
   let start = 0;
   for (let i = items.length - 1; i >= 0; i -= 1) {
-    if (items[i].kind === "user") {
+    // 插话不切轮（与 `lib/process.turnSpans` 同一套锚点）：按它取起点会漏掉插话之前
+    // 那几条回答，而它们同属这一回合。
+    const it = items[i];
+    if (it.kind === "user" && !it.interjected) {
       start = i + 1;
       break;
     }
@@ -981,8 +984,13 @@ export function stripAnsi(s: string): string {
     .join("\n");
 }
 
-/** 本地插入一条用户消息（不等后端回显）。 */
-export function appendUser(items: Item[], text: string, images?: UserImage[]): Item[] {
+/**
+ * 本地插入一条用户消息（不等后端回显）。
+ *
+ * `interjected` 标出「这是插话」（`priority=now`）：它并入当前回合，**不切轮**。
+ * 切轮规则见 `lib/process.turnSpans` 与 `lib/turns.turnsOf`。
+ */
+export function appendUser(items: Item[], text: string, images?: UserImage[], interjected = false): Item[] {
   const item: Item = {
     id: nextId(),
     seq: seqOf(items),
@@ -990,6 +998,7 @@ export function appendUser(items: Item[], text: string, images?: UserImage[]): I
     kind: "user",
     text,
     ...(images !== undefined && images.length > 0 ? { images } : {}),
+    ...(interjected ? { interjected: true } : {}),
   };
   return [...items, item];
 }
@@ -1006,7 +1015,7 @@ export function appendUser(items: Item[], text: string, images?: UserImage[]): I
  */
 export function appendPromptEcho(
   items: Item[],
-  echo: { text?: string; files?: string[]; images?: UserImage[] },
+  echo: { text?: string; files?: string[]; images?: UserImage[]; interjected?: boolean },
   label = "附件：",
 ): Item[] {
   const prompt = (echo.text ?? "").trim();
@@ -1032,6 +1041,8 @@ export function appendPromptEcho(
       kind: "user",
       text,
       ...(images.length > 0 ? { images } : {}),
+      // 别的设备插的一句话：同样并进当前回合，不切轮（跟本机发送那条一个口径）。
+      ...(echo.interjected ? { interjected: true } : {}),
     },
   ];
 }
