@@ -467,10 +467,12 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 		}
 		// 一次一帧：逐条 SendJSON 会把补发的历史与此刻正在广播的实时事件交错在一起
 		// （两者都只是往发送队列里塞），前端收到的事件顺序就不再是产生顺序。
-		if len(events) > 0 {
-			if err := c.SendJSON(WireEvent{Kind: "session.replay", SID: id, Data: replayPayload(events)}); err != nil {
-				s.sendError(c, err.Error())
-			}
+		//
+		// **补 0 条也要回这一帧**：前端在发出 sync 之后就进了「对齐窗口」，实时事件
+		// 全压着等这帧到来（1 秒兜底计时器才放行）。不发的话明明没缺口，界面也要
+		// 白停一秒。
+		if err := c.SendJSON(WireEvent{Kind: "session.replay", SID: id, Data: replayPayload(events)}); err != nil {
+			s.sendError(c, err.Error())
 		}
 		return
 	default:

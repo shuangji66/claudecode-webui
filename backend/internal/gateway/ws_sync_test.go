@@ -211,6 +211,28 @@ func TestSyncFallsBackToResyncWhenGapEvicted(t *testing.T) {
 	}
 }
 
+// 水位已经追平（since == 当前 seq）时，后端也必须回一帧 session.replay，
+// 否则前端的对齐窗口只能等 1 秒兜底计时器。
+func TestSyncUpToDateStillReplies(t *testing.T) {
+	cli := startFakeCLI(t, "uptodate-1")
+	srv, fake := newTestServer(t, "secret")
+	srv.d.Manager = &sessionMgr{fakeMgr: fake, sess: cli.sess}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	conn, r := dialWS(t, ts.Listener.Addr().String(), "/ws?id=uptodate-1&token=secret")
+	defer conn.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = readEvent(t, r) // snapshot
+
+	writeCmd(t, conn, map[string]any{"kind": "sync", "since": cli.sess.Seq(), "epoch": cli.sess.Epoch()})
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	ev := readEvent(t, r)
+	if ev.Kind != "session.replay" {
+		t.Fatalf("帧 = %q, want session.replay", ev.Kind)
+	}
+}
+
 // pipeTransport 是会话与假 CLI 之间的双向管道。
 type pipeTransport struct {
 	r *os.File
