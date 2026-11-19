@@ -289,9 +289,9 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
             type="button"
             onClick={() => void setHidden(!hidden)}
             className={`rounded-md p-1.5 hover:bg-black/5 ${hidden ? "text-brand" : "text-muted hover:text-ink"}`}
-            aria-label={hidden ? t("隐藏点文件", "Hide dotfiles") : t("显示点文件", "Show dotfiles")}
+            aria-label={hidden ? t("不显示隐藏文件", "Hide hidden files") : t("显示隐藏文件", "Show hidden files")}
             aria-pressed={hidden}
-            title={hidden ? t("隐藏点文件", "Hide dotfiles") : t("显示点文件", "Show dotfiles")}
+            title={hidden ? t("不显示隐藏文件", "Hide hidden files") : t("显示隐藏文件", "Show hidden files")}
           >
             {hidden ? <IconEye size={14} /> : <IconEyeOff size={14} />}
           </button>

@@ -93,6 +93,21 @@ export function cacheHitRate(u: UsageTotals): number | undefined {
   return u.cacheRead / total;
 }
 
+/**
+ * 缓存命中率的显示文案：≥99% 时保留一位小数，否则取整。
+ *
+ * 高命中率区间里整数没有分辨力——99.2% 与 99.9% 都显示成「99%」和「100%」，
+ * 看不出缓存到底有没有被吃满（长会话里这是最常看的一个数）。低区间反过来，
+ * 小数位只是噪音。正好 100%（命中 == 输入侧）直接写 100%，不写成 100.0%。
+ */
+export function formatCacheHit(rate: number): string {
+  const pct = rate * 100;
+  if (pct < 99) return `${Math.round(pct)}%`;
+  // 99.96 这类四舍五入到「100.0」的照旧写 100%，别画出一个假的精确度。
+  const one = pct.toFixed(1);
+  return one === "100.0" ? "100%" : `${one}%`;
+}
+
 /** 输入侧三项明细：新输入 / 命中缓存 / 新建缓存（原始数字，供详情面板摊开）。 */
 export function inputParts(
   u: UsageTotals,

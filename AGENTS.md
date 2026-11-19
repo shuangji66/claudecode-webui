@@ -254,6 +254,12 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **Git 支持工作区内的多个仓库**：`GET /api/git/repos` 扫描（深度 3、跳过隐藏目录与
   `node_modules`、命中仓库不再下钻），前端把选中的仓库绝对路径直接当 `/api/git/*` 的
   `cwd`（子目录本来就能过 `authorizedCwd`，不必为它加新参数）。
+- **文件面板的「显示隐藏文件」是全部隐藏项、不排除 `.git`**：那个开关的字面意思就是
+  「把点开头的都露出来」，仓库在自己工作区里却看不见只会让人以为面板读错了目录。
+  浏览本身是惰性的（每层只列直接子项 + 单层 2000 条上限），不会一次翻出整个对象库；
+  `/api/fs/tree` 的 `hidden=false` 仍然一条都不给。`@` 补全（`fsapi.Complete`）与
+  目录下载的 `.git` 跳过是两条**独立**的规则，不随这个开关变：补全要按相关性排序、
+  zip 打包对象库纯属浪费。
 - **文件面板行菜单有「引用到对话」和「下载」**：引用只把**绝对路径**交给
   `useAppStore.requestMention`（带单调递增 `seq`，Composer 消费一次后清空），由 Composer 用
   `lib/mention.mentionPath` 折算成 `@相对路径` 插进光标处（cwd 之外保留绝对写法）——格式化
@@ -484,6 +490,8 @@ hub ── manager ── session ── process ── claude (NDJSON)
   答里那行小字报的是**本轮消耗**（输入含缓存 + 输出），不是「输出 tok」：一轮几十次工具调用
   里输入侧占绝大多数，只报输出会让人以为没花钱。会话累计（`sessionInputTokens` /
   `sessionOutputTokens`）实时按回合滚、重开对话时用整份转录重算。
+  **缓存命中率 ≥99% 保留一位小数、其余取整**（`lib/usage.formatCacheHit`）：高命中区间
+  取整没有分辨力，99%、100% 两档看不出缓存有没有吃满；四舍五入到 100.0 的仍写 100%。
   **tok/s 用「最近一次请求」的口径**：`genMs/genTokens` = `message_start` → `message_delta`
   的到达间隔与那一次的输出（不含首字延迟）。整轮输出 ÷ 整轮 `duration_api_ms` 会把每次请求的
   首字延迟都摊进分母（实测 200 tok/s 被读成 70，误判成「模型很慢」）。上游把整段回复合并后

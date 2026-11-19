@@ -120,8 +120,10 @@ func (r *Root) Resolve(rel string) (abs, real, relPath string, err error) {
 
 // List 列出 rel 这一层目录的直接子项。
 //
-// 隐藏项（以 "." 开头）默认不显示；.git 即使在 hidden=true 时也不显示，
-// 避免把内部对象库暴露成可浏览的几万个文件。排序为目录优先、名称不区分大小写。
+// 隐藏项（以 "." 开头）默认不显示；hidden=true 时按「显示隐藏文件」的含义**全部**列出，
+// 包括 `.git`——工作区里明明有 `.git` 却看不见，用户会以为仓库没被认出来。
+// 浏览本身是惰性的（每层只列直接子项、单层上限 DefaultEntries），不会一次翻出整个对象库。
+// 排序为目录优先、名称不区分大小写。
 func (r *Root) List(rel string, hidden bool, limit int) (Listing, error) {
 	return r.listDir(rel, hidden, limit, nil)
 }
@@ -153,9 +155,6 @@ func (r *Root) listDir(rel string, hidden bool, limit int, keep func(Entry) bool
 	out := Listing{Root: r.Dir, Path: relPath, Entries: make([]Entry, 0, len(items))}
 	for _, item := range items {
 		name := item.Name()
-		if name == ".git" {
-			continue
-		}
 		if !hidden && strings.HasPrefix(name, ".") {
 			continue
 		}

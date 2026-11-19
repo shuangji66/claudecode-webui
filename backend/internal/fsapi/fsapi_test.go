@@ -77,6 +77,24 @@ func TestListSortsDirsFirstAndHidesDotfiles(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("entries = %v, want %v", got, want)
 	}
+
+	// 打开「显示隐藏文件」后，.git 也要出现：仓库就在工作区里，看不见只会让人以为
+	// 面板读的不是这个目录。
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	listing, err = r.List("", true, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = got[:0]
+	for _, e := range listing.Entries {
+		got = append(got, e.Type+":"+e.Name)
+	}
+	want = []string{"dir:.git", "dir:sub", "file:.hidden", "file:A.txt", "file:b.txt"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("hidden entries = %v, want %v", got, want)
+	}
 }
 
 func TestListTruncates(t *testing.T) {

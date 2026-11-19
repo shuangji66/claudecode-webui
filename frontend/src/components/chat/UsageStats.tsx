@@ -10,7 +10,7 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
-import { contextPercent, formatTokens, tokensPerSecond, type UsageSnapshot } from "../../lib/usage";
+import { contextPercent, formatCacheHit, formatTokens, tokensPerSecond, type UsageSnapshot } from "../../lib/usage";
 import { POPUP_PANEL, PORTAL_ATTR, useAnchoredPanel, useDismiss } from "../common/Menu";
 
 interface SummaryProps {
@@ -188,7 +188,7 @@ export function UsageStats({ snap, turns, tools, events }: StatsProps) {
               {cacheRead ? <Row label={t("缓存读取", "From cache")}>{formatTokens(cacheRead)}</Row> : null}
               {cacheWrite ? <Row label={t("缓存写入", "Cache write")}>{formatTokens(cacheWrite)}</Row> : null}
               {cacheHit !== undefined && (
-                <Row label={t("缓存命中", "Cache hit")}>{Math.round(cacheHit * 100)}%</Row>
+                <Row label={t("缓存命中", "Cache hit")}>{formatCacheHit(cacheHit)}</Row>
               )}
             </div>
 

@@ -6,6 +6,7 @@ import {
   cacheHitRate,
   contextPercent,
   contextTokens,
+  formatCacheHit,
   formatTokens,
   tokensPerSecond,
   totalsFromUsage,
@@ -56,6 +57,18 @@ describe("usage totals", () => {
     expect(contextPercent(contextTokens(totals), 200000)).toBe(5);
     expect(contextPercent(0, 200000)).toBeUndefined();
     expect(contextPercent(9312, undefined)).toBeUndefined();
+  });
+
+  // 高命中率区间整数没有分辨力：99.2% 与 99.9% 都挤成 99%，看不出缓存吃满没有。
+  it("缓存命中率 ≥99% 保留一位小数，其余取整", () => {
+    expect(formatCacheHit(9000 / 9312)).toBe("97%");
+    expect(formatCacheHit(0.985)).toBe("99%"); // 98.5 未到 99，取整
+    expect(formatCacheHit(0.992)).toBe("99.2%");
+    expect(formatCacheHit(0.9994)).toBe("99.9%");
+    // 四舍五入到 100.0 的照旧写 100%，不画一个假的精确度。
+    expect(formatCacheHit(0.9996)).toBe("100%");
+    expect(formatCacheHit(1)).toBe("100%");
+    expect(formatCacheHit(0)).toBe("0%");
   });
 
   it("tok/s 用输出 token ÷ API 耗时；缺耗时返回 undefined", () => {
