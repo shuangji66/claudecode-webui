@@ -4,6 +4,27 @@ import { FilesPanel } from "./FilesPanel";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { useAppStore } from "../../store/useAppStore";
 
+/** 文件树请求：按相对目录返回不同的子项，用来验证「刷新后展开状态还在」。 */
+const { apiFetch } = vi.hoisted(() => ({
+  apiFetch: vi.fn(async (path: string): Promise<unknown> => {
+    const url = new URL(path, "http://localhost");
+    if (url.pathname.endsWith("/api/fs/tree")) {
+      const dir = url.searchParams.get("path") ?? "";
+      if (dir === "") return { entries: [{ name: "frontend", path: "frontend", type: "dir" }] };
+      if (dir === "frontend") {
+        return { entries: [{ name: "src", path: "frontend/src", type: "dir" }] };
+      }
+      return { entries: [] };
+    }
+    return {};
+  }),
+}));
+
+vi.mock("../../lib/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/runtime")>();
+  return { ...actual, apiFetch };
+});
+
 const downloadFromUrl = vi.fn(async (_url: string, _name: string) => {});
 const downloadInFrame = vi.fn((_url: string) => {});
 vi.mock("../../lib/download", () => ({
@@ -115,6 +136,36 @@ describe("FilesPanel 行菜单", () => {
     // 目录不摆这一项：打开目录就是「在文件夹显示」，两条入口会让人不知道点哪条。
     fireEvent.click(screen.getByLabelText("更多操作 src"));
     expect(screen.queryByRole("menuitem", { name: /用默认应用打开/ })).toBeNull();
+  });
+});
+
+describe("文件树刷新", () => {
+  beforeEach(() => {
+    useSidebarStore.setState({
+      cwd: CWD,
+      levels: { "": [{ name: "frontend", path: "frontend", type: "dir" }] },
+      loading: {},
+      truncated: {},
+      errors: {},
+      hidden: true,
+    });
+  });
+
+  it("点刷新不会把已展开的目录折回去", async () => {
+    render(<FilesPanel cwd={CWD} active />);
+
+    // 展开 frontend：子项 src 出现。
+    fireEvent.click(screen.getByText("frontend"));
+    expect(await screen.findByText("src")).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("刷新文件树"));
+    // 刷新会重取根目录与已展开的 frontend；重取期间树不能闪成空白，
+    // 之后 src 仍在（TreeNode 没被卸载重挂，展开状态保留）。
+    expect(screen.getByText("src")).toBeTruthy();
+    await waitFor(() => expect(useSidebarStore.getState().loading[""]).toBe(false));
+    await waitFor(() => expect(useSidebarStore.getState().loading.frontend).toBe(false));
+    expect(screen.getByText("frontend")).toBeTruthy();
+    expect(screen.getByText("src")).toBeTruthy();
   });
 });
 

@@ -243,8 +243,16 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
 
   reloadTree: async () => {
     treeEpoch += 1;
-    set({ levels: {}, loading: {}, truncated: {}, errors: {} });
-    await get().loadDir("", true);
+    // 不先清空 levels：清空会让所有子目录节点卸载重挂，TreeNode 的本地展开状态
+    // （`open`）随之归零，用户点一次刷新就得把折叠的目录重新展开一遍。
+    // 这里只把**已经加载过的**目录原样重取（根目录永远重取），树保持可视、原地更新，
+    // 列表里已经消失的路径自然不再渲染。
+    const paths = [...new Set([...Object.keys(get().levels), ""])];
+    // 清掉 loading 才能让这些路径的强制重取不被 `loading[path]` 提前 return 掉（旧
+    // treeEpoch 的请求可能还挂着，它们的响应本来就会被丢弃）；清 errors 让读取失败过的
+    // 目录重新发请求——刷新本来就是「再试一次」，挂着的节点会在 effect 里补取。
+    set({ loading: {}, errors: {} });
+    await Promise.all(paths.map((path) => get().loadDir(path, true)));
   },
 
   readFile: async (path) => {
