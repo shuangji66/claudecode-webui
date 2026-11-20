@@ -250,6 +250,41 @@ function joinDone(parts: string[], locale: Locale | string): string {
 }
 
 /**
+ * 一轮之内，哪些「正文段」前面要加一条分隔线。
+ *
+ * 场景：模型说完一段过渡正文（「我先看一下这个文件」），接着又是思考与工具调用，
+ * 最后给出真正的回答。两段正文之间没有任何视觉边界，读起来像同一段话被截成两截，
+ * 而且看不出后半截才是结论。
+ *
+ * 规则（只看轮内**可见的正文段**）：
+ *   - 这一轮的第一段不加（它紧跟在用户消息 / 收起行下面，那里已经有边界）；
+ *   - 后面每一段**只有跨过了过程（思考或工具）才加**。相邻两段正文中间什么都没发生
+ *     时（上游把一条回复拆成多个 text 块）不该多一道线，那会显得像两轮。
+ *
+ * `hidden` 是「仅最终回答」档下被藏掉的回复 id：它们不占渲染位置，也不该参与
+ * 分段——否则会算出一段看不见的「前文」，给真正的那一段多挂一条线。
+ *
+ * 返回需要加线的正文 item id 集合。纯函数，`done` 是这一轮的行序列。
+ */
+export function replyDividerIds(done: Item[], hidden?: Set<string>): Set<string> {
+  const out = new Set<string>();
+  let seenReply = false;
+  let crossedProcess = false;
+  for (const item of done) {
+    if (isProcessItem(item)) {
+      crossedProcess = true;
+      continue;
+    }
+    if (item.kind !== "assistant" || !item.text.trim()) continue;
+    if (hidden?.has(item.id)) continue;
+    if (seenReply && crossedProcess) out.add(item.id);
+    seenReply = true;
+    crossedProcess = false;
+  }
+  return out;
+}
+
+/**
  * 「仅最终回答」时该隐藏哪些 Assistant 回复。
  *
  * 按用户消息切轮；被折叠的轮次只留**最后一条**有正文的回复，阶段回复随过程一起收起。

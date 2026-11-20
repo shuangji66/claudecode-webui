@@ -10,6 +10,7 @@ import {
   reasoningPreview,
   runningTool,
   replyCopy,
+  replyDividerIds,
   toolCategory,
   turnSpans,
 } from "./process";
@@ -384,5 +385,56 @@ describe("插话不切轮", () => {
       true,
     );
     expect(spans[0].finished).toBe(true);
+  });
+});
+
+describe("replyDividerIds（过渡正文与最终回答之间的分隔线）", () => {
+  it("跨过过程之后的那一段正文才加线", () => {
+    // 用户 → 过渡正文 a1 → 思考 → 工具 → 最终回答 a2
+    const turn: Item[] = [
+      reply("a1"),
+      thinking("t1"),
+      tool("b1", "Read", "ok"),
+      reply("a2"),
+    ];
+    expect([...replyDividerIds(turn)]).toEqual(["a2"]);
+  });
+
+  it("第一段正文不加（紧跟在用户消息/收起行下面，那里已有边界）", () => {
+    expect(replyDividerIds([reply("a1"), thinking("t1")]).size).toBe(0);
+    expect(replyDividerIds([reply("a1")]).size).toBe(0);
+  });
+
+  it("中间没跨过过程时不加：上游把一条回复拆成多个 text 块不该凭空多一道线", () => {
+    const turn: Item[] = [reply("a1"), reply("a2"), reply("a3")];
+    expect(replyDividerIds(turn).size).toBe(0);
+  });
+
+  it("多段过渡正文：只有真正换了上下文的那些加", () => {
+    // a1 → 思考 → a2 → 工具 → a3：a2、a3 都跨过了过程。
+    const turn: Item[] = [
+      reply("a1"),
+      thinking("t1"),
+      reply("a2"),
+      tool("b1", "Bash", "ok"),
+      reply("a3"),
+    ];
+    expect([...replyDividerIds(turn)].sort()).toEqual(["a2", "a3"]);
+  });
+
+  it("空正文的 assistant 不参与分段（它不占渲染位置）", () => {
+    const blank: Item = { id: "a0", seq: 0, ts: 0, kind: "assistant", text: "   ", streaming: false };
+    const turn: Item[] = [blank, thinking("t1"), reply("a1")];
+    // a0 不算「前一段」，a1 因此是这一轮的第一段可见正文。
+    expect(replyDividerIds(turn).size).toBe(0);
+  });
+
+  it("被「仅最终回答」藏掉的回复不参与分段", () => {
+    // 标准档：a1 可见 → a2 前面要加线。
+    const turn: Item[] = [reply("a1"), thinking("t1"), reply("a2")];
+    expect([...replyDividerIds(turn)]).toEqual(["a2"]);
+    // 「仅最终回答」把 a1 藏了：a2 成了唯一可见段，不该再加线
+    // （否则会给它挂一条"看不见前文"的线）。
+    expect(replyDividerIds(turn, new Set(["a1"])).size).toBe(0);
   });
 });

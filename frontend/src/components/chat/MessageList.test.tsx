@@ -815,3 +815,51 @@ describe("被中断的回合", () => {
     expect(screen.queryByText("已中断")).toBeNull();
   });
 });
+
+describe("过渡正文与最终回答之间的分隔线", () => {
+  /** 拿某个 item 那一行（渲染层把 id 挂在 data-item-id 上）。 */
+  const rowOf = (id: string): HTMLElement => {
+    const el = document.querySelector(`[data-item-id="${id}"]`);
+    if (!el) throw new Error(`找不到 ${id} 那一行`);
+    return el as HTMLElement;
+  };
+
+  it("跨过思考与工具之后的那段正文带分隔线，第一段不带", () => {
+    setProcessView("detailed"); // 详细档一步一行，不折成过程组，便于逐行断言
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "看一下这个文件" },
+      { id: "a1", seq: 1, ts: 0, kind: "assistant", text: "我先读一下。", streaming: false },
+      { id: "t1", seq: 2, ts: 0, kind: "thinking", text: "需要先看内容" },
+      { id: "b1", seq: 3, ts: 0, kind: "tool", toolUseId: "b1", name: "Read", input: {}, result: "ok" },
+      { id: "a2", seq: 4, ts: 0, kind: "assistant", text: "结论是这样的。", streaming: false },
+    ];
+    render(<MessageList items={items} />);
+
+    // 过渡正文：这一轮的第一段，不加线。
+    expect(rowOf("a1").className).not.toContain("border-t");
+    // 最终回答：前面跨过思考与工具，加线。
+    expect(rowOf("a2").className).toContain("border-t");
+  });
+
+  it("中间没跨过过程时不加线（上游把一条回复拆成多块）", () => {
+    setProcessView("detailed");
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "在吗" },
+      { id: "a1", seq: 1, ts: 0, kind: "assistant", text: "在的，", streaming: false },
+      { id: "a2", seq: 2, ts: 0, kind: "assistant", text: "你说。", streaming: false },
+    ];
+    render(<MessageList items={items} />);
+    expect(rowOf("a1").className).not.toContain("border-t");
+    expect(rowOf("a2").className).not.toContain("border-t");
+  });
+
+  it("纯问答（没有任何过程）不会多出分隔线", () => {
+    setProcessView("detailed");
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "1+1" },
+      { id: "a1", seq: 1, ts: 0, kind: "assistant", text: "2", streaming: false },
+    ];
+    render(<MessageList items={items} />);
+    expect(rowOf("a1").className).not.toContain("border-t");
+  });
+});

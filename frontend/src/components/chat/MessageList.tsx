@@ -23,6 +23,7 @@ import {
   hiddenReplyIds,
   isProcessItem,
   replyCopy,
+  replyDividerIds,
   turnSpans,
   type ProcessEntry,
   type TurnSpan,
@@ -190,6 +191,7 @@ const TurnRows = memo(function TurnRows({
   rows,
   copies,
   hiddenReplies,
+  dividers,
   dense,
   manual,
   timing,
@@ -200,11 +202,14 @@ const TurnRows = memo(function TurnRows({
   rows: ProcessEntry[][];
   copies: Map<string, string>;
   hiddenReplies: Set<string> | null;
+  /** 每轮里「前面要加一条分隔线」的正文 item id（见 `replyDividerIds`）。 */
+  dividers: Set<string>[];
   dense: boolean;
   manual: Record<string, boolean>;
   timing: CollapseTiming;
   onToggleTurn: (key: string, collapsed: boolean) => void;
 }) {
+
   /** 某一轮此刻是不是收起态。 */
   const isCollapsed = (span: TurnSpan, index: number): boolean => {
     if (span.process.length === 0) return false; // 没有过程可收：纯问答不该多一行
@@ -269,11 +274,21 @@ const TurnRows = memo(function TurnRows({
                   </div>
                 );
               } else {
+                // 分隔线：过渡正文 → 过程 → 最终回答之间的一道视觉边界。
+                // 只在这一段正文确实跨过了过程时才加（见 `replyDividerIds`），
+                // 否则相邻两段正文中间会凭空多一道线，像另起了一轮。
+                const divider =
+                  entry.item.kind === "assistant" && dividers[index]?.has(entry.item.id);
                 row = (
                   <div
                     key={entry.key}
                     data-item-id={entry.item.id}
-                    className={dense ? (isProcessItem(entry.item) ? "mt-1" : "mt-5") : undefined}
+                    className={[
+                      dense ? (isProcessItem(entry.item) ? "mt-1" : "mt-5") : "",
+                      divider ? "border-t border-line/70 pt-3" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ") || undefined}
                   >
                     <MessageRow
                       item={entry.item}
@@ -398,10 +413,21 @@ export function MessageList({
     [folded, shown, keepTail],
   );
   /**
-   * 轮级收起。键用轮首那条的 id：数组下标会随「加载更早」整体平移，用它当键会把
-   * 展开态错配到别的轮上。
+   * 每轮里哪些正文段前面要加分隔线（过渡正文 → 过程 → 最终回答）。
+   *
+   * 与 `hiddenReplies` 一起算：被「仅最终回答」藏掉的那些回复不占渲染位置，
+   * 不该参与分段，否则会给真正的那一段多挂一条看不见前文的线。
+   *
+   * 要在 `spans` 之后定义（按轮切片）。
    */
   const spans = useMemo(() => turnSpans(shown, running), [shown, running]);
+  const dividers = useMemo(
+    () =>
+      spans.map((span) =>
+        replyDividerIds(shown.slice(span.start, span.end), hiddenReplies ?? undefined),
+      ),
+    [spans, shown, hiddenReplies],
+  );
   const [manual, setManual] = useState<Record<string, boolean>>({});
   /**
    * 手动开合某一轮的过程。
@@ -753,6 +779,7 @@ export function MessageList({
               rows={rows}
               copies={copies}
               hiddenReplies={hiddenReplies}
+              dividers={dividers}
               dense={dense}
               manual={manual}
               timing={timing}
