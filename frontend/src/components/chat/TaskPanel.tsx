@@ -57,7 +57,7 @@ export function TaskPanel({ items }: Props) {
                 />
               )}
               <span
-                className={`min-w-0 flex-1 break-words ${
+                className={`min-w-0 flex-1 [overflow-wrap:anywhere] ${
                   e.status === "completed"
                     ? "text-faint"
                     : e.status === "in_progress"

@@ -28,7 +28,7 @@ export function EditBody({ item }: { item: ToolItem }) {
               <span className="w-6 shrink-0 select-none text-center opacity-60">
                 {l.type === "add" ? "+" : l.type === "del" ? "−" : l.type === "hunk" ? "" : " "}
               </span>
-              <span className="whitespace-pre-wrap break-words pr-3">{l.text || " "}</span>
+              <span className="whitespace-pre-wrap [overflow-wrap:anywhere] pr-3">{l.text || " "}</span>
             </div>
           ))}
         </div>

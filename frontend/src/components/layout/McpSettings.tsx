@@ -7,6 +7,10 @@
 //   1. 改完不会热加载——MCP server 是 claude 会话启动时连接的，要重开会话；
 //   2. 停用是「把配置摘到本应用自己的暂存文件」，期间外部工具看不到这条配置；
 //   3. 探测只针对已保存的服务，命令写错了（PATH 里没有 npx 之类）会在这里报出来。
+//
+// 这一页**自己渲染 `PageShell`**（与模型页同一套）：页头右侧是「添加」——它是这一页
+// 唯一的整体动作，而正文里的分组（内置搜索 / 用户级 / 项目级）都可以长到一屏以外，
+// 钉在正文顶部等于滚下去之后要一路翻回来才能加一条。
 
 import { useEffect, useRef, useState } from "react";
 import { NO_AUTOFILL } from "../../lib/autofill";
@@ -21,6 +25,8 @@ import { Dialog } from "../common/Dialog";
 import { Select } from "../common/Select";
 import { askConfirm } from "../common/SystemDialogs";
 import { IconAlert, IconPlus, IconRefresh, IconTrash } from "../common/Icons";
+import { PageShell } from "./FeaturePage";
+import { SETTINGS_PANE_FLEX } from "./settings/SettingsSurface";
 import { SearchSettings } from "./SearchSettings";
 
 /** 编辑中的表单。name + scope 是标识，编辑已有项时不允许改。 */
@@ -69,7 +75,17 @@ function draftOf(srv: McpServer): Draft {
 const inputClass =
   "w-full rounded-lg border border-line-strong bg-canvas px-2.5 py-1.5 text-[12.5px] text-ink outline-none placeholder:text-faint focus-visible:border-brand/60";
 
-export function McpSettings({ cwd }: { cwd: string }) {
+export function McpSettings({
+  cwd,
+  onClose,
+  onOpenSidebar,
+}: {
+  cwd: string;
+  /** 回到对话；不传时不渲染页头的关闭键（设置抽屉里嵌进来时由抽屉自己给）。 */
+  onClose?: () => void;
+  /** 移动端抽屉入口（见 PageShell）。 */
+  onOpenSidebar?: () => void;
+}) {
   const t = useT();
   const data = useMcpStore((s) => s.data);
   const probes = useMcpStore((s) => s.probes);
@@ -248,77 +264,83 @@ export function McpSettings({ cwd }: { cwd: string }) {
     });
 
   return (
-    // pr-2 给滚动条留位：macOS / 部分 webview 是覆盖式滚动条，内容会一直画到
-    // 容器右边缘，右对齐的按钮与文字就会被压在滚动条下面。
-    <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pr-2">
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-        {/* min-w-[12rem] 而不是 min-w-0：中文可以在任意字之间断行，min-content 只有
-            一个字符宽——空间不足时文字会被压成「每行两三个字」，而按钮还在同一行。
-            给说明挤出一个下限，按钮才会整体折到下一行。 */}
-        <div className="min-w-[12rem] flex-1">
-          <h2 className="text-[15px] font-semibold text-ink">{t("MCP 服务", "MCP servers")}</h2>
-          <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted">
-            {t(
-              "MCP 是给 Claude 增加外部工具的方式（GitHub、数据库、浏览器…）。",
-              "MCP adds external tools to Claude (GitHub, databases, browsers…).",
-            )}
-          </p>
-        </div>
+    <PageShell
+      title="MCP"
+      onClose={onClose}
+      onOpenSidebar={onOpenSidebar}
+      bodyClassName={SETTINGS_PANE_FLEX}
+      // 「添加」放页头右侧：正文里三个分组（内置搜索 / 用户级 / 项目级）随时会长过
+      // 一屏，动作钉在正文顶部就是「滚下去之后要翻回来才能加一条」。与模型页的保存
+      // 同一个位置、同一个理由。
+      actions={
         <Button variant="primary" size="sm" icon={<IconPlus size={13} />} disabled={busy} onClick={() => setDraft({ ...EMPTY_DRAFT })}>
           {t("添加", "Add")}
         </Button>
-      </div>
-
-      {error && (
-        <div className="mb-3 flex items-start gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11.5px] text-danger dark:border-rose-900/60 dark:bg-rose-950/30">
-          <IconAlert size={13} className="mt-0.5 shrink-0" />
-          <span className="min-w-0 break-words">{error}</span>
-        </div>
-      )}
-
-      <SearchSettings />
-
-      <section className="mb-4">
-        <div className="mb-1.5 flex items-baseline justify-between gap-2">
-          <h3 className="text-[12px] font-medium text-ink">{t("用户级", "User scope")}</h3>
-          <span className="min-w-0 truncate font-mono text-[10px] text-faint" title={data.user_path}>
-            {data.user_path}
-          </span>
-        </div>
-        <div className="space-y-2">
-          {data.user.length > 0 ? rows(data.user) : <p className="text-[11.5px] text-faint">{t("还没有用户级服务。", "No user-scope servers yet.")}</p>}
-        </div>
-      </section>
-
-      <section>
-        <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
-          <h3 className="shrink-0 text-[12px] font-medium text-ink">{t("项目级", "Project scope")}</h3>
-          {/* 工作区在这里选，不跟着「当前对话在哪」：多工作区时经常要把一条
-              服务加到别的目录的 .mcp.json 里。 */}
-          {options.length > 0 && (
-            <div className="w-[12rem] max-w-full min-w-0">
-              <Select ariaLabel={t("工作区", "Workspace")} value={target} onChange={chooseTarget} options={options} />
-            </div>
+      }
+    >
+      {/* pr-2 给滚动条留位：macOS / 部分 webview 是覆盖式滚动条，内容会一直画到
+          容器右边缘，右对齐的按钮与文字就会被压在滚动条下面。
+          底部安全区由 `PageShell` 的 `SETTINGS_PANE_FLEX` 之外这一层自己给：
+          这一页是满高 flex，最后一个分组紧贴屏幕下沿。 */}
+      <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pr-2">
+        <p className="mb-3 text-[11.5px] leading-relaxed text-muted">
+          {t(
+            "MCP 是给 Claude 增加外部工具的方式（GitHub、数据库、浏览器…）。",
+            "MCP adds external tools to Claude (GitHub, databases, browsers…).",
           )}
-          <span className="ml-auto min-w-0 max-w-full truncate font-mono text-[10px] text-faint" title={data.project_path}>
-            {data.project_path}
-          </span>
-        </div>
-        {target ? (
-          <div className="space-y-2">
-            {data.project.length > 0 ? rows(data.project) : <p className="text-[11.5px] text-faint">{t("这个工作区还没有项目级服务。", "No project-scope servers for this workspace.")}</p>}
-          </div>
-        ) : (
-          <p className="text-[11.5px] text-faint">{t("先选一个工作区，才能读写项目级配置。", "Pick a workspace first to read and write project-scope config.")}</p>
-        )}
-      </section>
+        </p>
 
-      <p className="mt-4 text-[10.5px] leading-relaxed text-faint">
-        {t(
-          "注：条目按 claude 的格式写入。stdio 走本地命令（npx / node / uvx…），http 与 sse 走远端地址。服务名会成为工具前缀 mcp__<名字>__<工具>。",
-          "Entries use claude's own format: stdio runs a local command (npx / node / uvx…), http and sse connect to a URL. The name becomes the tool prefix mcp__<name>__<tool>.",
+        {error && (
+          <div className="mb-3 flex items-start gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11.5px] text-danger dark:border-rose-900/60 dark:bg-rose-950/30">
+            <IconAlert size={13} className="mt-0.5 shrink-0" />
+            <span className="min-w-0 break-words">{error}</span>
+          </div>
         )}
-      </p>
+
+        <SearchSettings />
+
+        <section className="mb-4">
+          <div className="mb-1.5 flex items-baseline justify-between gap-2">
+            <h3 className="text-[12px] font-medium text-ink">{t("用户级", "User scope")}</h3>
+            <span className="min-w-0 truncate font-mono text-[10px] text-faint" title={data.user_path}>
+              {data.user_path}
+            </span>
+          </div>
+          <div className="space-y-2">
+            {data.user.length > 0 ? rows(data.user) : <p className="text-[11.5px] text-faint">{t("还没有用户级服务。", "No user-scope servers yet.")}</p>}
+          </div>
+        </section>
+
+        <section>
+          <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+            <h3 className="shrink-0 text-[12px] font-medium text-ink">{t("项目级", "Project scope")}</h3>
+            {/* 工作区在这里选，不跟着「当前对话在哪」：多工作区时经常要把一条
+                服务加到别的目录的 .mcp.json 里。 */}
+            {options.length > 0 && (
+              <div className="w-[12rem] max-w-full min-w-0">
+                <Select ariaLabel={t("工作区", "Workspace")} value={target} onChange={chooseTarget} options={options} />
+              </div>
+            )}
+            <span className="ml-auto min-w-0 max-w-full truncate font-mono text-[10px] text-faint" title={data.project_path}>
+              {data.project_path}
+            </span>
+          </div>
+          {target ? (
+            <div className="space-y-2">
+              {data.project.length > 0 ? rows(data.project) : <p className="text-[11.5px] text-faint">{t("这个工作区还没有项目级服务。", "No project-scope servers for this workspace.")}</p>}
+            </div>
+          ) : (
+            <p className="text-[11.5px] text-faint">{t("先选一个工作区，才能读写项目级配置。", "Pick a workspace first to read and write project-scope config.")}</p>
+          )}
+        </section>
+
+        <p className="mt-4 text-[10.5px] leading-relaxed text-faint">
+          {t(
+            "注：条目按 claude 的格式写入。stdio 走本地命令（npx / node / uvx…），http 与 sse 走远端地址。服务名会成为工具前缀 mcp__<名字>__<工具>。",
+            "Entries use claude's own format: stdio runs a local command (npx / node / uvx…), http and sse connect to a URL. The name becomes the tool prefix mcp__<name>__<tool>.",
+          )}
+        </p>
+      </div>
 
       <Dialog
         open={draft !== null}
@@ -481,6 +503,6 @@ export function McpSettings({ cwd }: { cwd: string }) {
           </div>
         )}
       </Dialog>
-    </div>
+    </PageShell>
   );
 }

@@ -139,6 +139,17 @@ describe("FilesPanel 行菜单", () => {
   });
 });
 
+describe("移动端底部安全区", () => {
+  // 右侧栏在移动端是全屏抽屉，面板底边就是屏幕底边：不留安全区，文件树最后一行
+  // 会被 iPhone 的 Home Indicator 盖住。jsdom 不算 env()，只能钉住这组类名。
+  it("整列留出安全区，且树与预览共用同一个根节点", () => {
+    render(<FilesPanel cwd={CWD} active />);
+    const root = screen.getByText("README.md").closest("div.flex.h-full.min-h-0.flex-col") as HTMLElement;
+    expect(root).toBeTruthy();
+    expect(root.className).toContain("pb-[calc(env(safe-area-inset-bottom,0px)+8px)]");
+  });
+});
+
 describe("文件树刷新", () => {
   beforeEach(() => {
     useSidebarStore.setState({

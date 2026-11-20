@@ -542,7 +542,7 @@ export function Composer({
         className="min-w-0 flex-1 text-left"
         title={t("点一下编辑这条", "Click to edit")}
       >
-        <span className="chat-text line-clamp-2 block whitespace-pre-wrap break-words leading-5 text-ink">
+        <span className="chat-text line-clamp-2 block whitespace-pre-wrap [overflow-wrap:anywhere] leading-5 text-ink">
           {q.text || t("（仅附件）", "(attachments only)")}
         </span>
         {q.attachments.length > 0 && (

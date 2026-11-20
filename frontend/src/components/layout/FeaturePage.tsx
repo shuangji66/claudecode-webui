@@ -105,7 +105,8 @@ export function FeaturePage({
       </Suspense>
     );
   }
-  // 模型页自己渲染 PageShell（保存按钮在页头右侧），这里不再套一层外壳。
+  // 模型页与 MCP 页自己渲染 PageShell（页头右侧各有一个整体动作：保存 / 添加），
+  // 这里不再套一层外壳——套两层会出现两个标题、两倍内边距。
   if (view === "models") {
     return (
       <Suspense fallback={null}>
@@ -113,18 +114,25 @@ export function FeaturePage({
       </Suspense>
     );
   }
+  if (view === "mcp") {
+    return (
+      <Suspense fallback={null}>
+        <McpSettings cwd={cwd} onClose={onClose} onOpenSidebar={onOpenSidebar} />
+      </Suspense>
+    );
+  }
 
   const title =
-    view === "plugins" ? t("插件", "Plugins") : view === "mcp" ? "MCP" : t("技能中心", "Skills");
+    view === "plugins" ? t("插件", "Plugins") : t("技能中心", "Skills");
 
-  // 滚动归谁：MCP / 技能页自己就是 flex 列、内部有滚动区；插件页是一整段普通内容
+  // 滚动归谁：技能页自己就是 flex 列、内部有滚动区；插件页是一整段普通内容
   // （根节点只有 `space-y-3`），必须由外层给滚动容器——否则内容超出视口就再也够不到。
   const bodyClassName = view === "plugins" ? SETTINGS_PANE_SCROLL : SETTINGS_PANE_FLEX;
 
   return (
     <PageShell title={title} onClose={onClose} onOpenSidebar={onOpenSidebar} bodyClassName={bodyClassName}>
       <Suspense fallback={null}>
-        {view === "plugins" ? <PluginsSettings cwd={cwd} /> : view === "mcp" ? <McpSettings cwd={cwd} /> : <SkillsSettings cwd={cwd} />}
+        {view === "plugins" ? <PluginsSettings cwd={cwd} /> : <SkillsSettings cwd={cwd} />}
       </Suspense>
     </PageShell>
   );

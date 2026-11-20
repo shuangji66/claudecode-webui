@@ -59,7 +59,7 @@ export function ThinkingBlock({
       dense={dense}
       icon={dense ? <IconSpark size={12} /> : undefined}
     >
-      <p className="whitespace-pre-wrap break-words text-[12px] italic leading-relaxed text-muted">
+      <p className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[12px] italic leading-relaxed text-muted">
         {text}
         {streaming && <span className="ml-0.5 inline-block h-3 w-1.5 translate-y-0.5 rounded-sm bg-brand opacity-80" />}
       </p>

@@ -39,7 +39,7 @@ export function UserBubble({ text, ts, images = [] }: { text: string; ts?: numbe
             ))}
           </div>
         )}
-        {text && <div className="whitespace-pre-wrap break-words">{text}</div>}
+        {text && <div className="whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</div>}
       </div>
       <div className="flex items-center gap-1.5 pr-1 text-[10.5px] text-faint">
         {typeof ts === "number" && ts > 0 && <span className="tabular-nums">{clockTime(ts, locale)}</span>}

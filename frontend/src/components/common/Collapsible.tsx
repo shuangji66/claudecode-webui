@@ -16,6 +16,13 @@ interface Props {
   tone?: "neutral" | "muted";
   /** 标题前的图标（紧凑模式下工具行与思考行共用同一套外观）。 */
   icon?: ReactNode;
+  /**
+   * 标题行右侧的动作（启停开关这类）。
+   *
+   * 它在**折叠按钮之外**：嵌进按钮里就是按钮套按钮（点一下既切换折叠又按到动作，
+   * 键盘上也无法分别聚焦）。所以标题行的结构是「折叠按钮占满剩余宽度 + 动作」。
+   */
+  actions?: ReactNode;
   /** 紧凑模式：去掉边框、压成一行，展开后才显示内容。 */
   dense?: boolean;
 }
@@ -68,6 +75,7 @@ export function Collapsible({
   children,
   tone = "neutral",
   icon,
+  actions,
   dense = false,
 }: Props) {
   const [open, setOpen] = useState(defaultOpen);
@@ -109,17 +117,20 @@ export function Collapsible({
 
   return (
     <div className={`overflow-hidden rounded-xl border border-line ${tone === "muted" ? "bg-panel/60" : "bg-canvas"}`}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[11.5px] font-medium text-muted hover:bg-panel-strong/60 hover:text-ink"
-        aria-expanded={open}
-      >
-        <IconChevronRight size={13} className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
-        {icon && <span className="shrink-0">{icon}</span>}
-        <span className="shrink-0 truncate">{title}</span>
-        {summaryCell("text-[10px]")}
-      </button>
+      <div className="flex items-center gap-1.5 pr-3">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-[11.5px] font-medium text-muted hover:bg-panel-strong/60 hover:text-ink"
+          aria-expanded={open}
+        >
+          <IconChevronRight size={13} className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
+          {icon && <span className="shrink-0">{icon}</span>}
+          <span className="shrink-0 truncate">{title}</span>
+          {summaryCell("text-[10px]")}
+        </button>
+        {actions && <span className="shrink-0">{actions}</span>}
+      </div>
       {open && <div className="border-t border-line px-3 py-2.5">{children}</div>}
     </div>
   );

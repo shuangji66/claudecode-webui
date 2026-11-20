@@ -12,11 +12,11 @@ export function GenericBody({ item }: { item: ToolItem }) {
   return (
     <div className="space-y-2 px-3 py-2.5">
       <Collapsible title={t("参数", "Input")} summary={preview(inputText)}>
-        <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-ink-2">{inputText}</pre>
+        <pre className="max-h-60 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[11.5px] leading-relaxed text-ink-2">{inputText}</pre>
       </Collapsible>
       {item.result !== undefined && (
         <Collapsible title={t("结果", "Result")} summary={preview(item.result)}>
-          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-ink-2">
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[11.5px] leading-relaxed text-ink-2">
             {item.result}
           </pre>
         </Collapsible>

@@ -762,6 +762,22 @@ hub ── manager ── session ── process ── claude (NDJSON)
   才下发时（算出来超过 `MAX_GENERATION_TPS`）宁可不显示，别编速度；转录回放只能拿
   `api-request` → `assistant` 的时间差当这一请求的耗时（含首字延迟，略偏低）。
 - 移动端输入框下方必须保留 `env(safe-area-inset-bottom)`，否则 iPhone Home Indicator 会盖住输入区。
+  **全屏抽屉（右侧栏）里的面板也一样**：它的 `aside` 是 `fixed inset-y-0 h-[100dvh]`，
+  面板自己的根节点就是屏幕底边——文件树最后一行、Git 的分支胶囊/deep diff 末行都会被
+  Home Indicator 压住。安全区分两处各加一次（`FilesPanel` / `GitPanel` 的根节点，覆盖树、
+  预览、PDF/Office iframe、变更/历史/diff/提交详情所有分支），**不要按断点复位**：
+  侧栏在 1000px 以下都是浮层，平板竖屏同样贴底；桌面停靠时 `env()` 为 0，只剩内边距。
+- **对话消息区禁止横向滚动**（`MessageList` 的滚动区必须写 `overflow-x-hidden overflow-y-auto`）：
+  只写 `overflow-y-auto` 时，按 CSS 规则另一轴的 `visible` 会被算成 `auto`——消息区
+  其实一直是横向滚动容器。一条不含断点的长文件名 / 长路径就能把它推出去，手机上表现
+  是「整屏能左右滑动、两边被裁掉」。横向滚动只允许发生在**内层**：代码块（`pre`）与
+  表格各自的容器（都带 `max-w-full overflow-x-auto`），因为它们有缩进/列对齐语义。
+- **正文折行用 `[overflow-wrap:anywhere]`，不用 `break-words`**：`break-words`
+  只在「单词」层面断，而中文没有空格、长文件名/长路径/long hash 也没有断点，对它完全
+  无效——那串东西会直接撑破气泡（截图里的超长文件名就是这样）。`break-all` 也不给：
+  那会在英文单词中间随意断开，正文读起来全是碎词。`anywhere` 只在必要时断，并且参与
+  min-content 计算。已覆盖：`Markdown` 的段落/标题/列表项/引用/行内代码、`UserBubble`、
+  `ThinkingBlock`、`ResultBar`、各工具卡片的正文与 `ToolShell` 之外的消息内 `<pre>`。
 - 界面文案走 `useT()`（中文 / English 两参数），默认中文；新增文案不要再硬编码单语。
 - **UI 原语入库，不要重复造**：模态 `common/Dialog`、确认/输入 `common/SystemDialogs`
   （`askConfirm`/`askPrompt`）、下拉 `common/Select`、菜单 `common/Menu`、按钮 `common/Button`、
@@ -1030,6 +1046,24 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **`always_load` 只写 true、不写 false**（false 是默认语义），但**老版本注册的条目没有
   这个键**：`GET /api/search` 的 `always_load` 就是给前端提示「补上常驻」用的，
   别把它当成 `attached` 的重复字段。
+- **设置页里这块默认折叠成一行**（`SearchSettings` 用 `common/Collapsible`，`tone="muted"`）：
+  它压在 MCP 页最上面、配好之后基本不再动，展开态会把下面的服务列表推出屏幕（手机上
+  尤其明显）。折叠式的约定：① 摘要在收起时就说明「注册没注册」（状态没读到时留空，
+  不要把「不知道」写成「未注册」）；② 启停按钮放在标题行右侧（`Collapsible` 的 `actions`，
+  在折叠按钮**之外**——嵌进去就是按钮套按钮），这样收起时也能直接开关；
+  ③ 启停状态不在摘要里重复一遍，按钮文案已经说了。
+
+### 4.12.1 MCP 页的页头动作（`McpSettings` 自己渲染 `PageShell`）
+
+- **「添加」在页头右侧，不在正文顶部**：这一页有三个分组（内置搜索 / 用户级 / 项目级），
+  随时会长过一屏；动作钉在正文顶部就是「滚下去之后要一路翻回来才能加一条」。
+  与模型页的保存同一个位置、同一个理由（`PageShell` 的 `actions`），
+  `FeaturePage` 因此**不再给 MCP 页套外壳**（套两层会出现两个标题、两倍内边距），
+  它的 `view === "mcp"` 分支和 `models` 一样直接渲染页面自己。
+  新增这类「页头有整体动作」的页时照此办理：页面自己渲染 `PageShell`，
+  `FeaturePage` 只留一条直通分支。
+- 正文里**不再写「MCP 服务」标题**：页头已经给了一份（与模型页同一条规矩）。
+  说明文字留着，它是「MCP 是什么」的入门一句话，不要跟着标题一起删。
 
 ### 4.13 插件管理（`internal/plugin`）
 

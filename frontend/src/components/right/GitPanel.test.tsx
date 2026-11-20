@@ -115,6 +115,22 @@ beforeEach(() => {
   apiFetch.mockClear();
 });
 
+describe("移动端底部安全区", () => {
+  // 移动端右侧栏是全屏抽屉：面板底边就是屏幕底边，最下面压着分支胶囊那一行。
+  // 不留安全区，iPhone 的 Home Indicator 会横在上面。jsdom 不算 env()，钉类名。
+  it("整列留出安全区，覆盖变更 / 历史 / diff / 提交详情四条渲染路径", async () => {
+    render(<GitPanel cwd={CWD} active />);
+    const root = (await screen.findByLabelText("暂存 src/a.ts")).closest("div.flex.h-full.min-h-0.flex-col") as HTMLElement;
+    expect(root).toBeTruthy();
+    expect(root.className).toContain("pb-[calc(env(safe-area-inset-bottom,0px)+8px)]");
+
+    // 专注 diff 时仍是这一个根节点（留白在列上，不在列表分支里）。
+    fireEvent.click(screen.getByTitle("src/a.ts"));
+    await screen.findByText("const a = 2;");
+    expect(screen.getByLabelText(/自动换行/).closest("div.flex.h-full.min-h-0.flex-col")).toBe(root);
+  });
+});
+
 describe("GitPanel 差异预览", () => {
   it("只预览，不摆任何暂存/取消暂存按钮（已暂存的文件也一样）", async () => {
     render(<GitPanel cwd={CWD} active />);

@@ -160,7 +160,12 @@ export function renderInline(s: string, keyPrefix = "i", media: MarkdownMedia | 
     const key = `${keyPrefix}-${idx++}`;
     if (m[1]) {
       out.push(
-        <code key={key} className="rounded-md bg-panel-strong px-1 py-0.5 font-mono text-[0.86em] text-ink-2">
+        // 行内代码也要能断：模型常把整条路径 / 命令写进行内代码，那一串没有断点，
+        // 不折就是横向溢出（`anywhere` 与正文同一个理由）。
+        <code
+          key={key}
+          className="rounded-md bg-panel-strong px-1 py-0.5 font-mono text-[0.86em] text-ink-2 [overflow-wrap:anywhere]"
+        >
           {token.slice(1, -1)}
         </code>,
       );
@@ -359,15 +364,21 @@ function renderBlock(b: Block, key: number, media: MarkdownMedia | null): ReactN
   switch (b.type) {
     case "code":
       return (
+        // 代码块保留自己的横向滚动（缩进与对齐是代码的一部分，硬折会把 `if` 与
+        // 它的条件拆到两行）。这是**唯一**允许在消息里横向滚的东西：外层
+        // `MessageList` 已经 `overflow-x-hidden`，滚动只发生在这个 `pre` 里。
+        // 表格同理，见下面的 `table` 分支。
         <pre
           key={key}
-          className="chat-code overflow-x-auto rounded-xl border border-line bg-[#0f1115] p-3 leading-relaxed text-[#e5e7eb]"
+          className="chat-code max-w-full overflow-x-auto rounded-xl border border-line bg-[#0f1115] p-3 leading-relaxed text-[#e5e7eb]"
         >
           <code>{b.content.replace(/\n$/, "")}</code>
         </pre>
       );
     case "heading": {
-      const cls = `font-semibold text-ink ${HEADING_SIZE[Math.min(Math.max(b.level, 1), 6) - 1]}`;
+      // 标题也要能断：模型常把一长串路径 / 文件名写在标题里，`text-ink` 那几档字号
+      // 更大，撑破的宽度也更明显。
+      const cls = `font-semibold text-ink [overflow-wrap:anywhere] ${HEADING_SIZE[Math.min(Math.max(b.level, 1), 6) - 1]}`;
       const children = renderInline(b.text, `h${key}`, media);
       const Tag = (`h${b.level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
       return (
@@ -381,7 +392,9 @@ function renderBlock(b: Block, key: number, media: MarkdownMedia | null): ReactN
       return (
         <Tag key={key} className={`${b.ordered ? "list-decimal" : "list-disc"} space-y-1 pl-5`}>
           {b.items.map((it, j) => (
-            <li key={j} style={it.indent > 0 ? { marginLeft: it.indent * 12 } : undefined}>
+            // 列表项是最常出现「一整条长路径」的地方（模型爱用 `- /very/long/path…`
+            // 罗列文件），不折就是一整行横向溢出。
+            <li key={j} className="[overflow-wrap:anywhere]" style={it.indent > 0 ? { marginLeft: it.indent * 12 } : undefined}>
               {renderInline(it.text, `l${key}-${j}`, media)}
             </li>
           ))}
@@ -391,12 +404,14 @@ function renderBlock(b: Block, key: number, media: MarkdownMedia | null): ReactN
     case "quote":
       return (
         <blockquote key={key} className="border-l-2 border-line pl-3 text-muted">
-          <p className="whitespace-pre-wrap break-words">{renderInline(b.text, `q${key}`, media)}</p>
+          <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{renderInline(b.text, `q${key}`, media)}</p>
         </blockquote>
       );
     case "table":
       return (
-        <div key={key} className="overflow-x-auto">
+        // 表格这里是**内层**横向滚动：宽表有列对齐语义，逐格折行会把表读坏。
+        // 外层消息区已经 `overflow-x-hidden`，所以滚动只发生在这张表自己的容器里。
+        <div key={key} className="max-w-full overflow-x-auto">
           <table className="min-w-full border-collapse text-[12.5px]">
             <thead>
               <tr>
@@ -428,7 +443,13 @@ function renderBlock(b: Block, key: number, media: MarkdownMedia | null): ReactN
       return <hr key={key} className="border-line" />;
     case "para":
       return (
-        <p key={key} className="whitespace-pre-wrap break-words">
+        // `[overflow-wrap:anywhere]` 而不是 `break-words`：后者只在「单词」层面断，
+        // 而中文没有空格、长文件名/长路径/长 hash 也都没有断点——`break-words` 对它们
+        // 完全无效，那串东西会直接撑破气泡（截图里的超长文件名就是这样）。`anywhere`
+        // 只在**需要**时才断，正常段落不受影响，而且它参与 min-content 计算——这一点
+        // 决定了 flex/grid 里的这一列能不能被正确压窄。`break-all` 不给：那会在英文
+        // 单词中间随意断开，正文读起来全是碎词。
+        <p key={key} className="whitespace-pre-wrap [overflow-wrap:anywhere]">
           {renderInline(b.text, `p${key}`, media)}
         </p>
       );

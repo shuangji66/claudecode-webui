@@ -53,7 +53,7 @@ function QuestionView({ question, answer }: { question: AskQuestion; answer: str
         {question.header && (
           <span className="rounded-full bg-panel-strong px-2 py-0.5 text-[10px] text-muted">{question.header}</span>
         )}
-        <p className="min-w-0 whitespace-pre-wrap break-words text-[12px] font-medium text-ink">{question.question}</p>
+        <p className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere] text-[12px] font-medium text-ink">{question.question}</p>
       </div>
       {question.options.length > 0 && (
         <ul className="space-y-1">
@@ -115,7 +115,7 @@ export function AskQuestionBody({ item }: { item: ToolItem }) {
           title={t("原始结果", "Raw result")}
           summary={(item.result.split("\n").find((line) => line.trim()) ?? "").slice(0, 60)}
         >
-          <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-ink-2">
+          <pre className="max-h-60 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[11px] leading-relaxed text-ink-2">
             {item.result}
           </pre>
         </Collapsible>

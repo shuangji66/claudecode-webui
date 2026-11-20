@@ -74,6 +74,35 @@ describe("Markdown 块级结构", () => {
   });
 });
 
+describe("Markdown 长内容不撑破消息区", () => {
+  // 手机上整屏能左右滑动、两边被裁掉，起因常常就是模型写的一条长路径 / 长文件名。
+  // `break-words` 只在「单词」层面断，对这种没有断点的长串完全无效。
+  it("正文、标题、列表项、行内代码都按任意点折行", () => {
+    const long = "x".repeat(200);
+    const { container } = render(
+      <Markdown text={`看 ${long}.txt\n\n## ${long}\n\n- ${long}\n\n\`${long}\``} />,
+    );
+    for (const el of [
+      container.querySelector("p"),
+      container.querySelector("h2"),
+      container.querySelector("li"),
+      container.querySelector("code"),
+    ]) {
+      expect(el?.className).toContain("[overflow-wrap:anywhere]");
+    }
+  });
+
+  it("代码块与表格各自是内层横向滚动，且不吃满消息区宽度", () => {
+    const { container } = render(<Markdown text={"```js\nconst a = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |"} />);
+    const pre = container.querySelector("pre")!;
+    expect(pre.className).toContain("overflow-x-auto");
+    expect(pre.className).toContain("max-w-full");
+    const tableWrap = container.querySelector("table")!.parentElement!;
+    expect(tableWrap.className).toContain("overflow-x-auto");
+    expect(tableWrap.className).toContain("max-w-full");
+  });
+});
+
 describe("Markdown 正文图片", () => {
   const CWD = "/vol1/@appshare/ClaudeCode";
   const PNG = "data:image/png;base64,iVBORw0KGgo=";

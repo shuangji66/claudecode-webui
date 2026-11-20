@@ -70,14 +70,14 @@ export function AgentBody({ item }: { item: ToolItem }) {
       <div className="space-y-2 px-3 pb-2.5">
         {prompt && (
           <Collapsible title={t("任务说明", "Task prompt")} summary={preview(prompt)}>
-            <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-ink-2">
+            <pre className="max-h-60 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[11.5px] leading-relaxed text-ink-2">
               {prompt}
             </pre>
           </Collapsible>
         )}
         {item.result !== undefined && item.result !== "" && (
           <Collapsible title={t("结果", "Result")} summary={preview(item.result)}>
-            <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-ink-2">
+            <pre className="max-h-80 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[11.5px] leading-relaxed text-ink-2">
               {item.result}
             </pre>
           </Collapsible>

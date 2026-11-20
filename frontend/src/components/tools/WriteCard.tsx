@@ -19,7 +19,7 @@ export function WriteBody({ item }: { item: ToolItem }) {
           {diff.lines.map((l, i) => (
             <div key={i} className="flex bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
               <span className="w-6 shrink-0 select-none text-center opacity-60">+</span>
-              <span className="whitespace-pre-wrap break-words pr-3">{l.text || " "}</span>
+              <span className="whitespace-pre-wrap [overflow-wrap:anywhere] pr-3">{l.text || " "}</span>
             </div>
           ))}
         </div>

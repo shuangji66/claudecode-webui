@@ -279,7 +279,13 @@ export function GitPanel({ cwd, active }: Props) {
   const repo = git?.is_repo === true;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    // 底部安全区：移动端右侧栏是全屏抽屉，面板底边就是屏幕底边。这里最下面
+    // 压着的是分支胶囊那一行、以及专注 diff/提交详情时的补丁末行——不留白，
+    // iPhone 的 Home Indicator 正好盖在上面。留白放在整列上（不是逐个分支加），
+    // 变更 / 历史 / diff / 提交详情四条渲染路径一次覆盖。
+    // **不按断点复位**：侧栏在 1000px 以下都是浮层（`DOCK_MIN`），平板竖屏
+    // 同样贴着屏幕底边；桌面停靠时 env() 为 0，只剩这 8px。
+    <div className="flex h-full min-h-0 flex-col pb-[calc(env(safe-area-inset-bottom,0px)+8px)]">
       {/* 工作区里并排放着好几个仓库时给一排切换 chip；只有一个仓库就不用占这行。 */}
       {repos.length > 1 && (
         <div className="dsh-scroll flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-2 py-1.5">

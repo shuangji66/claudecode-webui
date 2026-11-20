@@ -75,6 +75,21 @@ beforeEach(() => {
 });
 
 describe("McpSettings", () => {
+  // 「添加」是这一页唯一的整体动作：正文里三个分组随时会长过一屏，动作钉在正文
+  // 顶部等于滚下去之后要翻回来才能加一条。与模型页的保存同一个位置、同一个理由。
+  it("「添加」在页头右侧，正文里不再有一份", async () => {
+    setup();
+    await screen.findByText("github");
+    const add = screen.getByRole("button", { name: /添加/ });
+    expect(add.closest("header")).not.toBeNull();
+    // 正文（滚动区）里没有第二个「添加」。
+    const scroller = document.querySelector(".dsh-scroll") as HTMLElement;
+    expect(within(scroller).queryByRole("button", { name: /添加/ })).toBeNull();
+    // 点页头那颗照样能开编辑弹窗。
+    fireEvent.click(add);
+    expect(screen.getByRole("dialog", { name: "MCP 服务" })).toBeInTheDocument();
+  });
+
   it("按作用域列出服务，停用项标注并禁止探测", async () => {
     setup();
     expect(await screen.findByText("github")).toBeInTheDocument();

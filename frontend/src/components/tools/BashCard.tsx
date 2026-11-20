@@ -31,7 +31,7 @@ export function BashBody({ item }: Props) {
         <div className="px-3 py-2.5">
           <Collapsible title={t("输出", "Output")} summary={t(`${item.result.split("\n").length} 行`, `${item.result.split("\n").length} lines`)}>
             <pre
-              className={`max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed ${
+              className={`max-h-80 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-[11.5px] leading-relaxed ${
                 item.isError ? "text-danger" : "text-ink-2"
               }`}
             >

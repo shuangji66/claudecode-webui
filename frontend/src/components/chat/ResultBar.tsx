@@ -43,7 +43,7 @@ export function ResultBar({ item }: { item: ResultItem }) {
       </div>
       {/* 失败原因：CLI 把它放在 result.result 里，不显示的话用户只看到「本轮出错」。 */}
       {item.text && (
-        <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 font-mono text-[11.5px] leading-relaxed text-danger dark:border-rose-900/60 dark:bg-rose-950/30">
+        <pre className="max-h-60 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 font-mono text-[11.5px] leading-relaxed text-danger dark:border-rose-900/60 dark:bg-rose-950/30">
           {item.text}
         </pre>
       )}

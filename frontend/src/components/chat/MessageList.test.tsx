@@ -60,6 +60,27 @@ function scrollUp(el: HTMLElement, to = 0) {
   fireEvent.scroll(el);
 }
 
+// 手机上整屏能左右滑动、两边被裁掉：只写 `overflow-y-auto` 时另一轴的 `visible`
+// 按 CSS 规则被算成 `auto`，消息区其实一直是横向滚动容器——一条不含断点的长文件名
+// 就能把它推出去。这里钉住「外框不许横滚」，横向滚动只留给代码块与表格自己。
+describe("MessageList 禁止整屏横向滚动", () => {
+  it("滚动区裁掉横向溢出", () => {
+    render(<MessageList items={many(3)} />);
+    const scroller = screen.getByTestId("message-scroller");
+    expect(scroller.className).toContain("overflow-x-hidden");
+    expect(scroller.className).toContain("overflow-y-auto");
+  });
+
+  it("超长文件名按任意点折行，不靠横向滚动", () => {
+    const long = "verylongfilenamewithoutanybreakpoint-" + "x".repeat(120) + ".txt";
+    render(<MessageList items={[{ id: "u1", seq: 1, ts: 0, kind: "user", text: `看一下这个文件：${long}` }]} />);
+    // `break-words` 对没有断点的长串无效（它只在「单词」层面断），必须用 anywhere。
+    const bubble = screen.getByText(/看一下这个文件/);
+    expect(bubble.className).toContain("[overflow-wrap:anywhere]");
+    expect(bubble.className).not.toContain("break-words");
+  });
+});
+
 describe("MessageList 长对话", () => {
   it("默认只渲染最近 80 条，点「加载更早」再展开一批", () => {
     render(<MessageList items={many(200)} />);

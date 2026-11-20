@@ -278,7 +278,14 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
   const rootLabel = baseName(cwd);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    // 底部安全区：右侧栏在移动端是全屏抽屉（`fixed inset-y-0 h-[100dvh]`），
+    // 面板底边就是屏幕底边——文件树的最后一行会被 iPhone 的 Home Indicator 盖住。
+    // 留白放在整列上而不是滚动区里：树、预览、PDF/Office 的 iframe 都是这一层
+    // 之下的分支，逐个加漏一个就是一整块内容贴着屏幕底边。
+    // **不按断点复位**：侧栏在 1000px 以下一律是浮层（`DOCK_MIN`），平板竖屏
+    // （768px）也在这条路上，那时它照样贴着屏幕底边；桌面停靠时 env() 为 0，
+    // 只剩这 8px，不影响原有布局。
+    <div className="flex h-full min-h-0 flex-col pb-[calc(env(safe-area-inset-bottom,0px)+8px)]">
       <div className="flex h-[42px] shrink-0 items-center gap-1 border-b border-line px-2">
         <FolderIcon open size={14} className="ml-1 shrink-0" />
         <span className="min-w-0 truncate text-[12px] font-medium text-ink" title={cwd}>

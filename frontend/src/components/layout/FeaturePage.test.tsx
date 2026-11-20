@@ -28,7 +28,8 @@ describe("功能区整页视图", () => {
 
     render(<FeaturePage view="mcp" cwd="" onClose={() => {}} />);
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("heading", { name: "MCP" })).toBeInTheDocument();
+    // MCP 页和模型页一样，自己渲染 PageShell（页头右侧是「添加」），也是懒加载的 chunk。
+    expect(await screen.findByRole("heading", { name: "MCP" })).toBeInTheDocument();
     unmount();
 
     render(<FeaturePage view="skills" cwd="" onClose={() => {}} />);
@@ -68,10 +69,11 @@ describe("功能区整页视图", () => {
   });
 
   // 整页视图会盖掉对话区的页头，那时左侧栏在移动端是抽屉，入口只剩页头这一颗。
-  it("移动端给打开侧栏的入口（md 以下才显示）", () => {
+  it("移动端给打开侧栏的入口（md 以下才显示）", async () => {
     const onOpenSidebar = vi.fn();
     render(<FeaturePage view="mcp" cwd="" onClose={() => {}} onOpenSidebar={onOpenSidebar} />);
-    const button = screen.getByRole("button", { name: "打开侧栏" });
+    // MCP 页是懒加载的 chunk，页头随它一起到。
+    const button = await screen.findByRole("button", { name: "打开侧栏" });
     expect(button.className).toContain("md:hidden");
     fireEvent.click(button);
     expect(onOpenSidebar).toHaveBeenCalledTimes(1);
