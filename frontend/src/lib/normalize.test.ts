@@ -2012,6 +2012,45 @@ describe("system 消息里的可显示状态", () => {
     expect(items[0].kind).toBe("error");
   });
 
+  // 自动压缩（上下文撞阈值时 CLI 自己触发）的帧序与手动不同：收尾是
+  // `status: null` + `metadata.compactResult`，不是 `requesting`。
+  // 而且它不经过 `/compact` 的本地命令回显。
+  it("自动压缩（status:null 收尾）同样把进行中的提示摘掉", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, { type: "system", subtype: "status", status: "compacting", compact_output_chars: 3000 });
+    expect(items).toHaveLength(1);
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "status",
+      status: null,
+      metadata: { compactResult: "success" },
+    });
+    expect(items).toHaveLength(0);
+
+    // 紧接着的边界给出压缩后的结果提示。
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "auto", pre_tokens: 900000, post_tokens: 12000 },
+    });
+    expect(items).toHaveLength(1);
+    expect((items[0] as { text: string }).text).toContain("上下文已自动压缩");
+  });
+
+  // `microcompact_boundary` 是微观压缩（只清过期 tool_result / 冗余附件）的边界，
+  // 不是一次真正的上下文压缩：没有 compactMetadata、没有前后数，CLI 自己的界面
+  // 也直接不渲染。它带 content 时不能掉进通用分支变成一条假提示。
+  it("microcompact_boundary 不渲染，但会结束「正在压缩」", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, { type: "system", subtype: "status", status: "compacting" });
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "microcompact_boundary",
+      content: "Conversation compacted",
+    });
+    expect(items).toHaveLength(0);
+  });
+
   // hook 的输出在 output/stdout/stderr 里，没有 content，早先同样静默。
   it("hook 失败显示 hook 名与 stderr，成功的报告不显示", () => {
     const ok = applyCLI([], {

@@ -1371,6 +1371,39 @@ func TestLocalBusyTracksCompacting(t *testing.T) {
 	}
 }
 
+// **自动压缩**（上下文撞到阈值时 CLI 自己触发）收尾用的是 `status: null` +
+// `metadata.compactResult`，不是 `requesting`（二进制里那条 `sdk_status` 分支）。
+// 只认 requesting 的话，自动压缩之后界面上会一直停在「正在压缩上下文」，
+// 而沉默提示也跟着永久失效。
+func TestLocalBusyAutoCompactEndsWithNullStatus(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{"type": "system", "subtype": "status", "status": "compacting", "compact_output_chars": 4200})
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && !sess.LocalBusy().Compacting {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !sess.LocalBusy().Compacting {
+		t.Fatal("没进入压缩状态，后面的断言没有意义")
+	}
+
+	// 自动压缩成功时 CLI 发的是 status:null（不是 requesting），metadata 里带结果。
+	fc.send(map[string]any{
+		"type":     "system",
+		"subtype":  "status",
+		"status":   nil,
+		"metadata": map[string]any{"compactResult": "success"},
+	})
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && sess.LocalBusy().Compacting {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.LocalBusy().Compacting {
+		t.Fatal("自动压缩的 status:null 之后不该还在压缩")
+	}
+}
+
 func TestLocalBusyCompactBoundaryEndsCompacting(t *testing.T) {
 	sess, fc, _ := startSession(t)
 	defer sess.Close()

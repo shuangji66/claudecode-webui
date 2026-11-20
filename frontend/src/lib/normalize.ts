@@ -1356,6 +1356,16 @@ function applySystem(items: Item[], m: Raw, at: number): Item[] {
     // 压缩结束：「正在压缩上下文…」不再成立，必须一起摘掉（见 clearOngoing）。
     return pushSystem(clearOngoing(items, "status"), at, "compact_boundary", `上下文已${trigger}压缩${pre}`);
   }
+  // `microcompact_boundary` 是**微观压缩**（只清掉过期的 tool_result / 冗余附件）的边界，
+  // 不是一次真正的上下文压缩：没有 `compactMetadata`、没有 before/after 数，CLI 自己的
+  // 界面也直接 `return null`（二进制里就是这一行）。所以整条丢弃。
+  //
+  // 只挡在没有 content 时是不够的：带一句 content 就会掉进下面的通用分支，界面上多一条
+  // 「Conversation compacted」之类的提示，而历史并没有变短，用户会以为压过了。
+  if (m.subtype === "microcompact_boundary") {
+    // 微观压缩同样会结束上一个「正在压缩」的进行时（它证明这一轮已经过去了）。
+    return clearOngoing(items, "status");
+  }
   // 本地命令回显也可能走 system 通道，同样整条丢弃。
   if (typeof m.content === "string" && isLocalCommandEcho(m.content)) return items;
   // hooks 输出等以 system + content 字符串形式上送，需要展示（并清洗 ANSI）。

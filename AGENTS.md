@@ -573,6 +573,21 @@ hub ── manager ── session ── process ── claude (NDJSON)
   - `model_fallback` / `model_refusal_fallback` / `informational`：CLI 自己在 `content` 里
     写好了人话，走通用分支即可。
   - `compact_boundary`：压缩真的发生过，不提示就是「历史无缘无故变短了」。
+    两种触发（`trigger`）走同一条渲染，但**帧序不同，收尾信号因此不同**：
+    - **手动**（`/compact`，`trigger: manual`）：`status: compacting` → … →
+      `status: requesting` → `compact_boundary`（实测三个样本 20–32 秒）。
+    - **自动**（上下文撞到 auto window，`trigger: auto`）：**在下一轮请求发出之前**触发，
+      所以那时这一轮已经是 busy、计时行正在走——正是会误报「上游没有响应」的场景。
+      收尾用的是 `status: null` + `metadata.compactResult`（不是 `requesting`），
+      而且它不经过 `/compact` 的本地命令回显。
+    只认 `requesting` 的话，自动压缩之后界面会一直停在「正在压缩上下文」，
+    沉默提示也跟着永久失效。**四种收尾信号都要认**：`requesting` / `status: null` /
+    `compact_boundary` / `compact_result: "failed"`。
+  - `microcompact_boundary`：**微观压缩**（只清过期的 tool_result / 冗余附件）的边界，
+    不是一次真正的上下文压缩——没有 `compactMetadata`、没有前后 token 数，
+    CLI 自己的界面（二进制里那行）也直接 `return null`。整条丢弃，**不要**掉进
+    通用分支（它带 `content` 时会在界面上造出一条「历史变短了」的假提示）。
+    它同样算一次压缩的结束，要一起摘掉「正在压缩上下文…」。
     **元数据两处字段名不同**——实时帧是 `compact_metadata` + `pre_tokens`/`post_tokens`，
     转录里落盘成 `compactMetadata` + `preTokens`/`postTokens`（2.1.329 实测）。
     统一走 `lib/usage.compactMetaOf` 两样都认，只认一个会变成「实时看得见、重开对话后消失」。
@@ -599,9 +614,11 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `session.LocalBusy`）：`TurnTimer` 超过 15 秒没有帧就补一句「上游 Ns 没有响应」，
   但那句话的前提是「这段时间本该有上游字节」。有两类操作压根不等上游：
   - **上下文压缩**：CLI 自己发一次摘要请求，只发一条 `status: compacting` 就没声音了
-    ——实测一次手动压缩 **25.3 秒**（`compact_boundary.duration_ms`）。而 CLI 自己的
-    压缩心跳是 **30 秒**一次（`sZ` 里的 `setInterval(..., 30000)`），15 秒阈值必然
-    在中间误报「上游 18s 没有响应」（截图复现过）。压缩失败时 CLI 会自己报
+    ——实测一次手动压缩 **25.3 秒**（`compact_boundary.duration_ms`），另两个样本
+    20.3 / 31.7 秒。而 CLI 自己的压缩心跳是 **30 秒**一次（`sZ` 里的
+    `setInterval(..., 30000)`），15 秒阈值必然在中间误报「上游 18s 没有响应」
+    （截图复现过）。**自动压缩更危险**：它发生在下一轮请求之前，那时界面已经在
+    「这一轮在跑」，计时行本来就在走。压缩失败时 CLI 会自己报
     `compact_result: "failed"` + 原因，轮不到前端猜。
   - **hook**：用户自己配的本地进程（`hook_started` → `hook_response`），跑多久与上游无关。
   这两档要说的是「正在压缩上下文」（带上 `compact_output_chars` 这个会动的数）/「hook X
