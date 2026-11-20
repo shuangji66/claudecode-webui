@@ -13,7 +13,7 @@ import {
   IconPanel,
   IconSidebarRight,
   IconSpark,
-  IconStop,
+  IconStopOutline,
   IconTerminal,
 } from "../common/Icons";
 
@@ -151,12 +151,18 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, backgr
             hint: typeof task.progress === "number" ? `${task.progress}s` : undefined,
             // 行尾的中止按钮：不关闭菜单，可以连续停几个。拿不到 task_id 时不给——
             // 点了只会报错（后端表里也没有，说明这个任务已经不在 CLI 那里了）。
+            // 图标用描边版：实心方块单摆在白底菜单里像一块常驻的高亮背景。
+            // 中止要二次确认，确认按钮**就地**换在这一行（不另开弹窗）：这条命令
+            // 可能正在写文件，误点的代价比多点一下大。
             ...(task.taskId && onStopTask
               ? {
                   trailing: {
                     label: t("中止", "Stop"),
-                    icon: <IconStop size={12} />,
-                    onSelect: () => onStopTask(task.taskId),
+                    confirmLabel: t("确认中止", "Confirm"),
+                    icon: <IconStopOutline size={13} />,
+                    onSelect: () => {
+                      if (task.taskId) onStopTask(task.taskId);
+                    },
                   },
                 }
               : {}),

@@ -1,7 +1,7 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
-import { attachedPosition, useDismiss } from "./Menu";
+import { attachedPosition, Menu, useDismiss } from "./Menu";
 
 /** 只给用得到的字段，其余补 0（jsdom 里所有 rect 都是 0，纯函数得自己造）。 */
 function rect(partial: Partial<DOMRect>): DOMRect {
@@ -81,5 +81,56 @@ describe("useDismiss 的按下事件", () => {
     fireEvent.pointerDown(getByText("layer"));
 
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 列表清空 / 触发器一起卸载的浮层（页头「后台操作」就是这样）。
+ *
+ * 触发元素游离之后 `getBoundingClientRect()` 全 0，align="end" 算出来的 left 是
+ * 视口左边距——面板会飞到左上角；条目为空时还只剩一个 `p-1 + border` 的空框。
+ */
+function DynamicProbe({ n }: { n: number }) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  return (
+    <div>
+      {n > 0 && (
+        <button type="button" onClick={(e) => setAnchor(e.currentTarget)}>
+          trigger
+        </button>
+      )}
+      <Menu
+        open={anchor !== null}
+        anchor={anchor}
+        items={Array.from({ length: n }, (_, i) => ({ id: `i${i}`, label: `item ${i}`, onSelect: () => {} }))}
+        onClose={() => setAnchor(null)}
+      />
+    </div>
+  );
+}
+
+describe("Menu 在列表清空时收起来", () => {
+  it("条目清空后不再留下空浮层", () => {
+    const { container, rerender } = render(<DynamicProbe n={2} />);
+    fireEvent.click(container.querySelector("button")!);
+    // 浮层是 Portal 到 body 的，不在 container 里。
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+
+    rerender(<DynamicProbe n={0} />);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("触发元素自己卸载后不留在错误位置，也不在下一次自己弹回来", () => {
+    const { container, rerender } = render(<DynamicProbe n={1} />);
+    fireEvent.click(container.querySelector("button")!);
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+
+    // 最后一条跑完：锚点与浮层一起消失（游离元素的 rect 全是 0，会算到视口左上角）。
+    rerender(<DynamicProbe n={0} />);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+
+    // 新任务到来：按钮回来了，但列表得等用户再点一次才展开。
+    rerender(<DynamicProbe n={1} />);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
   });
 });

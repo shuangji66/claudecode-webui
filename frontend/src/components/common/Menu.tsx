@@ -6,7 +6,7 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { IconCheck } from "./Icons";
+import { IconCheck, IconStop } from "./Icons";
 
 /** 所有浮层共用的面板外观（菜单、下拉选择）。 */
 export const POPUP_PANEL = "fixed z-[80] rounded-xl border border-line bg-canvas p-1 shadow-soft";
@@ -340,7 +340,19 @@ export interface MenuItem {
    * 行尾的一颗独立图标按钮（例如「更多」里把功能固定回侧栏）。
    * 它在主按钮之外，所以不会顺带触发 `onSelect`，也不关菜单。
    */
-  trailing?: { label: string; icon: ReactNode; onSelect: () => void };
+  trailing?: {
+    label: string;
+    icon: ReactNode;
+    /**
+     * 二次确认的文案：设了之后第一下只把行尾那颗按钮换成它，第二下才真正执行。
+     *
+     * 确认态**就地**换按钮，不另开弹窗：浮层里再叠一层确认框要处理焦点、层级与
+     * 点外部关闭，而「中止一个后台命令」这种动作只需要多一次点击的缓冲。
+     * 确认态在关闭菜单、或换到另一行时复位——不会带着上一行的确认状态留着。
+     */
+    confirmLabel?: string;
+    onSelect: () => void;
+  };
   onSelect: () => void;
 }
 
@@ -393,13 +405,39 @@ export function Menu({
 }: MenuProps) {
   const ref = useRef<HTMLDivElement>(null);
   const height = menuHeight(items);
+  // 正在等第二下确认的那一行（`trailing.confirmLabel` 的行尾按钮）。
+  const [confirming, setConfirming] = useState<string | null>(null);
   // 两个定位 hook 都调用（hook 不能条件调用），没在用的那个收到 open=false 只返回 null。
   const attached = useAttachedPosition(attachTo, open && attachTo !== null, height);
   const anchored = useAnchoredPosition(anchor, open && attachTo === null, width, height, align);
   const pos = attachTo === null ? anchored : attached;
   useDismiss(open, ref, anchor, onClose);
 
-  if (!open || !pos) return null;
+  // 已经没有可显示的东西——列表清空，或触发元素自己随列表清空被卸载了。
+  //
+  // 后一种是页头「后台操作」的常态：跑完最后一个任务，按钮与它的 anchor 一起从
+  // DOM 消失，但 state 里的 anchor 还握着那个游离元素。`getBoundingClientRect()`
+  // 对游离元素返回全 0，`align="end"` 于是算出 left=8——面板飞到视口左上角；
+  // 条目又是空的，只剩一个 `p-1 + border` 的空框留在那里。而下次有新任务时
+  // 按钮回来、open 还是 true，列表就在错过的位置「自己弹出来」。所以这里按
+  // 「已经关闭」处理并回调 onClose，让调用方把 anchor 真正清掉。
+  const stale = open && (items.length === 0 || (anchor !== null && !anchor.isConnected));
+  useEffect(() => {
+    if (stale) onClose();
+  }, [stale, onClose]);
+
+  // 菜单一关就复位确认态：重新打开时不该有一个已经在等第二下的按钮，
+  // 也不该让它带着上一轮的「确认中止」继续。
+  useEffect(() => {
+    if (!open) setConfirming(null);
+  }, [open]);
+  // 那一行自己消失了（任务跑完 / 被别处中止）也要复位，否则同一个 id 万一回来
+  // 就直接是确认态。
+  useEffect(() => {
+    if (confirming !== null && !items.some((item) => item.id === confirming)) setConfirming(null);
+  }, [confirming, items]);
+
+  if (!open || stale || !pos) return null;
   return createPortal(
     <div
       ref={ref}
@@ -426,7 +464,9 @@ export function Menu({
                   item.onSelect();
                 }}
                 className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] disabled:opacity-40 ${
-                  item.trailing ? "pr-7" : ""
+                  // 行尾有按钮时给主按钮留出位置；确认态那颗更宽（图标 + 两三个字），
+                  // 留窄了标题会钻到它下面。
+                  item.trailing ? (confirming === item.id ? "pr-[86px]" : "pr-7") : ""
                 } ${
                   item.danger ? "text-danger hover:bg-danger/[0.06]" : "text-ink hover:bg-panel-strong"
                 }`}
@@ -445,15 +485,33 @@ export function Menu({
                 <button
                   type="button"
                   role="menuitem"
-                  aria-label={item.trailing.label}
-                  title={item.trailing.label}
+                  aria-label={confirming === item.id ? item.trailing.confirmLabel : item.trailing.label}
+                  title={confirming === item.id ? item.trailing.confirmLabel : item.trailing.label}
                   onClick={(e) => {
                     e.stopPropagation();
+                    // 带二次确认的：第一下只换成确认按钮，第二下才执行。
+                    // 换的是**这一行**的确认态，点别的行会把它收回。
+                    if (item.trailing?.confirmLabel && confirming !== item.id) {
+                      setConfirming(item.id);
+                      return;
+                    }
+                    setConfirming(null);
                     item.trailing?.onSelect();
                   }}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1 text-faint hover:bg-black/5 hover:text-ink"
+                  className={
+                    confirming === item.id
+                      ? "absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1 rounded-md bg-danger px-1.5 py-1 text-[10.5px] font-medium text-white hover:brightness-95"
+                      : "absolute right-1 top-1/2 -translate-y-1/2 rounded-md p-1 text-faint hover:bg-black/5 hover:text-ink"
+                  }
                 >
-                  {item.trailing.icon}
+                  {confirming === item.id ? (
+                    <>
+                      <IconStop size={11} />
+                      {item.trailing.confirmLabel}
+                    </>
+                  ) : (
+                    item.trailing.icon
+                  )}
                 </button>
               )}
             </div>

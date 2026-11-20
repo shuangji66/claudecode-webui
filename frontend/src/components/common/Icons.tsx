@@ -148,6 +148,20 @@ export function IconStop(props: Props) {
   );
 }
 
+/**
+ * 描边「中止」：给**只有图标**的位置用（菜单行尾那颗）。
+ *
+ * 实心的 IconStop 是配文字标签的（「停止」「结束进程」），单摆一颗 12px 实心方块
+ * 在白色菜单里就是一块灰底——看着像常驻高亮背景，认不出是个按钮。
+ */
+export function IconStopOutline(props: Props) {
+  return (
+    <Svg {...props}>
+      <rect x="6" y="6" width="12" height="12" rx="2.5" />
+    </Svg>
+  );
+}
+
 export function IconChevronRight(props: Props) {
   return (
     <Svg {...props}>

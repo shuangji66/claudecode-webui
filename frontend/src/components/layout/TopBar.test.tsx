@@ -111,7 +111,7 @@ describe("TopBar 后台操作", () => {
     expect(screen.queryByLabelText(/子智能体 3 个/)).toBeNull();
   });
 
-  it("进行中的可以手动中止", () => {
+  it("进行中的可以手动中止，且要就地二次确认", () => {
     const onStop = vi.fn();
     render(bar({ backgroundTasks: bg, onStopTask: onStop }));
     fireEvent.click(screen.getByLabelText("后台操作 2 个进行中"));
@@ -119,7 +119,15 @@ describe("TopBar 后台操作", () => {
     const stop = screen.getAllByLabelText("中止");
     // 只有拿得到 task_id 的那条才有中止按钮：点了只会报错的不摆。
     expect(stop).toHaveLength(1);
+
+    // 第一下只换成该行的确认按钮，不回调、不关菜单（可以接着停别的）。
     fireEvent.click(stop[0]);
+    expect(onStop).not.toHaveBeenCalled();
+    const confirm = screen.getByLabelText("确认中止");
+    expect(screen.getByText("npm test")).toBeInTheDocument();
+
+    // 第二下才真正中止。
+    fireEvent.click(confirm);
     expect(onStop).toHaveBeenCalledWith("task-1");
   });
 
