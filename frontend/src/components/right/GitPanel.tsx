@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import {
   asAddedDiff,
@@ -25,6 +25,7 @@ import {
   IconRetry,
   IconSync,
   IconTrash,
+  IconWrap,
 } from "../common/Icons";
 
 interface Props {
@@ -38,9 +39,7 @@ interface DiffViewState {
   title: string;
   subtitle: string;
   text: string;
-  path?: string;
-  staged?: boolean;
-  untracked?: boolean;
+  /** 这是一条提交详情（历史页签），不是工作区改动。 */
   commit?: boolean;
 }
 
@@ -105,6 +104,14 @@ export function GitPanel({ cwd, active }: Props) {
   const [diff, setDiff] = useState<DiffViewState | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState("");
+  /**
+   * diff 里的长行是否按面板宽度折行（默认折行）。
+   *
+   * 右侧栏宽度是拖出来的，窄栏里横向滚动条基本没法用（与文件源码预览同一条理由）；
+   * 但 diff 逐行标了行号，看大段改动时也有人更想要「一行就是一行」，所以给个开关。
+   * 状态放在面板这一层而不是 DiffView 里面：关掉再打开文件时不该自己弹回去。
+   */
+  const [wrap, setWrap] = useState(true);
   /** 连续点不同文件时，只允许最后一次请求发布结果。 */
   const diffSeq = useRef(0);
 
@@ -159,20 +166,15 @@ export function GitPanel({ cwd, active }: Props) {
     setDiffLoading(true);
     try {
       let text = await loadDiff(row.entry.path, staged);
-      let untracked = false;
       if (!text && !staged && row.entry.xy === "??") {
         const file = await readFile(row.entry.path);
         text = asAddedDiff(file.content);
-        untracked = true;
       }
       if (diffSeq.current !== seq) return;
       setDiff({
         title: row.entry.path,
         subtitle: staged ? t("已暂存", "Staged") : t("工作区", "Working tree"),
         text,
-        path: row.entry.path,
-        staged,
-        untracked,
       });
     } catch (reason) {
       if (diffSeq.current !== seq) return;
@@ -252,41 +254,6 @@ export function GitPanel({ cwd, active }: Props) {
     const ok = await commit(text);
     setBusy(false);
     if (ok) setMessage("");
-  };
-
-  const sideActions = () => {
-    if (!selected || diff?.commit || !diff?.path) return null;
-    if (diff.untracked) {
-      return (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void run(() => stage(diff.path))}
-          className="rounded-md border border-line-strong px-2 py-1 text-[11px] font-medium text-ink hover:bg-panel-strong disabled:opacity-40"
-        >
-          {t("暂存", "Stage")}
-        </button>
-      );
-    }
-    return diff.staged ? (
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => void run(() => unstage(diff.path))}
-        className="rounded-md border border-line-strong px-2 py-1 text-[11px] font-medium text-ink hover:bg-panel-strong disabled:opacity-40"
-      >
-        {t("取消暂存", "Unstage")}
-      </button>
-    ) : (
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => void run(() => stage(diff.path))}
-        className="rounded-md border border-line-strong px-2 py-1 text-[11px] font-medium text-ink hover:bg-panel-strong disabled:opacity-40"
-      >
-        {t("暂存", "Stage")}
-      </button>
-    );
   };
 
   const backFromDiff = () => {
@@ -406,7 +373,8 @@ export function GitPanel({ cwd, active }: Props) {
             <DiffView
               state={diff}
               busy={busy}
-              actions={sideActions()}
+              wrap={wrap}
+              onToggleWrap={() => setWrap((v) => !v)}
               onBack={backFromDiff}
             />
           )}
@@ -750,11 +718,24 @@ function HistoryList({ entries, loading, error, onOpen }: { entries: GitLogEntry
   );
 }
 
-function DiffView({ state, busy, actions, onBack }: { state: DiffViewState; busy: boolean; actions: ReactNode; onBack: () => void }) {
+interface DiffViewProps {
+  state: DiffViewState;
+  busy: boolean;
+  /** 长行是否按面板宽度折行（默认开）。 */
+  wrap: boolean;
+  onToggleWrap: () => void;
+  onBack: () => void;
+}
+
+function DiffView({ state, busy, wrap, onToggleWrap, onBack }: DiffViewProps) {
   const t = useT();
   const lines = useMemo(() => parseUnifiedDiff(state.text), [state.text]);
   const stat = useMemo(() => diffStat(lines), [lines]);
   const shown = lines.slice(0, MAX_DIFF_LINES);
+  // 折行：`whitespace-pre-wrap` 保住缩进、`[overflow-wrap:anywhere]` 让无空格的长串
+  // （base64 / minified js / 长路径）也能断；容器不能再 `min-w-max`，否则整块按最长行
+  // 撑开，横向滚动条一出现折行就失效了——那是「看起来开了却没生效」的来源。
+  const codeWrap = wrap ? "whitespace-pre-wrap [overflow-wrap:anywhere]" : "whitespace-pre";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -782,24 +763,35 @@ function DiffView({ state, busy, actions, onBack }: { state: DiffViewState; busy
             )}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-1">{actions}</div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={onToggleWrap}
+            className={`rounded-md p-1.5 hover:bg-black/5 ${wrap ? "text-brand" : "text-muted hover:text-ink"}`}
+            aria-label={wrap ? t("关闭自动换行", "Disable word wrap") : t("开启自动换行", "Enable word wrap")}
+            aria-pressed={wrap}
+            title={wrap ? t("关闭自动换行", "Disable word wrap") : t("开启自动换行", "Enable word wrap")}
+          >
+            <IconWrap size={14} />
+          </button>
+        </div>
       </div>
       <div className="dsh-scroll min-h-0 flex-1 overflow-auto bg-canvas">
         {shown.length === 0 ? (
           <p className="px-3 py-3 text-[11.5px] text-faint">{t("没有文本差异（可能是二进制文件或改动已暂存）。", "No textual diff (binary file or already staged).")}</p>
         ) : (
-          <div className="min-w-max py-1 font-mono text-[11px] leading-[1.55]">
+          <div className={`py-1 font-mono text-[11px] leading-[1.55] ${wrap ? "" : "min-w-max"}`}>
             {shown.map((line, i) => {
               if (line.kind === "hunk") {
                 return (
-                  <div key={i} className="whitespace-pre bg-brand/[0.07] px-2 py-0.5 text-[10.5px] text-brand">
+                  <div key={i} className={`${codeWrap} bg-brand/[0.07] px-2 py-0.5 text-[10.5px] text-brand`}>
                     {line.text}
                   </div>
                 );
               }
               if (line.kind === "meta") {
                 return (
-                  <div key={i} className="whitespace-pre px-2 py-0.5 text-[10px] text-faint">
+                  <div key={i} className={`${codeWrap} px-2 py-0.5 text-[10px] text-faint`}>
                     {line.text}
                   </div>
                 );
@@ -816,7 +808,7 @@ function DiffView({ state, busy, actions, onBack }: { state: DiffViewState; busy
                   <span className={`w-3 shrink-0 select-none text-center ${add ? "text-ok" : del ? "text-danger" : "text-faint"}`}>
                     {add ? "+" : del ? "−" : " "}
                   </span>
-                  <span className="whitespace-pre pr-3 text-ink-2">{line.text || " "}</span>
+                  <span className={`${codeWrap} pr-3 text-ink-2 ${wrap ? "min-w-0 flex-1" : ""}`}>{line.text || " "}</span>
                 </div>
               );
             })}

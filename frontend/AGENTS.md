@@ -414,9 +414,19 @@ src/
    **源码行的长行按面板宽度折行**（`whitespace-pre-wrap` + `[overflow-wrap:anywhere]`，
    容器不要 `min-w-max`）：右侧栏宽度是拖出来的，窄栏里横向滚动条基本没法用；
    只写 `break-words` 不够——无空格的长串（base64 / 长路径 / 长 URL）不会断。
-   Git 面板的 diff 仍是横向滚动，那是另一块面板，别顺手改。
 
-33.1 **Office 预览是三条懒加载路径**（`components/right/preview/`）：
+33.1 **Git 面板的 diff 也默认折行，右上角有一颗开关**（`GitPanel` 的 `wrap` →
+   `DiffView` 的 `IconWrap` 按钮）：同一套 `whitespace-pre-wrap` + `[overflow-wrap:anywhere]`，
+   关掉才退回 `whitespace-pre` + 容器 `min-w-max` 的横向滚动——diff 逐行带行号，有人看大段
+   改动时更想要「一行就是一行」。**容器与代码行必须一起切**：折行时容器不能再 `min-w-max`，
+   否则整块按最长行撑开、横向滚动条一出现折行就失效（看起来开了却没生效）。
+   开关状态放在 `GitPanel` 而不是 `DiffView` 里（换文件不该自己弹回去），但**不落盘**：
+   它跟当前会话的阅读习惯走，不值得为它多加一个 localStorage 键。
+   **预览里不摆任何暂存动作**（`sideActions` 已删除）：预览只预览，暂存/取消暂存/丢弃
+   都在左侧变更列表的行内操作与分组标题上，提交框在它下面——预览顶上再来一颗就是把
+   「看改动」和「改索引」混在同一块屏幕里，还容易误点。
+
+33.2 **Office 预览是三条懒加载路径**（`components/right/preview/`）：
 
    - `OfficePane` 是外壳：用 `store.readBytes`（→ `GET /api/fs/blob`）取字节，再渲染
      `React.lazy` 的 `DocxPreview` / `XlsxPreview` / `PptxPreview`。**三个渲染器各自一个

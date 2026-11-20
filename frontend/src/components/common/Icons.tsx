@@ -469,6 +469,18 @@ export function IconCode(props: Props) {
   );
 }
 
+/** 自动换行：一行写满后折回下一行（箭头表示回折）。 */
+export function IconWrap(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M4 6h16" />
+      <path d="M4 12h12a3 3 0 0 1 0 6h-3" />
+      <path d="m15 15.5-2 2.5 2 2.5" />
+      <path d="M4 18h4" />
+    </Svg>
+  );
+}
+
 export function IconEye(props: Props) {
   return (
     <Svg {...props}>
