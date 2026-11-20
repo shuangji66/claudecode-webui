@@ -185,7 +185,11 @@ export function HistoryPage({ onClose, onOpenSidebar }: Props) {
                 type="button"
                 disabled={Boolean(busyCwd)}
                 onClick={() => void archiveConversation(c.id, !c.archived)}
-                className="rounded-md p-1.5 text-muted transition hover:bg-black/5 hover:text-ink disabled:opacity-50"
+                // 已归档的行这颗按钮是「取消归档」：用主题色，与灰色的「归档」区分开，
+                // 否则同一颗图标两种语义只能靠 tooltip 分辨。
+                className={`rounded-md p-1.5 transition disabled:opacity-50 ${
+                  c.archived ? "text-brand hover:bg-brand/10" : "text-muted hover:bg-black/5 hover:text-ink"
+                }`}
                 aria-label={`${archiveLabel(c)} ${titleOf(c)}`}
                 title={archiveLabel(c)}
               >
@@ -218,7 +222,7 @@ export function HistoryPage({ onClose, onOpenSidebar }: Props) {
                 {
                   id: "archive",
                   label: archiveLabel(menuConv),
-                  icon: <IconArchive size={13} className="text-muted" />,
+                  icon: <IconArchive size={13} className={menuConv.archived ? "text-brand" : "text-muted"} />,
                   onSelect: () => void archiveConversation(menuConv.id, !menuConv.archived),
                 },
                 {

@@ -99,6 +99,20 @@ describe("HistoryPage 行操作", () => {
     expect(screen.getByRole("button", { name: "删除 会话甲" })).toBeInTheDocument();
   });
 
+  // 同一颗图标两种语义，只靠 tooltip 分辨不出来：已归档行的「取消归档」用主题色，
+  // 未归档行的「归档」保持灰色。
+  it("「取消归档」用主题色，「归档」仍是灰色", () => {
+    render(<HistoryPage onClose={() => {}} />);
+
+    const unarchive = screen.getByRole("button", { name: "取消归档 会话乙" });
+    expect(unarchive.className).toContain("text-brand");
+    expect(unarchive.className).not.toContain("text-muted");
+
+    const archive = screen.getByRole("button", { name: "归档 会话甲" });
+    expect(archive.className).toContain("text-muted");
+    expect(archive.className).not.toContain("text-brand");
+  });
+
   it("删除必须先二次确认", async () => {
     askConfirmMock.mockResolvedValue(false);
     render(<HistoryPage onClose={() => {}} />);

@@ -515,7 +515,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
           <button
             type="button"
             onClick={() => void archiveConversation(c.id, !c.archived)}
-            className="hidden rounded-md p-1 text-muted transition hover:bg-black/5 hover:text-ink md:inline-flex"
+            // 已归档的行这颗是「取消归档」，用主题色与灰色的「归档」区分（与历史记录页一致）。
+            className={`hidden rounded-md p-1 transition hover:bg-black/5 md:inline-flex ${c.archived ? "text-brand" : "text-muted hover:text-ink"}`}
             aria-label={`${c.archived ? t("取消归档", "Unarchive") : t("归档", "Archive")} ${titleOf(c)}`}
             title={c.archived ? t("取消归档", "Unarchive") : t("归档", "Archive")}
           >
@@ -1230,7 +1231,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                   icon: <IconPin size={13} className={menuConv.pinned ? "text-brand" : "text-muted"} />,
                   onSelect: () => void pinConversation(menuConv.id, !menuConv.pinned),
                 },
-                { id: "archive", label: menuConv.archived ? t("取消归档", "Unarchive") : t("归档", "Archive"), icon: <IconArchive size={13} className="text-muted" />, onSelect: () => askArchive(menuConv) },
+                { id: "archive", label: menuConv.archived ? t("取消归档", "Unarchive") : t("归档", "Archive"), icon: <IconArchive size={13} className={menuConv.archived ? "text-brand" : "text-muted"} />, onSelect: () => askArchive(menuConv) },
                 {
                   id: "fork",
                   // 复制的是上下文，不是权限：新进程要重新审批（CLI 的 fork 语义）。
