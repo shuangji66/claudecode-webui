@@ -586,6 +586,23 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `ccweb-active-session` 一起换。
   用户从历史记录点回旧 id 时，`Touch` 会清掉 `superseded_by`——他显式回到了那份历史，
   不该再被藏起来。
+- **换 id 之后，事件必须按新 id 走**（`session.CurrentID`）：
+  `Session.ID` 是**创建时**的 id，`/clear` 之后不变（它是三张登记表与外部按 id 找会话的键）；
+  「现在叫什么」由 `CurrentID()` 持锁回答。manager 的 emit 闭包里**不能捕获创建时的 id**，
+  否则 hub 的订阅已经搬到新 topic、事件却还投给旧 topic——没人订阅，界面在 `/clear`
+  之后看起来冻结（收不到正文、思考、工具、result 里的任何一个），直到整页刷新。
+  `session.replaced` 自己是唯一例外：它必须投到**旧** topic（订阅是收到它之后才搬的，
+  `Event.Topic` 就是为它留的）。载荷里的 `from` 也必须是**更新前**那个 id——拿 `s.ID`
+  在连续两次 `/clear` 之后会指回启动时的值。
+- **订阅搬家与注销成对**：`hub.Rekey` 搬完要通知连接新 topic（`Retopical`），
+  连接的读循环退出时按**当前** topic 退订。不改的话新 topic 里会留下一条永远发不出去的
+  死订阅，之后每次广播都要失败一次才被摘掉。
+- **按会话 id 记账的旁路状态都要跟着搬**（漏一个就是「只有它停在旧 id」）：
+  `Server.NoteSessionReplaced` 搬 `pendingTurns`（回合结束时的标题补写与列表刷新靠它），
+  `schedule.Store.RekeyConversation` 把绑定这条对话的自动化任务改指新 id——不改的话
+  它们之后每一轮都 `--resume 旧 id`（那份转录停在 clear 之前），等于把用户刚清掉的
+  上下文重新读进来，而新 id 上真正的对话永远收不到投递。前端还有一张模块级的
+  `lastSoundAt`（沉默计时）要清。
 - **`system/init` 的 `mcp_servers` 要提示**：它是「这个会话实际连上了什么」的唯一来源，
   设置 → MCP 的探测回答不了。非 `connected`/`disabled` 的条目在 ChatPane 顶部挂一条横幅。
 - **`tool_progress` 的 `subagent_retry`** 写进 `ToolItem.progressNote`（单独字段：
