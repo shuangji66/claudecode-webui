@@ -1116,6 +1116,14 @@ hub ── manager ── session ── process ── claude (NDJSON)
   触屏点行尾的 `Tab` 提示），`Enter` = 引用，`↑↓` = 选候选，`Esc` = 关菜单。
   少一步就会变成「Tab 把焦点移走」「Enter 把半截 `@查询` 直接发出去」。候选还在路上
   （loading）时不许插入上一轮的行；`Esc` 关掉的 token 不能因为重渲染又弹回来。
+- **`/` 指令补全与 `+ → 指令` 是同一份 `commands`，`/` 侧不许截断**：两个入口看到不同
+  集合时，用户会以为某条指令不存在（曾经 `.slice(0, 8)`，日志里 `/deep-research`、
+  `/design-sync` 这些只在 `+` 菜单里）。匹配与排序在 `lib/commands.matchCommands`
+  （前缀命中优先于子串命中；空查询给全部），键盘仲裁在 `Composer.handleCommandKey`：
+  `↑↓` 选、`Enter` 填入、`Esc` 只关这一次。语法判定是「**整条正文**就是 `/名字`」——
+  敲出空格就不再是补全，那已经是在发指令了，菜单必须让位。
+  高亮按**名字**记而不是下标（敲字会让列表变短，下标一挪就落到别的指令上），
+  候选变多超过一屏时同样要 `scrollIntoView({block:"nearest"})` 跟随。
 - **「从飞牛选择」只在飞牛宿主里出现**（与 `+` 菜单同一个宿主选择器 `pickUserFile`）：
   判定是 `lib/fnos.canPickFnos`（在宿主内 **且** 不是 TCP 直连端口通道，与页头
   「在飞牛打开工作区」同一条规则）——不在宿主里时这一行不摆，摆了也只会得到

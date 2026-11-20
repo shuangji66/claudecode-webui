@@ -161,6 +161,18 @@ describe("Composer 添加菜单", () => {
 });
 
 describe("Composer 指令补全", () => {
+  const textarea = () => screen.getByLabelText("消息输入框") as HTMLTextAreaElement;
+  const rows = () => within(screen.getByLabelText("指令候选")).getAllByRole("listitem");
+  /** 高亮行是 `aria-current="true"` 的那一条；取它第一个 span（`/名字`）。 */
+  const activeName = () =>
+    screen
+      .getByLabelText("指令候选")
+      .querySelector('[aria-current="true"] span')
+      ?.textContent?.replace(/^\//, "") ?? "";
+  /** 列表里每一行的指令名（按渲染顺序）。 */
+  const rowNames = () =>
+    rows().map((row) => row.querySelector("span")?.textContent?.replace(/^\//, "") ?? "");
+
   it("补全列表用中文说明，而不是 CLI 的英文长句", () => {
     setup({
       commands: [
@@ -174,6 +186,124 @@ describe("Composer 指令补全", () => {
 
     expect(screen.getByText("精简改动过的代码")).toBeInTheDocument();
     expect(screen.queryByText(/Skill — Review/)).toBeNull();
+  });
+
+  it("列出全部指令，不截断到前几条", () => {
+    // 曾经 `.slice(0, 8)`：`+ → 指令` 里有的指令在 `/` 菜单里找不到。
+    const many = Array.from({ length: 20 }, (_, i) => ({ name: `skill-${i}`, description: "" }));
+    setup({ commands: many });
+    fireEvent.change(textarea(), { target: { value: "/" } });
+
+    expect(rows()).toHaveLength(20);
+    expect(screen.getByText("/skill-19")).toBeInTheDocument();
+  });
+
+  it("前缀命中排在全量子串命中之前", () => {
+    setup({
+      commands: [
+        { name: "update-config", description: "" },
+        { name: "debug", description: "" },
+        { name: "config-help", description: "" },
+      ],
+    });
+    fireEvent.change(textarea(), { target: { value: "/config" } });
+
+    // `config` 想找的是 config-help；update-config 只是子串命中，不能排在它前面。
+    expect(rowNames()).toEqual(["config-help", "update-config"]);
+    expect(activeName()).toBe("config-help");
+  });
+
+  it("↑↓ 移动高亮，Enter 填入选中的指令", () => {
+    setup({
+      commands: [
+        { name: "compact", description: "" },
+        { name: "model", description: "" },
+      ],
+    });
+    const input = textarea();
+    fireEvent.change(input, { target: { value: "/" } });
+    expect(activeName()).toBe("compact");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(activeName()).toBe("model");
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(activeName()).toBe("compact");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input.value).toBe("/compact ");
+  });
+
+  it("↑ 在第一条时绕到末条", () => {
+    setup({
+      commands: [
+        { name: "compact", description: "" },
+        { name: "model", description: "" },
+      ],
+    });
+    const input = textarea();
+    fireEvent.change(input, { target: { value: "/" } });
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(activeName()).toBe("model");
+  });
+
+  it("Esc 关掉菜单后不发送，正文原样保留", async () => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    setup({ commands: [{ name: "compact", description: "" }], onSend });
+    const input = textarea();
+    fireEvent.change(input, { target: { value: "/" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByLabelText("指令候选")).toBeNull();
+    expect(input.value).toBe("/");
+
+    // Esc 只关这一次：接着敲字（正文变了）菜单就该重新出现。
+    fireEvent.change(input, { target: { value: "/m" } });
+    expect(screen.getByLabelText("指令候选")).toBeInTheDocument();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("Esc 之后删回同一个 /，菜单照样能再打开", () => {
+    setup({ commands: [{ name: "compact", description: "" }] });
+    const input = textarea();
+    fireEvent.change(input, { target: { value: "/" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByLabelText("指令候选")).toBeNull();
+
+    // 敲一个字再退格删回来：正文又变成一模一样的 `/`，不能被当成「还关着」。
+    fireEvent.change(input, { target: { value: "/m" } });
+    fireEvent.change(input, { target: { value: "/" } });
+    expect(screen.getByLabelText("指令候选")).toBeInTheDocument();
+  });
+
+  it("敲出空格后菜单让位，Enter 照常发送", async () => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    setup({ commands: [{ name: "compact", description: "" }], onSend });
+    const input = textarea();
+    fireEvent.change(input, { target: { value: "/compact " } });
+    expect(screen.queryByLabelText("指令候选")).toBeNull();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("/compact", [], undefined);
+  });
+
+  it("高亮行被滚进视野（指令多到超出一屏时键盘才看得见）", () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ name: `skill-${i}`, description: "" }));
+    setup({ commands: many });
+    const input = textarea();
+    fireEvent.change(input, { target: { value: "/" } });
+
+    const spy = vi.fn();
+    Element.prototype.scrollIntoView = spy;
+    try {
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(spy).toHaveBeenCalled();
+      // 滚的是高亮那一条（skill-1），不是列表顶部的 skill-0。
+      const scrolled = spy.mock.instances[0] as HTMLElement;
+      expect(scrolled).toHaveTextContent("/skill-1");
+    } finally {
+      // @ts-expect-error 删掉桩，别漏给别的用例
+      delete Element.prototype.scrollIntoView;
+    }
   });
 });
 

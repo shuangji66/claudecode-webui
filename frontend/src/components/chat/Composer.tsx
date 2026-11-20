@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNo
 import type { CommandInfo, WireAttachment } from "../../transport/types";
 import { useAppStore } from "../../store/useAppStore";
 import { commandDescription, permissionLabel } from "../../lib/labels";
+import { matchCommands } from "../../lib/commands";
 import { canPickFnos, fnosHostAvailable, pickFnosFiles } from "../../lib/fnos";
 import { applyMention, formatMention, mentionPath, type MentionToken } from "../../lib/mention";
 import { MentionMenu } from "./MentionMenu";
-import { useMention } from "./useMention";
+import { CommandMenu } from "./CommandMenu";
+import { useMention, type MentionKeyEvent } from "./useMention";
 import { readDraft, writeDraft } from "../../lib/drafts";
 import { useLocale, useT } from "../../lib/i18n";
 import type { ModelOption } from "../../lib/providerForm";
@@ -186,17 +188,66 @@ export function Composer({
   // 组件卸载（切对话、关面板）时必须放开按住：否则那条消息永远不会被自动发出去。
   useEffect(() => () => onEditingQueued(null), [onEditingQueued]);
 
-  const suggestions = useMemo(() => {
-    if (!text.startsWith("/") || text.includes(" ")) return [];
-    const q = text.slice(1).toLowerCase();
-    return commands.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8);
-  }, [text, commands]);
+  // `/` 补全：与 `+ → 指令` 同一份 `commands`，不过滤到前 N 条——菜单本身就是
+  // 「有哪些指令」的答案，截断会让人以为某条指令不存在（而 `+` 菜单里明明有）。
+  const suggestions = useMemo(() => matchCommands(commands, text), [text, commands]);
 
   // 补全列表和「+ → 指令」共用同一份中文说明，别一个中文一个英文。
   const suggestionRows = useMemo(
     () => suggestions.map((c) => ({ ...c, desc: commandDescription(c.name, c.description, locale) })),
     [suggestions, locale],
   );
+
+  // 高亮行：`↑↓` 移动、`Enter` 插入。按**名字**记而不是下标——敲字会让列表变短，
+  // 下标一挪高亮就落到另一条指令上了；`commandIndex` 每次渲染现对回来。
+  const [commandHighlight, setCommandHighlight] = useState("");
+  const [commandDismissed, setCommandDismissed] = useState("");
+  const commandIndex = suggestionRows.findIndex((c) => c.name === commandHighlight);
+  // 候选集合变了（敲字 / 命令列表刷新）就回到第一行：`↑↓` 之前总得有个起点。
+  // 依赖用 `suggestionRows` 的身份而不是高亮值，否则 ↑↓ 自己会把高亮重置掉。
+  useEffect(() => {
+    setCommandHighlight(suggestionRows[0]?.name ?? "");
+  }, [suggestionRows]);
+
+  // Esc 关掉的是「这一串正文」的补全：正文一变（哪怕又敲回一模一样的 `/`）就重新弹。
+  // 与 `@` 菜单的 `dismissed` 同一个道理：它约束的是一次交互，不是一个位置——
+  // 正文离开过这一串就把它清掉，否则「Esc → 敲个字 → 退格删回来」会再也弹不出来。
+  const showSuggestions = suggestionRows.length > 0 && text !== commandDismissed;
+
+  useEffect(() => {
+    if (commandDismissed !== "" && commandDismissed !== text) setCommandDismissed("");
+  }, [text, commandDismissed]);
+
+  /** `/` 菜单开着时仲裁按键；返回 true 表示输入框不该再走自己的默认行为。 */
+  const handleCommandKey = (e: MentionKeyEvent): boolean => {
+    if (!showSuggestions || e.nativeEvent.isComposing) return false;
+    switch (e.key) {
+      case "ArrowDown":
+      case "ArrowUp": {
+        e.preventDefault();
+        const step = e.key === "ArrowDown" ? 1 : -1;
+        const from = commandIndex < 0 ? 0 : commandIndex;
+        const next = (from + step + suggestionRows.length) % suggestionRows.length;
+        setCommandHighlight(suggestionRows[next].name);
+        return true;
+      }
+      case "Escape":
+        e.preventDefault();
+        // 只关菜单，不改正文：用户可能只是想把 `/` 当普通字符接着写完。
+        setCommandDismissed(text);
+        return true;
+      case "Enter": {
+        if (e.shiftKey) return false; // 换行照旧
+        e.preventDefault();
+        const row = suggestionRows[commandIndex < 0 ? 0 : commandIndex];
+        if (row) updateText(`/${row.name} `);
+        return true;
+      }
+      default:
+        // Tab 不拦：这里没有「下钻」，把焦点困在输入框里只会让人切不出去。
+        return false;
+    }
+  };
 
   const preview = files.find((f) => f.id === previewId && f.kind === "image") ?? null;
 
@@ -627,24 +678,16 @@ export function Composer({
           onCrumb={mention.jumpTo}
         />
       )}
-      {suggestionRows.length > 0 && (
-        <div className="mb-2 max-h-56 overflow-y-auto rounded-xl border border-line bg-canvas p-1 shadow-soft">
-          {suggestionRows.map((c) => (
-            <button
-              key={c.name}
-              type="button"
-              onClick={() => {
-                updateText(`/${c.name} `);
-                ref.current?.focus();
-              }}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] hover:bg-panel-strong"
-            >
-              <span className="font-mono font-medium text-ink">/{c.name}</span>
-              {c.argumentHint && <span className="text-faint">{c.argumentHint}</span>}
-              {c.desc && <span className="ml-auto max-w-[55%] truncate text-[11px] text-muted">{c.desc}</span>}
-            </button>
-          ))}
-        </div>
+      {showSuggestions && (
+        <CommandMenu
+          rows={suggestionRows}
+          highlight={commandHighlight}
+          onHover={setCommandHighlight}
+          onPick={(name) => {
+            updateText(`/${name} `);
+            ref.current?.focus();
+          }}
+        />
       )}
 
       <div ref={cardRef} className="composer-card px-3 pb-2.5 pt-2">
@@ -737,7 +780,13 @@ export function Composer({
           }}
           onKeyDown={(e) => {
             // `@` 菜单开着时先由它仲裁：↑↓ 选候选、Tab 进目录、Enter 引用、Esc 关闭。
+            // 两者的 token 语法互斥（`@` 后允许有正文，`/` 只在整条正文是 `/名字` 时才成立），
+            // 但顺序仍要固定，免得两边都认领同一次 Esc。
             if (mention.handleKey(e)) {
+              skipCaretSync.current = true;
+              return;
+            }
+            if (handleCommandKey(e)) {
               skipCaretSync.current = true;
               return;
             }

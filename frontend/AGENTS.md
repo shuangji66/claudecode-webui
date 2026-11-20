@@ -56,6 +56,7 @@ src/
   lib/plugins.ts       插件响应兜底、目录查询串、id 拆分（纯函数）
   lib/fnos.ts          飞牛宿主桥接：目录授权（authorizeUserFile）+ 回包归一化（纯函数部分可测）
   lib/mention.ts       输入框 `@` 引用语法：token 检测/格式化/替换/面包屑（纯函数，对齐 DSH grammar）
+  lib/commands.ts      输入框 `/` 指令补全：查询串判定 + 前缀优先排序（纯函数）
   assets/claude-code.svg 品牌图标：左侧栏 / 鉴权页品牌标记 + 浏览器标签页图标（index.html 的 favicon）
   store/useAppStore.ts zustand 全局状态（只做状态搬运）
   store/useSidebarStore.ts 右侧栏数据（文件树/Git/预览，所有 fetch 收敛在这里）
@@ -131,6 +132,11 @@ src/
     CLI 原文）；
     " / " 仍由用户键入触发补全。从飞牛挑中的图片/PDF 走 `readHostFile`（`POST /api/fs/host-file`，
     后端只放行这两类）转成附件，其余类型只把路径写进消息——不要在前端读任意宿主文件。
+    **`/` 补全与 `+ → 指令` 是同一份 `commands`，不能各自过滤**：菜单本身就是「这个会话
+    有哪些指令」的答案，`/` 侧截断（曾经 `.slice(0, 8)`）会让人以为某条指令不存在，而
+    `+` 菜单里明明有。匹配与排序在 `lib/commands.matchCommands`（前缀命中优先于子串命中，
+    空查询给全部）；`↑↓` 选、`Enter` 填入、`Esc` 只关这一次，`Tab` 不拦（这里没有下钻）。
+    高亮按**名字**记而不是下标——敲字会让列表变短，下标一挪就落到别的指令上。
     **桌面截图要能直接 Ctrl+V**：textarea 的 `onPaste` 用 `lib/attachments.clipboardFiles`
     取文件（优先 `items.getAsFile()`，Safari/部分 Linux 的 `files` 是空的），有文件才
     `preventDefault`——纯文本粘贴必须原样交给浏览器。读成附件的路径与「+ → 本地文件」共用
