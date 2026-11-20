@@ -467,7 +467,6 @@ export function GitPanel({ cwd, active }: Props) {
                     <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-panel-strong text-ok">
                       <IconGitCommit size={20} />
                     </span>
-                    <p className="text-[12.5px] font-medium text-ink">{t("工作区干净", "Working tree clean")}</p>
                     <p className="text-[11px] text-muted">{t("没有未提交的改动。", "No uncommitted changes.")}</p>
                   </div>
                 )}
