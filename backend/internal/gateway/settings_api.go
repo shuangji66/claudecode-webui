@@ -221,9 +221,9 @@ type proxyReq struct {
 
 // handleApplyProxy 保存代理设置并重启全部 claude 会话。
 //
-// 代理变量只在进程启动时注入，改完必须换进程才能实时生效；这里先关掉
-// 所有会话，再按原目录 ensure 一个新的。前端拿到响应里的 sessions 后
-// 直接切换到新会话，不必等 WS 重连兜底。
+// 代理变量只在进程启动时注入，改完必须换进程才能实时生效；这里先关掉所有会话，
+// 再按**原对话 id** 逐个恢复（有转录 `--resume`、没转录 `StartFresh`）。
+// 前端拿到响应里的 sessions 后直接切换，不必等 WS 重连兜底。
 func (s *Server) handleApplyProxy(w http.ResponseWriter, r *http.Request) {
 	var req proxyReq
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
