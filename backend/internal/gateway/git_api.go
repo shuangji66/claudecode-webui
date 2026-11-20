@@ -93,18 +93,21 @@ func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"diff": diff})
 }
 
-// handleGitShow 返回一次提交的补丁。
+// handleGitShow 返回一次提交的详情（元数据 + 补丁）。
+//
+// 界面把它拆成「提交详情 / 差异」两页，但两页描述的是同一次提交：分成两个
+// 接口只会让点开一次提交发两次 git show（大提交各跑一遍，慢一倍）。
 func (s *Server) handleGitShow(w http.ResponseWriter, r *http.Request) {
 	cwd, ok := s.gitCwd(w, r)
 	if !ok {
 		return
 	}
-	diff, err := gitctl.Show(r.Context(), cwd, r.URL.Query().Get("hash"))
+	commit, err := gitctl.CommitDetails(r.Context(), cwd, r.URL.Query().Get("hash"))
 	if err != nil {
 		writeGitError(w, err)
 		return
 	}
-	writeJSON(w, map[string]string{"diff": diff})
+	writeJSON(w, commit)
 }
 
 // handleGitLog 返回最近提交。

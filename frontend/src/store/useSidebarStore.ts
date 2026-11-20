@@ -11,6 +11,7 @@ import type {
   FsFile,
   FsListing,
   GitBranches,
+  GitCommit,
   GitLogEntry,
   GitRepo,
   GitStatus,
@@ -86,7 +87,8 @@ interface SidebarState {
   loadBranches: () => Promise<void>;
   loadLog: () => Promise<void>;
   loadDiff: (path: string, staged: boolean) => Promise<string>;
-  showCommit: (hash: string) => Promise<string>;
+  /** 一次提交的详情（元数据 + 补丁）；差异页按文件切段渲染。 */
+  showCommit: (hash: string) => Promise<GitCommit>;
   stage: (path?: string) => Promise<boolean>;
   unstage: (path?: string) => Promise<boolean>;
   discard: (path: string) => Promise<boolean>;
@@ -373,9 +375,9 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     if (!cwd) throw new Error("未选择工作区");
     const at = epoch;
     const query = new URLSearchParams({ cwd, hash });
-    const payload = await apiFetch<{ diff: string }>(`/api/git/show?${query.toString()}`);
+    const payload = await apiFetch<GitCommit>(`/api/git/show?${query.toString()}`);
     if (at !== epoch || gitCwd(get()) !== cwd) throw new Error("工作区已切换");
-    return payload.diff ?? "";
+    return { ...payload, diff: payload.diff ?? "", parents: payload.parents ?? [] };
   },
 
   stage: async (path) => {

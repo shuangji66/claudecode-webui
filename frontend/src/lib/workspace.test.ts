@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   asAddedDiff,
+  decodeGitPath,
   diffStat,
   formatBytes,
   groupChanges,
   lineCountParts,
+  parseDiffFiles,
   parseUnifiedDiff,
   pickRepo,
   previewKind,
@@ -97,6 +99,90 @@ describe("parseUnifiedDiff", () => {
     const lines = parseUnifiedDiff(asAddedDiff("a\nb\n"));
     expect(lines.map((l) => l.kind)).toEqual(["add", "add"]);
     expect(diffStat(lines)).toEqual({ added: 2, removed: 0 });
+  });
+});
+
+describe("parseDiffFiles", () => {
+  const text = [
+    "diff --git a/src/a.ts b/src/a.ts",
+    "index 111..222 100644",
+    "--- a/src/a.ts",
+    "+++ b/src/a.ts",
+    "@@ -1,2 +1,2 @@",
+    " one",
+    "-two",
+    "+two changed",
+    "diff --git a/README.md b/README.md",
+    "new file mode 100644",
+    "index 000..333",
+    "--- /dev/null",
+    "+++ b/README.md",
+    "@@ -0,0 +1,2 @@",
+    "+# 标题",
+    "+正文",
+  ].join("\n");
+
+  it("按文件切段并各自统计增删行数", () => {
+    const files = parseDiffFiles(text);
+    expect(files.map((f) => f.path)).toEqual(["src/a.ts", "README.md"]);
+    expect(files[0]).toMatchObject({ added: 1, removed: 1 });
+    expect(files[1]).toMatchObject({ added: 2, removed: 0, tag: "added" });
+    // 后一个文件的行不能被算进前一个。
+    expect(files[0]!.lines.some((l) => l.text === "# 标题")).toBe(false);
+  });
+
+  it("改名与删除的文件靠 ±-- 头补出路径", () => {
+    const renamed = parseDiffFiles([
+      "diff --git a/old.ts b/new.ts",
+      "similarity index 90%",
+      "rename from old.ts",
+      "rename to new.ts",
+      "diff --git a/gone.txt b/gone.txt",
+      "deleted file mode 100644",
+      "--- a/gone.txt",
+      "+++ /dev/null",
+      "@@ -1,1 +0,0 @@",
+      "-bye",
+    ].join("\n"));
+    expect(renamed[0]).toMatchObject({ path: "new.ts", oldPath: "old.ts", tag: "renamed" });
+    // 删除的文件没有 `+++`：用旧侧名字，否则标题是空的。
+    expect(renamed[1]).toMatchObject({ path: "gone.txt", tag: "deleted" });
+    expect(renamed[1]!.oldPath).toBeUndefined();
+  });
+
+  it("路径含空格时按「两侧同名」那一刀切开", () => {
+    const files = parseDiffFiles("diff --git a/my dir/a b.txt b/my dir/a b.txt\n--- a/my dir/a b.txt\n+++ b/my dir/a b.txt\n@@ -1 +1 @@\n-x\n+y");
+    expect(files[0]!.path).toBe("my dir/a b.txt");
+    expect(files[0]!.oldPath).toBeUndefined();
+  });
+
+  it("没有 diff --git 头（未跟踪文件的伪 diff）整篇算一个文件", () => {
+    const files = parseDiffFiles(asAddedDiff("a\nb\n"));
+    expect(files).toHaveLength(1);
+    expect(files[0]!.added).toBe(2);
+    expect(files[0]!.path).toBe("");
+  });
+
+  it("真实 git 输出：空格路径 + `+++` 行尾 TAB 都不会污染文件名", () => {
+    // 取自实测 `git show` 的输出（core.quotePath=false）：含空格的路径以 TAB 结尾。
+    const files = parseDiffFiles([
+      "diff --git a/有 空格.txt b/有 空格.txt",
+      "new file mode 100644",
+      "index 0000000..587be6b",
+      "--- /dev/null",
+      "+++ b/有 空格.txt\t",
+      "@@ -0,0 +1 @@",
+      "+x",
+    ].join("\n"));
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatchObject({ path: "有 空格.txt", added: 1, removed: 0, tag: "added" });
+  });
+
+  it("还原 git 的 C 引用路径", () => {
+    expect(decodeGitPath('"\\346\\226\\207.md"')).toBe("文.md");
+    expect(decodeGitPath("普通.md")).toBe("普通.md");
+    // 空格在 git 的输出里是以 TAB 结尾的，不能把它当路径的一部分。
+    expect(decodeGitPath("a b.txt\t")).toBe("a b.txt\t");
   });
 });
 

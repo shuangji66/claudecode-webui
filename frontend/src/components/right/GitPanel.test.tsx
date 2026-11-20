@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { GitPanel } from "./GitPanel";
+import { GitPanel, commitBody } from "./GitPanel";
 import { useSidebarStore } from "../../store/useSidebarStore";
 
 const { apiFetch } = vi.hoisted(() => {
@@ -13,6 +13,28 @@ const { apiFetch } = vi.hoisted(() => {
     "@@ -1,2 +1,2 @@",
     "-const a = 1;",
     "+const a = 2;",
+  ].join("\n");
+  const commitDiff = [
+    "diff --git a/src/one.ts b/src/one.ts",
+    "--- a/src/one.ts",
+    "+++ b/src/one.ts",
+    "@@ -1 +1 @@",
+    "-old one",
+    "+new one",
+    "diff --git a/src/two.ts b/src/two.ts",
+    "--- a/src/two.ts",
+    "+++ b/src/two.ts",
+    "@@ -1 +1 @@",
+    "-old two",
+    "+new two",
+    "diff --git a/src/one.test.ts b/src/one.test.ts",
+    "--- a/src/one.test.ts",
+    "+++ b/src/one.test.ts",
+    "@@ -1 +1 @@",
+    "-old test",
+    "+new test",
+    "diff --git a/logo.png b/logo.png",
+    "Binary files a/logo.png and b/logo.png differ",
   ].join("\n");
   const entries = [
     { path: "src/a.ts", xy: " M", unstaged: { additions: 1, deletions: 1 } },
@@ -27,6 +49,35 @@ const { apiFetch } = vi.hoisted(() => {
       }
       if (url.pathname.endsWith("/api/git/diff")) return { diff };
       if (url.pathname.endsWith("/api/git/file")) return { content: "const a = 2;\n" };
+      if (url.pathname.endsWith("/api/git/log")) {
+        return {
+          entries: [
+            {
+              hash: "abc1234",
+              hash_full: "abc1234def5678",
+              parents: ["ppp0000"],
+              subject: "标题行",
+              author: "ccweb dev",
+              date: "2026-11-19T16:08:57+08:00",
+              refs: "",
+            },
+          ],
+        };
+      }
+      if (url.pathname.endsWith("/api/git/show")) {
+        return {
+          hash: "abc1234",
+          hash_full: "abc1234def5678",
+          parents: ["ppp0000"],
+          subject: "标题行",
+          author: "ccweb dev",
+          author_email: "dev@example.com",
+          date: "2026-11-19T16:08:57+08:00",
+          refs: "",
+          message: "标题行\n\n这是提交正文。",
+          diff: commitDiff,
+        };
+      }
       return {};
     }),
   };
@@ -104,5 +155,65 @@ describe("GitPanel 差异预览", () => {
     expect(next).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByText("const a = 2;")).toHaveClass("whitespace-pre");
     expect(screen.getByText("const a = 2;")).not.toHaveClass("whitespace-pre-wrap");
+  });
+});
+
+describe("提交详情与差异分页", () => {
+  const openCommit = async () => {
+    render(<GitPanel cwd={CWD} active />);
+    fireEvent.click(screen.getByRole("button", { name: /历史/ }));
+    fireEvent.click(await screen.findByTitle(/abc1234 标题行/));
+    await screen.findByText("标题行");
+  };
+
+  it("默认落在「提交详情」，显示作者、完整 hash、父提交与正文", async () => {
+    await openCommit();
+
+    expect(screen.getByRole("button", { name: "提交详情" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("ccweb dev")).toBeInTheDocument();
+    expect(screen.getByText("abc1234def5678")).toBeInTheDocument();
+    expect(screen.getByTitle("ppp0000")).toBeInTheDocument();
+    // 正文只显示标题之外的部分：`%B` 的首行与 subject 重复，屏幕上「标题行」只出现一次。
+    expect(screen.getByText("这是提交正文。")).toBeInTheDocument();
+    expect(screen.getAllByText("标题行")).toHaveLength(1);
+    // 详情页不该直接铺补丁。
+    expect(screen.queryByText("new one")).toBeNull();
+  });
+
+  it("正文里重复的标题行不再渲染第二遍", () => {
+    expect(commitBody("标题\n\n正文\n", "标题")).toBe("正文");
+    // 首行与 subject 不一致（git 折过行）时整份都显示，不静默丢一行。
+    expect(commitBody("标题\n正文", "标题 换行了")).toBe("标题\n正文");
+  });
+
+  it("切到「差异」按文件分组，可逐个收起", async () => {
+    await openCommit();
+    fireEvent.click(screen.getByRole("button", { name: /差异/ }));
+
+    // 两个源码文件默认展开。
+    const one = screen.getByRole("button", { name: /src\/one\.ts/ });
+    expect(one).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("new one")).toBeInTheDocument();
+    expect(screen.getByText("new two")).toBeInTheDocument();
+    // 二进制文件没有可展开的行，但仍在列表里。
+    expect(screen.getByRole("button", { name: /logo\.png/ })).toBeInTheDocument();
+
+    fireEvent.click(one);
+    expect(one).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("new one")).toBeNull();
+    // 收起一个不影响另一个。
+    expect(screen.getByText("new two")).toBeInTheDocument();
+  });
+
+  it("测试文件默认折叠，源码文件默认展开", async () => {
+    await openCommit();
+    fireEvent.click(screen.getByRole("button", { name: /差异/ }));
+
+    // 首屏展开一两屏代码就够了：测试文件按「不影响改动本身」默认收起，
+    // 但它在列表里、带增删行数，点一下就能看。
+    const test = screen.getByRole("button", { name: /src\/one\.test\.ts/ });
+    expect(test).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("new test")).toBeNull();
+    expect(screen.getByRole("button", { name: /src\/one\.ts/ })).toHaveAttribute("aria-expanded", "true");
   });
 });

@@ -209,6 +209,60 @@ func TestStageCommitUnstageAndDiscard(t *testing.T) {
 	}
 }
 
+func TestCommitDetails(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("没有 git")
+	}
+	dir := t.TempDir()
+	runGitTest(t, dir, "init", "-q")
+	runGitTest(t, dir, "config", "user.email", "test@example.com")
+	runGitTest(t, dir, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, dir, "add", ".")
+	// 正文要带空行：`%B` 原样返回正文，而详情页只渲染标题之外的正文，
+	// 少一个空行就会把「标题」与「正文」粘成一行。
+	runGitTest(t, dir, "commit", "-qm", "标题行", "-m", "第一段正文\n\n第二段正文")
+
+	ctx := context.Background()
+	entries, err := Log(ctx, dir, 5, 0)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("log = %+v, %v", entries, err)
+	}
+	got, err := CommitDetails(ctx, dir, entries[0].Hash)
+	if err != nil {
+		t.Fatalf("CommitDetails: %v", err)
+	}
+	if got.HashFull != entries[0].HashFull || got.Hash != entries[0].Hash {
+		t.Fatalf("hash = %q / %q，want %q / %q", got.Hash, got.HashFull, entries[0].Hash, entries[0].HashFull)
+	}
+	if got.Subject != "标题行" {
+		t.Fatalf("subject = %q", got.Subject)
+	}
+	if got.Author != "Test" || got.AuthorEmail != "test@example.com" {
+		t.Fatalf("author = %q <%q>", got.Author, got.AuthorEmail)
+	}
+	if !strings.Contains(got.Message, "第一段正文") || !strings.Contains(got.Message, "第二段正文") {
+		t.Fatalf("message = %q", got.Message)
+	}
+	if len(got.Parents) != 0 {
+		t.Fatalf("首个提交不该有父提交: %+v", got.Parents)
+	}
+	// 元数据不能混进补丁：否则前端按 `diff --git` 切文件时会多出一段无法归属的头部。
+	if strings.Contains(got.Diff, "标题行") {
+		t.Fatalf("补丁里混进了提交信息:\n%s", got.Diff)
+	}
+	if !strings.Contains(got.Diff, "a.txt") {
+		t.Fatalf("补丁里没有文件:\n%s", got.Diff)
+	}
+
+	// 非法的 hash 必须在跑 git 之前挡掉。
+	if _, err := CommitDetails(ctx, dir, "--upload-pack=x"); err == nil {
+		t.Fatal("非法 hash 应报错")
+	}
+}
+
 func TestGitEnvProxy(t *testing.T) {
 	// 继承的代理变量必须被剔除，避免和面板设置打架。
 	t.Setenv("HTTPS_PROXY", "http://inherited:3128")

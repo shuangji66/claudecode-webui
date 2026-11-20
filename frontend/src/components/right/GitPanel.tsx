@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
+import { copyText } from "../../lib/clipboard";
+import { relativeTime } from "../../lib/labels";
 import {
   asAddedDiff,
   diffStat,
   groupChanges,
   lineCountParts,
+  parseDiffFiles,
   parseUnifiedDiff,
   refsLabel,
   type ChangeRow,
+  type DiffFile,
+  type DiffLine,
   type GitTone,
 } from "../../lib/workspace";
 import { useSidebarStore } from "../../store/useSidebarStore";
@@ -15,9 +20,13 @@ import { watchGitRepo } from "../../store/useAppStore";
 import { Select } from "../common/Select";
 import { FileIcon } from "../common/FileIcon";
 import { askConfirm } from "../common/SystemDialogs";
-import type { GitLineCounts, GitLogEntry } from "../../transport/types";
+import { Markdown } from "../common/Markdown";
+import type { GitCommit, GitLineCounts, GitLogEntry } from "../../transport/types";
 import {
+  IconCheck,
   IconChevronLeft,
+  IconChevronRight,
+  IconCopy,
   IconGitBranch,
   IconGitCommit,
   IconMinus,
@@ -35,13 +44,16 @@ interface Props {
 
 type Mode = "changes" | "history";
 
-interface DiffViewState {
-  title: string;
-  subtitle: string;
-  text: string;
-  /** 这是一条提交详情（历史页签），不是工作区改动。 */
-  commit?: boolean;
-}
+/**
+ * 打开的是「一处改动」还是「一次提交」。
+ *
+ * 两者都渲染 diff，但提交多出元数据（作者 / 时间 / 完整 hash / 父提交 / 正文），
+ * 而正文与补丁是两件事：正文是给人读的，补丁是给眼睛比对的，塞进同一屏只会互相挤。
+ * 所以提交这一层再分两个页签（提交详情 / 差异）。
+ */
+type DiffViewState =
+  | { kind: "change"; title: string; subtitle: string; text: string }
+  | { kind: "commit"; commit: GitCommit };
 
 const TONE_TEXT: Record<GitTone, string> = {
   modified: "text-warn",
@@ -172,6 +184,7 @@ export function GitPanel({ cwd, active }: Props) {
       }
       if (diffSeq.current !== seq) return;
       setDiff({
+        kind: "change",
         title: row.entry.path,
         subtitle: staged ? t("已暂存", "Staged") : t("工作区", "Working tree"),
         text,
@@ -191,14 +204,9 @@ export function GitPanel({ cwd, active }: Props) {
     setDiffError("");
     setDiffLoading(true);
     try {
-      const text = await showCommit(entry.hash);
+      const commit = await showCommit(entry.hash);
       if (diffSeq.current !== seq) return;
-      setDiff({
-        title: entry.subject || entry.hash,
-        subtitle: `${entry.hash} · ${entry.author} · ${entry.date.slice(0, 16)}`,
-        text,
-        commit: true,
-      });
+      setDiff({ kind: "commit", commit });
     } catch (reason) {
       if (diffSeq.current !== seq) return;
       setDiffError(reason instanceof Error ? reason.message : String(reason));
@@ -301,9 +309,9 @@ export function GitPanel({ cwd, active }: Props) {
             setMode("changes");
             setDiff(null);
           }}
-          aria-pressed={mode === "changes" && !diff?.commit}
+          aria-pressed={mode === "changes" && diff?.kind !== "commit"}
           className={`rounded-md px-2 py-1 text-[11.5px] ${
-            mode === "changes" && !diff?.commit ? "bg-panel-strong font-medium text-ink" : "text-muted hover:text-ink"
+            mode === "changes" && diff?.kind !== "commit" ? "bg-panel-strong font-medium text-ink" : "text-muted hover:text-ink"
           }`}
         >
           {t("变更", "Changes")}
@@ -370,13 +378,27 @@ export function GitPanel({ cwd, active }: Props) {
             </div>
           )}
           {diff && !diffLoading && (
-            <DiffView
-              state={diff}
-              busy={busy}
-              wrap={wrap}
-              onToggleWrap={() => setWrap((v) => !v)}
-              onBack={backFromDiff}
-            />
+            diff.kind === "commit" ? (
+              <CommitView
+                // 换一条提交就重开：页签回到「提交详情」，折叠状态也跟着复位。
+                key={diff.commit.hash_full || diff.commit.hash}
+                commit={diff.commit}
+                busy={busy}
+                wrap={wrap}
+                onToggleWrap={() => setWrap((v) => !v)}
+                onBack={backFromDiff}
+              />
+            ) : (
+              <DiffView
+                title={diff.title}
+                subtitle={diff.subtitle}
+                text={diff.text}
+                busy={busy}
+                wrap={wrap}
+                onToggleWrap={() => setWrap((v) => !v)}
+                onBack={backFromDiff}
+              />
+            )
           )}
           {!diff && !diffLoading && diffError && (
             <button
@@ -718,24 +740,88 @@ function HistoryList({ entries, loading, error, onOpen }: { entries: GitLogEntry
   );
 }
 
-interface DiffViewProps {
-  state: DiffViewState;
+interface DiffBodyProps {
+  /** 已经解析好的行（提交按文件切段后不必再拼回文本重解析一遍）。 */
+  lines: readonly DiffLine[];
   busy: boolean;
   /** 长行是否按面板宽度折行（默认开）。 */
   wrap: boolean;
-  onToggleWrap: () => void;
-  onBack: () => void;
 }
 
-function DiffView({ state, busy, wrap, onToggleWrap, onBack }: DiffViewProps) {
+/**
+ * 差异正文：hunk 头 / meta / 增删行。
+ *
+ * 拆成独立组件是为了让「一处改动」与「提交里的一个文件」共用同一套行渲染——
+ * 提交那一层按文件切段后，每个文件各渲染一份，样式必须完全一致。
+ */
+function DiffBody({ lines, busy, wrap }: DiffBodyProps) {
   const t = useT();
-  const lines = useMemo(() => parseUnifiedDiff(state.text), [state.text]);
-  const stat = useMemo(() => diffStat(lines), [lines]);
   const shown = lines.slice(0, MAX_DIFF_LINES);
   // 折行：`whitespace-pre-wrap` 保住缩进、`[overflow-wrap:anywhere]` 让无空格的长串
   // （base64 / minified js / 长路径）也能断；容器不能再 `min-w-max`，否则整块按最长行
   // 撑开，横向滚动条一出现折行就失效了——那是「看起来开了却没生效」的来源。
   const codeWrap = wrap ? "whitespace-pre-wrap [overflow-wrap:anywhere]" : "whitespace-pre";
+
+  if (shown.length === 0) {
+    return <p className="px-3 py-3 text-[11.5px] text-faint">{t("没有文本差异（可能是二进制文件或改动已暂存）。", "No textual diff (binary file or already staged).")}</p>;
+  }
+  return (
+    <>
+      <div className={`py-1 font-mono text-[11px] leading-[1.55] ${wrap ? "" : "min-w-max"}`}>
+        {shown.map((line, i) => {
+          if (line.kind === "hunk") {
+            return (
+              <div key={i} className={`${codeWrap} bg-brand/[0.07] px-2 py-0.5 text-[10.5px] text-brand`}>
+                {line.text}
+              </div>
+            );
+          }
+          if (line.kind === "meta") {
+            return (
+              <div key={i} className={`${codeWrap} px-2 py-0.5 text-[10px] text-faint`}>
+                {line.text}
+              </div>
+            );
+          }
+          const add = line.kind === "add";
+          const del = line.kind === "del";
+          return (
+            <div key={i} className={`flex ${add ? "bg-emerald-500/[0.09]" : del ? "bg-rose-500/[0.09]" : ""}`}>
+              <span className="w-9 shrink-0 select-none pr-1.5 text-right text-[9.5px] text-faint">{line.oldNo ?? ""}</span>
+              <span className="w-9 shrink-0 select-none pr-1.5 text-right text-[9.5px] text-faint">{line.newNo ?? ""}</span>
+              <span className={`w-3 shrink-0 select-none text-center ${add ? "text-ok" : del ? "text-danger" : "text-faint"}`}>
+                {add ? "+" : del ? "−" : " "}
+              </span>
+              <span className={`${codeWrap} pr-3 text-ink-2 ${wrap ? "min-w-0 flex-1" : ""}`}>{line.text || " "}</span>
+            </div>
+          );
+        })}
+      </div>
+      {lines.length > MAX_DIFF_LINES && (
+        <p className="px-3 py-2 text-[10.5px] text-warn">
+          {t(`差异过大，仅显示前 ${MAX_DIFF_LINES} 行。`, `Diff too large; showing first ${MAX_DIFF_LINES} lines.`)}
+        </p>
+      )}
+      {busy && <p className="px-3 py-1 text-[10px] text-faint">{t("正在更新…", "Updating…")}</p>}
+    </>
+  );
+}
+
+interface DiffViewProps {
+  title: string;
+  subtitle: string;
+  text: string;
+  busy: boolean;
+  wrap: boolean;
+  onToggleWrap: () => void;
+  onBack: () => void;
+}
+
+/** 一处改动（工作区 / 索引侧的文件）的差异预览。 */
+function DiffView({ title, subtitle, text, busy, wrap, onToggleWrap, onBack }: DiffViewProps) {
+  const t = useT();
+  const lines = useMemo(() => parseUnifiedDiff(text), [text]);
+  const stat = useMemo(() => diffStat(lines), [lines]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -750,12 +836,12 @@ function DiffView({ state, busy, wrap, onToggleWrap, onBack }: DiffViewProps) {
           <IconChevronLeft size={15} />
         </button>
         <div className="min-w-0 flex-1">
-          <p className="flex min-w-0 items-center gap-1.5 truncate text-[11.5px] font-medium text-ink" title={state.title}>
-            <FileIcon name={state.title} size={13} className="shrink-0" />
-            <span className="truncate">{state.title}</span>
+          <p className="flex min-w-0 items-center gap-1.5 truncate text-[11.5px] font-medium text-ink" title={title}>
+            <FileIcon name={title} size={13} className="shrink-0" />
+            <span className="truncate">{title}</span>
           </p>
           <p className="mt-0.5 flex items-center gap-1.5 truncate text-[9.5px] text-faint">
-            <span className="truncate">{state.subtitle}</span>
+            <span className="truncate">{subtitle}</span>
             {lines.length > 0 && (
               <span className="shrink-0 font-mono">
                 <LineCounts counts={{ additions: stat.added, deletions: stat.removed }} />
@@ -764,63 +850,311 @@ function DiffView({ state, busy, wrap, onToggleWrap, onBack }: DiffViewProps) {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <button
-            type="button"
-            onClick={onToggleWrap}
-            className={`rounded-md p-1.5 hover:bg-black/5 ${wrap ? "text-brand" : "text-muted hover:text-ink"}`}
-            aria-label={wrap ? t("关闭自动换行", "Disable word wrap") : t("开启自动换行", "Enable word wrap")}
-            aria-pressed={wrap}
-            title={wrap ? t("关闭自动换行", "Disable word wrap") : t("开启自动换行", "Enable word wrap")}
-          >
-            <IconWrap size={14} />
-          </button>
+          <WrapToggle wrap={wrap} onToggle={onToggleWrap} />
         </div>
       </div>
       <div className="dsh-scroll min-h-0 flex-1 overflow-auto bg-canvas">
-        {shown.length === 0 ? (
-          <p className="px-3 py-3 text-[11.5px] text-faint">{t("没有文本差异（可能是二进制文件或改动已暂存）。", "No textual diff (binary file or already staged).")}</p>
-        ) : (
-          <div className={`py-1 font-mono text-[11px] leading-[1.55] ${wrap ? "" : "min-w-max"}`}>
-            {shown.map((line, i) => {
-              if (line.kind === "hunk") {
-                return (
-                  <div key={i} className={`${codeWrap} bg-brand/[0.07] px-2 py-0.5 text-[10.5px] text-brand`}>
-                    {line.text}
-                  </div>
-                );
-              }
-              if (line.kind === "meta") {
-                return (
-                  <div key={i} className={`${codeWrap} px-2 py-0.5 text-[10px] text-faint`}>
-                    {line.text}
-                  </div>
-                );
-              }
-              const add = line.kind === "add";
-              const del = line.kind === "del";
-              return (
-                <div
-                  key={i}
-                  className={`flex ${add ? "bg-emerald-500/[0.09]" : del ? "bg-rose-500/[0.09]" : ""}`}
-                >
-                  <span className="w-9 shrink-0 select-none pr-1.5 text-right text-[9.5px] text-faint">{line.oldNo ?? ""}</span>
-                  <span className="w-9 shrink-0 select-none pr-1.5 text-right text-[9.5px] text-faint">{line.newNo ?? ""}</span>
-                  <span className={`w-3 shrink-0 select-none text-center ${add ? "text-ok" : del ? "text-danger" : "text-faint"}`}>
-                    {add ? "+" : del ? "−" : " "}
-                  </span>
-                  <span className={`${codeWrap} pr-3 text-ink-2 ${wrap ? "min-w-0 flex-1" : ""}`}>{line.text || " "}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        {lines.length > MAX_DIFF_LINES && (
-          <p className="px-3 py-2 text-[10.5px] text-warn">
-            {t(`差异过大，仅显示前 ${MAX_DIFF_LINES} 行。`, `Diff too large; showing first ${MAX_DIFF_LINES} lines.`)}
-          </p>
-        )}
-        {busy && <p className="px-3 py-1 text-[10px] text-faint">{t("正在更新…", "Updating…")}</p>}
+        <DiffBody lines={lines} busy={busy} wrap={wrap} />
       </div>
     </div>
   );
+}
+
+function WrapToggle({ wrap, onToggle }: { wrap: boolean; onToggle: () => void }) {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`rounded-md p-1.5 hover:bg-black/5 ${wrap ? "text-brand" : "text-muted hover:text-ink"}`}
+      aria-label={wrap ? t("关闭自动换行", "Disable word wrap") : t("开启自动换行", "Enable word wrap")}
+      aria-pressed={wrap}
+      title={wrap ? t("关闭自动换行", "Disable word wrap") : t("开启自动换行", "Enable word wrap")}
+    >
+      <IconWrap size={14} />
+    </button>
+  );
+}
+
+type CommitTab = "details" | "diff";
+
+interface CommitViewProps {
+  commit: GitCommit;
+  busy: boolean;
+  wrap: boolean;
+  onToggleWrap: () => void;
+  onBack: () => void;
+}
+
+/**
+ * 一次提交：元数据与补丁分两页（对齐 DSH 的「提交详情 / 差异」）。
+ *
+ * 之前两者挤在一屏：标题栏一行摘要，下面是整份补丁平铺。提交信息里的正文
+ * （本次为什么改、影响什么）根本没地方显示，而补丁又长到一屏放不下——两件事
+ * 抢同一块空间，谁都读不好。
+ */
+function CommitView({ commit, busy, wrap, onToggleWrap, onBack }: CommitViewProps) {
+  const t = useT();
+  const [tab, setTab] = useState<CommitTab>("details");
+  // 补丁在打开时就切好段：两个页签都要用（详情页顶部报文件数与增删行），
+  // 切页签时再算一遍等于每次点击都重新解析一遍大补丁。
+  const files = useMemo(() => parseDiffFiles(commit.diff), [commit.diff]);
+  const totals = useMemo(() => {
+    let added = 0;
+    let removed = 0;
+    for (const file of files) {
+      added += file.added;
+      removed += file.removed;
+    }
+    return { added, removed };
+  }, [files]);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center gap-1 border-b border-line px-2">
+        <button
+          type="button"
+          onClick={onBack}
+          className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+          aria-label={t("返回", "Back")}
+          title={t("返回", "Back")}
+        >
+          <IconChevronLeft size={15} />
+        </button>
+        {(["details", "diff"] as const).map((id) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setTab(id)}
+            aria-pressed={tab === id}
+            className={`rounded-md px-2 py-1 text-[11.5px] ${
+              tab === id ? "bg-panel-strong font-medium text-ink" : "text-muted hover:text-ink"
+            }`}
+          >
+            {id === "details" ? t("提交详情", "Details") : t("差异", "Diff")}
+            {id === "diff" && totals.added + totals.removed > 0 && (
+              <span className="ml-1 font-mono text-[10px]">
+                <LineCounts counts={{ additions: totals.added, deletions: totals.removed }} />
+              </span>
+            )}
+          </button>
+        ))}
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          {tab === "diff" && <WrapToggle wrap={wrap} onToggle={onToggleWrap} />}
+        </div>
+      </div>
+      {tab === "details" ? (
+        <CommitDetails commit={commit} fileCount={files.length} totals={totals} />
+      ) : (
+        <div className="dsh-scroll min-h-0 flex-1 overflow-auto bg-canvas">
+          <CommitDiff files={files} busy={busy} wrap={wrap} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CommitDetails({
+  commit,
+  fileCount,
+  totals,
+}: {
+  commit: GitCommit;
+  fileCount: number;
+  totals: { added: number; removed: number };
+}) {
+  const t = useT();
+  const [copied, setCopied] = useState("");
+  const copy = async (value: string, what: string) => {
+    const ok = await copyText(value);
+    if (!ok) return;
+    setCopied(what);
+    window.setTimeout(() => setCopied(""), 1500);
+  };
+  // `%B` 的首行就是标题，正文从第二行开始——整份原样显示会把标题重复一遍。
+  const body = commitBody(commit.message, commit.subject);
+
+  return (
+    <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <p className="text-[13px] font-semibold leading-relaxed text-ink">
+        {commit.subject || t("（无提交信息）", "(no subject)")}
+      </p>
+      <dl className="mt-3 space-y-1.5 text-[11.5px]">
+        <div className="flex items-start gap-2">
+          <dt className="w-14 shrink-0 text-faint">{t("作者", "Author")}</dt>
+          <dd className="min-w-0 flex-1 break-words text-ink-2">
+            {commit.author}
+            {commit.author_email && <span className="text-faint"> &lt;{commit.author_email}&gt;</span>}
+          </dd>
+        </div>
+        <div className="flex items-start gap-2">
+          <dt className="w-14 shrink-0 text-faint">{t("时间", "Date")}</dt>
+          <dd className="min-w-0 flex-1 break-words font-mono text-[11px] text-ink-2">
+            {commit.date}
+            <span className="ml-1.5 font-sans text-faint">{relativeTime(commit.date)}</span>
+          </dd>
+        </div>
+        <div className="flex items-start gap-2">
+          <dt className="w-14 shrink-0 text-faint">{t("提交", "Commit")}</dt>
+          <dd className="flex min-w-0 flex-1 items-start gap-1">
+            <code className="min-w-0 flex-1 break-all font-mono text-[11px] text-ink-2">{commit.hash_full || commit.hash}</code>
+            <button
+              type="button"
+              onClick={() => void copy(commit.hash_full || commit.hash, "hash")}
+              className="shrink-0 rounded p-0.5 text-muted hover:bg-black/5 hover:text-ink"
+              aria-label={t("复制完整 ID", "Copy full hash")}
+              title={copied === "hash" ? t("已复制", "Copied") : t("复制完整 ID", "Copy full hash")}
+            >
+              {copied === "hash" ? <IconCheck size={12} className="text-ok" /> : <IconCopy size={12} />}
+            </button>
+          </dd>
+        </div>
+        <div className="flex items-start gap-2">
+          <dt className="w-14 shrink-0 text-faint">{t("父提交", "Parents")}</dt>
+          <dd className="flex min-w-0 flex-1 flex-wrap gap-1">
+            {commit.parents.length === 0 ? (
+              <span className="text-faint">—</span>
+            ) : (
+              commit.parents.map((parent) => (
+                <code key={parent} className="rounded bg-panel-strong px-1 py-0.5 font-mono text-[10.5px] text-ink-2" title={parent}>
+                  {parent.slice(0, 7)}
+                </code>
+              ))
+            )}
+          </dd>
+        </div>
+        {commit.refs && (
+          <div className="flex items-start gap-2">
+            <dt className="w-14 shrink-0 text-faint">{t("引用", "Refs")}</dt>
+            <dd className="min-w-0 flex-1 break-words text-brand">{refsLabel(commit.refs)}</dd>
+          </div>
+        )}
+        <div className="flex items-start gap-2">
+          <dt className="w-14 shrink-0 text-faint">{t("改动", "Changes")}</dt>
+          <dd className="min-w-0 flex-1 text-ink-2">
+            <span className="font-mono text-[10.5px]">
+              <LineCounts counts={{ additions: totals.added, deletions: totals.removed }} />
+            </span>
+            <span className="ml-2 text-faint">{t(`${fileCount} 个文件`, `${fileCount} files`)}</span>
+          </dd>
+        </div>
+      </dl>
+      {body && (
+        <div className="mt-3 border-t border-line/70 pt-3">
+          {/* 正文是提交信息里的说明文字（常含列表、代码块），交给同一个 Markdown 渲染，
+              不要包成 <pre>——那是原样保留换行，长段落会横着溢出。 */}
+          <Markdown text={body} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 提交正文：去掉与标题重复的首行。
+ *
+ * `git log %B` 是第一行标题 + 一个空行 + 正文，而详情页已经把标题显示在顶上了。
+ * 首行与 `%s` 不一致时（手写信息被 git 折行过）整份都显示，宁可重复也不要静默丢一行。
+ */
+export function commitBody(message: string, subject: string): string {
+  const lines = message.replace(/\r\n/g, "\n").split("\n");
+  const head = (lines[0] ?? "").trim();
+  const rest = head === subject.trim() ? lines.slice(1) : lines;
+  return rest.join("\n").trim();
+}
+
+interface CommitDiffProps {
+  files: DiffFile[];
+  busy: boolean;
+  wrap: boolean;
+}
+
+/**
+ * 提交补丁：按文件切段，每段一个可折叠的头（对齐 DSH 的 DiffFiles）。
+ *
+ * **默认只展开源码文件，且限一个行数预算**：一次提交动几十个文件时全部展开，
+ * 首屏就成了几屏代码，真正的改动分布反而看不见。预算之内的源码文件默认展开
+ * （第一个无论如何都展开——全折叠的面板看起来像空的），测试/文档/生成物保持折叠。
+ */
+function CommitDiff({ files, busy, wrap }: CommitDiffProps) {
+  const t = useT();
+  const [expanded, setExpanded] = useState<Set<number>>(() => defaultExpandedFiles(files));
+  useEffect(() => {
+    setExpanded(defaultExpandedFiles(files));
+  }, [files]);
+
+  if (files.length === 0) {
+    return <p className="px-3 py-3 text-[11.5px] text-faint">{t("这次提交没有文本差异（可能是空提交或只有二进制文件）。", "No textual diff (empty commit or binary files only).")}</p>;
+  }
+
+  return (
+    <div className="py-1">
+      {files.map((file, index) => {
+        const open = expanded.has(index);
+        return (
+          <section key={`${file.path}:${index}`} className="border-b border-line/60 last:border-b-0">
+            <button
+              type="button"
+              aria-expanded={open}
+              onClick={() =>
+                setExpanded((current) => {
+                  const next = new Set(current);
+                  if (next.has(index)) next.delete(index);
+                  else next.add(index);
+                  return next;
+                })
+              }
+              className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left hover:bg-black/[0.035]"
+            >
+              <IconChevronRight size={13} className={`shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`} />
+              <FileIcon name={file.path || "file"} size={13} className="shrink-0" />
+              <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-2" title={file.path}>
+                {file.path || t("（未知文件）", "(unknown file)")}
+                {file.oldPath && <span className="text-faint"> ← {file.oldPath}</span>}
+              </span>
+              {file.tag && (
+                <span className="shrink-0 rounded-full bg-panel-strong px-1.5 text-[9.5px] text-muted">
+                  {file.tag === "added" ? t("新增", "added") : file.tag === "deleted" ? t("删除", "deleted") : file.tag === "renamed" ? t("改名", "renamed") : t("二进制", "binary")}
+                </span>
+              )}
+              <span className="shrink-0 font-mono text-[10px]">
+                <LineCounts counts={{ additions: file.added, deletions: file.removed }} />
+              </span>
+            </button>
+            {open && <DiffBody lines={file.lines} busy={busy} wrap={wrap} />}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+/** 源码文件：默认展开的那一类（其余测试 / 文档 / 构建产物默认折叠）。 */
+const SOURCE_PATH = /\.(?:js|jsx|mjs|cjs|ts|tsx|mts|cts|py|rb|php|java|kt|kts|scala|go|rs|swift|c|h|cc|cpp|cxx|hpp|cs|dart|lua|r|ex|exs|erl|clj|sh|bash|zsh|fish|sql|vue|svelte|astro|html|htm|css|scss|sass|less|json|yaml|yml|toml)$/i;
+const TEST_PATH = /(^|\/)(?:__tests__|tests?|specs?|fixtures?|mocks?|snapshots?)(?:\/|$)|\.(?:test|spec)\.[^/]+$/i;
+const DOC_PATH = /(^|\/)(?:docs?|documentation)(?:\/|$)|(^|\/)(?:readme|changelog|contributing|license|authors|notice)(\.[^/]*)?$/i;
+const GENERATED_PATH = /(^|\/)(?:dist|build|coverage|generated|vendor|node_modules)(?:\/|$)|(^|\/)(?:package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|composer\.lock|cargo\.lock|poetry\.lock)$/i;
+
+/**
+ * 默认展开哪些文件：源码文件展开，但总量不超过 `DEFAULT_EXPANDED_LINE_BUDGET` 行。
+ *
+ * 第一个源码文件无论如何都展开——全折叠的面板看起来像「这次提交没有改动」。
+ * 预算用完之后的文件仍然显示在列表里（带增删行数），点一下就能看：
+ * 一次提交动了二十个源文件时，全部展开等于首屏塞进几屏代码，反而看不出改了哪些地方。
+ */
+const DEFAULT_EXPANDED_LINE_BUDGET = 2000;
+
+function defaultExpandedFiles(files: readonly DiffFile[]): Set<number> {
+  const expanded = new Set<number>();
+  let budget = 0;
+  files.forEach((file, index) => {
+    if (file.lines.length === 0) return;
+    const path = file.path;
+    const isSource = !file.tag || file.tag === "renamed";
+    if (!isSource || TEST_PATH.test(path) || DOC_PATH.test(path) || GENERATED_PATH.test(path) || !SOURCE_PATH.test(path)) return;
+    if (expanded.size > 0 && budget + file.lines.length > DEFAULT_EXPANDED_LINE_BUDGET) return;
+    expanded.add(index);
+    budget += file.lines.length;
+  });
+  return expanded;
 }

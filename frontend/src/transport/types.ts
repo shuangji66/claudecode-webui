@@ -596,6 +596,15 @@ export interface GitLogEntry {
   refs: string;
 }
 
+/** 一次提交的详情：元数据 + 补丁（`GET /api/git/show`）。 */
+export interface GitCommit extends GitLogEntry {
+  /** 完整正文（`%B`，首行就是 subject）。 */
+  message: string;
+  author_email?: string;
+  /** 补丁文本；界面按文件切段渲染。 */
+  diff: string;
+}
+
 export interface GitBranches {
   current: string;
   names: string[];

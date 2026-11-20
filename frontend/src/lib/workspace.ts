@@ -117,11 +117,62 @@ export interface DiffLine {
 
 /** 解析 unified diff 文本（`git diff -U3` 的输出）。 */
 export function parseUnifiedDiff(text: string): DiffLine[] {
-  const out: DiffLine[] = [];
+  return parseDiffFiles(text).flatMap((file) => file.lines);
+}
+
+/** 补丁里的一个文件段（`diff --git` 到下一段之前）。 */
+export interface DiffFile {
+  /** 新侧路径（删除的文件取旧侧）；这是标题与折叠块的键。 */
+  path: string;
+  /** git 改过名时才是旧的路径。 */
+  oldPath?: string;
+  /** 新增 / 删除 / 改名 / 二进制之类的徽标；普通修改为 undefined。 */
+  tag?: "added" | "deleted" | "renamed" | "binary";
+  /** 这一段里的行（含 hunk 头与 meta）。 */
+  lines: DiffLine[];
+  added: number;
+  removed: number;
+}
+
+/**
+ * 按文件切分 unified diff。**提交详情的差异页必须按文件分组**：
+ * 一次提交动几十个文件时，平铺成一整条消息流既没处收起、也看不出改了哪些文件。
+ *
+ * 解析与 `parseUnifiedDiff` 是同一套行规则，区别只在「遇到 `diff --git` 就开新段」。
+ * 没有 `diff --git` 头时（未跟踪文件的伪 diff、单文件片段）整篇算一个文件，
+ * 路径留空由调用方给——总比丢掉不显示强。
+ */
+export function parseDiffFiles(text: string): DiffFile[] {
+  const files: DiffFile[] = [];
   let oldNo = 0;
   let newNo = 0;
   let inHunk = false;
+  let current: DiffFile | null = null;
+
+  const start = (): DiffFile => {
+    const file: DiffFile = { path: "", lines: [], added: 0, removed: 0 };
+    files.push(file);
+    return file;
+  };
+
   for (const raw of text.split("\n")) {
+    if (raw.startsWith("diff --git ")) {
+      inHunk = false;
+      current = start();
+      current.lines.push({ kind: "meta", text: raw });
+      const rest = raw.slice("diff --git ".length);
+      const split = splitGitHeaderPaths(rest);
+      if (split) {
+        current.oldPath = split.old;
+        current.path = stripDiffPrefix(split.new);
+      }
+      continue;
+    }
+    if (current === null) {
+      // 前面没有 `diff --git`：整篇当一个文件，别把这些行扔掉。
+      if (raw === "") continue;
+      current = start();
+    }
     if (raw.startsWith("@@")) {
       const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
       if (m) {
@@ -129,55 +180,162 @@ export function parseUnifiedDiff(text: string): DiffLine[] {
         newNo = Number(m[2]);
       }
       inHunk = true;
-      out.push({ kind: "hunk", text: raw });
-      continue;
-    }
-    if (raw.startsWith("diff --git ")) {
-      inHunk = false;
-      out.push({ kind: "meta", text: raw });
+      current.lines.push({ kind: "hunk", text: raw });
       continue;
     }
     // `---` / `+++` 只在 hunk 外是文件头；hunk 内它们是内容行（例如新增一行 `++ foo`
     // 在 diff 里就是 `+++ foo`），不能无条件当 meta。
-    if (!inHunk && (raw.startsWith("index ") || raw.startsWith("--- ") || raw.startsWith("+++ "))) {
-      out.push({ kind: "meta", text: raw });
+    if (!inHunk && (raw.startsWith("--- ") || raw.startsWith("+++ "))) {
+      current.lines.push({ kind: "meta", text: raw });
+      // 新侧路径以 `+++` 为准（改名的旧名只出现在 `---`）。
+      if (raw.startsWith("+++ ")) {
+        const path = stripDiffPrefix(headerPath(raw.slice(4)));
+        if (path && path !== "/dev/null") current.path = path;
+      } else {
+        const path = stripDiffPrefix(headerPath(raw.slice(4)));
+        if (path && path !== "/dev/null" && !current.oldPath) current.oldPath = path;
+      }
+      continue;
+    }
+    if (!inHunk && raw.startsWith("rename from ")) {
+      current.oldPath = headerPath(raw.slice("rename from ".length));
+      current.tag = "renamed";
+      current.lines.push({ kind: "meta", text: raw });
+      continue;
+    }
+    if (!inHunk && raw.startsWith("rename to ")) {
+      current.path = headerPath(raw.slice("rename to ".length));
+      current.lines.push({ kind: "meta", text: raw });
+      continue;
+    }
+    if (raw.startsWith("Binary files ") || raw === "GIT binary patch") {
+      inHunk = false;
+      current.tag = "binary";
+      current.lines.push({ kind: "meta", text: raw });
+      continue;
+    }
+    if (!inHunk && raw.startsWith("new file mode ")) current.tag = "added";
+    if (!inHunk && raw.startsWith("deleted file mode ")) current.tag = "deleted";
+    if (!inHunk && (raw.startsWith("index ") || raw.startsWith("new file mode ") || raw.startsWith("deleted file mode ") ||
+        raw.startsWith("similarity index ") || raw.startsWith("old mode ") || raw.startsWith("new mode "))) {
+      current.lines.push({ kind: "meta", text: raw });
       continue;
     }
     if (raw.startsWith("\\ No newline")) {
-      out.push({ kind: "meta", text: raw });
-      continue;
-    }
-    if (raw.startsWith("new file mode ") || raw.startsWith("deleted file mode ") || raw.startsWith("similarity index ") ||
-        raw.startsWith("rename from ") || raw.startsWith("rename to ") || raw.startsWith("old mode ") || raw.startsWith("new mode ")) {
-      out.push({ kind: "meta", text: raw });
+      current.lines.push({ kind: "meta", text: raw });
       continue;
     }
     if (inHunk) {
       if (raw.startsWith("+")) {
-        out.push({ kind: "add", text: raw.slice(1), newNo });
+        current.lines.push({ kind: "add", text: raw.slice(1), newNo });
+        current.added += 1;
         newNo += 1;
       } else if (raw.startsWith("-")) {
-        out.push({ kind: "del", text: raw.slice(1), oldNo });
+        current.lines.push({ kind: "del", text: raw.slice(1), oldNo });
+        current.removed += 1;
         oldNo += 1;
       } else if (raw.startsWith(" ")) {
-        out.push({ kind: "ctx", text: raw.slice(1), oldNo, newNo });
+        current.lines.push({ kind: "ctx", text: raw.slice(1), oldNo, newNo });
         oldNo += 1;
         newNo += 1;
       } else if (raw === "") {
         // diff 末尾的空行不是内容。
       } else {
-        out.push({ kind: "ctx", text: raw, oldNo, newNo });
+        current.lines.push({ kind: "ctx", text: raw, oldNo, newNo });
         oldNo += 1;
         newNo += 1;
       }
       continue;
     }
     // 未跟踪文件的伪 diff 没有 hunk，整篇都是新增行。
-    if (raw.startsWith("+")) out.push({ kind: "add", text: raw.slice(1) });
-    else if (raw !== "") out.push({ kind: "meta", text: raw });
+    if (raw.startsWith("+")) {
+      current.lines.push({ kind: "add", text: raw.slice(1) });
+      current.added += 1;
+    } else if (raw !== "") {
+      current.lines.push({ kind: "meta", text: raw });
+    }
   }
-  return out;
+  // 删除的文件没有 `+++`：用 `---` 那一侧的名字，否则标题是空的。
+  for (const file of files) {
+    if (!file.path && file.oldPath) file.path = file.oldPath;
+    if (file.oldPath === file.path) file.oldPath = undefined;
+  }
+  return files;
 }
+
+/** `--- a/x` / `+++ b/x` 后面的值：git 在路径含空格时补一个 TAB。 */
+function headerPath(raw: string): string {
+  return decodeGitPath(raw.endsWith("\t") ? raw.slice(0, -1) : raw);
+}
+
+/** 去掉 `a/` / `b/` 前缀（`/dev/null` 原样保留）。 */
+function stripDiffPrefix(path: string): string {
+  if (path.startsWith("a/") || path.startsWith("b/")) return path.slice(2);
+  return path;
+}
+
+/**
+ * 拆 `diff --git a/x b/x` 的两侧路径。
+ *
+ * 路径里可以有空格，所以从**每一个** ` b/` 处试切，取「两侧同名」的那一刀
+ * （git 在两边都写同一个路径，改名时才是两个不同的名字）。
+ * 中文路径由 `-c core.quotePath=false` 保证不被 C 引用，但仍兼容引号形式。
+ */
+function splitGitHeaderPaths(rest: string): { old: string; new: string } | null {
+  if (rest.startsWith('"')) {
+    const quoted = /^("(?:[^"\\]|\\.)*") ("(?:[^"\\]|\\.)*")$/.exec(rest);
+    if (quoted) return { old: decodeGitPath(quoted[1]!), new: decodeGitPath(quoted[2]!) };
+    return null;
+  }
+  for (let at = rest.indexOf(" b/"); at !== -1; at = rest.indexOf(" b/", at + 1)) {
+    const oldPath = rest.slice(0, at);
+    const newPath = rest.slice(at + 1);
+    if (oldPath.startsWith("a/") && newPath.startsWith("b/") && oldPath.slice(2) === newPath.slice(2)) {
+      return { old: oldPath.slice(2), new: newPath.slice(2) };
+    }
+  }
+  // 改名时两侧不同名：只能按最后一个 ` b/` 切（左侧一定叫 a/…）。
+  const at = rest.lastIndexOf(" b/");
+  if (at === -1) return null;
+  const oldPath = rest.slice(0, at);
+  const newPath = rest.slice(at + 1);
+  if (!oldPath.startsWith("a/") || !newPath.startsWith("b/")) return null;
+  return { old: oldPath.slice(2), new: newPath.slice(2) };
+}
+
+/** 还原 git 的 C 引用路径（`"\346\226\207.md"` → `文.md`）。非引用形式原样返回。 */
+export function decodeGitPath(raw: string): string {
+  if (raw.length < 2 || !raw.startsWith('"') || !raw.endsWith('"')) return raw;
+  const body = raw.slice(1, -1);
+  const bytes: number[] = [];
+  // 逐字符走：C 转义是字节语义，多字节字符按 UTF-8 编码后逐个 push。
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const escapes: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+  for (let i = 0; i < body.length; i += 1) {
+    const char = body[i]!;
+    if (char !== "\\") {
+      for (const byte of encoder.encode(char)) bytes.push(byte);
+      continue;
+    }
+    const next = body[i + 1];
+    const simple = next === undefined ? undefined : escapes[next];
+    if (simple !== undefined) {
+      bytes.push(simple);
+      i += 1;
+      continue;
+    }
+    const octal = /^[0-7]{1,3}/.exec(body.slice(i + 1));
+    if (octal) {
+      bytes.push(Number.parseInt(octal[0], 8));
+      i += octal[0].length;
+      continue;
+    }
+    for (const byte of encoder.encode(char)) bytes.push(byte);
+  }
+  return decoder.decode(new Uint8Array(bytes));
+}
+
 
 /** 统计 diff 的增删行数（只数 add/del）。 */
 export function diffStat(lines: readonly DiffLine[]): { added: number; removed: number } {

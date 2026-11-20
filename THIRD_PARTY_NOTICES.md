@@ -9,7 +9,10 @@
 - 许可证：MIT
 - 使用方式：右侧栏 Git 面板的交互与命令安全规则参考了该项目；`backend/internal/gitctl/gitctl.go`
   与 `frontend/src/lib/workspace.ts` 是基于其 `src/git.ts`、`src/client/ui/git-status.ts`、
-  `src/client/changes/*` 思路的 Go / TypeScript 重写，未直接嵌入其构建产物。
+  `src/client/changes/*` 思路的 Go / TypeScript 重写，未直接嵌入其构建产物。提交详情的
+  「详情 / 差异」分页（`changes/CommitDetails.tsx`）与按文件折叠的差异列表
+  （`diff/DiffFiles.tsx`、`diff/rows.ts` 的 `parseUnifiedDiff` / `displayPath`）同样是
+  按思路重写（`GitPanel.CommitView`、`lib/workspace.parseDiffFiles`），未复制其代码。
 
 ```text
 MIT License

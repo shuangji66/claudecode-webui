@@ -78,6 +78,24 @@ type LogEntry struct {
 	Refs     string   `json:"refs"`
 }
 
+// CommitDetail 是一次提交的详情：元数据 + 补丁。
+//
+// 元数据与补丁在界面上分两页（提交详情 / 差异），所以一次请求一起给：
+// 只有补丁时，详情页要么再发一次请求、要么只能显示列表里那几行（没有正文、
+// 没有完整 hash、没有父提交）。
+type CommitDetail struct {
+	Hash        string   `json:"hash"`
+	HashFull    string   `json:"hash_full"`
+	Subject     string   `json:"subject"`
+	Message     string   `json:"message"`
+	Author      string   `json:"author"`
+	AuthorEmail string   `json:"author_email,omitempty"`
+	Date        string   `json:"date"`
+	Parents     []string `json:"parents"`
+	Refs        string   `json:"refs"`
+	Diff        string   `json:"diff"`
+}
+
 // BranchList 是本地分支清单。
 type BranchList struct {
 	Current string   `json:"current"`
@@ -164,17 +182,59 @@ func Diff(ctx context.Context, cwd, path string, staged bool) (string, error) {
 	return run(ctx, root, args...)
 }
 
-// Show 返回一次提交的补丁（合并提交取第一父）。
-func Show(ctx context.Context, cwd, hash string) (string, error) {
+// CommitDetails 返回一次提交的元数据与补丁（合并提交取第一父）。
+//
+// 两条命令分别跑：补丁那次必须带 `--format=`，否则提交信息会混进 diff 文本，
+// 前端按 `diff --git` 切文件时它就变成一段无法归属的头部；而带 `--format=`
+// 之后就取不到元数据了，所以元数据单独用 `show -s` 读一次。
+func CommitDetails(ctx context.Context, cwd, hash string) (CommitDetail, error) {
 	root, err := repoRoot(ctx, cwd)
 	if err != nil {
-		return "", err
+		return CommitDetail{}, err
 	}
+	hash, err = cleanHash(hash)
+	if err != nil {
+		return CommitDetail{}, err
+	}
+	meta, err := run(ctx, root, "show", "-s",
+		"--format=%H%x1f%h%x1f%s%x1f%an%x1f%ae%x1f%ai%x1f%D%x1f%P%x1f%B",
+		"--end-of-options", hash)
+	if err != nil {
+		return CommitDetail{}, err
+	}
+	fields := strings.SplitN(strings.TrimSuffix(meta, "\n"), "\x1f", 9)
+	if len(fields) < 9 {
+		return CommitDetail{}, errors.New("git: 无法解析提交信息")
+	}
+	diff, err := run(ctx, root, "show", "--no-ext-diff", "--no-color", "--format=", "-m", "--first-parent", "--end-of-options", hash)
+	if err != nil {
+		return CommitDetail{}, err
+	}
+	parents := []string{}
+	if strings.TrimSpace(fields[7]) != "" {
+		parents = strings.Fields(fields[7])
+	}
+	return CommitDetail{
+		Hash:        fields[1],
+		HashFull:    fields[0],
+		Subject:     fields[2],
+		Author:      fields[3],
+		AuthorEmail: fields[4],
+		Date:        fields[5],
+		Refs:        fields[6],
+		Parents:     parents,
+		Message:     strings.TrimRight(fields[8], "\n"),
+		Diff:        diff,
+	}, nil
+}
+
+// cleanHash 校验并规整提交 ID。
+func cleanHash(hash string) (string, error) {
 	hash = strings.TrimSpace(hash)
 	if !validHash(hash) {
 		return "", errors.New("git: 非法的提交 ID")
 	}
-	return run(ctx, root, "show", "--no-ext-diff", "--no-color", "--format=", "-m", "--first-parent", "--end-of-options", hash)
+	return hash, nil
 }
 
 // Log 返回最近的提交；count 默认 30，最多 100。
