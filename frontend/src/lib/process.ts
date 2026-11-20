@@ -188,8 +188,17 @@ export function dominantCategory(items: Item[]): ToolCategory {
 
 /** 组里正在跑的工具（组头在「标准」模式要显示它的摘要）。 */
 export function runningTool(items: Item[]): ToolItem | undefined {
+  // **只看本回合**（最后一条 result 之后）：一轮被中断时，它的工具永远等不到
+  // tool_result，`result` 就一直是 undefined。不划边界的话，从那一刻起每一轮都会
+  // 被判成「有工具在跑」——组头一直显示一个早就不会返回的命令，而 ChatPane 用
+  // 这个判定来决定要不要提示「上游多久没出声」，于是沉默提示也永久失效（实测
+  // 中断过一个 Bash 之后，后面所有会话的沉默提示都不再出现）。
+  //
+  // 中断前那些工具卡片本身照旧显示（它们确实没返回，那是事实），这里只回答
+  // 「现在还有东西在跑吗」。
   for (let i = items.length - 1; i >= 0; i -= 1) {
     const item = items[i];
+    if (item.kind === "result") return undefined;
     if (item.kind === "tool" && item.result === undefined) return item;
   }
   return undefined;

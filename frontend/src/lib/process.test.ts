@@ -141,6 +141,27 @@ describe("组头详情与推理预览", () => {
     expect(runningTool([tool("a", "Read")])?.name).toBe("Read");
     expect(runningTool([tool("a", "Read", "done")])).toBeUndefined();
   });
+
+  // 一轮被中断时它的工具永远等不到 tool_result，`result` 一直是 undefined。
+  // 不按回合划边界的话，从那一刻起每一轮都会被判成「有工具在跑」——组头一直
+  // 显示那个早就不回来的命令，ChatPane 的沉默提示（runningTool 决定要不要看）
+  // 也永久失效。
+  it("上一轮遗留的未完成工具不算「正在跑」", () => {
+    const stale: Item[] = [
+      { id: "u1", seq: 0, ts: 1, kind: "user", text: "跑个长命令" },
+      tool("t1", "Bash"),
+      { id: "r1", seq: 2, ts: 3, kind: "result", isError: true, subtype: "interrupt" },
+    ];
+    expect(runningTool(stale)).toBeUndefined();
+
+    // 同一轮的下一轮里真有工具在跑时照样认得出。
+    const fresh: Item[] = [
+      ...stale,
+      { id: "u2", seq: 3, ts: 4, kind: "user", text: "下一轮" },
+      tool("t2", "Read"),
+    ];
+    expect(runningTool(fresh)?.toolUseId).toBe("t2");
+  });
 });
 
 describe("hiddenReplyIds（仅最终回答）", () => {
