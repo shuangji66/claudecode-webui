@@ -330,6 +330,13 @@ pre {
   .chat-code {
     font-size: var(--code-font-size);
   }
+
+  /* 流式摘要「跟着最新内容走」：内容贴右、左侧溢出被裁掉（`Collapsible` 的
+     `summaryTail`）。左缘给一段渐隐，否则一个字母拦腰截断看着像渲染坏了。 */
+  .summary-tail {
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 14px);
+    mask-image: linear-gradient(to right, transparent 0, #000 14px);
+  }
 }
 
 /* 消息进入时轻微上浮，避免流式内容闪跳。 */

@@ -839,6 +839,14 @@ src/
     会把「思考过程」这个标题挤成 0 宽、并把整行撑出容器；组正文的 `overflow-y-auto`
     还会顺带把 x 轴变成滚动容器，于是出现一条横向滚动条。组正文的横向裁剪见下一条的
     `overflow-x-clip`。
+  - **流式思考的摘要要跟着最新内容走**（`Collapsible` 的 `summaryTail`）：已结束的块取
+    首行（那是这段思考的标题，读开头）；`streaming` 时取最后一行、只留尾部
+    `SUMMARY_TAIL_CHARS` 个字符，`SummaryTail` 把 `scrollLeft` 钉在 `scrollWidth`
+    （贴末尾、开头溢出被裁掉，左缘 `.summary-tail` 的 mask 渐隐只在真的溢出时加）。
+    一直取首行的话，模型写完第一句这一行就不动了——看起来就是「滚到左边尽头就卡住」，
+    后面想了什么一个字都看不到。**别指望 `justify-end` 或 `flex-row-reverse`**：
+    flex 溢出的是主轴末端，LTR 下会从右边溢出去，正好裁掉最新的那几个字。也**不要改成
+    横向 marquee/循环动画**：前端规范只允许 StateDot 的进度环是循环动画。
   - 组正文限高只在 `md` 以上生效（`md:max-h-[min(400px,50vh)]`）：手机上「页面里再套一个
     滚动区」很难摸到边界，展开的组直接跟页面一起滚；详细模式运行中不限高，卡片完整铺开。
     横向用 `overflow-x-clip` 而不是 `overflow-x-hidden`——后者会把元素变成滚动容器

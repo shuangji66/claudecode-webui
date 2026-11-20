@@ -20,4 +20,19 @@ describe("ThinkingBlock", () => {
     const { container } = render(<ThinkingBlock text="" streaming />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  // 首行是思考的开头，写完第一句就不动了。流式时沿用它的话，那一行截断之后就停在
+  // 原地，后面想了什么一个字都看不到（截图里的「滚到左边尽头就停住」）。
+  it("流式中摘要跟着最新一行走，已结束仍取首行", () => {
+    const text = "先看布局\n再改样式\n最后补测试";
+    const { rerender } = render(<ThinkingBlock text={text} streaming />);
+    expect(screen.getByText("正在思考")).toBeInTheDocument();
+    expect(screen.getByText("最后补测试")).toBeInTheDocument();
+    expect(screen.queryByText("先看布局")).toBeNull();
+
+    rerender(<ThinkingBlock text={text} />);
+    expect(screen.getByText("思考过程")).toBeInTheDocument();
+    expect(screen.getByText("先看布局")).toBeInTheDocument();
+    expect(screen.queryByText("最后补测试")).toBeNull();
+  });
 });
