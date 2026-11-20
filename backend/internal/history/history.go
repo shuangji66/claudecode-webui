@@ -382,7 +382,12 @@ func LoadTranscript(projectsDir, id string) (Transcript, error) {
 	return tr, nil
 }
 
-// subagentStates 读 <project>/<session>/subagents/*.meta.json 里的收尾状态。
+// subagentStates 读 <project>/<session>/subagents/ 下每个子代理的收尾状态。
+//
+// 以**转录文件**为准枚举（`agent-<id>.jsonl`），meta.json 只用来补 tool_use_id /
+// 描述 / `finished`。只按 meta 枚举会漏掉没写出 meta 的那些：meta 是 claude 收尾时
+// 才补全的，进程被杀、会话被回收、TaskStop 打断都可能只留下 jsonl——它们恰恰是最
+// 需要「已结束」判定的（前端本来还挂在 running 上）。
 //
 // best-effort：目录不存在、单个文件坏掉都只跳过那一条，不能让整份转录读不出来。
 func subagentStates(projectDir, sessionID string) []SubagentState {
@@ -392,28 +397,27 @@ func subagentStates(projectDir, sessionID string) []SubagentState {
 		return nil
 	}
 	out := make([]SubagentState, 0, len(entries))
+	seen := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, "agent-") || !strings.HasSuffix(name, ".meta.json") {
+		if e.IsDir() || !strings.HasPrefix(name, "agent-") || !strings.HasSuffix(name, ".jsonl") {
 			continue
 		}
-		agentID := strings.TrimSuffix(strings.TrimPrefix(name, "agent-"), ".meta.json")
-		if !validAgentID(agentID) {
+		agentID := strings.TrimSuffix(strings.TrimPrefix(name, "agent-"), ".jsonl")
+		if !validAgentID(agentID) || seen[agentID] {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			continue
-		}
+		seen[agentID] = true
 		var m SubagentMeta
-		if json.Unmarshal(b, &m) != nil {
-			continue
+		// meta 可能不存在或写了一半：读不到时结构体是零值，仍按转录判收尾。
+		if b, err := os.ReadFile(filepath.Join(dir, "agent-"+agentID+".meta.json")); err == nil {
+			_ = json.Unmarshal(b, &m)
 		}
 		out = append(out, SubagentState{
 			AgentID:     agentID,
 			ToolUseID:   m.ToolUseID,
 			Description: m.Description,
-			Finished:    m.Finished || subagentEnded(filepath.Join(dir, "agent-"+agentID+".jsonl")),
+			Finished:    m.Finished || subagentEnded(filepath.Join(dir, name)),
 		})
 	}
 	return out

@@ -244,6 +244,50 @@ func TestLoadTranscriptIncludesSubagentStates(t *testing.T) {
 	}
 }
 
+// 枚举以**转录文件**为准，不能只看 meta.json：meta 是 claude 收尾时才补全的，
+// 进程被杀 / 会话被回收 / TaskStop 打断时可能只留下 jsonl——偏偏这些才是需要
+// 「已结束」判定的（前端本来还挂在 running 上转圈）。
+func TestSubagentStatesFromTranscriptWithoutMeta(t *testing.T) {
+	root := t.TempDir()
+	id := "77777777-8888-4999-8aaa-bbbbbbbbbbbb"
+	proj := filepath.Join(root, "p")
+	writeJSONL(t, filepath.Join(proj, id+".jsonl"),
+		`{"type":"user","message":{"role":"user","content":"hi"}}`,
+	)
+	sub := filepath.Join(proj, id, "subagents")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// 只有 jsonl，没有 meta.json：末尾是中断标记。
+	writeJSONL(t, filepath.Join(sub, "agent-nometa.jsonl"),
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"在跑"}],"stop_reason":null}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}`,
+	)
+	// meta 坏掉的那条也要按转录算出来。
+	writeJSONL(t, filepath.Join(sub, "agent-badmeta.jsonl"),
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"做完了"}],"stop_reason":"end_turn"}}`,
+	)
+	writeFile(t, filepath.Join(sub, "agent-badmeta.meta.json"), `{not json`)
+
+	tr, err := LoadTranscript(root, id)
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+	byAgent := map[string]SubagentState{}
+	for _, s := range tr.Subagents {
+		byAgent[s.AgentID] = s
+	}
+	if len(byAgent) != 2 {
+		t.Fatalf("subagents = %+v", tr.Subagents)
+	}
+	if got := byAgent["nometa"]; !got.Finished {
+		t.Fatalf("没有 meta 但转录末尾是中断标记，应判收尾: %+v", got)
+	}
+	if got := byAgent["badmeta"]; !got.Finished {
+		t.Fatalf("meta 坏掉时应回落到转录的 end_turn: %+v", got)
+	}
+}
+
 // 没有 subagents 目录时不该报错（大多数对话都没有子代理）。
 func TestLoadTranscriptWithoutSubagents(t *testing.T) {
 	root := t.TempDir()
