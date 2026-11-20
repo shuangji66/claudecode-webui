@@ -38,6 +38,14 @@ interface SidebarState {
   log: GitLogEntry[];
   logLoading: boolean;
   logError: string;
+  /**
+   * 当前仓库的 log 是否已经取过（空仓库也算取过）。
+   *
+   * **不能用「`log.length === 0`」当「还没加载」**：空仓库（没有任何提交）请求回来
+   * 也是空数组，于是「还没加载 → 请求 → 还是空 → 还没加载」无限循环，面板在空仓库上
+   * 会一直重复打 `/api/git/log`。切仓库时要复位。
+   */
+  logLoaded: boolean;
   actionError: string;
 
   setCwd: (cwd: string) => Promise<void>;
@@ -139,6 +147,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   log: [],
   logLoading: false,
   logError: "",
+  logLoaded: false,
   actionError: "",
   openRequest: null,
 
@@ -173,6 +182,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
       log: [],
       logLoading: false,
       logError: "",
+      logLoaded: false,
       actionError: "",
       openRequest: null,
     });
@@ -201,7 +211,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
 
   selectRepo: async (root) => {
     if (root === get().repo) return;
-    set({ repo: root, git: null, branches: null, log: [], gitError: "", actionError: "" });
+    set({ repo: root, git: null, branches: null, log: [], logLoaded: false, logError: "", gitError: "", actionError: "" });
     await Promise.all([get().refreshGit(), get().loadBranches()]);
     if (get().log.length === 0) await get().loadLog();
   },
@@ -346,11 +356,11 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
         const query = new URLSearchParams({ cwd, count: "30" });
         const payload = await apiFetch<{ entries: GitLogEntry[] }>(`/api/git/log?${query.toString()}`);
         if (at !== epoch || gitCwd(get()) !== cwd) return;
-        set({ log: payload.entries ?? [], logLoading: false, logError: "" });
+        set({ log: payload.entries ?? [], logLoading: false, logError: "", logLoaded: true });
       } catch (reason) {
         if (at !== epoch || gitCwd(get()) !== cwd) return;
         const message = errorText(reason);
-        set({ logLoading: false, logError: message, actionError: message });
+        set({ logLoading: false, logError: message, logLoaded: true, actionError: message });
       } finally {
         if (logInFlight === slot) logInFlight = null;
       }

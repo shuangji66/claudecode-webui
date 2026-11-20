@@ -104,6 +104,7 @@ function seed() {
     gitError: "",
     branches: { current: "master", names: ["master"] },
     log: [],
+    logLoaded: false,
     logError: "",
     actionError: "",
   });
@@ -215,5 +216,35 @@ describe("提交详情与差异分页", () => {
     expect(test).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("new test")).toBeNull();
     expect(screen.getByRole("button", { name: /src\/one\.ts/ })).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
+// 空仓库（一次提交都没有）：历史面板只能请求一次。
+//
+// 原来的守卫是 `log.length === 0 && !logLoading`，而空仓库请求回来也是空数组——
+// 这个 effect 依赖自己写回的结果，于是永远满足条件，`/api/git/log` 被无限重复请求，
+// 面板在空仓库上一直空转。
+describe("GitPanel 空仓库的历史", () => {
+  it("只请求一次 /api/git/log，并显示空状态", async () => {
+    let logCalls = 0;
+    apiFetch.mockImplementation(async (path: string): Promise<unknown> => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname.endsWith("/api/git/status")) return { is_repo: true, branch: "master", entries: [] };
+      if (url.pathname.endsWith("/api/git/branches")) return { current: "master", names: ["master"] };
+      if (url.pathname.endsWith("/api/git/log")) {
+        logCalls += 1;
+        return { entries: [] };
+      }
+      return {};
+    });
+    useSidebarStore.setState({ log: [], logLoaded: false, logError: "" });
+
+    render(<GitPanel cwd={CWD} active />);
+    fireEvent.click(await screen.findByRole("button", { name: /历史/ }));
+
+    // 给「重复请求」足够的时间暴露出来（若循环存在，这几百毫秒里会请求很多次）。
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(logCalls).toBe(1);
+    expect(await screen.findByText("还没有提交。")).toBeInTheDocument();
   });
 });

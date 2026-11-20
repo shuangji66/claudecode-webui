@@ -95,6 +95,7 @@ export function GitPanel({ cwd, active }: Props) {
   const log = useSidebarStore((s) => s.log);
   const logLoading = useSidebarStore((s) => s.logLoading);
   const logError = useSidebarStore((s) => s.logError);
+  const logLoaded = useSidebarStore((s) => s.logLoaded);
   const actionError = useSidebarStore((s) => s.actionError);
   const refreshGit = useSidebarStore((s) => s.refreshGit);
   const loadLog = useSidebarStore((s) => s.loadLog);
@@ -138,9 +139,13 @@ export function GitPanel({ cwd, active }: Props) {
   }, [cwd]);
 
   // 历史按需加载；切到历史页签才请求，避免每次开侧栏都跑一条 git log。
+  //
+  // 守卫用 `logLoaded` 而不是 `log.length === 0`：空仓库（一次提交都没有）请求
+  // 回来也是空数组，拿长度当「还没加载」会让这个 effect 依赖自己写回的结果，
+  // 于是永远满足条件、无限重复请求 `/api/git/log`。
   useEffect(() => {
-    if (active && mode === "history" && log.length === 0 && !logLoading && !logError) void loadLog();
-  }, [active, mode, log.length, logLoading, logError, loadLog]);
+    if (active && mode === "history" && !logLoaded && !logLoading && !logError) void loadLog();
+  }, [active, mode, logLoaded, logLoading, logError, loadLog]);
 
   // 可见时不再自己轮询：让后端盯住这个仓库，变了就推 `git.changed`
   // （系统通道的 git.watch，见 useAppStore.watchGitRepo）。切走标签就退订，
