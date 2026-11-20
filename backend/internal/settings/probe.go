@@ -229,31 +229,6 @@ func doAuth(ctx context.Context, c *http.Client, method, url string, p Provider,
 	return sendRequest(c, req, readLimitModels)
 }
 
-// doAuthSmall 用于错误体等小响应。
-func doAuthSmall(ctx context.Context, c *http.Client, method, url string, p Provider, body []byte) (int, []byte, error) {
-	req, err := newRequest(ctx, method, url, body)
-	if err != nil {
-		return 0, nil, err
-	}
-	if p.APIKey != "" {
-		req.Header.Set("x-api-key", p.APIKey)
-	}
-	if p.AuthToken != "" {
-		req.Header.Set("authorization", "Bearer "+p.AuthToken)
-	}
-	st, b, _, err := sendRequest(c, req, readLimitSmall)
-	return st, b, err
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func snippet(b []byte) string {
 	s := strings.TrimSpace(string(b))
 	s = strings.ReplaceAll(s, "\n", " ")
