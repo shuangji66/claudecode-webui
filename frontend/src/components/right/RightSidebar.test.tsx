@@ -169,6 +169,27 @@ describe("RightSidebar 标签页", () => {
     expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
     expect(screen.queryByText("FILES")).toBeNull();
   });
+
+  // 标签一多就横向溢出。滚动条不画（8px 细条压在 56px 高的标题行下沿），
+  // 所以滚轮必须能滚：纵向滚轮换成 scrollLeft，否则用户只能去拖那条看不见的条。
+  it("标签行不显示滚动条，且纵向滚轮能横向滚", () => {
+    setup();
+    openTerminal();
+    openStart();
+    openTerminal();
+    const strip = screen.getByRole("button", { name: /^bash$/ }).closest(".dsh-scroll-none") as HTMLElement;
+    expect(strip).not.toBeNull();
+    // 不显示滚动条靠的是 dsh-scroll-none（不用 dsh-scroll 那份 8px 细条）。
+    expect(strip.className).not.toContain("dsh-scroll ");
+    Object.defineProperty(strip, "scrollWidth", { value: 600, configurable: true });
+    Object.defineProperty(strip, "clientWidth", { value: 200, configurable: true });
+
+    const event = new WheelEvent("wheel", { deltaY: 40, bubbles: true, cancelable: true });
+    strip.dispatchEvent(event);
+
+    expect(strip.scrollLeft).toBe(40);
+    expect(event.defaultPrevented).toBe(true);
+  });
 });
 
 describe("RightSidebar 停靠与宽度", () => {

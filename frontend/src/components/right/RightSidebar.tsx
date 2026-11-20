@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { useT } from "../../lib/i18n";
+import { useWheelScrollX } from "../../lib/wheelScroll";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { FilesPanel } from "./FilesPanel";
 import { GitPanel } from "./GitPanel";
@@ -142,6 +143,9 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
   const [active, setActive] = useState("");
   const termSeq = useRef(0);
   const drag = useRef<{ startX: number; startWidth: number } | null>(null);
+  // 标签一多就横向溢出：滚动条藏在 `dsh-scroll-none` 后面，靠滚轮/触控板横向滑。
+  const tabStrip = useRef<HTMLDivElement | null>(null);
+  useWheelScrollX(tabStrip);
   const subagentView = useAppStore((s) => s.subagentView);
   const activeSession = useAppStore((s) => s.activeId);
   const handledSubagent = useRef(0);
@@ -376,7 +380,14 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
         />
 
         <div className="flex h-14 shrink-0 items-center gap-1 border-b border-line px-1.5">
-          <div className="dsh-scroll flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+          {/* 标签行。滚动条不画（`dsh-scroll-none`）：8px 的细条压在标签下沿，既挡标题
+              又会被误认成这一行的边框，而侧栏顶部宽高只有 56px，没地方给它。
+              `overscroll-x-contain`：滚动条看不见之后，触控板滑到两端时别把「横向越界」
+              传给浏览器（Chrome 会当成前进/后退手势，直接把应用页面换掉）。 */}
+          <div
+            ref={tabStrip}
+            className="dsh-scroll-none flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overscroll-x-contain"
+          >
             {active === "" && <span className="shrink-0 px-1.5 text-[12.5px] font-medium text-ink">{t("开始", "Start")}</span>}
             {tabs.map((tab) => {
               const Icon = KIND_ICON[tab.kind];
