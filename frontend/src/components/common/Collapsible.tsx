@@ -117,7 +117,7 @@ export function Collapsible({
 
   return (
     <div className={`overflow-hidden rounded-xl border border-line ${tone === "muted" ? "bg-panel/60" : "bg-canvas"}`}>
-      <div className="flex items-center gap-1.5 pr-3">
+      <div className="flex items-center gap-1.5">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
@@ -129,7 +129,12 @@ export function Collapsible({
           <span className="shrink-0 truncate">{title}</span>
           {summaryCell("text-[10px]")}
         </button>
-        {actions && <span className="shrink-0">{actions}</span>}
+        {/*
+          右内边距只跟着动作走：没有 actions 时（工具卡片、思考块这些）按钮自己带
+          `px-3`，整行悬停高亮才铺满到右边缘；无条件加 `pr-3` 会让那一整批折叠块
+          右侧凭空多出 12px，悬停色也提前断在离边 12px 的地方。
+        */}
+        {actions && <span className="shrink-0 pr-3">{actions}</span>}
       </div>
       {open && <div className="border-t border-line px-3 py-2.5">{children}</div>}
     </div>
