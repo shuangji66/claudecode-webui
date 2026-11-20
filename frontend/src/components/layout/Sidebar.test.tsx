@@ -300,6 +300,43 @@ describe("Sidebar 会话行的管理入口", () => {
     expect(pinConversation).toHaveBeenCalledWith("c-menu", true);
   });
 
+  // 同一颗图标承载两种语义（已归档是「取消归档」、未归档是「归档」），只靠 tooltip
+  // 分不出来。已归档那一档用主题色，未归档保持灰色——两处（本侧栏与历史记录页）一致。
+  it("「取消归档」用主题色，「归档」仍是灰色", () => {
+    // 侧栏默认「隐藏已归档」，先切成全部可见，否则这一行根本不在列表里。
+    localStorage.setItem("ccweb-sidebar-view", JSON.stringify({ group: "workspace", sort: "recent", archive: "all" }));
+    useAppStore.setState({
+      conversations: [
+        {
+          id: "c-menu",
+          cwd: "/w/demo",
+          title: "会话甲",
+          created_at: "",
+          last_active: "2026-01-02T00:00:00Z",
+          messages: 2,
+          archived: true,
+          live: false,
+        },
+      ],
+    });
+    renderSidebar();
+
+    const unarchive = screen.getByRole("button", { name: "取消归档 会话甲" });
+    expect(unarchive.className).toContain("text-brand");
+    expect(unarchive.className).toContain("hover:bg-brand/10");
+    expect(unarchive.className).not.toContain("text-muted");
+
+    // 回到未归档那一档：同一颗按钮换回灰色。
+    act(() => {
+      useAppStore.setState({
+        conversations: [{ id: "c-menu", cwd: "/w/demo", title: "会话甲", created_at: "", last_active: "2026-01-02T00:00:00Z", messages: 2, archived: false, live: false }],
+      });
+    });
+    const archive = screen.getByRole("button", { name: "归档 会话甲" });
+    expect(archive.className).toContain("text-muted");
+    expect(archive.className).not.toContain("text-brand");
+  });
+
   // 「复制 Session ID」暂时下线（SHOW_COPY_SESSION_ID=false）：实现与「复制到剪贴板」的
   // 失败回落都还在，只是不在菜单里露出来。恢复时把开关改回 true，并把这个断言反过来。
   it("复制 Session ID 已下线，菜单里不出现", () => {

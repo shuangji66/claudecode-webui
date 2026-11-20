@@ -516,7 +516,9 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             type="button"
             onClick={() => void archiveConversation(c.id, !c.archived)}
             // 已归档的行这颗是「取消归档」，用主题色与灰色的「归档」区分（与历史记录页一致）。
-            className={`hidden rounded-md p-1 transition hover:bg-black/5 md:inline-flex ${c.archived ? "text-brand" : "text-muted hover:text-ink"}`}
+            className={`hidden rounded-md p-1 transition md:inline-flex ${
+              c.archived ? "text-brand hover:bg-brand/10" : "text-muted hover:bg-black/5 hover:text-ink"
+            }`}
             aria-label={`${c.archived ? t("取消归档", "Unarchive") : t("归档", "Archive")} ${titleOf(c)}`}
             title={c.archived ? t("取消归档", "Unarchive") : t("归档", "Archive")}
           >
