@@ -487,6 +487,9 @@ func (m *Manager) createWith(abs, sessionID, resumeID, model, permissionMode str
 		Fork:                   fork,
 		IncludePartialMessages: true,
 		ForwardSubagentText:    m.supportsFlag(bin, "--forward-subagent-text"),
+		// hook 的生命周期帧：不带的话 hook 失败的原因（只在 stderr 里）与「hook 正在跑」
+		// 这条状态都拿不到，界面会把 hook 的几十秒误报成「上游没有响应」。
+		IncludeHookEvents: m.supportsFlag(bin, "--include-hook-events"),
 		// 「跳过权限」要在会话里切得动，启动时就得带上这个能力开关；
 		// 它不会让会话以 bypass 启动（实测带 + --permission-mode default 时首轮照常审批）。
 		AllowBypassPermissions: m.supportsFlag(bin, "--allow-dangerously-skip-permissions"),

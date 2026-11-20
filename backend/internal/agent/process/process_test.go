@@ -189,6 +189,18 @@ func TestArgsForwardSubagentText(t *testing.T) {
 	}
 }
 
+// hook 生命周期帧同样是能力开关（老版本不认识这个参数会直接起不来）。
+// 不带它时 CLI 一条 hook 帧都不发：hook 失败的原因只在 stderr 里，界面看不到；
+// 「hook 正在跑」也没有依据，那段本地耗时会被误报成「上游没有响应」。
+func TestArgsIncludeHookEvents(t *testing.T) {
+	if slices.Contains(Args(Options{IncludePartialMessages: true}), "--include-hook-events") {
+		t.Fatal("未开启时不应带 --include-hook-events")
+	}
+	if !slices.Contains(Args(Options{IncludeHookEvents: true}), "--include-hook-events") {
+		t.Fatal("开启时应带 --include-hook-events")
+	}
+}
+
 // 内置搜索注册后，会话靠这两个参数把内置 WebSearch/WebFetch 挡掉、把自己的
 // MCP 搜索工具放行。名字要原样到模型眼前，别被拼成别的形状。
 func TestArgsToolRules(t *testing.T) {

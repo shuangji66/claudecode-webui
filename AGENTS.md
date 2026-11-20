@@ -570,6 +570,12 @@ hub ── manager ── session ── process ── claude (NDJSON)
     两句话一直叠在那里。**「进行中」的提示都得配一个收尾**，别只做去重。
   - `hook_response`（只报非 success）/ `stop_hook_summary`（`hookErrors` 非空）：
     这是用户唯一能看见「我这个 hook 挂了」的地方，输出在 `output`/`stdout`/`stderr` 里。
+    **前提是启动时带了 `--include-hook-events`**（`process.Args` 按 `supportsFlag`
+    探测后加）：实测 2.1.329 同一个 hook 配置，带参数能收到
+    `hook_started`/`hook_response` 各两条，不带则一条都没有——失败的那次只剩一条
+    `system/informational` 把它包装成「operation blocked by hook」。少了这条参数，
+    下面 `lib/localWork` 那条「hook 正在跑」也永远没有依据（本地耗时会被误报成
+    上游无响应）。
   - `model_fallback` / `model_refusal_fallback` / `informational`：CLI 自己在 `content` 里
     写好了人话，走通用分支即可。
   - `compact_boundary`：压缩真的发生过，不提示就是「历史无缘无故变短了」。
@@ -621,6 +627,8 @@ hub ── manager ── session ── process ── claude (NDJSON)
     「这一轮在跑」，计时行本来就在走。压缩失败时 CLI 会自己报
     `compact_result: "failed"` + 原因，轮不到前端猜。
   - **hook**：用户自己配的本地进程（`hook_started` → `hook_response`），跑多久与上游无关。
+    这两个帧**只有带 `--include-hook-events` 才会下发**（见上面那条），不加的话这一档
+    根本触发不了，那一整段本地耗时照样会被算成「上游没有响应」。
   这两档要说的是「正在压缩上下文」（带上 `compact_output_chars` 这个会动的数）/「hook X
   正在跑」，不是「上游没有响应」。**判据只认 CLI 自己报的帧，不按「等了多久」猜**——
   猜错的方向是把真正的上游故障说成正常。

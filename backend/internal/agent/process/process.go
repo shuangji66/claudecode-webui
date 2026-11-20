@@ -35,6 +35,16 @@ type Options struct {
 	// ForwardSubagentText 把子代理的正文与思考也转发到 stdout（带 parent_tool_use_id）。
 	// 只有较新版本支持，调用方要先用 manager.supportsFlag 探测。
 	ForwardSubagentText bool
+	// IncludeHookEvents 把 hook 的生命周期帧（`hook_started` / `hook_progress` /
+	// `hook_response`）也转发到 stdout。
+	//
+	// **不带这个参数时一条都不会有**（实测 2.1.329：同一个 hook 配置，加参数能收到
+	// hook_started/hook_response 各两条，不加则一条都没有——失败的那次只剩一条
+	// `system/informational` 包装）。界面靠它们做两件事：把 hook 执行失败的**原因**
+	// （原因只在 stderr 里）显示出来，以及在 hook 跑着的时候把计时行从「上游 Ns 没有
+	// 响应」换成「hook X 正在跑」——hook 是本地进程，跑多久与上游无关。
+	// 老版本不认识这个参数会直接起不来，所以要用 supportsFlag 探测。
+	IncludeHookEvents bool
 	// AllowBypassPermissions 允许会话在运行中切到 bypassPermissions（界面上的「跳过权限」）。
 	//
 	// claude 只在「启动时带着这个能力」的会话里接受 set_permission_mode
@@ -69,6 +79,9 @@ func Args(o Options) []string {
 	}
 	if o.ForwardSubagentText {
 		args = append(args, "--forward-subagent-text")
+	}
+	if o.IncludeHookEvents {
+		args = append(args, "--include-hook-events")
 	}
 	if o.AllowBypassPermissions {
 		args = append(args, "--allow-dangerously-skip-permissions")
