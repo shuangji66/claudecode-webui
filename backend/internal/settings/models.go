@@ -158,7 +158,7 @@ func hintFor(raw string) string {
 	case strings.HasPrefix(low, "<!doctype") || strings.HasPrefix(low, "<html"):
 		return "。返回的是 HTML 页面（多半是该网关没有这个接口，被前端路由兜底了），请手动填写模型名。"
 	case strings.Contains(low, "\"error\""):
-		return "。网关返回了错误对象，请检查地址、协议与密钥。"
+		return "。网关返回了错误对象，请检查地址、凭据与鉴权方式（密钥 / Bearer 令牌）。"
 	default:
 		return "。可直接手动填写模型名，效果相同。"
 	}

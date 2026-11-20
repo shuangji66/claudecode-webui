@@ -1,8 +1,9 @@
 // Package settings 是「第三方模型接入」的持久化配置。
 //
 // 设计（对齐 DSH 的模型页）：
-//   - 用户按**协议**添加若干「提供商」：每个提供商有自己的 API 地址、密钥、
-//     以及从它那里选中并添加的模型列表。
+//   - 用户添加若干「提供商」：每个提供商有自己的 API 地址、密钥、
+//     以及从它那里选中并添加的模型列表。对话协议恒为 Anthropic Messages
+//     （见 ProtocolAnthropic），不是可选项。
 //   - 全局只有一个**当前选中模型**（provider + model）。它就是 claude CLI 的
 //     「默认模型」——注入 ANTHROPIC_MODEL，CLI 始终以它为默认启动。
 //   - 不再有 opus/sonnet/haiku 之类的别名槽位：别名映射那套已废弃。
