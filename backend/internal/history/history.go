@@ -165,15 +165,17 @@ func summarize(path, project string) Session {
 			// 整条是微缩摘要就直接跳过；与用户那句话拼在一起时只留用户那半句。
 			// 不挡的话压缩过一轮的对话在侧栏里会叫
 			// "This session is being continued from a previous conversation…"。
+			//
+			// **只决定「能不能当标题」，不决定「算不算一条消息」**：`tool_result` 与
+			// 只有图片/PDF 的提问 `extractText` 同样是空串，按空串就跳过会把它们从
+			// 消息数里一起抹掉（实测一份真实转录从 567 掉到 372）。这里只有续接提示
+			// 本身不该计数，它与上面几个 `return true` 是同一类注入行。
 			userText := ""
 			if l.Type == "user" {
 				if isInjectedUserRow(l.IsCompactSummary, l.IsVisibleInTranscriptOnly) {
 					return true
 				}
 				userText = stripContinuation(extractText(l.Message.Content))
-				if userText == "" {
-					return true
-				}
 			}
 			s.Messages++
 			if l.Type == "user" && !titleDone && lines <= maxTitleScanLines {

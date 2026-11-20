@@ -917,6 +917,33 @@ func TestSummarizeCutsContinuationPrefix(t *testing.T) {
 	}
 }
 
+// 消息数的口径不能被续接提示的过滤带偏：`tool_result` 与「只发了图片的提问」
+// 抽出来的文本都是空串，但它们都是真实的一条消息。按「文本为空就不计数」写会把
+// 它们一起抹掉——实测一份真实转录从 567 掉到 372。
+func TestSummarizeCountsToolResultAndImageOnlyRows(t *testing.T) {
+	dir := t.TempDir()
+	id := "88888888-9999-4aaa-bbbb-cccccccccccc"
+	path := filepath.Join(dir, "p", id+".jsonl")
+	writeJSONL(t, path,
+		// 用户提问
+		`{"type":"user","sessionId":"`+id+`","message":{"role":"user","content":"看看这张图"},"timestamp":"2026-01-01T00:00:00Z"}`,
+		// 只发了一张图（没有 text block，extractText 是空串）
+		`{"type":"user","sessionId":"`+id+`","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAA"}}]},"timestamp":"2026-01-01T00:00:01Z"}`,
+		// 工具回包（内容在 tool_result 里，extractText 取不到）
+		`{"type":"user","sessionId":"`+id+`","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"工具输出"}]},"timestamp":"2026-01-01T00:00:02Z"}`,
+		// 续接提示（这条才不该计数）
+		`{"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"sessionId":"`+id+`","message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context. …"},"timestamp":"2026-01-01T00:00:03Z"}`,
+		`{"type":"assistant","sessionId":"`+id+`","message":{"role":"assistant","content":[{"type":"text","text":"看到了"}]},"timestamp":"2026-01-01T00:00:04Z"}`,
+	)
+	s := summarize(path, "p")
+	if s.Messages != 4 {
+		t.Fatalf("消息数 = %d, want 4（提问/图片/工具回包/回答；只有续接提示不计数）", s.Messages)
+	}
+	if s.Title != "看看这张图" {
+		t.Fatalf("标题 = %q", s.Title)
+	}
+}
+
 func TestScanTranscriptDropsContinuationRows(t *testing.T) {
 	root := t.TempDir()
 	id := "77777777-8888-4999-aaaa-bbbbbbbbbbbb"
