@@ -211,7 +211,16 @@ interface AppState {
   usage: Record<string, UsageSnapshot>;
 
   // 「获取可用模型」的临时结果（按提供商分别保存会太啰嗦，这里只留最近一次）
+  /**
+   * 最近一次拉目录是谁发起的（表单 uid，未保存的草稿没有 id）。
+   *
+   * 弹窗用它的**变化**判断「这次结果是不是为我拉的」：新发一次请求时它会立刻变，
+   * 之后哪怕请求失败（`gatewayModels` 被清空、`modelsError` 留空）也能认出来，
+   * 不必靠 `gatewayModels.length === 0` 去猜（上一家没模型时那个条件恒成立）。
+   */
   modelsFor: string;
+  /** `modelsFor` 那次请求还在飞（弹窗据此显示「正在获取模型列表…」）。 */
+  modelsLoading: boolean;
   gatewayModels: GatewayModel[];
   modelsError: string | null;
   modelsRaw: string;
@@ -922,6 +931,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   modes: {},
   usage: {},
   modelsFor: "",
+  modelsLoading: false,
   gatewayModels: [],
   modelsError: null,
   modelsRaw: "",
@@ -1069,16 +1079,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   fetchModelsFor: async (form) => {
-    set({ modelsFor: form.id, gatewayModels: [], modelsError: null, modelsRaw: "", modelsAttempts: [], error: null });
+    // key 用表单 uid：弹窗靠它的变化判断「结果到了」，而未保存的草稿 id 是空串，
+    // 用 id 时上一家的目录会看起来像这一家的。
+    const key = form.uid || form.id;
+    set({ modelsFor: key, modelsLoading: true, gatewayModels: [], modelsError: null, modelsRaw: "", modelsAttempts: [], error: null });
     try {
       const r = await apiFetch<ModelsResult>("/api/settings/models", {
         method: "POST",
         body: JSON.stringify(providerRef(form)),
       });
       if (r.models && r.models.length > 0) {
-        set({ gatewayModels: r.models, modelsAttempts: r.attempts ?? [] });
+        set({ modelsLoading: false, gatewayModels: r.models, modelsAttempts: r.attempts ?? [] });
       } else {
         set({
+          modelsLoading: false,
           gatewayModels: [],
           modelsError: r.detail || "未获取到模型",
           modelsRaw: r.raw ?? "",
@@ -1086,7 +1100,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         });
       }
     } catch (e) {
-      set({ gatewayModels: [], modelsError: errText(e), modelsRaw: "" });
+      set({ modelsLoading: false, gatewayModels: [], modelsError: errText(e), modelsRaw: "" });
     }
   },
 

@@ -1,5 +1,5 @@
 import { NO_AUTOFILL } from "../../../lib/autofill";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../../store/useAppStore";
 import { useT } from "../../../lib/i18n";
 import {
@@ -19,6 +19,7 @@ import { Select } from "../../common/Select";
 import { askConfirm } from "../../common/SystemDialogs";
 import { IconCheck, IconChevronDown, IconGauge, IconImage, IconPlus, IconSearch, IconTrash } from "../../common/Icons";
 import { SETTINGS_PANE_FLEX } from "./SettingsSurface";
+import { ModelPickerDialog } from "./ModelPickerDialog";
 
 /**
  * 「模型」页：侧栏功能区的整页视图（`FeaturePage` 的 `models` 分支懒加载它）。
@@ -222,13 +223,13 @@ function ProviderCard({
   const fetchModelsFor = useAppStore((s) => s.fetchModelsFor);
   const probeProvider = useAppStore((s) => s.probeProvider);
   const gatewayModels = useAppStore((s) => s.gatewayModels);
+  const modelsLoading = useAppStore((s) => s.modelsLoading);
   const modelsError = useAppStore((s) => s.modelsError);
   const modelsRaw = useAppStore((s) => s.modelsRaw);
   const modelsAttempts = useAppStore((s) => s.modelsAttempts);
+  const modelsFor = useAppStore((s) => s.modelsFor);
   const probe = useAppStore((s) => s.probe);
   const [picking, setPicking] = useState(false);
-  const [search, setSearch] = useState("");
-  const [picked, setPicked] = useState<Set<string>>(new Set());
   const [manual, setManual] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const [presetId, setPresetId] = useState("");
@@ -240,10 +241,14 @@ function ProviderCard({
   const probeKey = provider.uid || provider.id;
   const probing = probe?.key === probeKey && probe.pending;
   const probeResult = probe?.key === probeKey ? probe.result : null;
-  const filtered = useMemo(
-    () => gatewayModels.filter((m) => (search.trim() ? m.id.toLowerCase().includes(search.trim().toLowerCase()) : true)),
-    [gatewayModels, search],
-  );
+  // 拉目录的结果是全局单份（只留最近一次）。`modelsFor` 一旦不是本卡片，就当没有：
+  // 否则从 A 的弹窗切到 B 时，B 的弹窗会先摆出 A 的目录。
+  const modelsForMe = modelsFor === probeKey;
+  const catalog = modelsForMe ? gatewayModels : [];
+  const catalogLoading = modelsForMe && modelsLoading;
+  const catalogError = modelsForMe ? modelsError : null;
+  const catalogRaw = modelsForMe ? modelsRaw : "";
+  const catalogAttempts = modelsForMe ? modelsAttempts : [];
 
   const setSpec = (id: string, patch: Partial<ModelSpec>) => {
     const current = provider.modelMeta[id] ?? {};
@@ -274,6 +279,21 @@ function ProviderCard({
     if (!id) return;
     addModels([id]);
     setManual("");
+  };
+
+  /** 弹窗确认：把勾选的 id 连同网关给的名称/容量一起写进提供商。 */
+  const addPicked = (ids: string[]) => {
+    const seeds: Record<string, Partial<ModelSpec>> = {};
+    for (const m of catalog) {
+      if (!ids.includes(m.id)) continue;
+      seeds[m.id] = {
+        name: m.display_name,
+        context_window: m.context_length,
+        max_output_tokens: m.max_output_tokens,
+      };
+    }
+    addModels(ids, seeds);
+    setPicking(false);
   };
 
   const preset = findProviderPreset(presetId);
@@ -425,9 +445,7 @@ function ProviderCard({
             <button
               type="button"
               onClick={() => {
-                setPicking((v) => !v);
-                setPicked(new Set(provider.models));
-                setSearch("");
+                setPicking(true);
                 void fetchModelsFor(provider);
               }}
               className="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-[10.5px] font-medium text-brand hover:bg-brand-soft"
@@ -449,67 +467,18 @@ function ProviderCard({
             <p className={`mt-1 text-[10.5px] ${probeResult.ok ? "text-ok" : "text-danger"}`}>{probeResult.ok ? "✓ " : "✗ "}{probeResult.detail}</p>
           )}
 
-          {picking && (
-            <div className="mt-2 rounded-lg border border-line bg-canvas p-2">
-              <div className="flex items-center gap-2">
-                <input {...NO_AUTOFILL}
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder={t("搜索模型…", "Search models…")}
-                  className="min-w-0 flex-1 rounded-md border border-line-strong bg-canvas px-2 py-1 text-[11px] outline-none focus:border-brand/60"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    const seeds: Record<string, Partial<ModelSpec>> = {};
-                    for (const m of gatewayModels) {
-                      if (!picked.has(m.id)) continue;
-                      seeds[m.id] = {
-                        name: m.display_name,
-                        context_window: m.context_length,
-                        max_output_tokens: m.max_output_tokens,
-                      };
-                    }
-                    addModels([...picked], seeds);
-                    setPicking(false);
-                  }}
-                  className="shrink-0 rounded-md bg-brand px-2 py-1 text-[10.5px] font-medium text-white hover:bg-brand-hover"
-                >
-                  {t("添加所选", "Add selected")}
-                </button>
-              </div>
-              <div className="dsh-scroll mt-1.5 max-h-52 space-y-0.5 overflow-y-auto">
-                {filtered.length === 0 && <p className="px-2 py-3 text-center text-[11px] text-muted">{t("没有匹配的模型。", "No matching models.")}</p>}
-                {filtered.map((m) => (
-                  <label key={m.id} className="flex items-center gap-2 rounded-md px-2 py-1 text-[11.5px] hover:bg-panel-strong">
-                    <input {...NO_AUTOFILL}
-                      type="checkbox"
-                      className="accent-[var(--c-brand)]"
-                      checked={picked.has(m.id)}
-                      onChange={(e) => {
-                        setPicked((prev) => {
-                          const next = new Set(prev);
-                          if (e.target.checked) next.add(m.id);
-                          else next.delete(m.id);
-                          return next;
-                        });
-                      }}
-                    />
-                    <span className="min-w-0 flex-1 truncate font-mono text-ink">{m.id}</span>
-                    {m.context_length ? <span className="shrink-0 text-[10px] text-faint">{formatCapacity(m.context_length)}</span> : null}
-                    {m.display_name && <span className="max-w-[40%] truncate text-[10px] text-muted">{m.display_name}</span>}
-                  </label>
-                ))}
-              </div>
-              {modelsError && (
-                <div className="mt-1.5 rounded-md bg-amber-50 px-2 py-1.5 text-[10.5px] text-warn dark:bg-amber-950/20">
-                  <p>{modelsError}</p>
-                  {modelsAttempts.length > 0 && <p className="mt-0.5 font-mono opacity-80">{modelsAttempts.map((a) => `${a.path} → ${a.status || "-"}`).join(" · ")}</p>}
-                  {modelsRaw && <details className="mt-0.5"><summary className="cursor-pointer opacity-70">{t("查看网关返回", "Show response")}</summary><pre className="mt-0.5 max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono text-[10px]">{modelsRaw}</pre></details>}
-                </div>
-              )}
-            </div>
-          )}
+          <ModelPickerDialog
+            open={picking}
+            onClose={() => setPicking(false)}
+            providerName={provider.name || provider.id}
+            models={catalog}
+            selected={provider.models}
+            loading={catalogLoading}
+            error={catalogError}
+            attempts={catalogAttempts}
+            raw={catalogRaw}
+            onAdd={addPicked}
+          />
 
           <div className="mt-2 space-y-1.5">
             {provider.models.length === 0 && <p className="px-1 py-1 text-[10.5px] text-faint">{t("还没有模型。从上方获取，或在下面手动添加。", "No models yet. Fetch above or add one below.")}</p>}

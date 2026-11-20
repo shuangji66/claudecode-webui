@@ -140,4 +140,101 @@ describe("模型页凭证输入框的自动填充", () => {
     expect(await screen.findByText(/端点可用，返回 9 个模型/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "测试连接" })).not.toBeDisabled();
   });
+
+  // 「获取可用模型」从内联小面板改成弹窗（选择区要拿到整块高度，几十条目录在
+  // 卡片里那条 max-h-52 里根本看不清），并用全选/取消全选。
+  describe("获取可用模型的弹窗", () => {
+    const catalog = () =>
+      new Response(
+        JSON.stringify({
+          models: [
+            { id: "cn:hy4std", context_length: 960000, display_name: "Hy4" },
+            { id: "cn:hy4flash-free", context_length: 960000, display_name: "Hy4 flash" },
+            { id: "global:hy4std", context_length: 960000, display_name: "Hy4" },
+          ],
+          attempts: [],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+
+    it("点「获取可用模型」弹出弹窗，全选只作用于筛选结果，确认后只加勾选的", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => (String(input).includes("/api/settings/models") ? catalog() : new Response("{}", { status: 200 }))),
+      );
+      await act(async () => {
+        render(<ModelsSettings />);
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /获取可用模型/ }));
+      });
+
+      const dialog = await screen.findByRole("dialog", { name: "选择模型" });
+      expect(dialog).toBeInTheDocument();
+      // 三条都没加过 → 默认全不勾，按钮是「全选」
+      const all = screen.getByRole("button", { name: "全选" });
+      await act(async () => {
+        fireEvent.click(all);
+      });
+      expect(screen.getByText("已选 3 个")).toBeInTheDocument();
+
+      // 取消全选清空
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "取消全选" }));
+      });
+      expect(screen.getByText("已选 0 个")).toBeInTheDocument();
+
+      // 搜 "flash" 后全选：只该勾上命中筛选的那一条
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText("搜索模型"), { target: { value: "flash" } });
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "全选" }));
+      });
+      expect(screen.getByText("已选 1 个")).toBeInTheDocument();
+
+      // 清空搜索后再点全选：这次补齐其余两条
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText("搜索模型"), { target: { value: "" } });
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "全选" }));
+      });
+      expect(screen.getByText("已选 3 个")).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "添加所选" }));
+      });
+      // 弹窗关闭，三条都进了提供商的模型列表
+      expect(screen.queryByRole("dialog", { name: "选择模型" })).toBeNull();
+      for (const id of ["cn:hy4std", "cn:hy4flash-free", "global:hy4std"]) {
+        expect(screen.getByText(id)).toBeInTheDocument();
+      }
+    });
+
+    // 已经在列表里的模型默认勾上：否则「再点一次获取」等于把原有选择清零。
+    it("已添加的模型在弹窗里默认勾选", async () => {
+      useAppStore.setState({
+        settings: {
+          providers: [{ id: "gw", name: "网关", base_url: "", models: ["cn:hy4std"], model_meta: {} }],
+          selected: { provider: "gw", model: "", effort: "" },
+          permission_mode: "default",
+          locale: "zh",
+          font_size: 15,
+        } as never,
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL) => (String(input).includes("/api/settings/models") ? catalog() : new Response("{}", { status: 200 }))),
+      );
+      await act(async () => {
+        render(<ModelsSettings />);
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /获取可用模型/ }));
+      });
+      expect(await screen.findByRole("dialog", { name: "选择模型" })).toBeInTheDocument();
+      expect(screen.getByText("已选 1 个")).toBeInTheDocument();
+    });
+  });
 });
