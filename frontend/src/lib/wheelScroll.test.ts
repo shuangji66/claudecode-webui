@@ -54,6 +54,16 @@ describe("useWheelScrollX", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
+  // 触控板几乎不会给纯纵向的事件：两个增量同时非零时接管，会把横向那一半
+  // 与惯性一起吃掉，手感变成一顿一顿的。
+  it("触控板斜着滑（deltaX 与 deltaY 同时非零）也不插手", () => {
+    const el = strip({ width: 600, viewport: 200 });
+    mount(el);
+    const event = wheel(el, { deltaX: 30, deltaY: 5 });
+    expect(el.scrollLeft).toBe(0);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("Ctrl + 滚轮是缩放，不能被抢去横向滚", () => {
     const el = strip({ width: 600, viewport: 200 });
     mount(el);

@@ -14,7 +14,9 @@ const LINE_HEIGHT = 16;
  * 为什么用原生监听而不是 React 的 `onWheel`：React 17 起 root 上的 wheel 监听是
  * **passive** 的，`preventDefault()` 会被忽略并打一条控制台警告。
  *
- * 触控板的横向滑动（`deltaX`）本来就滚得动，不再插手。
+ * 触控板的横向滑动（`deltaX`）本来就滚得动，不再插手。**斜着滑同样放行**：
+ * 触控板几乎不会给出纯纵向的事件，两个增量同时非零时接管等于把横向那一半与
+ * 惯性一起吃掉，用户会感觉「滑得一顿一顿的」。只有纯纵向（鼠标滚轮）才换算。
  */
 export function useWheelScrollX(ref: RefObject<HTMLElement | null>): void {
   useEffect(() => {
@@ -23,7 +25,8 @@ export function useWheelScrollX(ref: RefObject<HTMLElement | null>): void {
     const onWheel = (e: WheelEvent) => {
       // Ctrl + 滚轮是浏览器/系统的捏合缩放，抢过来就放不大了。
       if (e.ctrlKey) return;
-      // 有横向增量时浏览器自己会滚（触控板），别把惯性与速度曲线弄丢。
+      // 带横向增量时浏览器自己会滚（触控板，斜滑也算），别把惯性与速度曲线弄丢。
+      if (e.deltaX !== 0) return;
       if (e.deltaY === 0) return;
       if (el.scrollWidth <= el.clientWidth) return;
       const unit = e.deltaMode === 1 ? LINE_HEIGHT : e.deltaMode === 2 ? el.clientWidth : 1;
