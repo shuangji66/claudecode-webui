@@ -63,4 +63,18 @@ describe("本地在干活的状态", () => {
     useAppStore.getState().applyEvent("s1", cli({ type: "system", subtype: "status", status: "compacting" }) as never);
     expect(hasLocalWork(localWork("s2"))).toBe(false);
   });
+
+  // 子代理的正文也是 `assistant` 帧，而 `localWorkFrom` 把 assistant 当成
+  // 「上游出声了，压缩早已结束」。子代理跑着的时候主会话可能仍在压缩——按它的帧
+  // 清掉，计时行就会在压缩途中退回「上游 Ns 没有响应」。
+  it("子代理的帧不改写主会话的压缩状态", () => {
+    useAppStore.getState().applyEvent("s1", cli({ type: "system", subtype: "status", status: "compacting" }) as never);
+    useAppStore.getState().applyEvent("s1", cli({
+      type: "assistant",
+      parent_tool_use_id: "tu1",
+      agent_id: "ag1",
+      message: { content: [{ type: "text", text: "子代理说的话" }] },
+    }) as never);
+    expect(localWork("s1").compacting).toBe(true);
+  });
 });

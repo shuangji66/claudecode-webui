@@ -642,6 +642,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
   hook 那一项是 `{id, name}` 而不是裸 id：`id` 只用来配对 `hook_started` /
   `hook_response`，**显示的是 `hook_name`**（实测 `PostToolUse:Read`）——直接显示 id
   的话界面上是一串 `hook 19d74da8-… 正在跑`，用户认不出是哪个 hook。
+  **子代理的帧不能改写这份状态**（store 的 `cli` 分支里要先 `subagentFrame` 分流、
+  再更新它）：子代理的正文也是 `assistant` 帧，而 `localWorkFrom` 把 assistant 当成
+  「上游出声了，压缩早已结束」。主会话压缩期间一个后台子代理吐一句话，压缩提示就会
+  退回「上游 Ns 没有响应」。
 - **`system/commands_changed` 要替换斜杠命令缓存**（CLI 原话：clients should REPLACE
   their cached command list）。会话中途装的技能、动态发现的命令靠它进 `/` 菜单。
   它**不进消息流**，由 store 的 `cli` 分支用 `commandsChanged` 写回 `inits[sid].commands`。

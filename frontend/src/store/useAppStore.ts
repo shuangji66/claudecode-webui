@@ -2522,16 +2522,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return;
       }
       case "cli": {
-        // 「CLI 在自己干活」的状态要跟着每条帧更新（压缩中 / hook 在跑），
-        // 它决定 TurnTimer 要不要说「上游 Ns 没有响应」——压缩与 hook 压根不等上游。
-        // 放在子代理分流之前：子代理帧同样说明链路活着，但压缩状态是主会话的，
-        // 子代理帧不该改写它（`localWorkFrom` 对认不出的类型原样返回）。
-        const work = localWorkFrom(localWork(sid), ev.data);
-        if (work !== localWork(sid)) localWorkAt.set(sid, work);
         // 子代理内部的帧（parent_tool_use_id 非空）单独归桶：它们既不能进主消息流，
         // 也不能污染主会话的用量统计。
         const sub = subagentFrame(ev.data);
         if (sub) {
+          // **子代理的帧不改写「本地在干活」的状态**：`localWorkFrom` 把 `assistant`
+          // 当成「上游出声了，压缩早已结束」，而子代理的正文恰恰也是 assistant 帧。
+          // 压缩发生在主链上，子代理跑着的时候主会话仍在压缩——按子代理的帧清掉，
+          // 计时行就会在压缩途中退回「上游 Ns 没有响应」。
           set((s) => {
             const byAgent = s.subagentItems[sid] ?? {};
             const prev = byAgent[sub.agentId] ?? [];
@@ -2544,6 +2542,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
           });
           return;
         }
+        // 「CLI 在自己干活」的状态要跟着每条帧更新（压缩中 / hook 在跑），
+        // 它决定 TurnTimer 要不要说「上游 Ns 没有响应」——压缩与 hook 压根不等上游。
+        // 必须放在子代理分流**之后**（见上一条：子代理的 assistant 帧会误清压缩态）。
+        const work = localWorkFrom(localWork(sid), ev.data);
+        if (work !== localWork(sid)) localWorkAt.set(sid, work);
         // 斜杠命令列表的中途变更（会话里发现新技能、加载了插件）：
         // CLI 的语义是「用这份**替换**你缓存的整份列表」。不接的话，会话中途装的
         // 技能永远不会出现在 `/` 菜单里，用户只能重开会话。
