@@ -1121,6 +1121,14 @@ hub ── manager ── session ── process ── claude (NDJSON)
   「在飞牛打开工作区」同一条规则）——不在宿主里时这一行不摆，摆了也只会得到
   「当前不在飞牛宿主中」。图片/PDF 仍走 `/api/fs/host-file` 转附件，其余类型写成
   `@绝对路径` 并**顶掉**用户敲下的 `@查询`。这一行与查询无关，候选没回来时也能点。
+  **它在第一行，但不抢默认高亮**：有工作区候选时高亮第一个候选（敲完 `@` 回车是引用
+  第一个文件，不该把用户带进文件选择器），一条候选都没有时才轮到它；↑↓ 移到哪一行，
+  `MentionMenu` 就把那一行 `scrollIntoView({block:"nearest"})` 带进视野——列表有
+  `max-h-56`，不跟随滚动时键盘能选到看不见的行。
+- **Esc 只关「这一次」补全，不是关掉这个位置上的 `@`**：`dismissed` 记的是 token
+  （`start:end:quoted:query`），删掉 `@` 再敲一次会得到完全相同的 tokenKey——所以
+  token 一消失（`mentionAt` 返回 undefined）就要把 `dismissed` 清掉，否则再敲 `@`
+  永远打不开，只能刷新页面（踩过）。
 - 接口 `GET /api/fs/complete?cwd=&q=&limit=` 必须挂 `s.authed` 并过 `authorizedCwd`，
   与 `/api/fs/tree` 同一条围栏；前端请求在 `useAppStore.completePaths`（带 `AbortSignal`，
   下一个按键到来时取消上一次）。

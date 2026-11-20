@@ -5,6 +5,7 @@
 // 行的形状对齐 DSH 的 `@` 菜单：图标 + 名字 +（不在当前层时）父目录，目录行右侧给
 // 一个 Tab 提示——Tab 是进入目录，Enter 才是引用这个目录。
 
+import { useEffect, useRef } from "react";
 import { FolderIcon, FileIcon } from "../common/FileIcon";
 import { IconFolder } from "../common/Icons";
 import { useT } from "../../lib/i18n";
@@ -38,6 +39,14 @@ export function MentionMenu({
   onCrumb,
 }: Props) {
   const t = useT();
+  const activeRef = useRef<HTMLLIElement | null>(null);
+  // ↑↓ 把高亮移到列表外面时，列表要跟着把它滚进视野（block: "nearest" 是「只滚到
+  // 刚好可见」，已经在视野里就一动不动）。jsdom 里没有 scrollIntoView，要判一下。
+  useEffect(() => {
+    const el = activeRef.current;
+    if (!el || typeof el.scrollIntoView !== "function") return;
+    el.scrollIntoView({ block: "nearest" });
+  }, [highlight, rows]);
   // 一条文件候选都没有（也没有飞牛那一行）时才是「没有匹配」：飞牛行本身算一条内容。
   const noFiles = rows.every((row) => row.kind === "fnos");
   return (
@@ -75,7 +84,7 @@ export function MentionMenu({
         {rows.map((row, index) => {
           const active = index === highlight;
           return (
-            <li key={row.kind === "fnos" ? "fnos" : row.path}>
+            <li key={row.kind === "fnos" ? "fnos" : row.path} ref={active ? activeRef : undefined}>
               <div
                 onMouseEnter={() => onHover(index)}
                 className={`flex items-center gap-1 rounded-lg ${active ? "bg-panel-strong" : ""}`}

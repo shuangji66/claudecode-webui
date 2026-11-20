@@ -31,7 +31,7 @@ export interface MentionKeyEvent {
   preventDefault: () => void;
 }
 
-/** 菜单里的一行。`fnos` 是「从飞牛选择」（只在飞牛宿主里出现），排在工作区候选之后。 */
+/** 菜单里的一行。`fnos` 是「从飞牛选择」（只在飞牛宿主里出现），固定排在列表第一行。 */
 export interface MentionRow {
   /** 相对工作区根的路径；飞牛行是空串。 */
   path: string;
@@ -42,6 +42,18 @@ export interface MentionRow {
 }
 
 const DEBOUNCE_MS = 120;
+
+/**
+ * 新一轮候选到达时默认高亮哪一行。
+ *
+ * 飞牛入口固定在第一行，但它不是「候选」：敲完 `@` 直接回车应当是引用第一个文件，
+ * 而不是每次都被带进飞牛文件选择器。所以高亮第一个工作区候选；一条候选都没有时
+ * 谁都不高亮（Enter 照旧当普通发送，↑↓ 再落到飞牛那一行）。
+ */
+function initialHighlight(count: number, fnos: boolean): number {
+  if (count === 0) return -1;
+  return fnos ? 1 : 0;
+}
 
 export interface MentionController {
   open: boolean;
@@ -88,6 +100,12 @@ export function useMention({ cwd, text, caret, apply, onFnos, fnos }: MentionOpt
   const tokenKey = token ? `${token.start}:${token.end}:${quoted ? 1 : 0}:${query}` : "";
   const open = token !== undefined && cwd !== "" && tokenKey !== dismissed;
 
+  // Esc 关掉的是「这一次」的补全，不是这个位置上的 `@`：删掉 `@` 再敲一次会得到
+  // 同一个 tokenKey（同样是 `@`、同样从 0 开始），不清掉就会永远打不开、只能刷新页面。
+  useEffect(() => {
+    if (!token) setDismissed("");
+  }, [token]);
+
   const [entries, setEntries] = useState<FsEntry[]>([]);
   const [highlight, setHighlight] = useState(-1);
   const [loading, setLoading] = useState(false);
@@ -111,7 +129,7 @@ export function useMention({ cwd, text, caret, apply, onFnos, fnos }: MentionOpt
           // 后端保证 entries 是数组；这里仍然兜一次 null（旧二进制 / 半截响应）。
           const found = (listing.entries ?? []).filter((entry) => entry.type !== "other");
           setEntries(found);
-          setHighlight(found.length > 0 ? 0 : -1);
+          setHighlight(initialHighlight(found.length, fnos));
           setError(null);
         })
         .catch((e: unknown) => {
@@ -128,7 +146,7 @@ export function useMention({ cwd, text, caret, apply, onFnos, fnos }: MentionOpt
       clearTimeout(timer);
       controller.abort();
     };
-  }, [cwd, open, query, completePaths]);
+  }, [cwd, open, query, completePaths, fnos]);
 
   const dir = useMemo(() => mentionDir(query), [query]);
   const rows = useMemo<MentionRow[]>(() => {
@@ -143,7 +161,7 @@ export function useMention({ cwd, text, caret, apply, onFnos, fnos }: MentionOpt
         ...(parent !== "" && `${parent}/` !== dir ? { location: parent } : {}),
       };
     });
-    if (fnos) list.push({ path: "", name: "fnos", kind: "fnos" });
+    if (fnos) list.unshift({ path: "", name: "fnos", kind: "fnos" });
     return list;
   }, [entries, dir, fnos]);
 

@@ -641,6 +641,43 @@ describe("Composer @ 文件引用", () => {
     expect(pickFnosFiles).toHaveBeenCalled();
     expect(readHostFile).not.toHaveBeenCalled();
   });
+
+  it("「从飞牛选择」排在第一行，但默认高亮仍是第一个工作区候选", async () => {
+    completePaths.mockResolvedValue(
+      listing([
+        { path: "src", type: "dir" },
+        { path: "README.md", type: "file" },
+      ]),
+    );
+    const onSend = vi.fn().mockResolvedValue(true);
+    setup({ cwd: "/ws", onSend });
+
+    const input = typeAtEnd("@");
+    await screen.findByText("src/");
+
+    const rows = within(screen.getByLabelText("文件引用候选")).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("从飞牛选择");
+    // 敲完 `@` 直接回车是引用第一个文件，不能被带进飞牛选择器。
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(pickFnosFiles).not.toHaveBeenCalled();
+    expect(input.value).toBe("@src/ ");
+  });
+
+  it("Esc 关掉后删掉 @ 重新敲，菜单能再打开", async () => {
+    completePaths.mockResolvedValue(listing([{ path: "README.md", type: "file" }]));
+    setup({ cwd: "/ws" });
+
+    const input = typeAtEnd("@");
+    await screen.findByText("README.md");
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByText("README.md")).toBeNull();
+
+    // 删掉再敲：同一个位置、同一个查询串，tokenKey 与上次完全一样。
+    typeAtEnd("");
+    typeAtEnd("@");
+
+    expect(await screen.findByText("README.md")).toBeInTheDocument();
+  });
 });
 
 describe("Composer 粘贴图片", () => {
