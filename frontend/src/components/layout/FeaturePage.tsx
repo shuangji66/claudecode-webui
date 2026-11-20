@@ -3,14 +3,15 @@
 //
 // 左侧栏始终保留：入口本身在原地高亮（`activeFeature`），再点一次就回到对话。
 //
-// 懒加载照旧：五份页面各自 `lazy()`，只有真正被打开过的那一份才下发。
+// 懒加载照旧：每份页面各自 `lazy()`，只有真正被打开过的那一份才下发。
 
 import { lazy, Suspense, type ReactNode } from "react";
 import { useT } from "../../lib/i18n";
 import type { FeatureKey } from "../../lib/sidebarFeatures";
 import { IconClose, IconPanel } from "../common/Icons";
-import { SETTINGS_PANE_SCROLL } from "./settings/SettingsSurface";
+import { SETTINGS_PANE_FLEX, SETTINGS_PANE_SCROLL } from "./settings/SettingsSurface";
 
+const ModelsSettings = lazy(() => import("./settings/ModelsSettings").then((m) => ({ default: m.ModelsSettings })));
 const PluginsSettings = lazy(() => import("./PluginsSettings").then((m) => ({ default: m.PluginsSettings })));
 const McpSettings = lazy(() => import("./McpSettings").then((m) => ({ default: m.McpSettings })));
 const SkillsSettings = lazy(() => import("./SkillsSettings").then((m) => ({ default: m.SkillsSettings })));
@@ -30,7 +31,8 @@ export function PageShell({
   bodyClassName = "dsh-scroll min-h-0 flex-1 overflow-y-auto",
 }: {
   title: string;
-  onClose: () => void;
+  /** 回到对话；不传时不渲染右上角的关闭键（页面单独挂载时没有「上一页」）。 */
+  onClose?: () => void;
   /** 移动端抽屉入口：整页视图铺满屏幕时，页头是唯一还能打开左侧栏的地方。 */
   onOpenSidebar?: () => void;
   actions?: ReactNode;
@@ -55,15 +57,17 @@ export function PageShell({
           )}
           <h1 className="min-w-0 flex-1 truncate text-[15px] font-semibold text-ink">{title}</h1>
           {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
-          <button
-            type="button"
-            onClick={onClose}
-            className="shrink-0 rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
-            aria-label={t("关闭", "Close")}
-            title={t("回到对话", "Back to chat")}
-          >
-            <IconClose size={18} />
-          </button>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+              aria-label={t("关闭", "Close")}
+              title={t("回到对话", "Back to chat")}
+            >
+              <IconClose size={18} />
+            </button>
+          )}
         </div>
       </header>
       <div className={bodyClassName}>{children}</div>
@@ -101,14 +105,21 @@ export function FeaturePage({
       </Suspense>
     );
   }
+  // 模型页自己渲染 PageShell（保存按钮在页头右侧），这里不再套一层外壳。
+  if (view === "models") {
+    return (
+      <Suspense fallback={null}>
+        <ModelsSettings onClose={onClose} onOpenSidebar={onOpenSidebar} />
+      </Suspense>
+    );
+  }
 
   const title =
     view === "plugins" ? t("插件", "Plugins") : view === "mcp" ? "MCP" : t("技能中心", "Skills");
 
   // 滚动归谁：MCP / 技能页自己就是 flex 列、内部有滚动区；插件页是一整段普通内容
   // （根节点只有 `space-y-3`），必须由外层给滚动容器——否则内容超出视口就再也够不到。
-  const bodyClassName =
-    view === "plugins" ? SETTINGS_PANE_SCROLL : "flex min-h-0 flex-1 flex-col px-4 pt-4 md:px-8 md:pt-6";
+  const bodyClassName = view === "plugins" ? SETTINGS_PANE_SCROLL : SETTINGS_PANE_FLEX;
 
   return (
     <PageShell title={title} onClose={onClose} onOpenSidebar={onOpenSidebar} bodyClassName={bodyClassName}>

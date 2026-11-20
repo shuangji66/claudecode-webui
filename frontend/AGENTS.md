@@ -70,11 +70,11 @@ src/
                        / Zoomable（ZoomBar + ZoomableImage：图片缩放条与按 zoom 撑开的图）
   components/layout/   Sidebar（工作区/对话列表）/ HoverPreview（悬浮概览外壳）/ ConversationPreview、WorkspacePreview（会话/工作区的概览内容）/ TopBar / TokenGate（访问鉴权页）/ SettingsDrawer（只留导航壳）
                        / AuthCallbackPage（飞牛授权回调页，不挂应用壳层）
-                       / FeaturePage（功能区整页视图外壳 PageShell + 插件/MCP/技能三页）
+                       / FeaturePage（功能区整页视图外壳 PageShell + 模型/插件/MCP/技能四页）
                        / SchedulePage（自动化任务）/ HistoryPage（历史记录）
-                       / WorkspaceDialog / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / DeploySettings
+                       / WorkspaceDialog / ModelsSettings / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / DeploySettings
                        / ClaudeInstallPrompt
-  components/layout/settings/  设置页分区：GeneralSettings / ModelsSettings / DirsSettings（飞牛已授权目录）/ ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题 + SettingRow/SettingRows 行式设置项）
+  components/layout/settings/  设置页分区：GeneralSettings / DirsSettings（飞牛已授权目录）/ ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题 + SettingRow/SettingRows 行式设置项）
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
                        / MentionMenu（@ 候选菜单）/ useMention（候选拉取、防抖与键盘仲裁）
                        / ImageLightbox（正文图片放大）
@@ -289,8 +289,8 @@ src/
     （宽度跟着当前值走），两三项用分段控件；说明可以直接跟着当前值变，
     不要再在控件下面另挂一行解释。
 
-26.1 **侧栏功能区是整页视图，不是弹窗**（对齐 DSH）：插件 / MCP / 技能中心 / 自动化任务 /
-    历史记录这五项从左侧栏「新对话」下面那排入口打开，**接管左侧栏以外的剩余区域**
+26.1 **侧栏功能区是整页视图，不是弹窗**（对齐 DSH）：模型 / 插件 / MCP / 技能中心 / 自动化任务 /
+    历史记录这六项从左侧栏「新对话」下面那排入口打开（**模型排第一**），**接管左侧栏以外的剩余区域**
     （`App.tsx` 里与 `ChatPane` 二选一，移动端铺满视口），不再用 `Dialog`：
     - **对话区只是 hidden、不卸载**：输入框草稿、滚动位置与 WS 连接都要留着；
       右侧栏同样是 `hidden`（卸载等于 SIGHUP 掉里面的终端 shell）。
@@ -298,8 +298,12 @@ src/
       点某条对话或「新对话」也会切回来（`App` 里按 `activeId` 复位）。
     - **页头**是 `PageShell`：`safe-top` + `h-14`（与对话/右侧栏表头对齐）、标题、
       页面自己的动作、右侧一颗「回到对话」；移动端再给一颗抽屉入口（那时左侧栏是抽屉）。
-    - **懒加载**：`FeaturePage` 自己 `lazy()`，五个页面各自一个 chunk；页面按
+    - **懒加载**：`FeaturePage` 自己 `lazy()`，六个页面各自一个 chunk；页面按
       「挂载即进入、关闭即卸载」组织，不要再套 `open` prop。
+    - **模型页是整页，不是弹窗**：`settings/ModelsSettings` 从设置页签搬过来，
+      页面自己渲染 `PageShell`（所以 `FeaturePage` 的 `models` 分支直接早返回，不再外套一层），
+      标题只由页头给一份，保存键在页头右侧（与「自动化任务」的「新建」同一种摆法）。
+      `PageShell.onClose` 因此改成可选：不传就不画右上角那颗关闭键。
     - **不要再改回「居中弹窗 + 复用设置几何」**：弹窗会盖住对话区，还要先关掉才能接着干活。
 26.2 **功能区的固定 / 取消固定只缓存浏览器**（`lib/sidebarFeatures.ts`，键
     `ccweb-sidebar-feature-hidden`）：入口清单与顺序在 `FEATURE_KEYS`，存的是**隐藏名单**
@@ -313,6 +317,10 @@ src/
     - **触发元素的 `currentTarget` 要先取出来再 setState**：放进更新函数里等它执行时
       已经是 `null`，菜单会「点了没反应」。
     - 设置（`openSettings`）不在这份清单里：它是应用本身的入口，始终留在侧栏底部。
+    - **侧栏底部不显示对话连接状态**（曾经是「设置」行右端的一颗绿点 / 一行小字）：
+      它既不能点、也不改变任何行为，正常连接时只是一颗纯噪音的圆点。会话进行中 /
+      待审批 / 完成未看已经由会话行的 `StateDot` 表达，底部不必再报一次；
+      断线的提示由对话区顶部的横幅负责。
 27. **键盘焦点必须可见**：全局 `:focus-visible` 兜底在 `styles.css` 末尾（无 layer，
     优先于 utilities），所以页面上那 30 多个 `outline-none` 只影响鼠标。新增输入控件
     不需要自己写 focus 样式，也不要用 `!important` 去盖掉那条规则。
@@ -901,8 +909,12 @@ src/
   **宽度必须由「用户偏好 + 当前视口」派生**（`preferredWidth` 存偏好、`useViewportWidth()`
   跟踪 resize、渲染时 `clampWidth(preferredWidth, viewport)`）：只在拖动时 clamp 的话，
   窗口缩小后右侧栏不会自己变窄，会一直把对话挤成一条缝，直到用户拖一下才被纠正。
-- 设置页是居中模态（移动端全屏），左导航分「通用 / 模型 / 目录 / 代理 / 部署 / 访问 / 关于」
-  ——技能 / 插件 / MCP 三页已移到左侧栏功能区（整页视图，见规则 26.1）；
+- 设置页是居中模态（移动端全屏），左导航分「通用 / 目录 / 代理 / 部署 / 访问 / 关于」
+  ——模型 / 技能 / 插件 / MCP 四页已移到左侧栏功能区（整页视图，见规则 26.1），
+  **模型页排功能区第一位**（整页版 `settings/ModelsSettings`，它自己渲染 `PageShell`：
+  标题只由页头给一份；**保存键在页头右侧**、文案就是「保存」，正文底部那条
+  `border-t` + 保存行已删掉——整页视图没有页脚，把唯一的动作钉在屏幕最下方既够不着，
+  又白白多切一条分隔线）；
   「目录」页只列飞牛已授权目录并提供添加/撤销（`DirsSettings` + `useDirsStore`）：
   **不打开目录、不标目录徽章、不写说明**，列表 `w-full` + 路径 `truncate`（完整值进 `title`），
   撤销前 `askConfirm`。后端给 `error` 时说原因（不在统一网关下 / 缺 token / scope 未声明），
@@ -920,7 +932,7 @@ src/
   （只有图标不带文字，`aria-label` 说明是仓库链接，`https://github.com/shuangji66/claudecode-webui`，
   `target=_blank` + `rel=noreferrer`）。不要再加「源码」区块或运行形态说明。
   不要把设置项塞进这一页。通用设置即时保存，
-  模型配置在底部「保存模型设置」统一提交，代理保存后重启所有 claude 会话。
+  模型配置（功能区那一页）在页头右侧那颗「保存」统一提交，代理保存后重启所有 claude 会话。
   「部署」页管 claude 版本（下载源 / 安装进度 / 切换生效版本），切换只影响之后新建的会话。
   「技能」页有「导入」（`SkillImportDialog.tsx` + `store.importEntries / importFromPaths`）：
   一次多条，来源是本地文件/文件夹（内容在浏览器里，逐条 `PUT /api/skills/doc`）或飞牛选择器

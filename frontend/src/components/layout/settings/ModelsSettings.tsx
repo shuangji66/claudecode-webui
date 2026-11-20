@@ -14,11 +14,29 @@ import {
 } from "../../../lib/providerForm";
 import type { ModelSpec } from "../../../transport/types";
 import { PROVIDER_PRESETS, findProviderPreset, presetFormFields } from "../../../lib/providerCatalog";
+import { PageShell } from "../FeaturePage";
+import { Button } from "../../common/Button";
 import { Select } from "../../common/Select";
 import { askConfirm } from "../../common/SystemDialogs";
 import { IconCheck, IconChevronDown, IconGauge, IconImage, IconPlus, IconSearch, IconTrash } from "../../common/Icons";
+import { SETTINGS_PANE_FLEX } from "./SettingsSurface";
 
-export function ModelsSettings() {
+/**
+ * 「模型」页：侧栏功能区的整页视图（`FeaturePage` 的 `models` 分支懒加载它）。
+ *
+ * 它自己渲染 `PageShell`：保存是这一页唯一的整体动作，摆在页头右侧（整页视图没有页脚，
+ * 钉在屏幕最下方既够不着、又要在正文与按钮之间切一条分隔线）。页面里不要再写标题，
+ * 页头已经给了一份。
+ */
+export function ModelsSettings({
+  onClose,
+  onOpenSidebar,
+}: {
+  /** 回到对话（整页视图没有遮罩）。 */
+  onClose?: () => void;
+  /** 移动端抽屉入口。 */
+  onOpenSidebar?: () => void;
+} = {}) {
   const t = useT();
   const settings = useAppStore((s) => s.settings);
   const saving = useAppStore((s) => s.settingsSaving);
@@ -79,96 +97,105 @@ export function ModelsSettings() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto pb-4 pr-2">
-      <div className="mx-auto max-w-2xl space-y-4">
-      <div>
-        <h3 className="text-[15px] font-semibold text-ink">{t("模型", "Models")}</h3>
-        <p className="mt-0.5 text-[11px] leading-relaxed text-muted">
-          {t("按协议添加提供商，拉取或手动添加模型；每个模型可以声明推理强度与图片支持。", "Add providers by protocol, fetch or add models manually, and declare reasoning efforts and image support per model.")}
-        </p>
-      </div>
-
-      {forms.length === 0 && (
-        <div className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center">
-          <p className="text-[12.5px] font-medium text-ink">{t("还没有提供商", "No providers yet")}</p>
-          <p className="mt-1 text-[11px] text-muted">{t("添加一个中继或官方端点开始。", "Add a relay or official endpoint to start.")}</p>
-        </div>
-      )}
-
-      <div className="space-y-3">
-        {forms.map((p) => (
-          <ProviderCard
-            key={p.uid}
-            provider={p}
-            existingIds={forms.filter((x) => x.uid !== p.uid).map((x) => x.id.trim()).filter(Boolean)}
-            expanded={expanded.has(p.uid)}
-            onToggle={() =>
-              setExpanded((prev) => {
-                const next = new Set(prev);
-                if (next.has(p.uid)) next.delete(p.uid);
-                else next.add(p.uid);
-                return next;
-              })
-            }
-            onChange={(patch) => update(p.uid, patch)}
-            onRemove={() => {
-              void (async () => {
-                const ok = await askConfirm({
-                  title: t("删除提供商", "Delete provider"),
-                  message: t(`「${p.name || p.id}」及其模型配置会被移除。`, `"${p.name || p.id}" and its model settings will be removed.`),
-                  danger: true,
-                  confirmText: t("删除", "Delete"),
-                });
-                if (!ok) return;
-                const next = forms.filter((x) => x.uid !== p.uid);
-                setForms(next);
-                if (next.length === 1) setExpanded(new Set([next[0].uid]));
-                else if (next.length === 0) setExpanded(new Set());
-                setDirty(true);
-                setSavedAt(null);
-              })();
-            }}
-          />
-        ))}
-      </div>
-
-      <button
-        type="button"
-        onClick={() => {
-          const draft = blankProvider(forms);
-          setForms((list) => [...list, draft]);
-          setExpanded(new Set([draft.uid]));
-          setDirty(true);
-          setSavedAt(null);
-          setSaveError(null);
-        }}
-        className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-line-strong py-2.5 text-[12px] font-medium text-muted hover:bg-panel-strong hover:text-ink"
-      >
-        <IconPlus size={14} />
-        {t("添加提供商", "Add provider")}
-      </button>
-      </div>
-      </div>
-
-      <div className="shrink-0 border-t border-line bg-canvas pb-[calc(env(safe-area-inset-bottom,0px)+8px)] pt-3">
-        <div className="mx-auto flex max-w-2xl items-center gap-3">
-          {saveError && <span className="text-[10.5px] text-danger">{saveError}</span>}
-          <span className="text-[10.5px] text-faint">
+    <PageShell
+      title={t("模型", "Models")}
+      onClose={onClose}
+      onOpenSidebar={onOpenSidebar}
+      bodyClassName={SETTINGS_PANE_FLEX}
+      // 保存是这一页唯一的整体动作，放页头右侧：整页视图没有页脚，钉在屏幕最下方
+      // 既够不着，又要在正文与按钮之间切一条分隔线。标题在左侧，这里只留按钮。
+      actions={
+        <>
+          <span className="hidden text-[10.5px] text-faint sm:inline">
             {saving ? t("保存中…", "Saving…") : savedAt ? t("已保存", "Saved") : dirty ? t("有未保存的修改", "Unsaved changes") : null}
           </span>
-          <button
-            type="button"
+          <Button
+            variant="primary"
             onClick={() => void onSave()}
             disabled={saving || !settings}
-            className="ml-auto flex items-center gap-1.5 rounded-lg bg-brand px-4 py-2 text-[12px] font-medium text-white hover:bg-brand-hover disabled:opacity-40"
+            icon={<IconCheck size={14} />}
+            aria-label={t("保存", "Save")}
           >
-            <IconCheck size={14} />
-            {t("保存模型设置", "Save models")}
+            {t("保存", "Save")}
+          </Button>
+        </>
+      }
+    >
+      {/* 保存失败的原因留在滚动区外：从页头点「保存」时人可能正滚在很下面，
+          跟着正文一起滚走的错误提示等于没提示。 */}
+      {saveError && (
+        <p className="mx-auto mb-2 w-full max-w-2xl shrink-0 break-words rounded-lg bg-rose-50 px-3 py-2 text-[11px] leading-relaxed text-danger dark:bg-rose-950/30">
+          {saveError}
+        </p>
+      )}
+      <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto pr-2 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] md:pb-6">
+        <div className="mx-auto max-w-2xl space-y-4">
+          <p className="text-[11px] leading-relaxed text-muted">
+            {t("按协议添加提供商，拉取或手动添加模型；每个模型可以声明推理强度与图片支持。", "Add providers by protocol, fetch or add models manually, and declare reasoning efforts and image support per model.")}
+          </p>
+
+          {forms.length === 0 && (
+            <div className="rounded-xl border border-dashed border-line-strong px-4 py-8 text-center">
+              <p className="text-[12.5px] font-medium text-ink">{t("还没有提供商", "No providers yet")}</p>
+              <p className="mt-1 text-[11px] text-muted">{t("添加一个中继或官方端点开始。", "Add a relay or official endpoint to start.")}</p>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {forms.map((p) => (
+              <ProviderCard
+                key={p.uid}
+                provider={p}
+                existingIds={forms.filter((x) => x.uid !== p.uid).map((x) => x.id.trim()).filter(Boolean)}
+                expanded={expanded.has(p.uid)}
+                onToggle={() =>
+                  setExpanded((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(p.uid)) next.delete(p.uid);
+                    else next.add(p.uid);
+                    return next;
+                  })
+                }
+                onChange={(patch) => update(p.uid, patch)}
+                onRemove={() => {
+                  void (async () => {
+                    const ok = await askConfirm({
+                      title: t("删除提供商", "Delete provider"),
+                      message: t(`「${p.name || p.id}」及其模型配置会被移除。`, `"${p.name || p.id}" and its model settings will be removed.`),
+                      danger: true,
+                      confirmText: t("删除", "Delete"),
+                    });
+                    if (!ok) return;
+                    const next = forms.filter((x) => x.uid !== p.uid);
+                    setForms(next);
+                    if (next.length === 1) setExpanded(new Set([next[0].uid]));
+                    else if (next.length === 0) setExpanded(new Set());
+                    setDirty(true);
+                    setSavedAt(null);
+                  })();
+                }}
+              />
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              const draft = blankProvider(forms);
+              setForms((list) => [...list, draft]);
+              setExpanded(new Set([draft.uid]));
+              setDirty(true);
+              setSavedAt(null);
+              setSaveError(null);
+            }}
+            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-line-strong py-2.5 text-[12px] font-medium text-muted hover:bg-panel-strong hover:text-ink"
+          >
+            <IconPlus size={14} />
+            {t("添加提供商", "Add provider")}
           </button>
         </div>
       </div>
-    </div>
+    </PageShell>
   );
 }
 

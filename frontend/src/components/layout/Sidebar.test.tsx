@@ -710,11 +710,13 @@ describe("Sidebar 功能区入口", () => {
     useAppStore.setState({ conversations: [], workspaces: [], currentWorkspace: "", activeId: null });
   });
 
-  // 插件 / MCP / 技能中心原来在「设置」页签里，现在和 DSH 一样摆到侧栏功能区。
-  it("插件 / MCP / 技能中心都在功能区，点击打开对应的整页视图", () => {
+  // 模型 / 插件 / MCP / 技能中心原来在「设置」页签里，现在和 DSH 一样摆到侧栏功能区。
+  it("模型 / 插件 / MCP / 技能中心都在功能区，点击打开对应的整页视图", () => {
     const onOpenFeature = vi.fn();
     renderSidebar({ onOpenFeature });
 
+    fireEvent.click(screen.getByRole("button", { name: "模型" }));
+    expect(onOpenFeature).toHaveBeenLastCalledWith("models");
     fireEvent.click(screen.getByRole("button", { name: "插件" }));
     expect(onOpenFeature).toHaveBeenLastCalledWith("plugins");
     fireEvent.click(screen.getByRole("button", { name: "MCP" }));
@@ -722,14 +724,28 @@ describe("Sidebar 功能区入口", () => {
     fireEvent.click(screen.getByRole("button", { name: "技能中心" }));
     expect(onOpenFeature).toHaveBeenLastCalledWith("skills");
 
-    // 都在工作区列表之上（功能区在「新对话」与工作区之间）。
+    // 都在工作区列表之上（功能区在「新对话」与工作区之间），模型排第一。
     const workspaces = screen.getByText("工作区");
-    for (const name of ["插件", "MCP", "技能中心", "自动化任务", "历史记录"]) {
+    for (const name of ["模型", "插件", "MCP", "技能中心", "自动化任务", "历史记录"]) {
       const button = screen.getByRole("button", { name });
       expect(button.compareDocumentPosition(workspaces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
+    const models = screen.getByRole("button", { name: "模型" });
+    for (const name of ["插件", "MCP", "技能中心", "自动化任务", "历史记录"]) {
+      const other = screen.getByRole("button", { name });
+      expect(models.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
     // 全部固定着时没有「更多」：它只装被取消固定的入口。
     expect(screen.queryByRole("button", { name: "更多" })).toBeNull();
+  });
+
+  // 底部只有「设置」（以及需要时的更新提示 / 退出登录）：连接状态不再常驻显示——
+  // 它既不能点、也不改变任何行为，绿点只是噪音。
+  it("侧栏底部不显示对话连接状态", () => {
+    useAppStore.setState({ activeId: "conv1", states: { conv1: "ready" } });
+    renderSidebar();
+    expect(screen.queryByText("已连接")).toBeNull();
+    expect(screen.queryByTitle("已连接")).toBeNull();
   });
 
   // 固定按钮就在每一行的右侧（对齐 DSH），取消固定后该行从列表消失、挪进「更多」。

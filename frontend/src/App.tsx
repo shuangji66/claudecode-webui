@@ -93,7 +93,7 @@ function AppShell() {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"general" | "models" | "proxy" | "deploy" | "access" | undefined>(undefined);
+  const [settingsTab, setSettingsTab] = useState<"general" | "proxy" | "deploy" | "access" | undefined>(undefined);
   const [installPromptDismissed, setInstallPromptDismissed] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   /** 侧栏功能区当前打开的整页视图；null = 回到对话区。 */

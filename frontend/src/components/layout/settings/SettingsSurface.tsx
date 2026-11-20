@@ -1,15 +1,15 @@
-// 「设置式」模态的外壳：设置抽屉与功能弹窗（插件 / MCP / 技能中心）共用同一份
-// 面板尺寸、圆角、移动端全屏与内边距，改一处两边一起变——不要再各写一份
-// `Dialog ... panelClassName="h-[100dvh] ..."`。
+// 「设置式」几何：设置抽屉用 `SettingsSurface` 的外壳，功能区整页视图（模型 / 插件 /
+// MCP / 技能中心）复用同一套内边距，改一处两边一起变——不要再各写一份
+// `Dialog ... panelClassName="h-[100dvh] ..."` 或一列手写的 `px-4 pt-4 md:px-8`。
 
 import { Suspense, type ReactNode } from "react";
 import { Dialog } from "../../common/Dialog";
 
-/** 可整页滚动的页内容（通用 / 目录 / 插件 / 代理 / 部署 / 访问 / 关于）。 */
+/** 可整页滚动的页内容（通用 / 目录 / 代理 / 部署 / 访问 / 关于 / 功能区里的插件页）。 */
 export const SETTINGS_PANE_SCROLL =
   "dsh-scroll h-full overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-4 md:px-8 md:pb-8 md:pt-6";
 
-/** 自己管滚动的页内容（模型 / 技能 / MCP：页内有固定头部或分栏）。 */
+/** 自己管滚动的页内容（功能区里的模型 / 技能 / MCP 页：页内有固定头部或分栏）。 */
 export const SETTINGS_PANE_FLEX = "flex h-full min-h-0 flex-col px-4 pt-4 md:px-8 md:pt-6";
 
 /** 桌面端与灯箱一致的尺寸（82vh / 900px），移动端铺满视口。 */

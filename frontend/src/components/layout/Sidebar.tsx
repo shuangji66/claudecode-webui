@@ -57,6 +57,7 @@ import {
   IconLogout,
   IconSettings,
   IconSliders,
+  IconSpark,
   IconStop,
   IconTerminal,
   IconTrash,
@@ -217,9 +218,10 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
 
   const archivedCount = conversations.filter((c) => c.archived).length;
 
-  // 功能区入口（对齐 DSH）：插件 / MCP / 技能中心 / 自动化任务 / 历史记录。
+  // 功能区入口（对齐 DSH）：模型 / 插件 / MCP / 技能中心 / 自动化任务 / 历史记录。
   // 每一项都能从「更多」里取消固定，取消后同时从展开态与收起态消失。
   const featureEntries: FeatureEntry[] = [
+    { key: "models", label: t("模型", "Models"), icon: (size) => <IconSpark size={size} />, onClick: () => onOpenFeature("models") },
     { key: "plugins", label: t("插件", "Plugins"), icon: (size) => <IconPlugin size={size} />, onClick: () => onOpenFeature("plugins") },
     { key: "mcp", label: "MCP", icon: (size) => <IconGlobe size={size} />, onClick: () => onOpenFeature("mcp") },
     { key: "skills", label: t("技能中心", "Skills"), icon: (size) => <IconWrench size={size} />, onClick: () => onOpenFeature("skills") },
@@ -553,17 +555,6 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     );
   };
 
-  const activeConn = activeId ? (states[activeId] ?? "idle") : "idle";
-  const connLabel =
-    activeConn === "busy"
-      ? t("运行中", "Running")
-      : activeConn === "ready"
-        ? t("已连接", "Connected")
-        : activeConn === "starting"
-          ? t("启动中", "Starting")
-          : t("未连接", "Not connected");
-  const connTone = activeConn === "busy" || activeConn === "starting" ? "bg-warn" : activeConn === "ready" ? "bg-ok" : "bg-faint";
-
   const startNewChat = () => {
     if (starting) return;
     if (!currentWorkspace) {
@@ -772,7 +763,6 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             <IconLogout size={18} />
           </button>
         )}
-        <span className={`mb-3 h-2 w-2 rounded-full ${connTone}`} title={connLabel} />
         <button
           type="button"
           onClick={onOpenSettings}
@@ -1100,12 +1090,6 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         <button type="button" onClick={onOpenSettings} className="side-row text-muted hover:text-ink">
           <IconSettings size={15} />
           <span className="text-[12px]">{t("设置", "Settings")}</span>
-          {/* 正常连接只留一个绿点（title 里有完整状态）：底部一直挂一行「已连接」
-              是纯噪音，异常状态（未连接 / 启动中 / 运行中）才值得写出来。 */}
-          <span className="ml-auto flex items-center gap-1 text-[10px] text-faint" title={connLabel}>
-            <span className={`h-1.5 w-1.5 rounded-full ${connTone}`} />
-            {activeConn === "ready" ? null : connLabel}
-          </span>
         </button>
       </div>
 

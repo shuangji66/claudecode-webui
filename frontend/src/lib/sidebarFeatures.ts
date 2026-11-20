@@ -1,4 +1,4 @@
-// 左侧栏功能区的入口清单与「固定 / 取消固定」偏好（对齐 DSH：插件 / MCP /
+// 左侧栏功能区的入口清单与「固定 / 取消固定」偏好（对齐 DSH：模型 / 插件 / MCP /
 // 技能中心 / 自动化任务 / 历史记录都在「新对话」与工作区之间的功能区里）。
 //
 // 偏好只缓存**本机**（localStorage），不进 settings.json：和主题、侧栏视图偏好
@@ -8,10 +8,10 @@
 // 而不是让老用户的侧栏永远少几项。
 import { useSyncExternalStore } from "react";
 
-export type FeatureKey = "plugins" | "mcp" | "skills" | "schedules" | "history";
+export type FeatureKey = "models" | "plugins" | "mcp" | "skills" | "schedules" | "history";
 
 /** 功能区与「更多」菜单的顺序。 */
-export const FEATURE_KEYS: readonly FeatureKey[] = ["plugins", "mcp", "skills", "schedules", "history"];
+export const FEATURE_KEYS: readonly FeatureKey[] = ["models", "plugins", "mcp", "skills", "schedules", "history"];
 
 /** 取消固定的偏好键（值是被隐藏的入口 id 数组）。 */
 const HIDDEN_KEY = "ccweb-sidebar-feature-hidden";
