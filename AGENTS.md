@@ -260,6 +260,15 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `--resume` 找不到会话会直接退出，那时我们只会留下一条永远 resume 不了的元数据。
 - **claude 转录会包含 sidechain / meta / queue-operation 行**：回放只取
   user/assistant/system/result 且跳过 `isSidechain`/`isMeta`，否则子代理和系统提醒会混进主消息流。
+- **`<task-notification>` 是 CLI 注入的 user 行，`isMeta` 是 `null` 不是 `true`**：
+  后台命令 / 子代理结束时它被当成一条普通用户消息写进转录，顶上的 meta 过滤挡不住。
+  不丢的话，停掉一个后台命令再重进对话，界面上就多出一坨原始 XML（`<task-id>`、
+  `<output-file>`、英文 `<note>`），而且它会让轮次计数多一格。
+  前端 `lib/normalize.isTaskNotification` 与后端 `history.isTaskNotification`
+  是同一条规则的两份镜像（**两边都要改**），都只认「整条消息就是这一个块」——
+  用户正文里贴了这段 XML 时前后还有自己的话，不会命中。
+  后端那份还负责让它**不参与消息计数、不当会话标题**：否则一条以「后台命令跑完了」
+  开头的对话在侧栏里会叫 `<task-notification> <task-id>…`。
 
 ### 4.4.1 WS 重连要补齐断线期间的事件（`sync` / `session.replay`）
 

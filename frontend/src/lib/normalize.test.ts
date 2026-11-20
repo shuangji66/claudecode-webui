@@ -11,6 +11,7 @@ import {
   isInterruptMarker,
   mergeReplayed,
   isLocalCommandEcho,
+  isTaskNotification,
   subagentFromResult,
   prependSystem,
   stripAnsi,
@@ -1757,3 +1758,46 @@ describe("conversation_reset", () => {
 });
 
 
+
+describe("CLI 注入的后台任务通知", () => {
+  beforeEach(() => __resetIds());
+
+  // 后台命令/子代理结束时 CLI 会写一条普通 user 行（isMeta 是 null，绕过了
+  // applyCLI 顶上的 meta 过滤）。不丢掉的话，停掉后台命令再重进对话，界面上
+  // 就多出一坨 `<task-notification>` 原始 XML，还让轮次计数多一格。
+  const notice =
+    "<task-notification>\n<task-id>bv3vaq2qk</task-id>\n<tool-use-id>call_00_x</tool-use-id>\n" +
+    "<output-file>/tmp/x.output</output-file>\n<status>killed</status>\n" +
+    '<summary>Background command "Run 529 mock server" was stopped</summary>\n' +
+    "<note>No completion record was found…</note>\n</task-notification>";
+
+  it("整条丢弃，不进消息流", () => {
+    const items = applyCLI([], { type: "user", message: { role: "user", content: notice } });
+    expect(items).toHaveLength(0);
+  });
+
+  it("内容块数组形态也认", () => {
+    const items = applyCLI([], {
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: notice }] },
+    });
+    expect(items).toHaveLength(0);
+  });
+
+  it("用户正文里贴了这段 XML 时不吞（前后还有自己的话）", () => {
+    const items = applyCLI([], {
+      type: "user",
+      message: { role: "user", content: "帮我看下这个：\n" + notice },
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("user");
+  });
+
+  it("isTaskNotification 只认整条就是这一个块", () => {
+    expect(isTaskNotification(notice)).toBe(true);
+    expect(isTaskNotification("  " + notice + "  ")).toBe(true);
+    expect(isTaskNotification("<task-notification>缺结束标签")).toBe(false);
+    expect(isTaskNotification("hello")).toBe(false);
+    expect(isTaskNotification("")).toBe(false);
+  });
+});

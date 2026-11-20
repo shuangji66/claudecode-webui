@@ -233,6 +233,28 @@ export function isLocalCommandEcho(text: string): boolean {
   return localCommandEchoRE.test(t);
 }
 
+// 后台命令 / 子代理结束时，CLI 会往对话里写一条**普通 user 行**：
+//
+//	<task-notification>
+//	<task-id>…</task-id><status>killed</status><summary>…</summary>
+//	…
+//	</task-notification>
+//
+// 它是**系统注入的状态通知**，不是用户说的话：渲染成用户气泡，界面里就多出一坨
+// 原始 XML（实测「停掉后台命令再重进前端」时会看到），而且它会让轮次计数多一格。
+// `isMeta` 在这里是 null 而不是 true，绕过了 applyCLI 顶上那道 meta 过滤。
+//
+// 只认「整条消息就是这一个块」：用户正文里贴了这段 XML 时前后还有自己的文字，
+// 不会命中。后端 `history.isTaskNotification` 是同一条规则的镜像（两边都要改）。
+const taskNotificationRE = /^<task-notification>\s*<task-id>[\s\S]*<\/task-notification>$/;
+
+/** 判断一条用户文本是否是 CLI 注入的后台任务通知（应整条忽略）。 */
+export function isTaskNotification(text: string): boolean {
+  const t = text.trim();
+  if (!t.startsWith("<task-notification>")) return false;
+  return taskNotificationRE.test(t);
+}
+
 // 回合被中断时，CLI 会往流里写一条**合成的 user 消息**当标记：
 //   `[Request interrupted by user]`（按 Esc）
 //   `[Request interrupted by user for tool use]`（工具执行中被打断）
@@ -740,6 +762,11 @@ function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): 
   // 本地命令回显（/model 之类的 stdout、斜杠命令包装）整条丢弃：
   // 它不是用户说的话，也不是模型输出，渲染成气泡只会污染会话。
   if (isLocalCommandEcho(textOfContent(content))) return items;
+
+  // 后台任务通知同样是 CLI 注入的 user 行（`isMeta` 是 null，绕过顶上那道过滤）。
+  // 不丢的话，停掉一个后台命令再重进对话，界面上就多出一坨 `<task-notification>`
+  // 的原始 XML，还带着一串 task-id 与英文说明。
+  if (isTaskNotification(textOfContent(content))) return items;
 
   // CLI 的中断标记：单独渲染成一句中性的「已中断」，不占用户气泡。
   // 连续中断（用户连按 Esc）只留一条，否则每按一次多一行。

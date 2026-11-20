@@ -136,6 +136,12 @@ func summarize(path, project string) Session {
 			if l.Type == "user" && isInterruptMarker(extractText(l.Message.Content)) {
 				return true
 			}
+			// 后台任务通知（`<task-notification>`）也是 CLI 注入的 user 行：
+			// 它既不是提问，也不能当标题——否则一条以「后台命令跑完了」开头的对话
+			// 在列表里会叫 `<task-notification> <task-id>…`。
+			if l.Type == "user" && isTaskNotification(extractText(l.Message.Content)) {
+				return true
+			}
 			s.Messages++
 			if l.Type == "user" && !titleDone && lines <= maxTitleScanLines {
 				if txt := extractText(l.Message.Content); txt != "" {
@@ -249,6 +255,33 @@ var interruptMarkerRE = regexp.MustCompile(`^\[(?:Request interrupted|Agent call
 func isInterruptMarker(text string) bool {
 	return interruptMarkerRE.MatchString(strings.TrimSpace(text))
 }
+
+// taskNotificationRE 匹配 CLI 注入的后台任务通知。
+//
+// 后台命令 / 子代理结束时，CLI 会往对话里写一条**普通 user 行**（`isMeta` 是
+// null，不是 true，所以绕过了 sidechain/meta 过滤）：
+//
+//	<task-notification>
+//	<task-id>…</task-id><status>killed</status><summary>…</summary>
+//	…
+//	</task-notification>
+//
+// 它既不是用户说的话，也不该算一条消息、更不能当会话标题。前端 `lib/normalize.ts`
+// 的 `isTaskNotification` 是同一条规则的镜像（两边都要改）。
+//
+// 只认「整条消息就是这一个块」：用户正文里顺口贴了这段 XML 时前后还有自己的文字，
+// 不会命中。
+var taskNotificationRE = regexp.MustCompile(`(?s)^<task-notification>\s*<task-id>[\s\S]*</task-notification>$`)
+
+// isTaskNotification 判断一条 user 文本是否是 CLI 注入的后台任务通知。
+func isTaskNotification(text string) bool {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "<task-notification>") {
+		return false
+	}
+	return taskNotificationRE.MatchString(t)
+}
+
 
 func truncate(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
