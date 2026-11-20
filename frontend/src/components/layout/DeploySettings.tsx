@@ -16,7 +16,7 @@ import type { ClaudeJobPhase, ClaudeSource, ClaudeVersion } from "../../transpor
 import { Section } from "./settings/Section";
 
 const SOURCES: { value: ClaudeSource; zh: string; en: string }[] = [
-  { value: "npmmirror", zh: "npmmirror 国内镜像（推荐）", en: "npmmirror (China mirror, recommended)" },
+  { value: "npmmirror", zh: "阿里云镜像", en: "Alibaba Cloud mirror" },
   { value: "tencent", zh: "腾讯云镜像", en: "Tencent Cloud mirror" },
   { value: "huawei", zh: "华为云镜像", en: "Huawei Cloud mirror" },
   { value: "official", zh: "官方 npm registry", en: "Official npm registry" },
