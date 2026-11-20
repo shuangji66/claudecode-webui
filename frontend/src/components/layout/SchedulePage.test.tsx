@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SchedulePage } from "./SchedulePage";
 import { useAppStore } from "../../store/useAppStore";
 import { useScheduleStore } from "../../store/useScheduleStore";
@@ -84,6 +84,40 @@ describe("SchedulePage", () => {
     render(<SchedulePage onClose={onClose} />);
     fireEvent.click(screen.getByRole("button", { name: "关闭" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // 运行记录里点一条对话：打开了才回对话区（与历史记录页同一条规矩），
+  // 打不开就留在这一页——否则功能页盖在上面，用户以为点了没反应。
+  it("运行记录里打开对话成功才回对话区", async () => {
+    const onClose = vi.fn();
+    const openConversation = vi.fn(async () => true);
+    useAppStore.setState({ openConversation });
+    useScheduleStore.setState({
+      deliveries: async () => [{ at: "2026-11-19T01:00:00Z", conversation_id: "c-9", prompt: "跑一遍测试" }],
+    });
+
+    render(<SchedulePage onClose={onClose} />);
+    fireEvent.click(screen.getByText("每日巡检"));
+
+    fireEvent.click(await screen.findByText("c-9"));
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(openConversation).toHaveBeenCalledWith("c-9");
+  });
+
+  it("对话打不开时留在自动化任务页", async () => {
+    const onClose = vi.fn();
+    const openConversation = vi.fn(async () => false);
+    useAppStore.setState({ openConversation });
+    useScheduleStore.setState({
+      deliveries: async () => [{ at: "2026-11-19T01:00:00Z", conversation_id: "c-9", prompt: "跑一遍测试" }],
+    });
+
+    render(<SchedulePage onClose={onClose} />);
+    fireEvent.click(screen.getByText("每日巡检"));
+    fireEvent.click(await screen.findByText("c-9"));
+
+    await waitFor(() => expect(openConversation).toHaveBeenCalledWith("c-9"));
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
 

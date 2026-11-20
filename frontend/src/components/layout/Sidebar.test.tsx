@@ -504,6 +504,20 @@ describe("Sidebar 回对话区", () => {
 
     expect(onOpenChat).toHaveBeenCalledTimes(1);
   });
+
+  // 工作区行尾的「+」是另一个新建入口：漏了它，功能区整页视图（MCP/插件…）开着时
+  // 新对话只会被建在后台，界面还停在功能页上。
+  it("工作区行尾的「+」也先回对话区", () => {
+    const onOpenChat = vi.fn();
+    const startConversationIn = vi.fn(async () => {});
+    useAppStore.setState({ startConversationIn });
+
+    renderSidebar({ onOpenChat });
+    fireEvent.click(screen.getByRole("button", { name: `在该工作区新建对话 ${cwd}` }));
+
+    expect(onOpenChat).toHaveBeenCalledTimes(1);
+    expect(startConversationIn).toHaveBeenCalledWith(cwd);
+  });
 });
 
 describe("Sidebar 退出登录", () => {

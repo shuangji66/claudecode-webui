@@ -230,7 +230,13 @@ export function SchedulePage({ onClose, onOpenSidebar }: Props) {
           onTogglePause={togglePause}
           onDelete={removeTask}
           status={tasks.find((x) => x.id === draft.id)?.status}
-          onOpenConversation={(id) => void openConversation(id)}
+          onOpenConversation={(id) => {
+            // 与历史记录页同一条规矩：打开了才回对话区。失败（目录未授权 / 会话起不来）
+            // 就留在这一页，原因由 store 的错误条说，别把人扔到一个空白的对话区。
+            void openConversation(id).then((ok) => {
+              if (ok) onClose();
+            });
+          }}
         />
       ) : (
         <TaskList

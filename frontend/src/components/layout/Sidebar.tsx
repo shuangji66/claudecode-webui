@@ -1021,6 +1021,9 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                     <button
                       type="button"
                       onClick={() => {
+                        // 与 startNewChat 同一条规矩：先回对话区再建会话。少了这一步，
+                        // 功能区整页视图还盖在上面，新对话建好了也看不见（入口仍在原地高亮）。
+                        onOpenChat?.();
                         void startConversationIn(g.path);
                         // 移动端：抽屉里发起的「新建对话」都要让出位置，直接落到新会话上。
                         onClose?.();
