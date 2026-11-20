@@ -563,7 +563,11 @@ hub ── manager ── session ── process ── claude (NDJSON)
   已接的分支与理由（都在 `applySystem`）：
   - `api_retry`：上游 429/5xx 重试。高峰期很常见，不显示就是「莫名卡住」。
   - `status: compacting` / `compact_result: "failed"`：压缩要跑几十秒；失败是静默的数据损失，
-    原因只在 `compact_error` 里。`compacting` 用 `pushOngoing` **去重**（一次压缩会连发很多条）。
+    原因只在 `compact_error` 里。`compacting` 用 `pushOngoing` **去重**（一次压缩会连发很多条），
+    但**必须收尾**（`clearOngoing`）：它是进行时，压缩一结束（`requesting` / `null` /
+    `compact_boundary` / 失败）就不成立了。不收的话消息流里会永远挂着一条
+    「正在压缩上下文…」，紧接着下面又出现「上下文已手动压缩」——一次 `/compact` 之后
+    两句话一直叠在那里。**「进行中」的提示都得配一个收尾**，别只做去重。
   - `hook_response`（只报非 success）/ `stop_hook_summary`（`hookErrors` 非空）：
     这是用户唯一能看见「我这个 hook 挂了」的地方，输出在 `output`/`stdout`/`stderr` 里。
   - `model_fallback` / `model_refusal_fallback` / `informational`：CLI 自己在 `content` 里
@@ -591,6 +595,23 @@ hub ── manager ── session ── process ── claude (NDJSON)
   明细与命中率一并摘掉（它们描述的是「某一次请求」，已经过时）；紧接着的请求会带着真实
   usage 覆盖回来，两者不打架。实时路径（`applyUsageMessage`）与转录回放
   （`usageFromTranscript`）两条都要做——每条路径各自维护自己的「压缩后上下文」状态。
+- **「上游多久没出声」这句提示只在真的在等上游时才说**（`lib/localWork.ts` + 后端
+  `session.LocalBusy`）：`TurnTimer` 超过 15 秒没有帧就补一句「上游 Ns 没有响应」，
+  但那句话的前提是「这段时间本该有上游字节」。有两类操作压根不等上游：
+  - **上下文压缩**：CLI 自己发一次摘要请求，只发一条 `status: compacting` 就没声音了
+    ——实测一次手动压缩 **25.3 秒**（`compact_boundary.duration_ms`）。而 CLI 自己的
+    压缩心跳是 **30 秒**一次（`sZ` 里的 `setInterval(..., 30000)`），15 秒阈值必然
+    在中间误报「上游 18s 没有响应」（截图复现过）。压缩失败时 CLI 会自己报
+    `compact_result: "failed"` + 原因，轮不到前端猜。
+  - **hook**：用户自己配的本地进程（`hook_started` → `hook_response`），跑多久与上游无关。
+  这两档要说的是「正在压缩上下文」（带上 `compact_output_chars` 这个会动的数）/「hook X
+  正在跑」，不是「上游没有响应」。**判据只认 CLI 自己报的帧，不按「等了多久」猜**——
+  猜错的方向是把真正的上游故障说成正常。
+  与 `ChatPane.waitingUpstream`（有工具卡片没返回）是同一件事的两个来源，两者都要过。
+  **状态要随 `session.snapshot` 下发**（后端 `Session.LocalBusy`）：压缩途中的连接
+  拿不到那条只发一次的 `status: compacting`，它又不进转录——不补这一份，刷新页面之后
+  界面照样误报。前后端是同一套规则的**两份镜像**（`lib/localWork.ts` /
+  `session.noteLocalBusy`），两边都要改。
 - **`system/commands_changed` 要替换斜杠命令缓存**（CLI 原话：clients should REPLACE
   their cached command list）。会话中途装的技能、动态发现的命令靠它进 `/` 菜单。
   它**不进消息流**，由 store 的 `cli` 分支用 `commandsChanged` 写回 `inits[sid].commands`。
@@ -1393,6 +1414,11 @@ cd frontend && npx tsc --noEmit
 - [ ] 转录回放是否过滤 sidechain/meta，并保留原始时间戳？被截断（20k 行 / 16MB）时有没有提示？
 - [ ] 动手碰 `user` 行/用量/标题的地方，是否也挡了**压缩后的续接提示**
       （`isCompactSummary` / `isVisibleInTranscriptOnly` / 正文前缀，见 4.7）？
+- [ ] 新增「进行中」类提示时是否配了**收尾**（`clearOngoing`）？会不会压缩/命令结束后
+      永远挂着一条「正在…」？
+- [ ] 新增会让 CLI 长时间不出声的操作（压缩、hook、本地命令）时，是否也进了
+      `lib/localWork`（前端）与 `Session.LocalBusy`（后端）？否则界面会把它误报成
+      「上游 Ns 没有响应」（见 4.7）。
 - [ ] 新增右侧栏路由是否过了 `authorizedCwd` / 路径围栏？raw 预览是否仍在白名单？
 - [ ] 右侧栏标签切走、收起整条侧栏时是否都只隐藏不卸载（终端 PTY 不能被杀）？Git 是否仍只 pull？
 - [ ] 终端是否仍走二进制帧、多开时每个标签各自一条 WS？

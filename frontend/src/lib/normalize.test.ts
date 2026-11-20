@@ -1966,6 +1966,52 @@ describe("system 消息里的可显示状态", () => {
     expect(items).toHaveLength(0);
   });
 
+  // 「正在压缩上下文…」是进行时：压缩一收尾它就不再成立。不收掉的话消息流里会永远
+  // 挂着这一条，紧接着下面又出现「上下文已手动压缩」——一次 /compact 之后两句话
+  // 一直叠在那里（截图复现过）。
+  it("压缩结束会把「正在压缩上下文…」摘掉，不留下永远进行中的一句话", () => {
+    let items: Item[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      items = applyCLI(items, { type: "system", subtype: "status", status: "compacting", compact_output_chars: 100 * i });
+    }
+    expect(items).toHaveLength(1);
+
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "status",
+      status: "requesting",
+      compact_result: "success",
+    });
+    expect(items).toHaveLength(0);
+  });
+
+  it("压缩边界把「正在压缩上下文…」换成结果提示", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, { type: "system", subtype: "status", status: "compacting" });
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "manual", pre_tokens: 368934, post_tokens: 9254 },
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "system", subtype: "compact_boundary" });
+    expect((items[0] as { text: string }).text).toContain("上下文已手动压缩");
+  });
+
+  it("压缩失败也要摘掉进行中的提示", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, { type: "system", subtype: "status", status: "compacting" });
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "status",
+      status: "requesting",
+      compact_result: "failed",
+      compact_error: "prompt too long",
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("error");
+  });
+
   // hook 的输出在 output/stdout/stderr 里，没有 content，早先同样静默。
   it("hook 失败显示 hook 名与 stderr，成功的报告不显示", () => {
     const ok = applyCLI([], {

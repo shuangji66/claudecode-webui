@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import { TurnTimer } from "./TurnTimer";
-import { __resetSyncState, noteFrame } from "../../store/useAppStore";
+import { __resetSyncState, noteFrame, useAppStore } from "../../store/useAppStore";
 
 const NOW = Date.parse("2026-01-02T00:00:00Z");
 
@@ -80,5 +80,45 @@ describe("TurnTimer 的上游沉默提示", () => {
   it("有工具在跑时不提示（watchSilence=false）", () => {
     render(<TurnTimer startedAt={NOW - 40_000} sessionId="s1" watchSilence={false} />);
     expect(screen.queryByText(/没有响应/)).toBeNull();
+  });
+
+  // 手动 `/compact` 实测 25.3 秒只发一条 `status: compacting` 就没了声音，
+  // 而 CLI 自己的压缩心跳是 30 秒一次：15 秒阈值必然在中间误报「上游 Ns 没有响应」。
+  // 压缩是 CLI 自己在跑摘要请求，压根不等上游——那时该说的是「正在压缩上下文」。
+  it("压缩中不报「上游没有响应」，改说正在压缩", () => {
+    useAppStore.getState().applyEvent("s1", {
+      kind: "cli",
+      data: { type: "system", subtype: "status", status: "compacting" },
+    } as never);
+    render(<TurnTimer startedAt={NOW - 40_000} sessionId="s1" />);
+    expect(screen.queryByText(/没有响应/)).toBeNull();
+    expect(screen.getByText(/正在压缩上下文/)).toBeInTheDocument();
+  });
+
+  it("压缩结束时那行提示消失", () => {
+    useAppStore.getState().applyEvent("s1", {
+      kind: "cli",
+      data: { type: "system", subtype: "status", status: "compacting" },
+    } as never);
+    useAppStore.getState().applyEvent("s1", {
+      kind: "cli",
+      data: { type: "system", subtype: "status", status: "requesting" },
+    } as never);
+    render(<TurnTimer startedAt={NOW - 40_000} sessionId="s1" />);
+    // `requesting` 本身是一条帧 → 沉默水位被刷新，这一刻既不提示压缩也不提示沉默。
+    expect(screen.queryByText(/正在压缩上下文/)).toBeNull();
+    expect(screen.queryByText(/没有响应/)).toBeNull();
+  });
+
+  // hook 是用户自己配的本地进程，跑多久与上游无关：长时间挂着的 hook 同样不该
+  // 被说成「上游没有响应」。
+  it("hook 在跑时说 hook，不报上游", () => {
+    useAppStore.getState().applyEvent("s1", {
+      kind: "cli",
+      data: { type: "system", subtype: "hook_started", hook_id: "h1", hook_name: "fmt", hook_event: "PostToolUse" },
+    } as never);
+    render(<TurnTimer startedAt={NOW - 90_000} sessionId="s1" />);
+    expect(screen.queryByText(/没有响应/)).toBeNull();
+    expect(screen.getByText(/hook h1 正在跑/)).toBeInTheDocument();
   });
 });

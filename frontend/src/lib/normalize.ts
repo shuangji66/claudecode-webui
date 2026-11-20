@@ -1290,13 +1290,20 @@ function applySystem(items: Item[], m: Raw, at: number): Item[] {
   //     什么都不动，用户会以为会话死了；
   //   - `compact_result: "failed"`：压缩失败是静默的数据损失（历史被截断却没压缩成），
   //     原因只在 `compact_error` 里。
+  //
+  // `compacting` 是**进行时**：压缩一收尾（`requesting` / `null`）就要把它摘掉，
+  // 否则消息流里永远挂着一条「正在压缩上下文…」，紧接着下面又出现「上下文已手动压缩」，
+  // 一次 `/compact` 之后两句话会一直叠在那里（截图复现过）。
   if (m.subtype === "status") {
     if (m.status === "compacting") {
       return pushOngoing(items, at, "status", "正在压缩上下文…");
     }
     if (m.compact_result === "failed") {
       const reason = typeof m.compact_error === "string" ? m.compact_error.trim() : "";
-      return pushError(items, at, reason ? `上下文压缩失败：${reason}` : "上下文压缩失败");
+      return pushError(clearOngoing(items, "status"), at, reason ? `上下文压缩失败：${reason}` : "上下文压缩失败");
+    }
+    if (m.status === "requesting" || m.status === null) {
+      return clearOngoing(items, "status");
     }
     return items;
   }
@@ -1346,7 +1353,8 @@ function applySystem(items: Item[], m: Raw, at: number): Item[] {
     const meta = compactMetaOf(m);
     const trigger = meta.trigger === "manual" ? "手动" : "自动";
     const pre = meta.preTokens !== undefined ? `，压缩前 ${formatTokens(meta.preTokens)} tokens` : "";
-    return pushSystem(items, at, "compact_boundary", `上下文已${trigger}压缩${pre}`);
+    // 压缩结束：「正在压缩上下文…」不再成立，必须一起摘掉（见 clearOngoing）。
+    return pushSystem(clearOngoing(items, "status"), at, "compact_boundary", `上下文已${trigger}压缩${pre}`);
   }
   // 本地命令回显也可能走 system 通道，同样整条丢弃。
   if (typeof m.content === "string" && isLocalCommandEcho(m.content)) return items;
@@ -1374,6 +1382,20 @@ function pushOngoing(items: Item[], at: number, subtype: string, text: string): 
   const last = items[items.length - 1];
   if (last && last.kind === "system" && last.subtype === subtype && last.text === text) return items;
   return pushSystem(items, at, subtype, text);
+}
+
+/**
+ * 摘掉「进行中」类的状态提示（压缩结束/失败时用）。
+ *
+ * 「正在压缩上下文…」是**进行时**：压缩一收尾它就不再成立，留着就是一条永远停在
+ * 「正在…」的陈述，紧接着下面又出现「上下文已手动压缩」——两句话互相打架。
+ * 早先只做了去重没做收尾，一次 `/compact` 之后那条提示会一直留在消息流里（截图复现过）。
+ *
+ * 只摘同一 subtype 的：别把别的进行时提示（比如以后新增的）一起收掉。
+ */
+function clearOngoing(items: Item[], subtype: string): Item[] {
+  const kept = items.filter((it) => !(it.kind === "system" && it.subtype === subtype));
+  return kept.length === items.length ? items : kept;
 }
 
 /** 追加一条错误提示（压缩失败这类「静默的数据损失」用它，比灰色小字显眼）。 */

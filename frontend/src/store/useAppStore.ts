@@ -26,6 +26,7 @@ import {
   turnsFromTranscript,
 } from "../lib/normalize";
 import { applyUsageMessage, mergeUsage, usageFromTranscript, type UsageSnapshot } from "../lib/usage";
+import { localWorkFrom, NO_LOCAL_WORK, type LocalWork } from "../lib/localWork";
 import { effortApply } from "../lib/providerForm";
 import { isNewChat } from "../lib/newChat";
 import { openFnosFileManager } from "../lib/fnos";
@@ -475,6 +476,25 @@ export function lastSound(sid: string | null): number | undefined {
 /** 会话被删/被关掉时清掉，否则这张表随对话数量无限长。 */
 function forgetSilence(sid: string): void {
   lastSoundAt.delete(sid);
+  localWorkAt.delete(sid);
+}
+
+/**
+ * 每个会话「CLI 自己在干活」的状态（上下文压缩中 / hook 在跑）。
+ *
+ * 与 `lastSoundAt` 同一套存法（模块级 Map，不进 zustand state）：它只在
+ * `TurnTimer` 每秒 tick 时被读一次，为它多开一轮渲染不值得。
+ *
+ * 为什么要单独记：`TurnTimer` 那句「上游 Ns 没有响应」的前提是「这段时间本该有
+ * 上游字节」。压缩与 hook 压根不等上游——手动 `/compact` 实测 25 秒一个字节都不回，
+ * 而 CLI 自己的压缩心跳是 30 秒一次，15 秒阈值必然误报。判据只认 CLI 自己报的帧，
+ * 见 lib/localWork。
+ */
+const localWorkAt = new Map<string, LocalWork>();
+
+/** 读某个会话「本地在干什么」；没记过返回空状态。 */
+export function localWork(sid: string | null): LocalWork {
+  return (sid ? localWorkAt.get(sid) : undefined) ?? NO_LOCAL_WORK;
 }
 
 /**
@@ -2235,10 +2255,20 @@ export const useAppStore = create<AppState>()((set, get) => ({
               info?: { state?: string; mode?: string };
               permissions?: PermissionPayload[];
               tasks?: LiveTask[];
+              // 「CLI 在自己进程里干活」的状态（压缩中 / hook 在跑）。压缩途中刷新页面
+              // 拿不到那条 `status: compacting`（只发一次、不进转录），靠它补上。
+              busy?: { compacting?: boolean; hooks?: string[] };
               seq?: number;
               epoch?: string;
             }
           | undefined;
+        if (data?.busy) {
+          localWorkAt.set(sid, {
+            compacting: data.busy.compacting === true,
+            compactChars: 0,
+            hooks: Array.isArray(data.busy.hooks) ? data.busy.hooks.filter((h) => typeof h === "string") : [],
+          });
+        }
         if (data?.init) set((s) => ({ inits: { ...s.inits, [sid]: data.init! } }));
         // info.mode 是会话**此刻**的模式（后端记录 CLI 最近一次上报的值）；
         // init 里那份只是启动时的快照，重连后不能拿它顶替。
@@ -2462,6 +2492,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
       }
       case "closed": {
         dropAskDrafts(get().perms[sid]);
+        // 进程没了，「本地在干什么」的旧状态必须一起清掉：压缩中被杀 / hook 挂着被杀时
+        // 不清的话，重连之后界面会一直以为还在压缩，沉默提示也跟着永久失效。
+        localWorkAt.delete(sid);
         set((s) => {
           const cur = s.items[sid];
           return {
@@ -2481,6 +2514,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return;
       }
       case "cli": {
+        // 「CLI 在自己干活」的状态要跟着每条帧更新（压缩中 / hook 在跑），
+        // 它决定 TurnTimer 要不要说「上游 Ns 没有响应」——压缩与 hook 压根不等上游。
+        // 放在子代理分流之前：子代理帧同样说明链路活着，但压缩状态是主会话的，
+        // 子代理帧不该改写它（`localWorkFrom` 对认不出的类型原样返回）。
+        const work = localWorkFrom(localWork(sid), ev.data);
+        if (work !== localWork(sid)) localWorkAt.set(sid, work);
         // 子代理内部的帧（parent_tool_use_id 非空）单独归桶：它们既不能进主消息流，
         // 也不能污染主会话的用量统计。
         const sub = subagentFrame(ev.data);
@@ -2564,4 +2603,5 @@ export function __resetSyncState(): void {
   syncTimers.clear();
   awaitingReplay.clear();
   lastSoundAt.clear();
+  localWorkAt.clear();
 }

@@ -1341,6 +1341,107 @@ func TestLiveTasksIgnoresOtherSystemMessages(t *testing.T) {
 	}
 }
 
+// 压缩期间 CLI 只发一条 `status: compacting` 就安静二十几秒（实测一次手动压缩
+// 25.3 秒）。前端只按「最后一条帧」判沉默，压缩途中刷新页面就完全拿不到这个状态，
+// 于是照样报「上游没有响应」——所以要随 session.snapshot 下发。
+func TestLocalBusyTracksCompacting(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	if got := sess.LocalBusy(); got.Compacting || len(got.Hooks) != 0 {
+		t.Fatalf("初始不该有本地忙状态: %+v", got)
+	}
+
+	fc.send(map[string]any{"type": "system", "subtype": "status", "status": "compacting", "compact_output_chars": 1200})
+	if _, ok := rec.wait(KindCLI, 2*time.Second); !ok {
+		t.Fatal("compacting 帧应继续作为 cli 事件转发")
+	}
+	if !sess.LocalBusy().Compacting {
+		t.Fatal("收到 status=compacting 后应记为正在压缩")
+	}
+
+	// 压缩结束的几种信号都要认（CLI 有时只发请求态，有时只发边界）。
+	fc.send(map[string]any{"type": "system", "subtype": "status", "status": "requesting"})
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && sess.LocalBusy().Compacting {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.LocalBusy().Compacting {
+		t.Fatal("status=requesting 之后不该还在压缩")
+	}
+}
+
+func TestLocalBusyCompactBoundaryEndsCompacting(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{"type": "system", "subtype": "status", "status": "compacting"})
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && !sess.LocalBusy().Compacting {
+		time.Sleep(5 * time.Millisecond)
+	}
+	fc.send(map[string]any{
+		"type":    "system",
+		"subtype": "compact_boundary",
+		"compactMetadata": map[string]any{
+			"trigger":     "manual",
+			"preTokens":   368934,
+			"postTokens":  9254,
+			"duration_ms": 25306,
+		},
+	})
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && sess.LocalBusy().Compacting {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.LocalBusy().Compacting {
+		t.Fatal("compact_boundary 之后不该还在压缩")
+	}
+}
+
+// hook 是用户自己配的本地进程，跑多久与上游无关：挂着的时候同样不该被说成
+// 「上游没有响应」，所以也要进快照。
+func TestLocalBusyTracksHooks(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{
+		"type":       "system",
+		"subtype":    "hook_started",
+		"hook_id":    "h1",
+		"hook_name":  "fmt",
+		"hook_event": "PostToolUse",
+	})
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && len(sess.LocalBusy().Hooks) == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := sess.LocalBusy().Hooks; len(got) != 1 || got[0] != "h1" {
+		t.Fatalf("hook 表 = %v", got)
+	}
+
+	fc.send(map[string]any{"type": "system", "subtype": "hook_response", "hook_id": "h1", "outcome": "success"})
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && len(sess.LocalBusy().Hooks) > 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := sess.LocalBusy().Hooks; len(got) != 0 {
+		t.Fatalf("hook 结束后仍在表里: %v", got)
+	}
+}
+
+// 没有 hook_id 的帧配不上结束，记下来就再也清不掉。
+func TestLocalBusyIgnoresHookWithoutID(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{"type": "system", "subtype": "hook_started", "hook_name": "fmt"})
+	time.Sleep(50 * time.Millisecond)
+	if got := sess.LocalBusy().Hooks; len(got) != 0 {
+		t.Fatalf("没有 hook_id 时不该记账: %v", got)
+	}
+}
+
 // 结束之后可能还有排队的进度帧在路上：task_progress / task_updated 不能把早就跑完的
 // 任务重新列进「进行中」，否则中止按钮指向一个已经不存在的 task。
 func TestLiveTasksDoesNotResurrectFinishedTask(t *testing.T) {

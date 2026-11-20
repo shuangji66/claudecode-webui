@@ -236,6 +236,15 @@ type Session struct {
 	// taskOrder 保证下发顺序稳定（= 启动顺序），不依赖 map 遍历。
 	taskOrder []string
 
+	// busyMu/busy 记「CLI 在自己进程里干活、没在等上游」的状态（压缩中 / hook 在跑）。
+	//
+	// 为什么要记：「沉默多久算上游不响应」是前端的判断（TurnTimer），它只看「最后一条帧」。
+	// 压缩期间 CLI 只发一条 `status: compacting` 就安静二十几秒，压缩途中刷新页面时
+	// 前端连那条都拿不到——于是界面上照样报「上游没有响应」，而实际上 CLI 正在写摘要。
+	// 随 session.snapshot 下发，重连的连接也能立刻渲染对的状态。
+	busyMu sync.Mutex
+	busy   protocol.LocalBusy
+
 	// replayMu/replay 是**有界的事件重放缓冲**，只给断线重连补空缺用。
 	//
 	// WS 断开期间 CLI 不会停：assistant 正文、工具结果、回合结束的 result（本轮用量
@@ -663,6 +672,75 @@ func (s *Session) LiveTasks() []taskRef {
 	return out
 }
 
+// LocalBusy 返回「CLI 在自己进程里干活、没在等上游」的状态，随 session.snapshot 下发。
+//
+// 前端据此把计时行上的「上游 Ns 没有响应」换成「正在压缩上下文」/「hook 正在跑」。
+// 压缩途中刷新页面的连接拿不到那条 `status: compacting`（它只发一次、不进转录），
+// 没有这份快照就只能误报。
+func (s *Session) LocalBusy() protocol.LocalBusy {
+	s.busyMu.Lock()
+	defer s.busyMu.Unlock()
+	return protocol.LocalBusy{
+		Compacting: s.busy.Compacting,
+		Hooks:      append([]string(nil), s.busy.Hooks...),
+	}
+}
+
+// noteLocalBusy 按 `system/status` 的压缩态、hook 的开始/结束与压缩边界维护上面那份状态。
+//
+// 判据与前端 lib/localWork.ts 是同一套规则（两边都要改）：
+//   - `compacting` 开始，`requesting` / `null` / `compact_boundary` 结束；
+//   - `hook_started` 记 id，`hook_response` 摘掉对应的那个。
+//
+// 没有 hook_id 的帧不记：记下来永远配不上结束，那份状态就再也清不掉。
+func (s *Session) noteLocalBusy(raw json.RawMessage) {
+	if status, isNull, ok := protocol.CompactStatusOf(raw); ok {
+		if status == "compacting" || isNull || status == "requesting" {
+			s.busyMu.Lock()
+			s.busy.Compacting = status == "compacting"
+			s.busyMu.Unlock()
+		}
+		return
+	}
+	if id, subtype, ok := protocol.HookIDOf(raw); ok {
+		// 没有 id 的记录配对不上结束，记下来就清不掉了。
+		if id == "" {
+			return
+		}
+		s.busyMu.Lock()
+		defer s.busyMu.Unlock()
+		switch subtype {
+		case "hook_started":
+			for _, h := range s.busy.Hooks {
+				if h == id {
+					return
+				}
+			}
+			s.busy.Hooks = append(s.busy.Hooks, id)
+		case "hook_response":
+			out := s.busy.Hooks[:0]
+			for _, h := range s.busy.Hooks {
+				if h != id {
+					out = append(out, h)
+				}
+			}
+			s.busy.Hooks = out
+		}
+		return
+	}
+	// 压缩边界是「压缩真的结束了」的权威信号：CLI 有时只发它、不发收尾的 status。
+	var boundary struct {
+		Type    string `json:"type"`
+		Subtype string `json:"subtype"`
+	}
+	if json.Unmarshal(raw, &boundary) == nil &&
+		boundary.Type == protocol.TypeSystem && boundary.Subtype == "compact_boundary" {
+		s.busyMu.Lock()
+		s.busy.Compacting = false
+		s.busyMu.Unlock()
+	}
+}
+
 // noteTaskEvent 按 system/task_* 维护后台任务表。
 //
 // 结束的任务要摘掉而不是留着「最后一次状态」：这张表只回答「现在还能中止哪些」，
@@ -1085,6 +1163,9 @@ func (s *Session) handleLine(line []byte) {
 		if protocol.IsTaskEvent(env.Raw) {
 			s.noteTaskEvent(env.Raw)
 		}
+		// 「CLI 自己在干活」的状态（压缩中 / hook 在跑）：同样随快照下发。
+		// 压缩途中刷新页面的连接拿不到那条 `status: compacting`，会误报上游无响应。
+		s.noteLocalBusy(env.Raw)
 		// 刚结束一轮又来了一条 init：这是我们写进去的插话没赶上本轮，CLI 把它
 		// 当成新的一轮在跑。不认这个信号，界面会在整轮里显示「空闲」（发送按钮
 		// 而不是中断按钮），待发送队列也会被提前放出去。

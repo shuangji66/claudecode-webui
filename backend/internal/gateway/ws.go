@@ -322,6 +322,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		// 但 task_id 只在实时的 task_started 里出现——中途连上来的设备只有转录回放，
 		// 拿不到它就没法中止「进行中」的后台操作。
 		"tasks": sess.LiveTasks(),
+		// 「CLI 在自己进程里干活」的状态（压缩中 / hook 在跑）：压缩途中刷新页面时
+		// 前端拿不到那条 `status: compacting`（只发一次、不进转录），没有它就会把
+		// 压缩误报成「上游 Ns 没有响应」。
+		"busy": sess.LocalBusy(),
 		// seq/epoch 是会话的事件序号与身份：前端拿它当基准，下一次重连据此补空缺。
 		"seq":   sess.Seq(),
 		"epoch": sess.Epoch(),

@@ -8,11 +8,18 @@
 // 在计时后面补一句「上游 32s 没有响应」。CLI 在一个字节都不回的那段时间里什么都不发，
 // 没有这句话时「模型在长考」与「上游已经不回了」在界面上一模一样，用户只能干等到
 // 后端注入的 60 秒字节流空闲阈值判死（见 lib/silence 与 settings.Env）。
+//
+// **但「没帧」不等于「上游没声」**：压缩与 hook 是 CLI 自己在本地跑活，压根不等上游。
+// 手动 `/compact` 实测 25.3 秒只发一条 `status: compacting` 就没了声音，而 CLI 自己的
+// 压缩心跳是 30 秒一次——15 秒阈值必然在中间误报「上游 18s 没有响应」（截图复现过）。
+// 所以那两档要换成「正在压缩上下文」「hook X 正在跑」，判据见 lib/localWork。
 import { useEffect, useState } from "react";
 import { StateDot } from "../common/StateDot";
 import { formatElapsed } from "../../lib/elapsed";
+import { hasLocalWork } from "../../lib/localWork";
 import { isSilentLongEnough, silentFor, silentSeconds } from "../../lib/silence";
-import { lastSound } from "../../store/useAppStore";
+import { formatTokens } from "../../lib/usage";
+import { lastSound, localWork } from "../../store/useAppStore";
 import { useT } from "../../lib/i18n";
 
 interface Props {
@@ -48,17 +55,31 @@ export function TurnTimer({ startedAt, sessionId = null, watchSilence = true, cl
   // 沉默时长从「本回合起点」与「最后一次有声」里取更晚的那个：刚发出 prompt 时
   // 还没有帧，沉默就该从发出那一刻开始算，而不是沿用上一轮的旧时间。
   const silent = silentFor(now, lastSound(sessionId), startedAt);
-  const warn = watchSilence && isSilentLongEnough(silent);
+  // CLI 自己在跑活（压缩 / hook）时，那段时间本来就不该有上游字节：
+  // 说「正在压缩上下文」是事实，说「上游 Ns 没有响应」是误报。
+  const work = localWork(sessionId);
+  const localBusy = hasLocalWork(work);
+  const warn = watchSilence && !localBusy && isSilentLongEnough(silent);
+  const note = localBusy
+    ? work.compacting
+      ? // `compact_output_chars` 在涨就说明摘要真的在写（CLI 的原话）；它只用来让
+        // 这句话带上一个会动的数字，不涨时什么都不说明，所以没有数字就不写。
+        work.compactChars > 0
+        ? t(
+            `正在压缩上下文 · 已写 ${formatTokens(work.compactChars)} 字`,
+            `Compacting · ${formatTokens(work.compactChars)} chars written`,
+          )
+        : t("正在压缩上下文", "Compacting the conversation")
+      : t(`hook ${work.hooks[0]} 正在跑`, `hook ${work.hooks[0]} is running`)
+    : warn
+      ? t(`上游 ${silentSeconds(silent)}s 没有响应`, `no response from upstream for ${silentSeconds(silent)}s`)
+      : "";
   return (
     <div className={`flex items-center gap-1.5 text-[11px] text-muted ${className}`}>
       <StateDot state="ongoing" size={11} />
       <span className="min-w-0 truncate">{t("少女祈祷中", "Waiting on Claude")}</span>
       <span className="font-mono tabular-nums text-faint">{formatElapsed(now - startedAt)}</span>
-      {warn && (
-        <span className="shrink-0 truncate text-faint">
-          · {t(`上游 ${silentSeconds(silent)}s 没有响应`, `no response from upstream for ${silentSeconds(silent)}s`)}
-        </span>
-      )}
+      {note && <span className="shrink-0 truncate text-faint">· {note}</span>}
     </div>
   );
 }
