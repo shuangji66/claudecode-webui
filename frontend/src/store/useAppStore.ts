@@ -903,6 +903,15 @@ let conversationsSeq = 0;
 /** 「测试连接」的序号：只认最后一次探测的结果（先点 A 再点 B 时 A 的迟到响应作废）。 */
 let probeSeq = 0;
 
+/**
+ * 「获取可用模型」的序号：与 `probeSeq` 同一条规矩。
+ *
+ * 目录是全局单份（`modelsFor` + `gatewayModels`），两张卡片先后点「获取」时，
+ * 先发的那次晚回来就会顶掉后一次的目录——弹窗里摆着 A 的模型，确认后却写进 B，
+ * 用户看到的是「加了几个不存在的模型」。
+ */
+let modelsSeq = 0;
+
 export const useAppStore = create<AppState>()((set, get) => ({
   info: null,
   settings: null,
@@ -1082,12 +1091,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // key 用表单 uid：弹窗靠它的变化判断「结果到了」，而未保存的草稿 id 是空串，
     // 用 id 时上一家的目录会看起来像这一家的。
     const key = form.uid || form.id;
+    const seq = ++modelsSeq;
     set({ modelsFor: key, modelsLoading: true, gatewayModels: [], modelsError: null, modelsRaw: "", modelsAttempts: [], error: null });
     try {
       const r = await apiFetch<ModelsResult>("/api/settings/models", {
         method: "POST",
         body: JSON.stringify(providerRef(form)),
       });
+      // 只认最后一次发出去的请求：先点 A 再点 B 时，A 的迟到响应不能把 B 的
+      // 目录（连同它自己的 `modelsFor`）顶掉。
+      if (seq !== modelsSeq) return;
       if (r.models && r.models.length > 0) {
         set({ modelsLoading: false, gatewayModels: r.models, modelsAttempts: r.attempts ?? [] });
       } else {
@@ -1100,6 +1113,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         });
       }
     } catch (e) {
+      if (seq !== modelsSeq) return;
       set({ modelsLoading: false, gatewayModels: [], modelsError: errText(e), modelsRaw: "" });
     }
   },
