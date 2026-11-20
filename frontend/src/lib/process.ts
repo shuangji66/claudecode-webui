@@ -269,9 +269,16 @@ function joinDone(parts: string[], locale: Locale | string): string {
  * `hidden` 是「仅最终回答」档下被藏掉的回复 id：它们不占渲染位置，也不该参与
  * 判断——否则会算出一段看不见的「前文」，给真正的那一段多挂一条线。
  *
+ * `settled` 是「这一轮已经结束了」（见 `TurnSpan.finished`）。**没结束就一条都不画**：
+ * 跑到一半时，最后一段正文只是「此刻说到哪」，模型随时会接着说下去。按当前最后一段
+ * 画线，线就会挂在过渡正文上（截图复现过：思考过程上方那条横线），等真正的结论来了
+ * 又跳下去——看起来像凭空多了一轮，比没有线更乱。最终回答只在一轮收尾之后才成立。
+ *
  * 返回需要加线的正文 item id 集合（至多一个元素）。
  */
-export function replyDividerIds(done: Item[], hidden?: Set<string>): Set<string> {
+export function replyDividerIds(done: Item[], hidden?: Set<string>, settled = true): Set<string> {
+  // 这一轮还在跑：没有「最终回答」可言，不画。
+  if (!settled) return new Set();
   // 先挑出这一轮可见的正文段：只留非空 assistant，且跳过被「仅最终回答」藏掉的。
   const replies: string[] = [];
   // 每一段正文之前「有没有出现过过程」——与 replies 一一对应。

@@ -716,7 +716,14 @@ src/
     自动落进前者）。偏好存 `ccweb-collapse-timing`。**它和档位互不影响**——别再把它写进档位说明。
   - **「这一轮结束没有」认 `result`，回放里认会话状态**（`lib/process.turnSpans`）：转录回放
     没有 result 行，只靠扫列表会把历史轮次全判成还在跑（整段历史都不收、也没有耗时）。
-    `turnSpans(items, running)` 的 `running` 必须传 store 的真实状态。
+    `turnSpans(items, running)` 的 `running` 必须传 store 的真实状态。同一个 `finished`
+    还决定**最终回答前面那条分隔线**画不画（`replyDividerIds` 的第三个参数）：跑到一半时
+    最后一段正文只是「说到哪」，按它画线会让线先挂在过渡正文上、之后又跳到结论前面。
+  - **纯空白的思考不能开气泡**（`lib/normalize.applyStreamEvent` + `ThinkingBlock`）：上游在
+    工具调用之间会发 `" "` / `"\n"` 这样的 `thinking_delta`，开出来就是一行
+    「思考过程 · 0 字」，点开只有一个空格（截图复现过）。三层都挡：空白增量在没有打开的气泡
+    时直接丢弃（已有气泡时照常追加——那是思考里的换行，丢了段落会粘在一起）；完整消息里没有
+    thinking 块时，补回 leftover 也要 `trim()` 过；`ThinkingBlock` 正文全空白就 `return null`。
   - 组头（简洁档）是**人话摘要**：进行中取「正在跑的那件事」（`正在读取文件`），已结束按类别
     次数拼 `已读取文件并执行了命令`（两类用「并」、三类用逗号、超过三类加「等」），类别与拼接
     都在 `lib/process.ts`，未知工具归到「调用工具」——绝不能因为工具名没见过就不显示组头。

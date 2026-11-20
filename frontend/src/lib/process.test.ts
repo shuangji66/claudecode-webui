@@ -438,3 +438,18 @@ describe("replyDividerIds（最终回答前面的分隔线）", () => {
     expect(replyDividerIds(turn, new Set(["a1"])).size).toBe(0);
   });
 });
+
+describe("replyDividerIds 只在轮次结束后画线", () => {
+  // 跑到一半时最后一段正文只是「此刻说到哪」，模型还会接着说。按它画线的话，
+  // 线先挂在过渡正文上、随后又跳到结论前面（截图里那道在思考过程上方的横线）。
+  it("settled=false 时一条线都不画", () => {
+    const turn: Item[] = [reply("a1"), thinking("t1"), reply("a2")];
+    expect(replyDividerIds(turn, undefined, true).size).toBe(1);
+    expect(replyDividerIds(turn, undefined, false).size).toBe(0);
+  });
+
+  it("默认参数按已结束处理（历史回放与既有调用点不受影响）", () => {
+    const turn: Item[] = [reply("a1"), thinking("t1"), reply("a2")];
+    expect([...replyDividerIds(turn)]).toEqual(["a2"]);
+  });
+});

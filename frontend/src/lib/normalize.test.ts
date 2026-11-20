@@ -1580,6 +1580,33 @@ describe("思考流式（thinking_delta）", () => {
     expect(items[1]).toMatchObject({ kind: "assistant", text: "好的" });
   });
 
+  // 上游在工具调用之间会发纯空白的 thinking_delta（`" "` / `"\n"`）：自己开一个
+  // 气泡就是界面上那行「思考过程 · 0 字」，点开只有个空格（截图复现过）。
+  it("纯空白的 thinking_delta 不开新气泡", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, thinkingDelta(" "));
+    items = applyCLI(items, thinkingDelta("\n  "));
+    expect(items).toHaveLength(0);
+  });
+
+  it("已经有思考气泡时空白增量照常追加（中间的换行不能丢）", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, thinkingDelta("第一段"));
+    items = applyCLI(items, thinkingDelta("\n\n"));
+    items = applyCLI(items, thinkingDelta("第二段"));
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "thinking", text: "第一段\n\n第二段", streaming: true });
+  });
+
+  // 只有 thinking_delta、完整消息里却没有 thinking 块（中断形态）：leftover 要补回去，
+  // 但纯空白的 leftover 补出来就是一行「0 字」。
+  it("完整消息没有 thinking 块时，纯空白的残留思考不补回", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, thinkingDelta("   "));
+    items = applyCLI(items, { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "好的" }] } });
+    expect(items.map((i) => i.kind)).toEqual(["assistant"]);
+  });
+
   it("被中断时流式思考块也要收尾（否则光标一直闪）", () => {
     let items: Item[] = [];
     items = applyCLI(items, thinkingDelta("一直想"));

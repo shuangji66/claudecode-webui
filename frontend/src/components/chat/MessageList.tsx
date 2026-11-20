@@ -418,13 +418,17 @@ export function MessageList({
    * 与 `hiddenReplies` 一起算：被「仅最终回答」藏掉的那些回复不占渲染位置，
    * 不该参与分段，否则会给真正的那一段多挂一条看不见前文的线。
    *
+   * **没结束的轮不画**（`span.finished`）：跑到一半时最后一段正文只是「说到哪」，
+   * 模型还会接着说。按它画线，线就先挂在过渡正文上、之后又跳到结论前面——
+   * 思考过程上方那道横线就是这么来的。最终回答只在一轮收尾之后才成立。
+   *
    * 要在 `spans` 之后定义（按轮切片）。
    */
   const spans = useMemo(() => turnSpans(shown, running), [shown, running]);
   const dividers = useMemo(
     () =>
       spans.map((span) =>
-        replyDividerIds(shown.slice(span.start, span.end), hiddenReplies ?? undefined),
+        replyDividerIds(shown.slice(span.start, span.end), hiddenReplies ?? undefined, span.finished),
       ),
     [spans, shown, hiddenReplies],
   );

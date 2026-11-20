@@ -27,6 +27,11 @@ export function ThinkingBlock({
   streaming?: boolean;
 }) {
   const t = useT();
+  // 正文全空白就不画这一行：`normalize` 已经挡掉纯空白的 thinking 块（上游在工具调用
+  // 之间会发 `" "`），这里再兜一层是为了「摘要退回字数」那条分支——它能显示出
+  // 「思考过程 · 0 字」这种既没信息又点不动的行（截图复现过）。宁可少一行，也不要
+  // 留一个空壳。
+  if (!text.trim()) return null;
   const firstLine = text.split("\n").find((line) => line.trim())?.trim() ?? "";
   const chars = t(`${text.trim().length} 字`, `${text.trim().length} chars`);
   const summary = firstLine || chars;

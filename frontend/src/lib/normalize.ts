@@ -313,8 +313,13 @@ function applyStreamEvent(items: Item[], m: Raw, at: number): Item[] {
     const piece = typeof delta.thinking === "string" ? delta.thinking : "";
     if (!piece) return items;
     const last = items[items.length - 1];
-    if (last && last.kind === "thinking" && last.streaming) {
-      return [...items.slice(0, -1), { ...last, text: last.text + piece }];
+    const open = last && last.kind === "thinking" && last.streaming ? last : null;
+    // 纯空白的增量**不能自己开一个气泡**：上游在工具调用之间会发 `" "`/`"\n"`，
+    // 开出来就是一行「思考过程 · 0 字」，点开是个空格（截图复现过）。
+    // 已经有气泡时照常追加——那是思考中间的换行/缩进，丢了会把段落粘在一起。
+    if (!open && !piece.trim()) return items;
+    if (open) {
+      return [...items.slice(0, -1), { ...open, text: open.text + piece }];
     }
     return [
       ...items,
@@ -481,7 +486,9 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
     ];
   }
   // 思考同理：只有 thinking_delta、完整消息里却没有 thinking 块时，把已收到的补回去。
-  if (thoughtCount === 0 && thought.leftover) {
+  // 补回去之前**也要过空白判断**：上游只发过一个 `" "` 的话，这里补出来的就是一行
+  // 「思考过程 · 0 字」（上面开气泡那条已经挡了一层，但气泡可能更早就开出来过）。
+  if (thoughtCount === 0 && thought.leftover.trim()) {
     out = [
       ...out.slice(0, thoughtInsertAt),
       {

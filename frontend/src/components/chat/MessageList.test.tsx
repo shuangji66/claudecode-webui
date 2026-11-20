@@ -874,6 +874,30 @@ describe("最终回答前面的分隔线", () => {
     expect(rowOf("a2").className).not.toContain("border-t");
   });
 
+  // 跑到一半时最后一段正文只是「此刻说到哪」：按它画线，线会先挂在过渡正文上
+  // （截图里那道压在思考过程上方的横线），等真正的结论来了又跳下去。
+  it("一轮还没结束时一条线都不画，收尾之后才画在最终回答前面", () => {
+    setProcessView("detailed");
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "做一下" },
+      { id: "a1", seq: 1, ts: 0, kind: "assistant", text: "我先看一下。", streaming: false },
+      { id: "t1", seq: 2, ts: 0, kind: "thinking", text: "想一下" },
+      { id: "a2", seq: 3, ts: 0, kind: "assistant", text: "还在改。", streaming: true },
+    ];
+    setSessionRunning(true);
+    const { unmount } = render(<MessageList items={items} />);
+    expect(rowOf("a1").className).not.toContain("border-t");
+    expect(rowOf("a2").className).not.toContain("border-t");
+
+    // 回合收尾（result 到达 / 会话空闲）之后，最终回答前面才出现那一条。
+    unmount();
+    setSessionRunning(false);
+    const done: Item[] = [...items.slice(0, 3), { ...items[3], streaming: false } as Item];
+    render(<MessageList items={done} />);
+    expect(rowOf("a1").className).not.toContain("border-t");
+    expect(rowOf("a2").className).toContain("border-t");
+  });
+
   it("纯问答（没有任何过程）不会多出分隔线", () => {
     setProcessView("detailed");
     const items: Item[] = [
