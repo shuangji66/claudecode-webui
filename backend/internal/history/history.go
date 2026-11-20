@@ -4,7 +4,8 @@
 //
 //	~/.claude/projects/<cwd-slug>/<session-uuid>.jsonl
 //
-// 一行一个 JSON 对象。首条 user 消息的文本用作会话标题。
+// 一行一个 JSON 对象。会话标题取 CLI 自己写的标题行（`custom-title` / `ai-title`），
+// 没有才退回首条 user 消息的文本。
 package history
 
 import (
@@ -22,7 +23,7 @@ import (
 )
 
 // maxScanLines 是列表摘要单次扫描的行数上限（与回放上限同量级），
-// maxTitleScanLines 是「取标题」只看头部多少行——标题来自首条用户消息，
+// maxTitleScanLines 是「取标题」只看头部多少行——标题来自 CLI 的标题行或首条用户消息，
 // 而时间戳与消息数必须覆盖整份转录。
 const (
 	maxScanLines      = 20000
@@ -46,6 +47,11 @@ type transcriptLine struct {
 	Timestamp   string `json:"timestamp"`
 	IsSidechain bool   `json:"isSidechain"`
 	IsMeta      bool   `json:"isMeta"`
+	// CustomTitle / AiTitle 是 CLI 自己写进转录的标题行（`type: "custom-title"` /
+	// `"ai-title"`）：终端 `/rename`、IDE 插件、`--name` 与它自己的自动标题都落在
+	// 这里。同一份转录里可能有多行，**最后一行才是当前名字**。
+	CustomTitle string `json:"customTitle"`
+	AiTitle     string `json:"aiTitle"`
 	Message     struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
@@ -97,6 +103,10 @@ func summarize(path, project string) Session {
 
 	titleDone := false
 	lines := 0
+	// cliTitle 是转录里 CLI 自己写的名字（custom-title 优先于 ai-title）。
+	// 它比首条用户消息更权威：用户在终端里 /rename 过之后，列表里就该叫那个名字。
+	// 同一份转录可能出现多行，按出现顺序取最后一个。
+	var cliCustom, cliAI string
 	// 时间戳与消息数要看整份转录：只读头部 5000 行会让长对话的「最近活跃」
 	// 停在第 5000 行那一刻，侧栏排序与自动预热都会选错。
 	_ = scanLines(f, 4<<20, func(line []byte) bool {
@@ -107,6 +117,12 @@ func summarize(path, project string) Session {
 		var l transcriptLine
 		if err := json.Unmarshal(line, &l); err != nil {
 			return true
+		}
+		if l.CustomTitle != "" {
+			cliCustom = l.CustomTitle
+		}
+		if l.AiTitle != "" {
+			cliAI = l.AiTitle
 		}
 		// 子代理消息与系统提醒不算主消息，也不能当标题——回放那边同样过滤。
 		if l.IsSidechain || l.IsMeta {
@@ -152,6 +168,13 @@ func summarize(path, project string) Session {
 		}
 		return true
 	})
+	if cliCustom != "" {
+		// CLI 自己记下的名字（终端 /rename、IDE 插件、--name）优先：
+		// 它是唯一能代表「这条对话现在叫什么」的权威来源。
+		s.Title = truncate(cliCustom, 80)
+	} else if cliAI != "" {
+		s.Title = truncate(cliAI, 80)
+	}
 	if s.Title == "" {
 		s.Title = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 	}

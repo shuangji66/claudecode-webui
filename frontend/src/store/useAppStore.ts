@@ -2276,6 +2276,21 @@ export const useAppStore = create<AppState>()((set, get) => ({
         }));
         return;
       }
+      case "session.title": {
+        // 别处改了会话名（终端 /rename、IDE 插件、--name）：后端已经把名字并进
+        // conversations.json，这里只把本机列表与页头对齐，别等下一次全量刷新——
+        // 用户很可能正看着这条对话。
+        //
+        // 不整份重拉列表：改名只改一行，`GET /api/conversations` 要重扫全部转录。
+        const data = ev.data as { title?: string; session_id?: string } | undefined;
+        const title = data?.title?.trim();
+        if (!title) return;
+        const target = data?.session_id || sid;
+        set((s) => ({
+          conversations: s.conversations.map((c) => (c.id === target ? { ...c, title } : c)),
+        }));
+        return;
+      }
       case "session.state": {
         // 同一个事件既承载状态机流转，也承载 CLI 报上来的权限模式（system/status）。
         const data = ev.data as { state?: string; mode?: string } | undefined;

@@ -1156,6 +1156,57 @@ func TestSetPermissionModeReportsCLIRejection(t *testing.T) {
 	}
 }
 
+// CLI 报上来的会话名要转成事件，同一名字重复上报只发一次。
+//
+// 这条链路服务的是「别处改了名字」：终端 /rename、IDE 插件、--name。
+// 不去重的话 CLI 每次重连/重启都会再发一遍同样的名字，上层就会把
+// conversations.changed 推给每个连接、让它们重扫一遍全部转录。
+func TestSessionTitleEventDeduped(t *testing.T) {
+	_, fc, rec := startSession(t)
+
+	frame := map[string]any{
+		"type": "system", "subtype": "session_title_changed", "title": "终端改的名字",
+		"uuid": "u1", "session_id": "s1",
+	}
+	fc.send(frame)
+	ev, ok := rec.wait(KindSessionTitle, time.Second)
+	if !ok {
+		t.Fatal("未收到 session.title 事件")
+	}
+	var data map[string]string
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		t.Fatalf("事件数据不是合法 JSON: %s", ev.Data)
+	}
+	if data["title"] != "终端改的名字" || data["session_id"] != "s1" {
+		t.Fatalf("事件内容 = %v", data)
+	}
+
+	// 同一个名字再来两遍：CLI 明确要求宿主把重复当作「没变化」。
+	fc.send(frame)
+	fc.send(frame)
+	time.Sleep(100 * time.Millisecond)
+	if n := rec.count(KindSessionTitle); n != 1 {
+		t.Fatalf("重复的标题上报发了 %d 次，应只发 1 次", n)
+	}
+
+	// 换了名字要照常发。
+	fc.send(map[string]any{
+		"type": "system", "subtype": "session_title_changed", "title": "又改了一次",
+		"uuid": "u2", "session_id": "s1",
+	})
+	deadline := time.Now().Add(time.Second)
+	for rec.count(KindSessionTitle) < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := rec.count(KindSessionTitle); n != 2 {
+		t.Fatalf("改名后事件数 = %d, want 2", n)
+	}
+	// 原文仍要作为 cli 事件转给前端（审计/日志），不能被这条分支吞掉。
+	if rec.count(KindCLI) != 4 {
+		t.Fatalf("system 原文应继续转发，cli 事件数 = %d", rec.count(KindCLI))
+	}
+}
+
 func TestPermissionModeEventFromCLIStatus(t *testing.T) {
 	_, fc, rec := startSession(t)
 

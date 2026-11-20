@@ -96,8 +96,18 @@ const (
 	// 上层必须据此把对话元数据迁到新 id：否则重开对话时按旧 id `--resume`，
 	// 用户会拿回**自己刚刚清掉**的上下文。`data` 是 `{from, to}`。
 	KindSessionReplaced = "session.replaced"
-	KindError           = "error"
-	KindClosed          = "closed"
+	// KindSessionTitle 表示 CLI 报上来了一个新的会话名
+	// （`system/session_title_changed`）。
+	//
+	// 它是**别处改的名字**：终端里的 `/rename`、IDE 插件、`--name`，或者别的客户端
+	// 发的 rename_session。自动 AI 标题不在这条流上（见 protocol.SessionTitleOf）。
+	// `data` 是 `{title, session_id}`。
+	//
+	// 上层要把它并进 conversations.json：那边没有这条链路的话，在终端里改过的名字
+	// 到这边看不见、下一次重命名还会被这边的旧标题盖回去。
+	KindSessionTitle = "session.title"
+	KindError        = "error"
+	KindClosed       = "closed"
 )
 
 // writeReq 是一条待写入 stdin 的行；ack 非空时调用方等待写入结果。
@@ -165,6 +175,11 @@ type Session struct {
 	// 只由读循环写（handleLine），由 CLI sessionID() 读。
 	cliMu  sync.RWMutex
 	cliSID string
+
+	// titleMu/title 是 CLI 最近报上来的会话名（`system/session_title_changed`）。
+	// 只用来去重：CLI 会把同一个名字重复发好几遍，宿主应当把重复当作「没变化」。
+	titleMu sync.Mutex
+	title   string
 
 	// seq 给「一次性的控制请求」发号：request_id 重复会让 pending 表互相覆盖
 	// （set_permission_mode 尤其明显——用户可能在几秒内连点两下档位）。
@@ -389,6 +404,23 @@ func (s *Session) noteCLISession(id string) bool {
 	first := s.cliSID == ""
 	s.cliSID = id
 	return !first
+}
+
+// noteTitle 记下 CLI 报上来的会话名；**真的变了才返回 true**。
+//
+// CLI 会重复发同一个名字（它自己的注释要求宿主把重复当「没变化」），第一次拿到
+// 也照常算「变了」——那是这条会话的第一个名字，上层需要它。
+func (s *Session) noteTitle(title string) bool {
+	if title == "" {
+		return false
+	}
+	s.titleMu.Lock()
+	defer s.titleMu.Unlock()
+	if s.title == title {
+		return false
+	}
+	s.title = title
+	return true
 }
 
 // justFinishedTurn 表示最近一条 result 还在 TurnHandoffWindow 之内。
@@ -1006,6 +1038,15 @@ func (s *Session) handleLine(line []byte) {
 		// 不存在转录（见 AGENTS.md 4.7）。
 		if sid, ok := protocol.SessionIDOf(env.Raw); ok && s.noteCLISession(sid) {
 			s.emitData(KindSessionReplaced, map[string]any{"from": s.ID, "to": sid})
+		}
+		// 别处改了会话名（终端 `/rename`、IDE 插件、`--name`、别的客户端）。
+		// 上层据此更新对话列表：丢掉这条，在终端里改过的名字这边看不见，
+		// 下一次重命名还会被这边的旧标题覆盖回去。
+		//
+		// CLI 会重复发同一个名字（它自己也写了「宿主应当把重复当作没变化」），
+		// 所以由 noteTitle 去重，只有真的变了才发事件。
+		if title, ok := protocol.SessionTitleOf(env.Raw); ok && s.noteTitle(title) {
+			s.emitData(KindSessionTitle, map[string]any{"title": title, "session_id": s.CLISessionID()})
 		}
 		// 后台任务的 task_id 只在这条流里出现，记下来随快照发给后来连上的设备
 		// （它们靠转录回放拿不到，见 LiveTasks）。

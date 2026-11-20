@@ -93,6 +93,52 @@ func TestPromptOnExistingConversationDoesNotBroadcast(t *testing.T) {
 	}
 }
 
+// 别处改了会话名（终端 /rename、IDE 插件、--name）要并进对话元数据。
+//
+// 不接的话不只是「看不见」：用户在这边再改一次名，旧标题会被这边的记录写回去，
+// 两边永远对不上。落库走 Rename（自定义标题），与人工重命名同一条路径。
+func TestSessionTitleUpdatesConversation(t *testing.T) {
+	srv, _, conv, id := newSyncFixture(t)
+	if err := conv.Touch(id, srv.d.ProjectsRoot); err != nil {
+		t.Fatal(err)
+	}
+	rec := &recClient{}
+	srv.d.Hub.Subscribe(systemTopic, rec)
+
+	srv.NoteSessionTitle(id, json.RawMessage(`{"title":"终端里改的名字","session_id":"`+id+`"}`))
+	if events := rec.take(); len(events) != 1 || events[0].Kind != "conversations.changed" {
+		t.Fatalf("改名应推 1 条 conversations.changed，得到 %+v", events)
+	}
+	got, ok := conv.Get(id)
+	if !ok {
+		t.Fatal("对话记录不见了")
+	}
+	if got.Title != "终端里改的名字" {
+		t.Fatalf("Title = %q", got.Title)
+	}
+
+	// 同一个名字重复上报：CLI 明确要求当作没变化，不该再推。
+	srv.NoteSessionTitle(id, json.RawMessage(`{"title":"终端里改的名字"}`))
+	if events := rec.take(); len(events) != 0 {
+		t.Fatalf("重复的标题不该推送，得到 %+v", events)
+	}
+}
+
+// 还没有元数据的对话（首轮还没跑完就改了名）也要能先收养再写标题，
+// 否则那次改名会凭空消失，下一轮又回到首条消息标题。
+func TestSessionTitleAdoptsConversationWithoutRecord(t *testing.T) {
+	srv, _, conv, id := newSyncFixture(t)
+
+	srv.NoteSessionTitle(id, json.RawMessage(`{"title":"先起个名字"}`))
+	got, ok := conv.Get(id)
+	if !ok {
+		t.Fatal("应收养出一条记录")
+	}
+	if got.Title != "先起个名字" {
+		t.Fatalf("Title = %q", got.Title)
+	}
+}
+
 // 重命名 / 置顶 / 归档 / 删除都会改变别人侧栏里的那一行（甚至它属于哪个分组），
 // 这些都是「列表变了」，必须让别的设备跟着刷新一次。
 func TestConversationMutationsBroadcast(t *testing.T) {

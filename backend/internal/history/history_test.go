@@ -91,6 +91,38 @@ func TestListSortsByUpdatedAtDesc(t *testing.T) {
 	}
 }
 
+// CLI 自己写进转录的标题行（终端 /rename、IDE 插件、--name）要比首条用户消息优先。
+// 否则「在终端里改过名」的对话进了侧栏还是叫第一句话——用户会以为自己没改成。
+func TestListPrefersCLICustomTitle(t *testing.T) {
+	root := t.TempDir()
+	writeJSONL(t, filepath.Join(root, "p", "s1.jsonl"),
+		`{"type":"user","cwd":"/tmp/work","sessionId":"s1","message":{"role":"user","content":"第一句话"}}`,
+		`{"type":"custom-title","customTitle":"终端里改的名字","sessionId":"s1"}`,
+		`{"type":"user","message":{"role":"user","content":"第二句话"}}`,
+	)
+	got, _ := List(root)
+	if len(got) != 1 {
+		t.Fatalf("条数 = %d", len(got))
+	}
+	if got[0].Title != "终端里改的名字" {
+		t.Fatalf("Title = %q, want 终端里改的名字", got[0].Title)
+	}
+}
+
+// 同一份转录可能有多行标题，以最后一行为准；custom-title 优先于 ai-title。
+func TestListUsesLastTitleLine(t *testing.T) {
+	root := t.TempDir()
+	writeJSONL(t, filepath.Join(root, "p", "s1.jsonl"),
+		`{"type":"user","sessionId":"s1","message":{"role":"user","content":"第一句话"}}`,
+		`{"type":"custom-title","customTitle":"改了一次","sessionId":"s1"}`,
+		`{"type":"custom-title","customTitle":"又改了一次","sessionId":"s1"}`,
+	)
+	got, _ := List(root)
+	if got[0].Title != "又改了一次" {
+		t.Fatalf("Title = %q, want 又改了一次（取最后一行）", got[0].Title)
+	}
+}
+
 func TestListFallsBackToFileNameForTitle(t *testing.T) {
 	root := t.TempDir()
 	writeJSONL(t, filepath.Join(root, "p", "only-id.jsonl"),

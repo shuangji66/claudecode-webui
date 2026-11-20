@@ -327,6 +327,29 @@ func SessionIDOf(raw []byte) (string, bool) {
 	return msg.SessionID, true
 }
 
+// SessionTitleOf 取出 `system/session_title_changed` 里的会话名。
+//
+// 这条帧来自**别处改了名字**：终端里的 `/rename`、IDE 插件、`--name` 参数，
+// 或者别的客户端发的 rename_session。CLI 的注释写明它「announces the session's
+// name, not an AI-generated title」——自动 AI 标题在这条流上根本不会出现
+// （实测 2.1.329：`-p` stream-json 模式跑完整轮，既不写 ai-title 行，也不发这条帧）。
+//
+// 同名的重复帧是正常现象（CLI 明确要求按「没变化」处理），去重由调用方做。
+func SessionTitleOf(raw []byte) (string, bool) {
+	var msg struct {
+		Type    string `json:"type"`
+		Subtype string `json:"subtype"`
+		Title   string `json:"title"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return "", false
+	}
+	if msg.Type != TypeSystem || msg.Subtype != "session_title_changed" || msg.Title == "" {
+		return "", false
+	}
+	return msg.Title, true
+}
+
 // IsTurnInit 判断一条 system 消息是不是「一轮开始」的 init。
 //
 // 它不只在进程启动时出现：回合进行中写进 stdin 的用户消息（插话）如果没赶上本轮，

@@ -1195,6 +1195,33 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **没做的**：一条任务的投递如果正赶上目标会话在跑，就是普通写入 stdin（并入下一轮）；
   没有 DSH 那种「排队中禁用编辑」的会话级锁。运行时长的统计、跨设备通知也都没有。
 
+### 4.21 会话标题（谁说的算）
+
+- **两个来源，CLI 优先**：转录里的 `custom-title`（终端 `/rename`、IDE 插件、`--name`、
+  别的客户端 `rename_session` 都会写）、其次 `ai-title`，都没有才退回首条 user 消息的
+  前 80 字（`history.summarize`）。同一份转录可能有多行标题，**取最后一行**。
+  应用元数据里的 `conversations.title`（用户在本界面重命名 / 下面那条事件写的）比两者
+  都优先——`GET /api/conversations` 的合并顺序是「metadata 覆盖 history」。
+- **`system/session_title_changed` 只代表「别处改了名字」**：CLI 的 schema 注释写得很清楚，
+  它 announce 的是会话名、**不是 AI 生成的标题**（`given_by` 也不在我们的帧里）。
+  接它是为了让在终端里改的名字能进侧栏；不接的话不只是「看不见」，用户在这边再改一次名，
+  旧标题还会被这边的记录盖回去，两边永远对不上。
+  链路：`protocol.SessionTitleOf` → `session.noteTitle`（**同名去重**，CLI 明确要求把
+  重复帧当作没变化）→ `KindSessionTitle` → `gateway.NoteSessionTitle` 写
+  `conversation.Rename` → 推 `conversations.changed`。前端另有一条 `session.title`
+  就地改本地那一行，省掉一次全量重拉（它要重扫全部转录）。
+- **自动 AI 标题在 `-p` stream-json 模式下不会产生**（2.1.329 实测）：
+  跑完整一轮，既不写 `ai-title` 行，也不发 `session_title_changed`；用 mock 端点确认
+  CLI 的 `generate_session_title` 控制请求本身是可用的，但只在交互式/宿主驱动的路径上触发。
+  另外它走 structured outputs（`output_config.format`），自建中转原样返回纯文本时
+  CLI 一律判 null（`[claude-code:unrecognized_model] query_source=generate_session_title`）。
+  **所以「标题变成模型总结」不能指望接 CLI，要 ccweb 自己发一次请求**（当前未实现，
+  见下一条）。
+- **要做自动总结标题**的话：首轮结束（`session.state=ready` + 已有转录）时由后端发一次
+  小请求，结果写 `conversation.Rename`；**用户手动改过名的不能再覆盖**（`Record.Title`
+  非空就跳过），失败静默保留首条消息标题，出站请求必须接 `netproxy`。
+  别把它做成同步等结果——那会把一份本来能秒开的列表拖成几秒。
+
 ## 5. 命令速查
 
 ```bash

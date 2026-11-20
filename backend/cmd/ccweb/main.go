@@ -147,6 +147,10 @@ func main() {
 			srv.NoteSessionState(sid, ev.Data)
 		case session.KindClosed:
 			srv.NoteSessionClosed(sid)
+		case session.KindSessionTitle:
+			// 别处改了会话名（终端 /rename、IDE 插件、--name）：并进对话元数据，
+			// 否则这边看不见那次改名，之后再改一次还会把旧标题盖回去。
+			srv.NoteSessionTitle(sid, ev.Data)
 		case session.KindSessionReplaced:
 			// CLI 换了会话 id（`/clear`）：把对话元数据迁到它实际在用的那个 id 上。
 			// 不迁的话，重开这条对话会按旧 id `--resume`，把用户刚刚清掉的上下文

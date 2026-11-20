@@ -587,6 +587,45 @@ func (s *Server) NoteSessionState(sid string, data json.RawMessage) {
 	s.finishPendingTurn(sid)
 }
 
+// NoteSessionTitle 收的是 CLI 报上来的会话名（`system/session_title_changed`）：
+// 终端里的 `/rename`、IDE 插件、`--name`、别的客户端 rename_session 都会产生它。
+//
+// 不接的后果是双向的：别处改过的名字在这边看不见，而用户在这边再改一次时，
+// 旧标题又被写回去，两边永远对不上。
+//
+// 落库走 Rename（自定义标题），与用户在界面上重命名是同一条路径 —— 列表接口里
+// 「元数据标题优先于转录首条消息」的规则因此天然成立，不用另加一套优先级。
+// 自动 AI 标题不走这条（`-p` stream-json 模式下 CLI 根本不产生它），所以这里
+// 不会把用户手改的标题顶掉。
+func (s *Server) NoteSessionTitle(sid string, data json.RawMessage) {
+	if s.d.Conversations == nil || sid == "" {
+		return
+	}
+	var payload struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return
+	}
+	title, err := normalizeTitle(payload.Title)
+	if err != nil || title == "" {
+		return
+	}
+	// 记录可能还没有（首轮还没落元数据就改了名）：先收养，再写标题。
+	if _, ok := s.d.Conversations.Get(sid); !ok {
+		if _, ok := s.ensureConversation(sid); !ok {
+			return
+		}
+	}
+	if cur, ok := s.d.Conversations.Get(sid); ok && cur.Title == title {
+		return // 同一个名字重复上报：CLI 明确要求当作没变化
+	}
+	if err := s.d.Conversations.Rename(sid, title); err != nil {
+		return
+	}
+	s.BroadcastConversationsChanged()
+}
+
 // NoteSessionClosed 同理：进程没了（崩溃 / 空闲回收）时这一轮不会再有 result，
 // 但列表里的 live/state 变了，同样要刷新一次。
 //
