@@ -441,7 +441,7 @@ func (s *Server) DeliverScheduledTask(ctx context.Context, t schedule.Task, fire
 
 	var info manager.Info
 	// schedTitle 是「新建的对话本来该叫什么」：投递那一刻转录往往还没落盘，
-	// 落不下元数据，标题要等这一轮结束再补（见 finishScheduledTurn）。
+	// 落不下元数据，标题要等这一轮结束再补（见 finishPendingTurn）。
 	schedTitle := ""
 	if createNew {
 		newID, err := manager.NewUUID()
@@ -500,7 +500,7 @@ func (s *Server) DeliverScheduledTask(ctx context.Context, t schedule.Task, fire
 	}
 	// 这条会话的回合结束后要再通知一次面板：它多半没人打开，而标题（转录首条消息）、
 	// live/state 都只在 GET /api/conversations 里现算。见 NoteSessionState。
-	s.watchScheduledTurn(id, scheduledTurn{title: schedTitle, cwd: cwd})
+	s.watchPendingTurn(id, pendingTurn{title: schedTitle, cwd: cwd})
 
 	if createNew && s.d.Conversations != nil {
 		// 转录已经落盘的话，标题现在就能写（多数情况写不上：CLI 还没来得及落盘）。
@@ -510,7 +510,7 @@ func (s *Server) DeliverScheduledTask(ctx context.Context, t schedule.Task, fire
 				ID: id, Cwd: cwd, Title: schedTitle, CreatedAt: now, LastActive: now,
 			})
 		}
-		s.broadcastConversationsChanged()
+		s.BroadcastConversationsChanged()
 	} else if info.ID != "" {
 		s.touchConversation(info)
 	}
@@ -518,42 +518,35 @@ func (s *Server) DeliverScheduledTask(ctx context.Context, t schedule.Task, fire
 	return id, nil
 }
 
-// broadcastConversationsChanged 通知所有面板刷新对话列表。
+// pendingTurn 是一条「这一轮还没跑完」的记录：回合结束后要补写标题（如果有）
+// 并通知所有面板重拉对话列表。
 //
-// 定时任务可能在没有任何浏览器打开时新建对话；用户下次打开面板时列表必须已经
-// 包含它——前端收到这条事件就重新拉一次 /api/conversations。
-func (s *Server) broadcastConversationsChanged() {
-	if s.d.Hub == nil {
-		return
-	}
-	s.d.Hub.Broadcast(systemTopic, WireEvent{Kind: "conversations.changed"})
-}
-
-// scheduledTurn 是一条「还没跑完的投递」：回合结束后要用它补写标题并通知面板。
-type scheduledTurn struct {
-	// title 只在「这次投递新建了对话」时非空（比如「每日巡检 · 11-19 09:00」）。
-	// 投递那一刻转录往往还没落盘，元数据写不进去，只能等回合结束再补。
+// 两个来源：自动化任务投递（title 是「任务名 · 时间」，投递那一刻转录还没落盘，
+// 只能等回合结束再补）与用户新建对话的首条消息（title 为空，只为了在标题与
+// live/state 定稿后再刷新一次列表）。
+type pendingTurn struct {
+	// title 只在「这一轮要负责起名」时非空。
 	title string
 	cwd   string
 }
 
-// watchScheduledTurn 记下「这条会话的回合结束后要再通知一次面板」。
+// watchPendingTurn 记下「这条会话的回合结束后要再通知一次面板」。
 //
 // 不记的话只能等用户点开这条对话或刷新页面：投递那一刻列表还是「刚新建、还没转录」，
 // 前端拿到的标题是空的（显示「新对话」）、state 是 busy（显示转圈），之后没人再拉列表。
-func (s *Server) watchScheduledTurn(id string, turn scheduledTurn) {
+func (s *Server) watchPendingTurn(id string, turn pendingTurn) {
 	if id == "" {
 		return
 	}
-	s.scheduledMu.Lock()
-	defer s.scheduledMu.Unlock()
-	if s.scheduledTurns == nil {
-		s.scheduledTurns = make(map[string]scheduledTurn)
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	if s.pendingTurns == nil {
+		s.pendingTurns = make(map[string]pendingTurn)
 	}
 	// 同一轮里又投了一次（例如每分钟一次的 new-reuse 任务，这一轮还没跑完）：
 	// 后一次没有待补的标题，别把前一次的抹掉——否则新建的那条对话永远拿不到
 	// 「任务名 · 时间」这个标题。
-	if prev, ok := s.scheduledTurns[id]; ok {
+	if prev, ok := s.pendingTurns[id]; ok {
 		if turn.title == "" {
 			turn.title = prev.title
 		}
@@ -561,29 +554,29 @@ func (s *Server) watchScheduledTurn(id string, turn scheduledTurn) {
 			turn.cwd = prev.cwd
 		}
 	}
-	s.scheduledTurns[id] = turn
+	s.pendingTurns[id] = turn
 }
 
-// consumeScheduledTurn 取走这条会话的待通知标记；没有标记返回 false。
-func (s *Server) consumeScheduledTurn(id string) (scheduledTurn, bool) {
-	s.scheduledMu.Lock()
-	defer s.scheduledMu.Unlock()
-	turn, ok := s.scheduledTurns[id]
+// consumePendingTurn 取走这条会话的待通知标记；没有标记返回 false。
+func (s *Server) consumePendingTurn(id string) (pendingTurn, bool) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	turn, ok := s.pendingTurns[id]
 	if !ok {
-		return scheduledTurn{}, false
+		return pendingTurn{}, false
 	}
-	delete(s.scheduledTurns, id)
+	delete(s.pendingTurns, id)
 	return turn, true
 }
 
 // NoteSessionState 是会话事件的旁路出口（装配层在 manager 的事件回调里调它）。
 //
-// 自动化任务投递的会话多半没人打开：一轮结束（`session.state=ready`）时没有任何
-// 客户端会收到 `result`，而侧栏那一行的标题（转录首条消息）与 live/state 都只在
-// `GET /api/conversations` 里现算。所以这里在回合结束时补写标题并推一条
-// conversations.changed，让面板自己重拉一次——否则那条对话会一直停在「新对话 + 转圈」。
+// 一轮结束（`session.state=ready`）时列表里那一行的标题（转录首条消息）与
+// live/state 才定稿，而它们都只在 `GET /api/conversations` 里现算。所以这里
+// 补写标题并推一条 conversations.changed，让别的设备自己重拉一次——否则新建的
+// 对话在那边永远停在「新对话 + 转圈」，任务投递出去的对话更是没人看得到。
 //
-// 只认记过的会话：普通对话的回合结束时用户正看着它，没必要让每个连接都去重扫一遍转录。
+// 只认记过的会话：没记过的普通对话，用户正看着它，没必要让每个连接都去重扫一遍转录。
 func (s *Server) NoteSessionState(sid string, data json.RawMessage) {
 	var payload struct {
 		State string `json:"state"`
@@ -591,21 +584,31 @@ func (s *Server) NoteSessionState(sid string, data json.RawMessage) {
 	if err := json.Unmarshal(data, &payload); err != nil || payload.State != session.StateReady {
 		return
 	}
-	s.finishScheduledTurn(sid)
+	s.finishPendingTurn(sid)
 }
 
 // NoteSessionClosed 同理：进程没了（崩溃 / 空闲回收）时这一轮不会再有 result，
 // 但列表里的 live/state 变了，同样要刷新一次。
+//
+// **与回合结束不同，这里必须无条件推**：进程结束是「列表里那一行从活跃变灰」，
+// 而 `closed` 事件只发给订阅了**该会话 topic** 的连接——别的设备没打开这条对话，
+// 就永远收不到，它侧栏里那一行会一直显示「活跃」，直到自己下次刷新列表。
+// 触发它的事件全都低频（用户点停止、空闲回收默认 30 分钟一次、删版本），
+// 不像 prompt 那样每条都来，所以不需要「只在有标记时推」这层节流。
 func (s *Server) NoteSessionClosed(sid string) {
-	s.finishScheduledTurn(sid)
+	// 先收掉待通知的回合（任务投递的那条要补写标题）。finishPendingTurn 自己
+	// 会推一次，没有标记就什么都不做——两种情况都只需要总共一条刷新。
+	if !s.finishPendingTurn(sid) {
+		s.BroadcastConversationsChanged()
+	}
 }
 
-// finishScheduledTurn 收尾一次自动化任务投递：补写标题（这时转录肯定有了）、
-// 通知面板重拉列表。没记过的会话什么都不做。
-func (s *Server) finishScheduledTurn(sid string) {
-	turn, ok := s.consumeScheduledTurn(sid)
+// finishPendingTurn 收尾一次待通知的回合：补写标题（这时转录肯定有了）、
+// 通知面板重拉列表。没记过的会话什么都不做，返回 false。
+func (s *Server) finishPendingTurn(sid string) bool {
+	turn, ok := s.consumePendingTurn(sid)
 	if !ok {
-		return
+		return false
 	}
 	// 有转录才落元数据：空对话落记录会留下 resume 不起来的幽灵条目
 	// （这里已经是回合结束，正常情况下转录一定在）。
@@ -615,5 +618,6 @@ func (s *Server) finishScheduledTurn(sid string) {
 			ID: sid, Cwd: turn.cwd, Title: turn.title, CreatedAt: now, LastActive: now,
 		})
 	}
-	s.broadcastConversationsChanged()
+	s.BroadcastConversationsChanged()
+	return true
 }

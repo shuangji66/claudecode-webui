@@ -253,7 +253,17 @@ func (s *Server) handlePatchConversation(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
+	// 标题 / 置顶 / 归档都会改变别人侧栏里那一行的样子（甚至它属于哪个分组），
+	// 别的设备要跟着刷新一次。
+	//
+	// **usage 与 touch 不推**：usage 只是重开对话时还原底部统计的快照（每回合一次），
+	// touch 只改 last_active（每次切换对话都会发生）——两者都不改列表里那一行的内容，
+	// 而每次推送都让所有连接重扫一遍全部转录。排序偏差由各自的本地刷新兜着。
+	listVisible := req.Title != nil || req.Archived != nil || req.Pinned != nil
 	writeJSON(w, map[string]any{"ok": true})
+	if listVisible {
+		s.BroadcastConversationsChanged()
+	}
 }
 
 type forkConversationReq struct {
@@ -365,6 +375,9 @@ func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request) 
 		_ = s.d.Conversations.Rename(info.ID, title)
 	}
 	s.waitForkTranscript(req.ID, info.ID)
+	// 新对话已经能列出来了：别的设备也要看到这一行（它此刻还没有转录，
+	// 靠 Touch 落下的元数据 + live 会话进列表）。
+	s.BroadcastConversationsChanged()
 	writeJSON(w, map[string]any{"ok": true, "id": info.ID, "cwd": rec.Cwd})
 }
 
@@ -388,6 +401,8 @@ func (s *Server) handleDeleteConversation(w http.ResponseWriter, r *http.Request
 		return
 	}
 	_ = s.d.Manager.Close(id)
+	// 删除是软删除，但列表里那一行必须立刻消失（别的设备不知道用户刚删了它）。
+	s.BroadcastConversationsChanged()
 	writeJSON(w, map[string]any{"ok": true})
 }
 
@@ -439,14 +454,20 @@ func (s *Server) ensureConversation(id string) (conversation.Record, bool) {
 }
 
 // touchConversation 记录一次打开/发送：创建元数据（如果还没有）并刷新时间。
-func (s *Server) touchConversation(info manager.Info) {
+//
+// 返回值报告「这次调用新建了元数据」，也就是这条对话第一次进入列表：调用方据此
+// 决定要不要通知其它设备（见 ws.go 的 prompt 分支）。已有记录的对话每次发消息
+// 都只改 last_active——为它广播等于让每个连接的每个回合都去重扫一遍全部转录。
+func (s *Server) touchConversation(info manager.Info) (created bool) {
 	if s.d.Conversations == nil || info.ID == "" {
-		return
+		return false
 	}
+	_, existed := s.d.Conversations.Get(info.ID)
 	if err := s.d.Conversations.Touch(info.ID, info.Cwd); err != nil {
-		return
+		return false
 	}
 	_ = s.d.Conversations.UpdateMeta(info.ID, info.Provider, info.Model, info.Effort)
+	return !existed
 }
 
 // conversationInfo 从 manager 的列表里取一个会话（touch 用）。

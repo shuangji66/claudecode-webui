@@ -40,6 +40,8 @@ type fakeMgr struct {
 	subdirCwd string
 	// sessions 保存测试注入的会话（自动化任务投递要真的往 stdin 写一行）。
 	sessions map[string]*session.Session
+	// listed 非空时 List 用它当存活会话表（默认只有 sess-1）。
+	listed []manager.Info
 	// newSession 非空时，Create/Resume/StartFresh 会给新 id 现造一个会话登记进去。
 	newSession func(id, cwd string) *session.Session
 }
@@ -105,6 +107,11 @@ func (f *fakeMgr) Get(id string) (*session.Session, bool) {
 	if s, ok := f.sessions[id]; ok {
 		return s, true
 	}
+	for _, info := range f.listed {
+		if info.ID == id {
+			return &session.Session{ID: id, Cwd: info.Cwd}, true
+		}
+	}
 	if id == "sess-1" {
 		return &session.Session{ID: "sess-1", Cwd: f.cwd()}, true
 	}
@@ -123,6 +130,10 @@ func (f *fakeMgr) register(id, cwd string) {
 }
 
 func (f *fakeMgr) List() []manager.Info {
+	// listed 让测试注入自定义的存活会话（默认只有 sess-1）。
+	if len(f.listed) > 0 {
+		return f.listed
+	}
 	return []manager.Info{{ID: "sess-1", Cwd: f.cwd(), State: "ready"}}
 }
 

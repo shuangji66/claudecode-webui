@@ -466,6 +466,20 @@ func TestScheduledSessionClosedRefreshesConversationList(t *testing.T) {
 	}
 }
 
+// 没有任何待通知标记的普通对话被关闭时也要推：`closed` 事件只发给订阅了该会话
+// topic 的连接（`h.Broadcast(sid, …)`），别的设备没打开这条对话就收不到，它侧栏里
+// 那一行会一直显示「活跃」——用户点停止、空闲回收（默认 30 分钟）、删版本都走这条路。
+func TestSessionClosedRefreshesListWithoutPendingTurn(t *testing.T) {
+	f := newSchedServer(t)
+	rec := &recClient{}
+	f.srv.d.Hub.Subscribe(systemTopic, rec)
+
+	f.srv.NoteSessionClosed("some-plain-conversation")
+	if events := rec.take(); len(events) != 1 || events[0].Kind != "conversations.changed" {
+		t.Fatalf("进程结束应推 1 条 conversations.changed，得到 %+v", events)
+	}
+}
+
 // 投递那一刻转录往往还没落盘（CLI 是异步写的），标题写不进元数据；
 // 回合结束时转录肯定有了，这时补写——否则每次新建的对话在侧栏里都叫「新对话」，
 // 「任务名 · 时间」这个用来区分多次运行的标题永远落不下。
@@ -482,7 +496,7 @@ func TestScheduledTurnEndWritesTitle(t *testing.T) {
 
 	// 这一轮还没跑完时又投了一次（例如每分钟一次的 new-reuse，没有待补标题）：
 	// 不能把前一次记下的标题抹掉。
-	f.srv.watchScheduledTurn(id, scheduledTurn{})
+	f.srv.watchPendingTurn(id, pendingTurn{})
 
 	// 单元测试里没有真的 claude 转录：清掉历史目录即视为「有转录」。
 	f.srv.d.HistoryDir = ""

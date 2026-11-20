@@ -14,11 +14,19 @@ const systemTopic = "__system__"
 //
 // 与 `claude.update` 同一条系统通道：这条事件跟「打开了哪条对话」无关，
 // 没有会话连接的标签页也要收到（`/clear` 会把一条对话的 id 换掉，侧栏必须跟着变）。
+//
+// 收到就重拉一次的代价是 `GET /api/conversations` 要重扫全部转录，所以只在
+// 「列表里真会多一行/少一行/换个顺序」的地方推：新建对话的首条消息、这一轮结束
+// （标题与 live/state 此时才定稿）、重命名/置顶/归档/删除/分叉、自动化任务投递。
+// 不要按 prompt 逐条推——每条消息都改 last_active，但为它让所有连接重扫一遍
+// 全部转录，在 NAS 上随对话数量线性变贵，换来的只有排序抖动。
 func (s *Server) BroadcastConversationsChanged() {
+	if s.d.Hub == nil {
+		return
+	}
 	s.d.Hub.Broadcast(systemTopic, WireEvent{Kind: "conversations.changed"})
 }
 
-//
 // 推送只带版本号，前端收到后照旧调 /api/claude/status 拿完整快照：状态里还有
 // 已安装列表、生效版本与安装进度，重复实现一份解析只会两边不一致。
 //

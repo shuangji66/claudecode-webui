@@ -106,6 +106,17 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	// （stderr: No conversation found with session ID: …），界面上就是一个永远
 	// 起不来的对话，而 id 又不能换。
 	resume := strings.TrimSpace(req.Resume)
+	// 这次调用会不会**把一条已有对话的进程拉起来**：拉起来之后列表里那一行的
+	// live/state 从「未运行」变成「活跃」，进程结束也有一次广播
+	// （`NoteSessionClosed`），可「起来」这一次原来一条都没有——别的设备要等自己
+	// 下次刷新列表才看得到，侧栏里那一行一直显示「未运行」。
+	//
+	// 只认「本来不在跑」：已经在跑的会话被再打开一次（切回同一条对话很常见）不该
+	// 广播——每次推送都让所有连接重扫一遍全部转录（见 BroadcastConversationsChanged）。
+	wasLive := false
+	if resume != "" {
+		_, wasLive = s.conversationInfo(resume)
+	}
 	hasTranscript := resume == "" || s.hasTranscript(resume)
 	hasRecord := false
 	if resume != "" && s.d.Conversations != nil {
@@ -141,6 +152,15 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		s.touchConversation(info)
 	}
 	s.touchWorkspace(abs)
+	// 进程刚被拉起来：别的设备上那一行得从「未运行」变「活跃」。
+	// **只在这条对话确实是由这次调用起出来的才推**（wasLive=false）——已经在跑的
+	// 会话被反复打开不该推到每个连接上去重扫转录。
+	//
+	// 空对话（没有转录、走 StartFresh 同 id 新建）也走这里且必须推：进程同样真的
+	// 起来了，而且它此前根本不在别人的列表里。
+	if resume != "" && !wasLive {
+		s.BroadcastConversationsChanged()
+	}
 	writeJSON(w, info)
 }
 

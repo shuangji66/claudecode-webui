@@ -416,7 +416,18 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 		if err == nil {
 			// 首条消息把对话落进持久化列表；后续消息刷新 last_active。
 			if info, ok := s.conversationInfo(id); ok {
-				s.touchConversation(info)
+				created := s.touchConversation(info)
+				// 这条对话此前不在列表里（新对话的首条消息）：别的设备上还没有
+				// 这一行，不广播就只能等它下次自己刷新列表才看得到。
+				if created {
+					s.BroadcastConversationsChanged()
+				}
+				// 还没有转录 = 标题还没定：等这一轮跑完（转录落盘）再推一次，
+				// 否则别处那行会一直停在「新对话」。**只在有这一层需要时才记**，
+				// 逐条 prompt 都记等于每回合让所有连接重扫一遍全部转录。
+				if created || !s.hasTranscript(id) {
+					s.watchPendingTurn(id, pendingTurn{})
+				}
 			}
 			// 同一会话的别的连接看不到这条提示词（CLI 不回显 stdin）：广播一份，
 			// 它们按内容去重后补上气泡。发送方自己也会收到，命中 samePromptEcho

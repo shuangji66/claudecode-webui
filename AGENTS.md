@@ -1088,7 +1088,42 @@ hub ── manager ── session ── process ── claude (NDJSON)
   达成时的条目另带 `iterations`/`durationMs`/`tokens`。要接得先确认 stream-json 会不会
   把这条 attachment 转发给客户端——没验证过之前不要凭 `/goal` 的用户消息猜状态。
 
-### 4.18 自动化任务（`internal/schedule` + `/api/schedules` + `ccweb mcp-schedule`）
+### 4.18 跨设备的对话列表同步（`conversations.changed`）
+
+- **列表是现算的，所以「别的设备发生了什么」必须由后端说一声**：`GET /api/conversations`
+  每次都要 `history.List` 把**每一份转录**打开扫一遍（最多 4MB / 20000 行）+ 元数据 +
+  存活会话。前端只有收到 `conversations.changed` 或自己主动刷新（换工作区、重开页面、
+  WS 重连）才会去拉——所以设备 A 上新建的对话，设备 B 不收到推送就一直看不见。
+- **只在「列表里那一行真会变」时推**，五类：
+  ① 这条对话**第一次进入列表**（`touchConversation` 返回「新建了元数据」）；
+  ② **这一轮结束**（`session.state=ready`）——此时转录才落盘，标题与
+     live/state 定稿（`pendingTurns` + `watchPendingTurn` / `NoteSessionState`，
+     定时任务与用户的首条消息共用这一套）；
+  ③ **进程结束**（`session.KindClosed` → `NoteSessionClosed`，**无条件推**，见下一条）；
+  ④ **进程被拉起来**（`POST /api/session {resume}` → `handleCreateSession`）：那一行的
+     live/state 从「未运行」变「活跃」。**只在「本来不在跑」时推**（先查
+     `conversationInfo(resume)`）——切回一条已经在跑的对话很常见，每次都推等于让所有连接
+     重扫一遍转录。空对话走 `StartFresh` 同 id 新建也走这里且同样要推。③④ 是一对：
+     只推「结束」不推「起来」，别的设备上那一行会一直停在「未运行」；
+  ⑤ **重命名 / 置顶 / 归档 / 删除 / 分叉**（`conversations_api.go` 的几个 handler）、
+     `/clear` 换了对话 id（见 4.7）。
+- **进程结束必须无条件推，不能只靠 `pendingTurns` 那层节流**：`closed` 事件由
+  `h.Broadcast(sid, …)` 只发给订阅了**该会话 topic** 的连接，别的设备没打开这条对话
+  就永远收不到，侧栏那一行会一直显示「活跃」。触发它的路径全都低频（用户点停止、
+  空闲回收 `manager.reapIdle` 默认 30 分钟、删除 claude 版本时的 `CloseSessionsUsing`、
+  归档/删除对话），不像 prompt 那样每条都来。`NoteSessionClosed` 的写法是
+  「`finishPendingTurn` 推过就不再推」，两种情况都只发一条。
+- **不要按 prompt 逐条推**：每条消息都只改 `last_active`，为它让**每个连接的每个回合**
+  都重扫一遍全部转录，在这台 NAS 上随对话数量线性变贵，换来的只有排序抖动。
+  `PATCH /api/conversations` 里 **`usage` 与 `touch` 也不推**：前者是重开对话时还原
+  底部统计的快照（每回合一次），后者每次切换对话都会发生，两者都不改那一行的内容。
+- **推送只在新建/定稿/用户动过时发生**，所以后发的消息在别的设备上可能稍晚才排到正确
+  位置——这是刻意的取舍：排序偏差由各自的本地刷新（发送时 600ms 后补拉）兜着，
+  不值得为此让全库转录每回合重扫一次。
+- 装配层的 `Server.BroadcastConversationsChanged` 是**唯一**出口（`broadcastXxx` 那份
+  重复实现已合并），`Hub` 为 nil 时静默返回（单测/无面板部署）。
+
+### 4.19 自动化任务（`internal/schedule` + `/api/schedules` + `ccweb mcp-schedule`）
 
 - **宿主级，不是 claude 的 cron**：claude 自己的 `CronCreate` / `ScheduleWakeup` / `/loop`
   是 **session-scoped**（二进制里 SDK 字段的原话：`cron tasks … that will wake this session
@@ -1111,7 +1146,7 @@ hub ── manager ── session ── process ── claude (NDJSON)
   没有转录」（前端显示「新对话」）、state 是 busy（显示转圈）；标题取自转录首条消息、
   live/state 也只有 `GET /api/conversations` 现算，没人再拉就**永远停在转圈上**
   （任务其实早跑完了，点开那条对话或刷新页面才恢复）。现在 `DeliverScheduledTask`
-  在 `Prompt` 之后 `watchScheduledTurn`，装配层（`cmd/ccweb` 的事件出口）把
+  在 `Prompt` 之后 `watchPendingTurn`，装配层（`cmd/ccweb` 的事件出口）把
   `session.state=ready` / `closed` 交给 `Server.NoteSessionState/NoteSessionClosed`：
   消耗标记 → 补写标题 → 推 `conversations.changed`。只认记过的会话，普通对话的
   回合结束不会让每个连接去重扫一遍转录。**标题也在这一刻补写**：`StartFresh` 之后
