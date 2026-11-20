@@ -158,24 +158,26 @@ func main() {
 			//
 			// manager 的键也要跟着换（只换键、不动进程）：不然列表里那条会显示
 			// `live:false`，后续 prompt 还会打到旧 id 上。
-			if from, to := sessionReplacedIDs(ev.Data); from != "" {
-				if m := mgrRef.Load(); m != nil {
-					m.Rename(from, to)
-				}
-				// 已经连着的页面订阅的是旧 topic，不搬就再也收不到事件。搬完还要
-				// 让各条连接记住新 topic：它们断开时按它退订，记着旧的那个等于没退。
-				h.Rekey(from, to)
-				// 待通知回合也按 id 记账：不搬的话回合结束时按新 id 找不到它，
-				// 标题补写与列表刷新都不会发生，还留下一条永不消费的残项。
-				if srv != nil {
-					srv.NoteSessionReplaced(from, to)
-				}
+			from, to := sessionReplacedIDs(ev.Data)
+			if from == "" {
+				return
+			}
+			if m := mgrRef.Load(); m != nil {
+				m.Rename(from, to)
+			}
+			// 已经连着的页面订阅的是旧 topic，不搬就再也收不到事件。搬完还要
+			// 让各条连接记住新 topic：它们断开时按它退订，记着旧的那个等于没退。
+			h.Rekey(from, to)
+			// 待通知回合也按 id 记账：不搬的话回合结束时按新 id 找不到它，
+			// 标题补写与列表刷新都不会发生，还留下一条永不消费的残项。
+			if srv != nil {
+				srv.NoteSessionReplaced(from, to)
 			}
 			var notify func()
 			if srv != nil {
 				notify = srv.BroadcastConversationsChanged
 			}
-			migrateConversationID(convStore, notify, ev.Data, logger)
+			migrateConversationID(convStore, from, to, notify, logger)
 		}
 	})
 	mgrRef.Store(mgr)
@@ -339,22 +341,15 @@ func sessionReplacedIDs(data json.RawMessage) (string, string) {
 // 而是跟着 claude 实际在用的那个走（见 conversation.Rekey 的注释）。
 //
 // 失败只记日志：迁移不上最多是重开对话时回到清空前的内容，不值得打断正在跑的会话。
-func migrateConversationID(conv *conversation.Store, notify func(), data json.RawMessage, logger *log.Logger) {
-	if conv == nil {
+func migrateConversationID(conv *conversation.Store, from, to string, notify func(), logger *log.Logger) {
+	if conv == nil || from == "" || to == "" || from == to {
 		return
 	}
-	var ev struct {
-		From string `json:"from"`
-		To   string `json:"to"`
-	}
-	if err := json.Unmarshal(data, &ev); err != nil || ev.From == "" || ev.To == "" || ev.From == ev.To {
-		return
-	}
-	if err := conv.Rekey(ev.From, ev.To); err != nil {
+	if err := conv.Rekey(from, to); err != nil {
 		// ErrNotFound 是常态：这条对话可能压根没登记过元数据（还没发过消息）。
 		// 其余情况（目标 id 已被占用）说明新 id 上已经有一条独立对话，也不该覆盖。
 		if !errors.Is(err, conversation.ErrNotFound) {
-			logger.Printf("迁移对话 id 失败（%s → %s）: %v", ev.From, ev.To, err)
+			logger.Printf("迁移对话 id 失败（%s → %s）: %v", from, to, err)
 		}
 		return
 	}
