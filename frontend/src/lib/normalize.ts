@@ -275,6 +275,11 @@ const NOTIFY_STATUS: Record<string, SubagentInfo["status"]> = {
  * 一条 system 都没有），所以回放历史时也靠它，否则重开对话后那条子代理永远停在
  * 「运行中」。
  *
+ * **同一种通知也发给后台命令与 MCP 调用**（它们与子代理共用 `task_*`），所以只认
+ * 本来就在跑子代理的卡片，或者本身是 Agent 调用的卡片：给一条后台命令补上
+ * `subagent` 就等于把它塞进页头的「子智能体」列表。回放时尤其容易踩——转录里没有
+ * `task_started`，Bash 卡片上压根没有子代理信息，这条通知就是唯一的「身份来源」。
+ *
  * 折完仍然整条丢弃：它是 CLI 注入的 user 行，不是用户说的话。
  */
 function applyTaskNotification(items: Item[], text: string): Item[] {
@@ -284,16 +289,18 @@ function applyTaskNotification(items: Item[], text: string): Item[] {
   const summary = tagValue(t, "summary");
   const usageMatch = SUBAGENT_USAGE_RE.exec(t);
   if (!status && !usageMatch) return items;
+  // 匹配不到 tool_use_id 时回落 task-id（后台子代理的通知里两者都有，task-id 就是 agentId）。
+  const taskId = tagValue(t, "task-id");
 
   return items.map((it) => {
     if (it.kind !== "tool") return it;
-    // 匹配不到就用 task-id：通知里的 `<task-id>` 就是 agentId。
-    const taskId = tagValue(t, "task-id");
+    // 通知可能先于 tool_result 到达：Agent 卡片此时还没有 `subagent`，按 task-id 建一个。
+    if (!it.subagent && !isAgentTool(it.name)) return it;
+    const prev: SubagentInfo = it.subagent ?? { taskId: taskId ?? "", status: "running" };
     const hit =
       (toolUseId !== undefined && it.toolUseId === toolUseId) ||
-      (taskId !== undefined && (it.subagent?.taskId === taskId || it.subagent?.agentId === taskId));
+      (taskId !== undefined && (prev.taskId === taskId || prev.agentId === taskId));
     if (!hit) return it;
-    const prev: SubagentInfo = it.subagent ?? { taskId: taskId ?? "", status: "running" };
     const next: SubagentInfo = { ...prev };
     if (status) next.status = status;
     if (summary) next.summary = summary;
@@ -752,6 +759,17 @@ const SUBAGENT_USAGE_RE =
   /<usage>[\s\S]*?subagent_tokens:\s*(\d+)[\s\S]*?tool_uses:\s*(\d+)[\s\S]*?duration_ms:\s*(\d+)[\s\S]*?<\/usage>/;
 
 /**
+ * 这个工具是不是「起子代理」的那一个。
+ *
+ * 只有它们才该长出 `subagent` 卡片信息：同一种 `<task-notification>` 也发给后台命令
+ * （`Bash` + `run_in_background`）与 MCP 调用，按它给所有工具卡片补子代理字段，
+ * 页头的「子智能体 N」就会混进一堆后台命令。
+ */
+function isAgentTool(name: string): boolean {
+  return name === "Agent" || name === "Task";
+}
+
+/**
  * 后台子代理的 tool_result 是**启动回执**，不是结果：
  * `Async agent launched successfully. … agentId: … The agent is working in the background.`
  *
@@ -861,9 +879,7 @@ function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): 
         // Agent 工具的最终报告里带着 agentId 与 <usage>：回放历史时没有 task 事件，
         // 靠它把卡片补成「已完成 + 用量 + 可查看对话」。
         const sub =
-          it.name === "Agent" || it.name === "Task"
-            ? subagentFromResult(text, isError)
-            : undefined;
+          isAgentTool(it.name) ? subagentFromResult(text, isError) : undefined;
         const subagent: SubagentInfo | undefined = sub
           ? {
               taskId: it.subagent?.taskId ?? sub.agentId ?? "",

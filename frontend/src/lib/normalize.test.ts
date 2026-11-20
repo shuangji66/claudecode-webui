@@ -932,6 +932,42 @@ describe("子代理任务事件", () => {
     expect(items).toHaveLength(1);
   });
 
+  // 同一种通知也发给**后台命令**（Bash + run_in_background）与 MCP 调用。
+  // 给它们补一个 `subagent` 就等于把后台命令塞进页头的「子智能体」列表——
+  // 回放时尤其容易踩：转录里没有 task_started，Bash 卡片上根本没有子代理信息。
+  it("task-notification 不会给后台命令凭空挂上子代理", () => {
+    let items = applyCLI([], {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "call_bg", name: "Bash", input: { command: "npm run mock", run_in_background: true } }],
+      },
+    });
+    items = applyCLI(items, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: [
+              "<task-notification>",
+              "<task-id>bv3vaq2qk</task-id>",
+              "<tool-use-id>call_bg</tool-use-id>",
+              "<output-file>/tmp/x.output</output-file>",
+              "<status>killed</status>",
+              '<summary>Background command "Run mock server" was stopped</summary>',
+              "</task-notification>",
+            ].join("\n"),
+          },
+        ],
+      },
+    });
+    expect((items[0] as Extract<Item, { kind: "tool" }>).subagent).toBeUndefined();
+    // 通知本身照旧整条丢弃。
+    expect(items).toHaveLength(1);
+  });
+
   // 被中断（TaskStop）的子代理**不写 task-notification**：转录里只有那条启动回执。
   // 不靠 meta.json 的 finished 结算，重开对话后它永远是 running——页头一直转圈。
   describe("settleSubagents（回放时用 meta 的 finished 结算）", () => {
