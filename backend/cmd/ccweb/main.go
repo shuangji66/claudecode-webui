@@ -178,6 +178,12 @@ func main() {
 				notify = srv.BroadcastConversationsChanged
 			}
 			migrateConversationID(convStore, from, to, notify, logger)
+			// 绑定了这条对话的自动化任务也要改指新 id：不改的话它们之后每一轮都去
+			// `--resume 旧 id`——那份转录停在 clear 之前，等于把用户刚刚清掉的上下文
+			// 重新读进来，而新 id 上真正的对话永远收不到投递。
+			if n := scheduleStore.RekeyConversation(from, to); n > 0 {
+				logger.Printf("已把 %d 条自动化任务改指到对话 %s", n, to)
+			}
 		}
 	})
 	mgrRef.Store(mgr)

@@ -312,6 +312,48 @@ func (s *Store) UpdateRun(id string, fn func(*Task) error) (Task, error) {
 	return s.update(id, fn, false)
 }
 
+// RekeyConversation 把所有「绑定在 oldID 这条对话上」的任务改指到 newID。
+//
+// `/clear` 让 claude 换了会话 id（见 conversation.Rekey），绑定旧 id 的任务会在
+// 之后每一轮都去 `--resume 旧 id`——那份转录正好停在 clear 之前，于是用户**刚刚
+// 清掉的上下文**被当成任务上下文重新读进来，而新 id 上真正的对话反而收不到投递。
+//
+// 与 conversation.Rekey 同一套「跟 claude 走」的理由，只是这里改的是任务的目标。
+// 返回改了几条，供装配层记日志。
+func (s *Store) RekeyConversation(oldID, newID string) int {
+	oldID = strings.TrimSpace(oldID)
+	newID = strings.TrimSpace(newID)
+	if oldID == "" || newID == "" || oldID == newID {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.reloadLocked(); err != nil {
+		return 0
+	}
+	changed := 0
+	for i := range s.data.Tasks {
+		if s.data.Tasks[i].Target.ConversationID != oldID {
+			continue
+		}
+		s.data.Tasks[i].Target.ConversationID = newID
+		changed++
+	}
+	if changed == 0 {
+		return 0
+	}
+	// 落盘失败就把改动撤回来，否则界面显示成功、重启后又是旧 id。
+	if err := s.save(); err != nil {
+		for i := range s.data.Tasks {
+			if s.data.Tasks[i].Target.ConversationID == newID {
+				s.data.Tasks[i].Target.ConversationID = oldID
+			}
+		}
+		return 0
+	}
+	return changed
+}
+
 func (s *Store) update(id string, fn func(*Task) error, bump bool) (Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

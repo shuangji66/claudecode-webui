@@ -2282,6 +2282,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // 又去 resume 一份用户已经清空的转录。
         clients.get(old)?.close();
         clients.delete(old);
+        // 沉默计时按旧 id 记的那条也要清：不清的话每 /clear 一次就留一条永远不用的
+        // 记录（这张表只在 purgeSession 里删），而且新 id 第一次等待会去读它。
+        forgetSilence(old);
         set((s) => ({
           states: moveKey(s.states, old, to),
           inits: moveKey(s.inits, old, to),
