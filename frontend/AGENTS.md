@@ -116,6 +116,10 @@ src/
    也绝不读 `settings.theme`。`index.html` 的启动脚本读同一份缓存，避免闪白。
 9. 强调色是陶土色 `#D97757`，统一用 `bg-brand/text-brand/border-brand`。
 10. 移动端输入区必须保留 `env(safe-area-inset-bottom)`；设置页底部操作栏同样要留安全区。
+    **凡是移动端落在屏幕最下沿的一条横栏都要留**：输入卡、设置页底部按钮行、侧栏底部
+    操作区，以及 `TerminalView` 的终端状态底栏（`pb-[calc(env(safe-area-inset-bottom,0px)+4px)]`
+    + `md:pb-1`）——它贴着屏幕下沿，不留的话 Home Indicator 直接压住「已连接 / shell / 目录」
+    这行字（iPhone 上截图复现过）。`env()` 在桌面端为 0，别靠 `@supports` 猜。
 11. 不要加呼吸灯/无限 pulse 动画；状态点用静态圆点，流式光标也不闪烁。
     **唯一例外**是对话「进行中」的进度环（`common/StateDot` 的 `ongoing`：1.5s 匀速旋转 +
     弧长呼吸，对齐 DSH 的 StateDot），它表达的是「正在干活」而不是装饰；必须在

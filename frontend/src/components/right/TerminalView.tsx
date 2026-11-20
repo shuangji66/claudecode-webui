@@ -204,7 +204,10 @@ function TerminalSession({ cwd, active }: { cwd: string; active: boolean }) {
           </div>
         )}
       </div>
-      <div className="shrink-0 border-t border-line px-2 py-1 text-[9.5px] text-faint">
+      {/* 底栏在移动端是屏幕最下面那一行：不留安全区的话 Home Indicator 会压在
+          「已连接 / shell / 目录」这行字上（iPhone 上直接看不见一半）。桌面端
+          `env()` 为 0，`md:pb-1` 只是把 4px 的内边距写回去，与原来一致。 */}
+      <div className="shrink-0 border-t border-line px-2 pb-[calc(env(safe-area-inset-bottom,0px)+4px)] pt-1 text-[9.5px] text-faint md:pb-1">
         <div className="flex items-center gap-1.5">
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
           <span className="shrink-0">{statusText}</span>
