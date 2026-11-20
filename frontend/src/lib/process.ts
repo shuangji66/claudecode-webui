@@ -250,36 +250,49 @@ function joinDone(parts: string[], locale: Locale | string): string {
 }
 
 /**
- * 一轮之内，哪些「正文段」前面要加一条分隔线。
+ * 一轮之内，**最终回答**前面要不要加一条分隔线。
  *
  * 场景：模型说完一段过渡正文（「我先看一下这个文件」），接着又是思考与工具调用，
- * 最后给出真正的回答。两段正文之间没有任何视觉边界，读起来像同一段话被截成两截，
- * 而且看不出后半截才是结论。
+ * 最后给出真正的回答。两者之间没有任何视觉边界，读起来像同一段话被截成两截，
+ * 也看不出后半截才是结论。
+ *
+ * **只给最后一段画，而且只画一条**。过程收起之后，一轮里的过渡正文会全部连在一起
+ * （思考与工具被折成了上面那一行「已完成」），逐段加线就是满屏横线——那是噪音，
+ * 不是分界。真正需要分开的只有「过程之前说的话」和「过程之后得出的结论」。
  *
  * 规则（只看轮内**可见的正文段**）：
- *   - 这一轮的第一段不加（它紧跟在用户消息 / 收起行下面，那里已经有边界）；
- *   - 后面每一段**只有跨过了过程（思考或工具）才加**。相邻两段正文中间什么都没发生
- *     时（上游把一条回复拆成多个 text 块）不该多一道线，那会显得像两轮。
+ *   - 只有一段正文 → 不画（纯问答不需要边界）；
+ *   - 最后一段前面**没有跨过过程** → 不画（上游把一条回复拆成多个 text 块很常见，
+ *     凭空多一道线会显得像另起了一轮）；
+ *   - 否则给**最后一段**画一条。
  *
  * `hidden` 是「仅最终回答」档下被藏掉的回复 id：它们不占渲染位置，也不该参与
- * 分段——否则会算出一段看不见的「前文」，给真正的那一段多挂一条线。
+ * 判断——否则会算出一段看不见的「前文」，给真正的那一段多挂一条线。
  *
- * 返回需要加线的正文 item id 集合。纯函数，`done` 是这一轮的行序列。
+ * 返回需要加线的正文 item id 集合（至多一个元素）。
  */
 export function replyDividerIds(done: Item[], hidden?: Set<string>): Set<string> {
-  const out = new Set<string>();
-  let seenReply = false;
-  let crossedProcess = false;
+  // 先挑出这一轮可见的正文段：只留非空 assistant，且跳过被「仅最终回答」藏掉的。
+  const replies: string[] = [];
+  // 每一段正文之前「有没有出现过过程」——与 replies 一一对应。
+  const hadProcessBefore: boolean[] = [];
+  let crossed = false;
   for (const item of done) {
     if (isProcessItem(item)) {
-      crossedProcess = true;
+      crossed = true;
       continue;
     }
     if (item.kind !== "assistant" || !item.text.trim()) continue;
     if (hidden?.has(item.id)) continue;
-    if (seenReply && crossedProcess) out.add(item.id);
-    seenReply = true;
-    crossedProcess = false;
+    replies.push(item.id);
+    hadProcessBefore.push(crossed);
+    crossed = false;
+  }
+  const out = new Set<string>();
+  const last = replies[replies.length - 1];
+  // 至少两段才有「过渡正文 / 最终回答」之分；最后一段之前跨过过程才画那一条。
+  if (replies.length >= 2 && last && hadProcessBefore[hadProcessBefore.length - 1]) {
+    out.add(last);
   }
   return out;
 }
