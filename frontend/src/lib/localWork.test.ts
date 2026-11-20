@@ -31,6 +31,29 @@ describe("localWorkFrom", () => {
     expect(w.compactChars).toBe(0);
   });
 
+  // CLI 的压缩心跳是 `{type:"sdk_status", status:"compacting"}`，每 30 秒一次、
+  // **不带 `compact_output_chars`**（二进制的 sZ → Gus）。当成 0 的话界面上
+  // 「已写 12K 字」会每 30 秒跳回 0，看着像进度倒退。
+  it("心跳不带 compact_output_chars 时保留上一次的数，不跳回 0", () => {
+    let w = localWorkFrom(NO_LOCAL_WORK, {
+      type: "system",
+      subtype: "status",
+      status: "compacting",
+      compact_output_chars: 5000,
+    });
+    expect(w.compactChars).toBe(5000);
+    w = localWorkFrom(w, { type: "system", subtype: "status", status: "compacting" });
+    expect(w.compactChars).toBe(5000);
+    // 明确给 0 才归零（新一轮摘要在写）。
+    w = localWorkFrom(w, { type: "system", subtype: "status", status: "compacting", compact_output_chars: 0 });
+    expect(w.compactChars).toBe(0);
+  });
+
+  it("从没给过 chars 时是 0，不是 undefined", () => {
+    const w = localWorkFrom(NO_LOCAL_WORK, { type: "system", subtype: "status", status: "compacting" });
+    expect(w.compactChars).toBe(0);
+  });
+
   it("status=requesting 结束压缩状态（CLI 在等上游了）", () => {
     const compacting = localWorkFrom(NO_LOCAL_WORK, { type: "system", subtype: "status", status: "compacting" });
     const done = localWorkFrom(compacting, { type: "system", subtype: "status", status: "requesting" });

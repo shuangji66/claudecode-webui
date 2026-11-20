@@ -70,9 +70,17 @@ export function localWorkFrom(prev: LocalWork, msg: unknown): LocalWork {
   const subtype = typeof m.subtype === "string" ? m.subtype : "";
   if (subtype === "status") {
     if (m.status === "compacting") {
-      const chars = typeof m.compact_output_chars === "number" && Number.isFinite(m.compact_output_chars)
-        ? m.compact_output_chars
-        : 0;
+      // **`compact_output_chars` 可能整条 absence**：CLI 的压缩心跳是
+      // `{type:"sdk_status", status:"compacting"}`，每 30 秒一次、不带这个字段
+      // （二进制的 `sZ` → `Gus`）。把它当成 0 的话，界面上「已写 12K 字」会每 30 秒
+      // 跳回 0，看着像进度在倒退。所以：**字段缺席时保留上一次的数**，
+      // 只有 CLI 明确给出数字（含 0，代表新一轮摘要从 0 开始）才覆盖。
+      const raw = m.compact_output_chars;
+      const chars =
+        typeof raw === "number" && Number.isFinite(raw) && raw >= 0
+          ? raw
+          : // 缺席：沿用上一次；从没给过就是 0。
+            prev.compactChars;
       // 同一个 count 连发很多条时对象引用不变，避免每条都让 store 记一次。
       if (prev.compacting && prev.compactChars === chars) return prev;
       return { ...prev, compacting: true, compactChars: chars };
