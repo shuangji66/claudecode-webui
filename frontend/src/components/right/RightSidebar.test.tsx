@@ -209,6 +209,19 @@ describe("RightSidebar 停靠与宽度", () => {
     expect(screen.getByLabelText("调整侧栏宽度")).toHaveClass("hidden");
     setViewport(1024);
   });
+
+  // 拖动条跨在侧栏左边界上（外 4px 落在对话区，内 4px 落在侧栏里）。
+  // 不给它层级的话，侧栏内部的面板（Git 的提交框/文件列表、终端的 xterm）会先于它
+  // 命中指针：拖到内侧那半截时既没有 col-resize，hover 高亮也被面板背景盖掉一半，
+  // 肉眼看到的就是「拖动条在面板边缘断开」。jsdom 不算层叠，只能钉住类名。
+  it("拖动条要压在面板内容之上，否则内侧半截收不到指针", () => {
+    setViewport(1400);
+    render(<RightSidebar cwd="/w" onClose={() => {}} />);
+    const handle = screen.getByLabelText("调整侧栏宽度");
+    expect(handle.className).toContain("z-20");
+    // 仍然是贴在左缘、且跨出侧栏 4px（对话区那一侧也要能拖到）
+    expect(handle.className).toContain("-left-1");
+  });
 });
 
 describe("RightSidebar 换工作区", () => {

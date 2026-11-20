@@ -367,7 +367,11 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
           onPointerCancel={onResizeEnd}
           onDoubleClick={() => applyWidth(RIGHT_DEFAULT_WIDTH)}
           onKeyDown={onResizeKey}
-          className={`absolute inset-y-0 -left-1 w-2 cursor-col-resize hover:bg-brand/30 ${docked ? "" : "hidden"}`}
+          // `z-20` 不能删：拖动条跨在侧栏左边界上（外 4px 在对话区、内 4px 在侧栏里），
+          // 不加层级时侧栏里的面板（Git 的列表/提交框、终端的 xterm）会先于它命中指针，
+          // 于是拖到侧栏内部那半截时既没有 col-resize、hover 高亮也被面板背景盖掉一半，
+          // 看起来就是「拖动条断在面板边缘」。层级只要盖过面板即可（Git 的 sticky 头是 z-10）。
+          className={`absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize hover:bg-brand/30 ${docked ? "" : "hidden"}`}
           title={t("拖动调整宽度，双击复位", "Drag to resize, double-click to reset")}
         />
 
