@@ -460,7 +460,6 @@ export interface GatewayModel {
 export interface ModelsResult {
   models: GatewayModel[] | null;
   endpoint: string;
-  supported: boolean;
   status: number;
   detail: string;
   /** 解析失败时的响应体片段，便于判断网关到底返回了什么。 */

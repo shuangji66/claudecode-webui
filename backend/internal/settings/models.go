@@ -35,16 +35,19 @@ type Attempt struct {
 }
 
 // ModelsResult 是拉取模型列表的结果。
+//
+// 没有 `supported`：以前它表示「这个协议的列表能不能自动拉」，协议删掉之后
+// 只剩 Anthropic Messages 一条路，字段恒为 true——留着就是个谁都不读、却在
+// 暗示「有些端点拉不到列表」的假开关。
 type ModelsResult struct {
-	Models    []Model   `json:"models"`
-	Endpoint  string    `json:"endpoint"`
-	Status    int       `json:"status"`
-	Detail    string    `json:"detail"`
-	Raw       string    `json:"raw,omitempty"`
-	Tried     []string  `json:"tried,omitempty"`
-	Attempts  []Attempt `json:"attempts,omitempty"`
-	Auth      AuthInfo  `json:"auth"`
-	Supported bool      `json:"supported"`
+	Models   []Model   `json:"models"`
+	Endpoint string    `json:"endpoint"`
+	Status   int       `json:"status"`
+	Detail   string    `json:"detail"`
+	Raw      string    `json:"raw,omitempty"`
+	Tried    []string  `json:"tried,omitempty"`
+	Attempts []Attempt `json:"attempts,omitempty"`
+	Auth     AuthInfo  `json:"auth"`
 }
 
 // ListingURL 拼出模型列表地址：`{root}/v1/models?limit=1000`。
@@ -74,9 +77,8 @@ const rawPreviewBytes = 600
 // 拿不到时手动输入模型名效果相同。
 func FetchModels(ctx context.Context, p Provider) ModelsResult {
 	res := ModelsResult{
-		Endpoint:  p.Root(),
-		Supported: true,
-		Auth:      AuthInfo{APIKeySent: p.APIKey != "", AuthTokenSent: p.AuthToken != ""},
+		Endpoint: p.Root(),
+		Auth:     AuthInfo{APIKeySent: p.APIKey != "", AuthTokenSent: p.AuthToken != ""},
 	}
 	if !strings.HasPrefix(res.Endpoint, "http://") && !strings.HasPrefix(res.Endpoint, "https://") {
 		res.Detail = "地址必须以 http:// 或 https:// 开头"
