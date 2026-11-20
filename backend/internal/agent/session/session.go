@@ -391,7 +391,6 @@ func (s *Session) noteCLISession(id string) bool {
 	return !first
 }
 
-
 // justFinishedTurn 表示最近一条 result 还在 TurnHandoffWindow 之内。
 func (s *Session) justFinishedTurn() bool {
 	at := s.resultAt.Load()

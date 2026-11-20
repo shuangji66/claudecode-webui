@@ -282,7 +282,6 @@ func isTaskNotification(text string) bool {
 	return taskNotificationRE.MatchString(t)
 }
 
-
 func truncate(s string, n int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	r := []rune(s)

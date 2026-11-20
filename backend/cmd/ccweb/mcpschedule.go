@@ -135,7 +135,7 @@ func scheduleToolDefs() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"name":  map[string]any{"type": "string", "description": "任务名称，例如「每日巡检」"},
+					"name":   map[string]any{"type": "string", "description": "任务名称，例如「每日巡检」"},
 					"prompt": map[string]any{"type": "string", "description": "到点后要发给模型的那句话（自包含：模型看不到这次对话的上下文）"},
 					"rule":   ruleSchema,
 					"workspace": map[string]any{
@@ -151,7 +151,7 @@ func scheduleToolDefs() []map[string]any {
 			},
 		},
 		{
-			"name": "schedule_list",
+			"name":        "schedule_list",
 			"description": "列出全部自动化任务（含已暂停与已结束），用来回答「我有哪些提醒」或在修改/删除前确认 id。",
 			"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false},
 		},
@@ -162,12 +162,12 @@ func scheduleToolDefs() []map[string]any {
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"id":    map[string]any{"type": "string", "description": "schedule_list 给出的任务 id"},
+					"id": map[string]any{"type": "string", "description": "schedule_list 给出的任务 id"},
 					"action": map[string]any{
 						"type": "string", "enum": []string{"pause", "resume", "delete"},
 						"description": "空=只改字段；pause 暂停；resume 恢复；delete 删除",
 					},
-					"name":  map[string]any{"type": "string", "description": "新名称"},
+					"name":   map[string]any{"type": "string", "description": "新名称"},
 					"prompt": map[string]any{"type": "string", "description": "新的指令正文"},
 					"rule":   ruleSchema,
 				},

@@ -21,9 +21,9 @@ import (
 
 // 任务状态。
 const (
-	StatusActive  = "active"
-	StatusPaused  = "paused"
-	StatusEnded   = "ended" // 一次性任务投递完之后
+	StatusActive = "active"
+	StatusPaused = "paused"
+	StatusEnded  = "ended" // 一次性任务投递完之后
 )
 
 // 投递目标。

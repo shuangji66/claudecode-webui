@@ -2,8 +2,8 @@ package manager
 
 import (
 	"os"
-	"slices"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"

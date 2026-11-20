@@ -23,9 +23,9 @@ type fakeDeploy struct {
 	deleted    []string
 	deleteErr  error
 	// onDelete 在真正删除前调用，用来断言「进程已经结束」这个顺序。
-	onDelete func()
-	activated  []string
-	sources    []string
+	onDelete  func()
+	activated []string
+	sources   []string
 }
 
 func (f *fakeDeploy) Status() claudebin.Status { return f.status }

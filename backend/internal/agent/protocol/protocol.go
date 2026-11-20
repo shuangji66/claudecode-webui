@@ -29,12 +29,12 @@ const (
 	TypeControlCancelRequest = "control_cancel_request"
 	// TypeKeepAlive 是纯心跳（长时间的控制请求期间 CLI 会周期性发），无载荷、可直接丢弃。
 	// 不当成未知类型转给前端：它会进入重放缓冲，把真正需要补发的历史挤掉。
-	TypeKeepAlive       = "keep_alive"
-	TypeUser            = "user"
-	TypeAssistant       = "assistant"
-	TypeSystem          = "system"
-	TypeResult          = "result"
-	TypeStreamEvent     = "stream_event"
+	TypeKeepAlive   = "keep_alive"
+	TypeUser        = "user"
+	TypeAssistant   = "assistant"
+	TypeSystem      = "system"
+	TypeResult      = "result"
+	TypeStreamEvent = "stream_event"
 )
 
 // 控制请求子类型。
@@ -78,7 +78,6 @@ type rawEnvelope struct {
 		Response  json.RawMessage `json:"response"`
 	} `json:"response"`
 }
-
 
 // Decode 解析一行 NDJSON。
 func Decode(line []byte) (Envelope, error) {
@@ -136,7 +135,6 @@ func (e Envelope) CancelTarget() string {
 	}
 	return r.RequestID
 }
-
 
 // ResponsePayload 取出 control_response 里 `response.response` 的载荷。
 // 结构形如：

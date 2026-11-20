@@ -122,7 +122,6 @@ func (h *Hub) Rekey(oldTopic, newTopic string) {
 	delete(h.subs, oldTopic)
 }
 
-
 // Topics 返回当前有订阅者的 topic 快照。
 func (h *Hub) Topics() []string {
 	h.mu.RLock()

@@ -1378,10 +1378,10 @@ func TestConversationResetAloneDoesNotReplaceSession(t *testing.T) {
 	defer sess.Close()
 
 	fc.send(map[string]any{
-		"type":                  "conversation_reset",
-		"trigger":               "clear",
-		"new_conversation_id":   "bogus-id",
-		"session_id":            "s1",
+		"type":                "conversation_reset",
+		"trigger":             "clear",
+		"new_conversation_id": "bogus-id",
+		"session_id":          "s1",
 	})
 	// 哨兵：重置帧处理完之后再发一条，确保断言时前面的都处理完了。
 	fc.send(map[string]any{"type": "system", "subtype": "informational", "content": "哨兵"})
