@@ -91,7 +91,7 @@ func Probe(ctx context.Context, p Provider) ProbeResult {
 	start := time.Now()
 	client := proxyClient()
 
-	url := ListingURL(p.Root(), p.ModelsPath)
+	url := ListingURL(p.ListBaseURL(), p.ModelsPath)
 	status, body, _, err := doAuth(ctx, client, http.MethodGet, url, p, nil)
 	res.Method = "GET " + url
 	res.Status = status

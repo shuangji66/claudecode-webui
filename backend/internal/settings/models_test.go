@@ -150,6 +150,10 @@ func TestParseModelsEmptyBody(t *testing.T) {
 
 // 列表路径只有一条规则：剥掉 base 末尾的 /v1 再拼 /v1/models。
 // 用户填带不带 /v1 都应该落到同一个地址。
+//
+// **必须走 Provider.ListBaseURL**（而不是自己先 strip 再调 ListingURL）：调用链里
+// 少剥一层就是 `…/v1/v1/models`，而自己 strip 过的用例照样能过——`Probe` 就曾经
+// 因为传的是 `p.Root()` 而漏了这一步。
 func TestListingURLStripsVersionSuffix(t *testing.T) {
 	cases := []struct {
 		base, want string
@@ -160,9 +164,9 @@ func TestListingURLStripsVersionSuffix(t *testing.T) {
 		{"https://gw.example/api/anthropic", "https://gw.example/api/anthropic/v1/models?limit=1000"},
 	}
 	for _, c := range cases {
-		base := stripVersionSuffix(c.base)
-		if got := ListingURL(base, ""); got != c.want {
-			t.Fatalf("ListingURL(strip(%q)) = %q, want %q", c.base, got, c.want)
+		p := Provider{BaseURL: c.base}
+		if got := ListingURL(p.ListBaseURL(), ""); got != c.want {
+			t.Fatalf("ListingURL(ListBaseURL(%q)) = %q, want %q", c.base, got, c.want)
 		}
 	}
 }
@@ -339,6 +343,32 @@ func TestFetchModelsRejectsBadScheme(t *testing.T) {
 	res := FetchModels(t.Context(), Provider{BaseURL: "relay.local"})
 	if len(res.Models) != 0 || !strings.Contains(res.Detail, "http") {
 		t.Fatalf("应提示协议头: %+v", res)
+	}
+}
+
+// Probe 与 FetchModels 必须打到同一个列表地址：两条路都走 ListBaseURL。
+//
+// 只比对预期字符串不够（自己先 strip 再断言照样能过），这里真的发请求——
+// `Probe` 曾经传的是 `p.Root()`，于是 base 带 `/v1` 时它请求
+// `…/v1/v1/models`，「测试连接」永远 404 而「获取模型列表」正常。
+func TestProbeUsesSameListingURLAsFetchModels(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	defer srv.Close()
+
+	p := Provider{BaseURL: srv.URL + "/v1"}
+	if res := Probe(t.Context(), p); !res.OK {
+		t.Fatalf("Probe 应通过: %+v", res)
+	}
+	if res := FetchModels(t.Context(), p); len(res.Models) != 1 {
+		t.Fatalf("FetchModels 应拿到模型: %+v", res)
+	}
+	if len(seen) != 2 || seen[0] != "/v1/models" || seen[1] != "/v1/models" {
+		t.Fatalf("两条路的列表地址应同为 /v1/models，实际 %v", seen)
 	}
 }
 
