@@ -217,7 +217,12 @@ interface AppState {
   modelsRaw: string;
   modelsAttempts: { path: string; status: number; note: string }[];
   verify: { key: string; result: ProbeResult } | null;
-  probe: { key: string; result: ProbeResult } | null;
+  /**
+   * 「测试连接」的最近一次探测。`pending` 是**在飞**标记：只靠 `key` 判断的话，
+   * 响应回来之后 key 仍然匹配，按钮会永远停在「测试中…」（踩过）。
+   * key 用表单 uid（未保存的草稿没有 id，用 id 会让所有草稿共用同一个 key）。
+   */
+  probe: { key: string; pending: boolean; result: ProbeResult | null } | null;
 
   loading: boolean;
   error: string | null;
@@ -886,6 +891,9 @@ let mentionRequestSeq = 0;
  */
 let conversationsSeq = 0;
 
+/** 「测试连接」的序号：只认最后一次探测的结果（先点 A 再点 B 时 A 的迟到响应作废）。 */
+let probeSeq = 0;
+
 export const useAppStore = create<AppState>()((set, get) => ({
   info: null,
   settings: null,
@@ -1269,18 +1277,26 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   probeProvider: async (form) => {
-    const key = form.id;
-    set({ probe: { key, result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: "探测中…" } } });
+    // 未保存的草稿没有 id，用表单 uid 做 key：否则两个草稿会共用 `""`，
+    // 其中一个的探测结果会显示在另一个卡片上。
+    const key = form.uid || form.id;
+    const seq = ++probeSeq;
+    set({ probe: { key, pending: true, result: null } });
     try {
       const r = await apiFetch<ProbeResult>("/api/settings/test", {
         method: "POST",
         body: JSON.stringify(providerRef(form)),
       });
-      set({ probe: { key, result: r } });
+      // 只认最后一次发出去的探测：先点 A 再点 B 时，A 的迟到响应不能把 B 的
+      // 进行中状态收掉（反之亦然）。
+      if (seq !== probeSeq) return;
+      set({ probe: { key, pending: false, result: r } });
     } catch (e) {
+      if (seq !== probeSeq) return;
       set({
         probe: {
           key,
+          pending: false,
           result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: errText(e) },
         },
       });

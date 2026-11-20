@@ -104,4 +104,40 @@ describe("模型页凭证输入框的自动填充", () => {
     });
     expect(screen.getByRole("checkbox", { name: /支持图片输入/ })).toBeChecked();
   });
+
+  // 曾经只看「最近一次探测的 key 是不是本提供商」，响应回来之后 key 仍然相等，
+  // 于是按钮永远停在「测试中…」（截图复现过：结果那行已经绿了，按钮还在转）。
+  it("测试连接返回后按钮恢复可点，并显示结果", async () => {
+    let resolve: (r: Response) => void = () => {};
+    const pending = new Promise<Response>((r) => {
+      resolve = r;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/api/settings/test")) return pending;
+        return new Response("{}", { status: 200 });
+      }),
+    );
+    await act(async () => {
+      render(<ModelsSettings />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    });
+    expect(screen.getByRole("button", { name: "测试中…" })).toBeDisabled();
+
+    await act(async () => {
+      resolve(
+        new Response(JSON.stringify({ ok: true, endpoint: "http://127.0.0.1:7863", method: "GET", status: 200, latency_ms: 3, detail: "端点可用，返回 9 个模型" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+      // 让 probeProvider 的 await 链跑完
+      await pending;
+    });
+    expect(await screen.findByText(/端点可用，返回 9 个模型/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "测试连接" })).not.toBeDisabled();
+  });
 });

@@ -234,7 +234,12 @@ function ProviderCard({
   const [presetId, setPresetId] = useState("");
 
   const saved = useAppStore((s) => s.settings?.providers.find((x) => x.id === provider.id));
-  const probing = probe?.key === provider.id;
+  // 按表单 uid 匹配（与 store 的 key 一致）：未保存的草稿没有 id，用 id 会让每张
+  // 草稿卡片都命中同一次结果。`pending` 才是「在跑」，不能只看 key——响应回来之后
+  // key 仍然相等，按钮会永远停在「测试中…」。
+  const probeKey = provider.uid || provider.id;
+  const probing = probe?.key === probeKey && probe.pending;
+  const probeResult = probe?.key === probeKey ? probe.result : null;
   const filtered = useMemo(
     () => gatewayModels.filter((m) => (search.trim() ? m.id.toLowerCase().includes(search.trim().toLowerCase()) : true)),
     [gatewayModels, search],
@@ -433,14 +438,15 @@ function ProviderCard({
             <button
               type="button"
               onClick={() => void probeProvider(provider)}
-              className="rounded-md px-2 py-1 text-[10.5px] text-muted ring-1 ring-line-strong hover:bg-canvas hover:text-ink"
+              disabled={probing}
+              className="rounded-md px-2 py-1 text-[10.5px] text-muted ring-1 ring-line-strong hover:bg-canvas hover:text-ink disabled:opacity-60"
             >
               {probing ? t("测试中…", "Testing…") : t("测试连接", "Test")}
             </button>
           </div>
 
-          {probing && probe && (
-            <p className={`mt-1 text-[10.5px] ${probe.result.ok ? "text-ok" : "text-danger"}`}>{probe.result.ok ? "✓ " : "✗ "}{probe.result.detail}</p>
+          {probeResult && !probing && (
+            <p className={`mt-1 text-[10.5px] ${probeResult.ok ? "text-ok" : "text-danger"}`}>{probeResult.ok ? "✓ " : "✗ "}{probeResult.detail}</p>
           )}
 
           {picking && (
