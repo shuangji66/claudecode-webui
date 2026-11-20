@@ -64,6 +64,13 @@ type Event struct {
 	Kind string          `json:"kind"`
 	Data json.RawMessage `json:"data"`
 	Seq  uint64          `json:"seq,omitempty"`
+	// Topic 是**这条事件该投给哪个会话 topic**；空表示由上层按 CurrentID() 决定。
+	//
+	// 目前只有 `session.replaced` 会自己指定：它正是「id 要换了」的通知本身，
+	// 而收到它的那一刻订阅者还都在**旧** topic 上（搬订阅是上层处理完这条之后的
+	// 事）。按新 id 发就没人收得到，前端永远不知道该换，界面停在旧 id 上、
+	// 后续事件一条也收不到——症状是「/clear 之后会话像冻结了」。
+	Topic string `json:"-"`
 }
 
 // 事件重放缓冲的下限。
@@ -137,6 +144,11 @@ type controlResponse struct {
 
 // Session 是一条会话。
 type Session struct {
+	// ID 是**创建时**用的会话 id，之后不再改变（`/clear` 也不改它，见 CurrentID）。
+	//
+	// 它是 `--session-id` / `--resume` 传进去的那个值，也是外部按 id 找这条会话的键。
+	// 事件的路由 id 用 CurrentID()：`/clear` 之后 CLI 会换 id，那时两者的差异才是
+	// 事实，把它写回这个字段就是在跨 goroutine 改一个别人正在读的变量。
 	ID        string
 	Cwd       string
 	CreatedAt time.Time
@@ -323,7 +335,7 @@ func (s *Session) Start() error {
 
 	s.setState(StateReady)
 	s.emitData(KindSessionReady, map[string]any{
-		"id":      s.ID,
+		"id":      s.CurrentID(),
 		"cwd":     s.Cwd,
 		"init":    json.RawMessage(resp.payload),
 		"version": protocolVersion(resp.payload),
@@ -387,23 +399,34 @@ func (s *Session) CLISessionID() string {
 	return s.ID
 }
 
-// noteCLISession 记下 CLI 报上来的 session_id；**真的变了才返回 true**。
+// CurrentID 是**这条会话此刻该用哪个 id 对外**：换过就是新 id，没换就是 s.ID。
+//
+// 事件路由（hub 的 topic）、快照里的 `id`、`closed` 载荷都走它。`/clear` 之后
+// CLI 换了 id，界面与订阅都已经跟到新 id 上，事件再按旧 id 发就没人收得到。
+func (s *Session) CurrentID() string { return s.CLISessionID() }
+
+// noteCLISession 记下 CLI 报上来的 session_id；**真的变了才返回 changed=true**，
+// 同时把**更新前**的 id 作为 prev 带出来。
 //
 // 首次记录（空 → 值）**不算变**：那是会话正常启动时的第一个 init。之后每次 init
 // 都带 session_id（每个回合都有一条），与已记下的相同就是正常一轮；不同才是
 // `/clear` 那种「CLI 换了会话」。
-func (s *Session) noteCLISession(id string) bool {
+//
+// prev 必须在同一把锁里取：拿 s.ID 或事后再读 CLISessionID() 都会漏掉「连续换两次」
+// 的中间那个 id——第一次已经把它覆盖掉了。
+func (s *Session) noteCLISession(id string) (changed bool, prev string) {
 	if id == "" {
-		return false
+		return false, ""
 	}
 	s.cliMu.Lock()
 	defer s.cliMu.Unlock()
 	if s.cliSID == id {
-		return false
+		return false, ""
 	}
-	first := s.cliSID == ""
+	prev = s.cliSID
 	s.cliSID = id
-	return !first
+	// 空 → 值 是正常启动的第一个 init，不是「换了会话」。
+	return prev != "", prev
 }
 
 // noteTitle 记下 CLI 报上来的会话名；**真的变了才返回 true**。
@@ -437,7 +460,7 @@ func (s *Session) setState(st string) {
 		return
 	}
 	s.state.Store(st)
-	s.emitData(KindSessionState, map[string]any{"id": s.ID, "state": st})
+	s.emitData(KindSessionState, map[string]any{"id": s.CurrentID(), "state": st})
 }
 
 // Prompt 发送一条用户文本消息。
@@ -799,7 +822,7 @@ func (s *Session) Close() error {
 		s.perms = make(map[string]json.RawMessage)
 		s.permOrder = nil
 		s.permMu.Unlock()
-		s.emitData(KindClosed, map[string]any{"id": s.ID})
+		s.emitData(KindClosed, map[string]any{"id": s.CurrentID()})
 	})
 	return nil
 }
@@ -1027,7 +1050,7 @@ func (s *Session) handleLine(line []byte) {
 		// 同样会走到这里。界面据此对齐，而不是自己记一份可能过期的状态。
 		if mode, ok := protocol.PermissionModeOf(env.Raw); ok {
 			s.setMode(mode)
-			s.emitData(KindSessionState, map[string]any{"id": s.ID, "mode": mode})
+			s.emitData(KindSessionState, map[string]any{"id": s.CurrentID(), "mode": mode})
 		}
 		// CLI 换了会话 id（`/clear` 之后会这样）：后续轮次写进另一份转录。
 		// 上层要拿它迁移对话元数据，否则重开对话时 --resume 旧 id 会把用户刚刚
@@ -1036,8 +1059,17 @@ func (s *Session) handleLine(line []byte) {
 		// **以 system/init 的 session_id 为准，不用 conversation_reset 的
 		// new_conversation_id**：实测两者是不同的 UUID，而后者在磁盘上根本
 		// 不存在转录（见 AGENTS.md 4.7）。
-		if sid, ok := protocol.SessionIDOf(env.Raw); ok && s.noteCLISession(sid) {
-			s.emitData(KindSessionReplaced, map[string]any{"from": s.ID, "to": sid})
+		//
+		// 载荷里的 `from` 用 noteCLISession 交回来的**更新前**那个 id：拿 s.ID 是启动
+		// 时的值（连续两次 /clear 之后对不上），事后再读 CLISessionID() 则已经被覆盖。
+		// 路由（hub topic / manager 的键）迁完之后，这条会话的后续事件都按新 id 走——
+		// 见 CurrentID 与装配层的 id 解析。
+		if sid, ok := protocol.SessionIDOf(env.Raw); ok {
+			if changed, prev := s.noteCLISession(sid); changed {
+				// 这条必须投到**旧** topic：订阅者还没搬（搬订阅是上层处理完这条之后
+				// 的事），按新 id 发就没人收得到。
+				s.emitTo(prev, KindSessionReplaced, map[string]any{"from": prev, "to": sid})
+			}
 		}
 		// 别处改了会话名（终端 `/rename`、IDE 插件、`--name`、别的客户端）。
 		// 上层据此更新对话列表：丢掉这条，在终端里改过的名字这边看不见，
@@ -1046,7 +1078,7 @@ func (s *Session) handleLine(line []byte) {
 		// CLI 会重复发同一个名字（它自己也写了「宿主应当把重复当作没变化」），
 		// 所以由 noteTitle 去重，只有真的变了才发事件。
 		if title, ok := protocol.SessionTitleOf(env.Raw); ok && s.noteTitle(title) {
-			s.emitData(KindSessionTitle, map[string]any{"title": title, "session_id": s.CLISessionID()})
+			s.emitData(KindSessionTitle, map[string]any{"title": title, "session_id": s.CurrentID()})
 		}
 		// 后台任务的 task_id 只在这条流里出现，记下来随快照发给后来连上的设备
 		// （它们靠转录回放拿不到，见 LiveTasks）。
@@ -1129,6 +1161,12 @@ func permPayload(p protocol.PermissionRequest) any {
 // 这不是理论问题：`setState` 由写 stdin 的 goroutine 触发，审批结论由网关的读循环
 // 触发，两者本来就会并发。
 func (s *Session) emitData(kind string, v any) {
+	s.emitTo("", kind, v)
+}
+
+// emitTo 与 emitData 相同，但可以指定这条事件的路由 topic（空 = 由上层按
+// CurrentID() 决定）。见 Event.Topic。
+func (s *Session) emitTo(topic, kind string, v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		b, _ = json.Marshal(map[string]string{"message": err.Error()})
@@ -1136,7 +1174,7 @@ func (s *Session) emitData(kind string, v any) {
 	}
 	s.emitMu.Lock()
 	defer s.emitMu.Unlock()
-	ev := s.record(Event{Kind: kind, Data: b})
+	ev := s.record(Event{Kind: kind, Data: b, Topic: topic})
 	if s.emit == nil {
 		return
 	}

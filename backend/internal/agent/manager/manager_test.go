@@ -229,3 +229,73 @@ func TestIdleTimeoutReadsSettingsLive(t *testing.T) {
 		t.Fatalf("没有 store 时应回落到默认值，实际 %s", got)
 	}
 }
+
+// `/clear` 之后 manager 的键要换到新 id，而且**不能顺手改会话对象的 ID 字段**：
+// 那个字段是外部按 id 找会话的键（sessions/procs/metas 三张表都用它），改了会让
+// 表与对象对不上；真正的「当前 id」由 Session.CurrentID 持锁维护。
+//
+// 同时验证事件路由：换 id 之后事件必须按**新** id 上报（hub 的订阅已经搬过去了），
+// 而 `session.replaced` 本身必须按**旧** id 上报（订阅还没搬）。
+func TestRenameKeepsSessionIDFieldAndRoutesEvents(t *testing.T) {
+	type got struct {
+		topic string
+		kind  string
+	}
+	var mu sync.Mutex
+	var events []got
+
+	// 直接用 session.New 造一个不握手的会话：这里只测 Rename 的登记表与路由，
+	// 不需要真的起 claude。
+	sess := session.New("old", t.TempDir(), nil, nil)
+	m := &Manager{
+		sessions:        map[string]*session.Session{"old": sess},
+		procs:           map[string]*process.Proc{},
+		metas:           map[string]meta{"old": {Provider: "p", Model: "m", Effort: "high"}},
+		closingSessions: map[string]chan struct{}{},
+		emit: func(topic string, ev session.Event) {
+			mu.Lock()
+			events = append(events, got{topic: topic, kind: ev.Kind})
+			mu.Unlock()
+		},
+	}
+
+	if ok := m.Rename("old", "new"); !ok {
+		t.Fatal("Rename 应当成功")
+	}
+	if _, ok := m.sessions["old"]; ok {
+		t.Fatal("旧 id 上还挂着会话")
+	}
+	if got, ok := m.sessions["new"]; !ok || got != sess {
+		t.Fatal("新 id 上应当是同一个会话对象（不重启进程）")
+	}
+	if got := m.metas["new"]; got.Effort != "high" {
+		t.Fatalf("meta 没跟着搬: %+v", got)
+	}
+	if sess.ID != "old" {
+		t.Fatalf("Rename 不该改 Session.ID（得到 %q）：当前 id 由 CurrentID 持锁维护", sess.ID)
+	}
+
+	// 新 id 上能按 id 取回同一个会话（后续 prompt 走的是这条路径）。
+	if got, ok := m.Get("new"); !ok || got != sess {
+		t.Fatal("Get(new) 应当返回同一个会话对象")
+	}
+	if _, ok := m.Get("old"); ok {
+		t.Fatal("Get(old) 不该再取到会话")
+	}
+	// List 报的是会话**当前**的 id（CurrentID）。这里会话自己还没收到带新 id 的
+	// init，所以它仍然自认旧 id——真实顺序是「会话先从 init 学到新 id（并广播
+	// session.replaced），装配层再 Rename」，那时两边一致。Rename 只负责换键。
+	if list := m.List(); len(list) != 1 || list[0].ID != "old" {
+		t.Fatalf("List = %+v（会话还没见过新 id，应当仍报旧 id）", list)
+	}
+
+	// 目标 id 已被占用时不搬（会摘掉另一个进程）。
+	sess2 := session.New("other", t.TempDir(), nil, nil)
+	m.sessions["taken"] = sess2
+	if m.Rename("new", "taken") {
+		t.Fatal("目标 id 已存在时不该搬")
+	}
+	if m.sessions["new"] != sess {
+		t.Fatal("搬失败时原登记不该被改动")
+	}
+}

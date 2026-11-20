@@ -39,9 +39,13 @@ const sendQueueLen = 256
 
 // wsClient 是一条浏览器 WebSocket 连接，同时实现 hub.Client。
 type wsClient struct {
-	conn  net.Conn
-	r     *bufio.Reader
-	topic string
+	conn net.Conn
+	r    *bufio.Reader
+	// topic 是这条连接当前订阅的会话 topic。**会被 hub.Rekey 改**（`/clear` 换了
+	// 会话 id），所以读写都要经过 topicMu：断开时 Unsubscribe 必须用**当前**那个，
+	// 用旧的话新 topic 里会留下一条死连接。
+	topicMu sync.Mutex
+	topic   string
 
 	out  chan []byte
 	done chan struct{}
@@ -78,6 +82,24 @@ func newWSClient(conn net.Conn, r *bufio.Reader, topic string) *wsClient {
 	}
 	go c.writeLoop()
 	return c
+}
+
+// Retopic 由 hub.Rekey 在搬订阅时调用：`/clear` 之后这条连接收的是新会话 id 的事件，
+// 断开时也要按新 topic 退订。（实现 hub.Retopical。）
+func (c *wsClient) Retopic(topic string) {
+	if topic == "" {
+		return
+	}
+	c.topicMu.Lock()
+	c.topic = topic
+	c.topicMu.Unlock()
+}
+
+// currentTopic 返回连接当前订阅的 topic。
+func (c *wsClient) currentTopic() string {
+	c.topicMu.Lock()
+	defer c.topicMu.Unlock()
+	return c.topic
 }
 
 // writeLoop 串行写帧。写失败（含 5s 超时）就直接关 socket 退出：
@@ -253,7 +275,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	c := newWSClient(conn, reader, topic)
 	s.d.Hub.Subscribe(topic, c)
 	defer func() {
-		s.d.Hub.Unsubscribe(topic, c)
+		// 用**当前** topic 退订：`/clear` 换 id 时 hub.Rekey 已经把它改成新 id 了，
+		// 拿握手时那个旧 topic 去退订等于什么都没退，新 topic 里那条永远留着。
+		s.d.Hub.Unsubscribe(c.currentTopic(), c)
 		// 连接断了就没人看图了：不停掉观察者，它会一直每几秒 spawn 一次 git。
 		c.setWatch(nil)
 		c.close()

@@ -342,3 +342,44 @@ func TestResumeLiveConversationDoesNotBroadcast(t *testing.T) {
 		t.Fatalf("已在跑的对话不该推送，得到 %+v", events)
 	}
 }
+
+// `/clear` 换了会话 id 之后，待通知回合要跟着搬到新 id。
+//
+// 不搬的话它永远没人消费：回合结束时的事件按新 id 走（session.CurrentID），
+// `NoteSessionState(newID)` 在旧 id 下找不到记录，标题补写与列表刷新都不会发生，
+// 表里还留下一条永不删除的残项。
+func TestSessionReplacedMovesPendingTurn(t *testing.T) {
+	srv, _, _, id := newSyncFixture(t)
+
+	srv.watchPendingTurn(id, pendingTurn{title: "每日巡检 · 11-20 09:00", cwd: srv.d.ProjectsRoot})
+	srv.NoteSessionReplaced(id, "cleared-id")
+
+	if _, ok := srv.consumePendingTurn(id); ok {
+		t.Fatal("旧 id 上不该还留着待通知记录")
+	}
+	turn, ok := srv.consumePendingTurn("cleared-id")
+	if !ok {
+		t.Fatal("待通知记录没有搬到新 id")
+	}
+	if turn.title != "每日巡检 · 11-20 09:00" {
+		t.Fatalf("搬过去的记录 = %+v，标题丢了", turn)
+	}
+	// 搬过一次之后就没有了，不会重复消费。
+	if _, ok := srv.consumePendingTurn("cleared-id"); ok {
+		t.Fatal("consume 之后不该还在")
+	}
+}
+
+// 新 id 上已经有一条待通知记录时，保留原来那条（不覆盖）。
+func TestSessionReplacedKeepsExistingPendingTurn(t *testing.T) {
+	srv, _, _, id := newSyncFixture(t)
+
+	srv.watchPendingTurn(id, pendingTurn{title: "旧的"})
+	srv.watchPendingTurn("cleared-id", pendingTurn{title: "新的"})
+	srv.NoteSessionReplaced(id, "cleared-id")
+
+	turn, ok := srv.consumePendingTurn("cleared-id")
+	if !ok || turn.title != "新的" {
+		t.Fatalf("新 id 上原有的记录被覆盖了: %+v (ok=%v)", turn, ok)
+	}
+}

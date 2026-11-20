@@ -569,6 +569,28 @@ func (s *Server) consumePendingTurn(id string) (pendingTurn, bool) {
 	return turn, true
 }
 
+// NoteSessionReplaced 在 CLI 换了会话 id（`/clear`）时把待通知记录搬到新 id 上。
+//
+// **不搬的话那条记录永远没人消费**：回合结束时的事件按新 id 走（见
+// session.CurrentID），`NoteSessionState(newID)` 找不到旧 id 下的记录，
+// 于是它既不会被补写标题也不会被推列表——还顺手在表里留了一条永远不删的残项。
+func (s *Server) NoteSessionReplaced(from, to string) {
+	if from == "" || to == "" || from == to {
+		return
+	}
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	turn, ok := s.pendingTurns[from]
+	if !ok {
+		return
+	}
+	delete(s.pendingTurns, from)
+	// 新 id 上已经有一条就保留它（同一轮里换了 id 又投递过一次这种边角情况）。
+	if _, taken := s.pendingTurns[to]; !taken {
+		s.pendingTurns[to] = turn
+	}
+}
+
 // NoteSessionState 是会话事件的旁路出口（装配层在 manager 的事件回调里调它）。
 //
 // 一轮结束（`session.state=ready`）时列表里那一行的标题（转录首条消息）与

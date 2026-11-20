@@ -162,8 +162,14 @@ func main() {
 				if m := mgrRef.Load(); m != nil {
 					m.Rename(from, to)
 				}
-				// 已经连着的页面订阅的是旧 topic，不搬就再也收不到事件。
+				// 已经连着的页面订阅的是旧 topic，不搬就再也收不到事件。搬完还要
+				// 让各条连接记住新 topic：它们断开时按它退订，记着旧的那个等于没退。
 				h.Rekey(from, to)
+				// 待通知回合也按 id 记账：不搬的话回合结束时按新 id 找不到它，
+				// 标题补写与列表刷新都不会发生，还留下一条永不消费的残项。
+				if srv != nil {
+					srv.NoteSessionReplaced(from, to)
+				}
 			}
 			var notify func()
 			if srv != nil {

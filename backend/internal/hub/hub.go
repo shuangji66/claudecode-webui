@@ -94,6 +94,15 @@ func (h *Hub) Count(topic string) int {
 	return len(h.subs[topic])
 }
 
+// Retopical 是可接收「你的 topic 变了」的连接（可选）。
+//
+// Rekey 搬完订阅要顺手告诉连接新 topic，否则连接断开时仍然用**旧** topic 去
+// Unsubscribe：旧集合里已经没有它（搬走了），新集合里那条却永远留着——一条死连接
+// 之后每次广播都要失败一次才被摘掉。
+type Retopical interface {
+	Retopic(topic string)
+}
+
 // Rekey 把 topic 下的所有订阅者搬到另一个 topic（`/clear` 之后 CLI 换了会话 id）。
 //
 // **不搬的话，已经连着的页面从此收不到任何事件**：订阅是在握手时按当时的会话 id
@@ -106,9 +115,9 @@ func (h *Hub) Rekey(oldTopic, newTopic string) {
 		return
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	from, ok := h.subs[oldTopic]
 	if !ok {
+		h.mu.Unlock()
 		return
 	}
 	to := h.subs[newTopic]
@@ -116,10 +125,21 @@ func (h *Hub) Rekey(oldTopic, newTopic string) {
 		to = make(map[Client]struct{}, len(from))
 		h.subs[newTopic] = to
 	}
+	moved := make([]Client, 0, len(from))
 	for c := range from {
 		to[c] = struct{}{}
+		moved = append(moved, c)
 	}
 	delete(h.subs, oldTopic)
+	h.mu.Unlock()
+
+	// 在锁外回调：Retopic 是客户端自己的锁，与 Hub 的锁无关，嵌套持有可能在
+	// 另一边（Unsubscribe 里取 Hub 锁）形成环。
+	for _, c := range moved {
+		if r, ok := c.(Retopical); ok {
+			r.Retopic(newTopic)
+		}
+	}
 }
 
 // Topics 返回当前有订阅者的 topic 快照。

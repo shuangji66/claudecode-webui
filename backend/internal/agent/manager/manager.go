@@ -176,6 +176,10 @@ func (m *Manager) Rename(oldID, newID string) bool {
 	if _, taken := m.sessions[newID]; taken {
 		return false
 	}
+	// 会话对象自己的 id 由它持锁维护（CurrentID / noteCLISession），这里**不改**它：
+	// 直接写 sess.ID 是跨 goroutine 的无锁写（读循环与写入循环都在读它），
+	// `-race` 下会报数据竞争，而且会在「事件已经按新 id 发出去、对象还停在旧 id」
+	// 的窗口里让快照与事件对不上。Rename 只负责换 manager 自己的键。
 	delete(m.sessions, oldID)
 	m.sessions[newID] = sess
 	if p, ok := m.procs[oldID]; ok {
@@ -186,10 +190,6 @@ func (m *Manager) Rename(oldID, newID string) bool {
 		delete(m.metas, oldID)
 		m.metas[newID] = mt
 	}
-	// 会话对象自己的 ID 也要跟着换：它的快照、session.state、closed 事件都带
-	// `id` 字段，前端按那个 id 分流。不换的话前端会收到一批「旧 id 的事件」，
-	// 落到已经搬空的那个桶里。
-	sess.ID = newID
 	return true
 }
 
@@ -507,10 +507,28 @@ func (m *Manager) createWith(abs, sessionID, resumeID, model, permissionMode str
 	}
 
 	id := sessionID
-	sess := session.New(id, abs, proc, func(ev session.Event) {
-		if m.emit != nil {
-			m.emit(id, ev)
+	// 先声明再赋值：emit 闭包要读「当前 id」，而 id 就挂在 sess 自己身上（`/clear`
+	// 之后 CurrentID 会变）。闭包在会话开始产出事件后才被调用，那时 sess 一定就绪。
+	var sess *session.Session
+	sess = session.New(id, abs, proc, func(ev session.Event) {
+		if m.emit == nil {
+			return
 		}
+		// **路由 id 必须在事件产生时现读，不能捕获创建时的 id**：`/clear` 之后
+		// CLI 换了会话 id，hub 的订阅与对话列表都已经跟到新 id 上（见 Rename），
+		// 再按旧 id 广播就没人订阅那个 topic——用户发消息后界面上什么都不动，
+		// 看起来像会话冻结，直到整页刷新。
+		//
+		// 例外是事件自己指定了 Topic（`session.replaced`，见 session.Event.Topic）：
+		// 那一条必须送到旧 topic，订阅是收到它之后才搬的。
+		topic := ev.Topic
+		if topic == "" && sess != nil {
+			topic = sess.CurrentID()
+		}
+		if topic == "" {
+			topic = id
+		}
+		m.emit(topic, ev)
 	})
 
 	m.mu.Lock()
@@ -741,7 +759,10 @@ type meta struct {
 
 func infoOf(s *session.Session) Info {
 	return Info{
-		ID:         s.ID,
+		// 用 CurrentID 而不是 s.ID：`/clear` 之后这条会话对外叫新 id（Rename 也把
+		// manager 的键换到新 id 上了），继续报启动时那个旧 id 会让列表里那一行
+		// 与真正的对话对不上。
+		ID:         s.CurrentID(),
 		Cwd:        s.Cwd,
 		State:      s.State(),
 		CreatedAt:  s.CreatedAt,

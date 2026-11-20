@@ -166,3 +166,58 @@ func TestRekeyNoop(t *testing.T) {
 		t.Fatal("不该凭空建出订阅者")
 	}
 }
+
+// topicClient 是会记住「自己现在订阅哪个 topic」的连接（网关的 wsClient 就是它）。
+type topicClient struct {
+	fakeClient
+	mu  sync.Mutex
+	now string
+}
+
+func (c *topicClient) Retopic(topic string) {
+	c.mu.Lock()
+	c.now = topic
+	c.mu.Unlock()
+}
+
+func (c *topicClient) topicNow() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+// Rekey 搬完订阅要告诉连接新 topic：它断开时要用**当前**那个去 Unsubscribe。
+//
+// 不说的话，界面上看不出任何异常，但那条连接一断，新 topic 里就留下一条永远发不出去
+// 的死订阅——之后每次广播都要失败一次才被摘掉。
+func TestRekeyRetopicsClients(t *testing.T) {
+	h := New()
+	c := &topicClient{}
+	h.Subscribe("old", c)
+
+	h.Rekey("old", "new")
+
+	if got := c.topicNow(); got != "new" {
+		t.Fatalf("连接记住的 topic = %q，want new（断开时会按它退订）", got)
+	}
+	// 用新 topic 退订必须真的退掉；用旧 topic 退等于什么都没做。
+	h.Unsubscribe("old", c)
+	if h.Count("new") != 1 {
+		t.Fatalf("用旧 topic 退订不该影响新 topic（count=%d）", h.Count("new"))
+	}
+	h.Unsubscribe(c.topicNow(), c)
+	if h.Count("new") != 0 {
+		t.Fatalf("按当前 topic 退订后仍剩 %d 个订阅者", h.Count("new"))
+	}
+}
+
+// 不实现 Retopical 的连接照旧可用（Rekey 只是不通知它）。
+func TestRekeyToleratesPlainClients(t *testing.T) {
+	h := New()
+	c := &fakeClient{}
+	h.Subscribe("old", c)
+	h.Rekey("old", "new")
+	if h.Count("new") != 1 {
+		t.Fatalf("新 topic 上有 %d 个订阅者，want 1", h.Count("new"))
+	}
+}

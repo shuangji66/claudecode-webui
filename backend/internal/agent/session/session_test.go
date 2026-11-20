@@ -98,6 +98,27 @@ func (r *recorder) count(kind string) int {
 	return n
 }
 
+// last 返回某类事件里最后一条（会话里同一类事件会来很多次）。
+func (r *recorder) last(kind string) (Event, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := len(r.evs) - 1; i >= 0; i-- {
+		if r.evs[i].Kind == kind {
+			return r.evs[i], true
+		}
+	}
+	return Event{}, false
+}
+
+// topicOf 返回某类事件最后一条上指定的路由 topic（空 = 由上层按 CurrentID 决定）。
+func (r *recorder) topicOf(kind string) string {
+	ev, ok := r.last(kind)
+	if !ok {
+		return ""
+	}
+	return ev.Topic
+}
+
 // fakeCLI 是测试用的对端，负责读取客户端写入的行并回包。
 type fakeCLI struct {
 	t    *testing.T
@@ -1468,5 +1489,93 @@ func TestFirstInitAfterStartIsNotAReplacement(t *testing.T) {
 	}
 	if n := rec.count(KindSessionReplaced); n != 0 {
 		t.Fatalf("第一个 init 被误判成换会话（%d 次）", n)
+	}
+}
+
+// `session.replaced` 必须**投到旧 topic**，其余事件投到新 topic。
+//
+// 这条链路错一步症状都一样：界面在 /clear 之后看起来冻结。
+//   - 换 id 的通知按新 id 发 → 订阅者还都在旧 topic 上，没人收到，前端不知道要换；
+//   - 之后的正文按旧 id 发 → 前端已经把订阅（和界面）搬到新 id 了，一样收不到。
+//
+// 载荷里的 `from` 也必须是**更新前**那个 id：连续两次 /clear 时拿 s.ID 是启动时的值，
+// 装配层会去迁一个已经不存在的对话。
+func TestSessionReplacedRoutedToOldTopicThenNew(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	// 第一次换 id：s1 → cleared-1。
+	fc.send(map[string]any{
+		"type":       "system",
+		"subtype":    "init",
+		"session_id": "cleared-1",
+		"tools":      []any{},
+	})
+	if _, ok := rec.wait(KindSessionReplaced, 2*time.Second); !ok {
+		t.Fatal("换了会话 id 却没有广播 session.replaced")
+	}
+	replaced := rec.topicOf(KindSessionReplaced)
+	if replaced != "s1" {
+		t.Fatalf("session.replaced 投到了 %q，want s1（订阅者还在旧 topic 上）", replaced)
+	}
+	// 换完之后，普通事件按新 id 走。
+	fc.send(map[string]any{"type": "system", "subtype": "informational", "content": "换完之后的哨兵"})
+	if _, ok := rec.wait(KindCLI, 2*time.Second); !ok {
+		t.Fatal("没收到哨兵")
+	}
+	if got := rec.topicOf(KindCLI); got != "" {
+		t.Fatalf("普通事件不该自己指定 topic（得到 %q）：路由由上层按 CurrentID 决定", got)
+	}
+	if got := sess.CurrentID(); got != "cleared-1" {
+		t.Fatalf("CurrentID = %q，want cleared-1", got)
+	}
+
+	// 第二次换 id：cleared-1 → cleared-2。`from` 必须是中间那个，不是 s1。
+	fc.send(map[string]any{
+		"type":       "system",
+		"subtype":    "init",
+		"session_id": "cleared-2",
+		"tools":      []any{},
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && rec.count(KindSessionReplaced) < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := rec.count(KindSessionReplaced); n != 2 {
+		t.Fatalf("第二次换 id 没广播（%d 次）", n)
+	}
+	ev, _ := rec.last(KindSessionReplaced)
+	var payload struct{ From, To string }
+	if err := json.Unmarshal(ev.Data, &payload); err != nil {
+		t.Fatalf("载荷不是合法 JSON: %v", err)
+	}
+	if payload.From != "cleared-1" || payload.To != "cleared-2" {
+		t.Fatalf("载荷 = %+v，want from=cleared-1 to=cleared-2", payload)
+	}
+	if got := rec.topicOf(KindSessionReplaced); got != "cleared-1" {
+		t.Fatalf("第二次的 session.replaced 投到了 %q，want cleared-1", got)
+	}
+}
+
+// s.ID 是创建时的 id，换过之后也不改：它是外部按 id 找这条会话的键，改了会让
+// manager 的登记表与对象对不上。
+func TestSessionIDStaysAtCreationValue(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{
+		"type":       "system",
+		"subtype":    "init",
+		"session_id": "cleared-id",
+		"tools":      []any{},
+	})
+	if _, ok := rec.wait(KindSessionReplaced, 2*time.Second); !ok {
+		t.Fatal("没收到 session.replaced")
+	}
+	if sess.ID != "s1" {
+		t.Fatalf("s.ID = %q，换 id 不该改它（用 CurrentID 读当前值）", sess.ID)
+	}
+	if got := sess.CurrentID(); got != "cleared-id" {
+		t.Fatalf("CurrentID = %q，want cleared-id", got)
 	}
 }
