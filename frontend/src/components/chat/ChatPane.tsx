@@ -22,6 +22,7 @@ import { downloadFile, sessionLogName } from "../../lib/download";
 import { useLocale, useT } from "../../lib/i18n";
 import { BrandMark, IconAlert, IconRetry } from "../common/Icons";
 import { backgroundTasks, subagentsOnly } from "../../lib/backgroundTasks";
+import { runningTool } from "../../lib/process";
 import { draftKeyFor } from "../../lib/drafts";
 import { MarkdownMediaContext, type MarkdownMedia } from "../common/Markdown";
 import { ImageLightbox } from "./ImageLightbox";
@@ -126,6 +127,10 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
     }
     return 0;
   }, [busy, itemList]);
+  // 有工具正在跑时不算「上游不响应」：本地命令、子代理、MCP 调用都在自己这边耗时间，
+  // CLI 那时本来就不会发上游帧（`tool_progress` 是它的进度，不是上游的字节）。
+  // 只看「最后一条帧」，一个跑了 3 分钟的 bash 会被误报成「上游 180s 没有响应」。
+  const waitingUpstream = useMemo(() => runningTool(itemList) === undefined, [itemList]);
   const title = session || conversation
     ? conversationTitle(conversation?.title, itemList, locale)
     : t("新对话", "New chat");
@@ -421,7 +426,7 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
 
           {/* 卡片浮在输入框上方时计时器会被它盖住/顶出来，直接不渲染：那行只说明「还在跑」，
               而待审批本身就表示这一轮没结束。 */}
-          {!newChat && pending.length === 0 && <TurnTimer startedAt={turnStartedAt} className="mb-1.5 px-1" />}
+          {!newChat && pending.length === 0 && <TurnTimer startedAt={turnStartedAt} sessionId={activeId} watchSilence={waitingUpstream} className="mb-1.5 px-1" />}
 
           {/* 任务清单贴在输入框上方（对齐 DSH）：模型用 Tasks API 维护的长期任务
               一眼能看到还剩什么，不必去聊天记录里翻 TaskCreate 卡片。 */}

@@ -373,6 +373,20 @@ func TestEnvFailsFastOnRateLimit(t *testing.T) {
 	}
 }
 
+// 上游一个字节都不回时的判定阈值压到 60s（默认 5 分钟，见 Settings.Env 的注释）。
+//
+// 关键是不能写成 CLAUDE_STREAM_IDLE_TIMEOUT_MS：它被 CLI 抬到 300000 下限，
+// 设 60s 等于把 firstParty 的 180s 默认值改成 5 分钟，比不设还慢（实测 2.1.329）。
+func TestEnvSetsByteStreamIdleTimeout(t *testing.T) {
+	env := strings.Join(Settings{}.Env(), ",")
+	if !strings.Contains(env, "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS=60000") {
+		t.Fatalf("缺少字节流空闲阈值: %v", env)
+	}
+	if strings.Contains(env, "CLAUDE_STREAM_IDLE_TIMEOUT_MS=") {
+		t.Fatalf("不该碰 CLAUDE_STREAM_IDLE_TIMEOUT_MS（有 300000 下限，设小反而更慢）: %v", env)
+	}
+}
+
 // 模型回退必须无条件关掉：CLI 会在好几条路径上悄悄换模型（可用性回退链、
 // 积分 consent gate、拒答回退）。界面上写着「当前模型」就必须真的是那个模型——
 // 换个模型重试对用户是不可见的行为改变，不能靠「ANTHROPIC_DEFAULT_* 恰好都指向

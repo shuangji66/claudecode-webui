@@ -425,6 +425,44 @@ function resetSyncWatermark(sid: string, seq: number, epoch: string): void {
 }
 
 /**
+ * 每个会话「最近一次有声」的时间（毫秒时间戳）。
+ *
+ * 两个来源都写它：① 收到任何一条会话帧；② 自己发出 prompt。**不放进 zustand state**：
+ * 每条帧都触发一次 `set` 就是每条帧多一轮渲染，而读它的 `TurnTimer` 本来就每秒 tick
+ * 一次，模块级变量足够及时。
+ *
+ * 为什么需要它：CLI 在一个字节都不回的那段时间里**什么都不发**——`api_retry` 只在
+ * 失败后才有，`keep_alive` 又被后端丢掉了（AGENTS 4.2.3）。界面上只剩计时器在走，
+ * 用户分不清「模型在想」和「上游已经没声了」。见 lib/silence 与 ChatPane 的提示行。
+ */
+const lastSoundAt = new Map<string, number>();
+
+/** 记一次「上游出声了」（收到 CLI 帧）。 */
+export function noteFrame(sid: string): void {
+  lastSoundAt.set(sid, Date.now());
+}
+
+/** 记一次「刚发出去 prompt」：这一轮的沉默从此刻开始算，不沿用上一轮的旧时间。 */
+export function notePrompt(sid: string): void {
+  lastSoundAt.set(sid, Date.now());
+}
+
+/**
+ * 读某个会话的最后一次有声时间；`undefined` 表示还没记过。
+ *
+ * 组件要跟着它重渲染，所以订阅了这个 Map 的**变化信号**：
+ * `TurnTimer` 自己每秒 tick，不需要额外的事件源。
+ */
+export function lastSound(sid: string | null): number | undefined {
+  return sid ? lastSoundAt.get(sid) : undefined;
+}
+
+/** 会话被删/被关掉时清掉，否则这张表随对话数量无限长。 */
+function forgetSilence(sid: string): void {
+  lastSoundAt.delete(sid);
+}
+
+/**
  * 已经发出 `sync`、还没收到 `session.replay` 的会话。
  *
  * 这段时间里到达的实时事件**不能立即应用**：它可能比补发的那一段还晚，先落地就会
@@ -520,6 +558,7 @@ function purgeSession(state: {
   delete state.modes[id];
   delete state.queued[id];
   delete state.liveTasks[id];
+  forgetSilence(id);
   eventSeq.delete(id);
   eventEpoch.delete(id);
   appliedSeq.delete(id);
@@ -1938,6 +1977,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // `priority=now` 是插话：它并入当前回合，**不切轮**（切了会把这一轮的思考与工具
     // 劈成两半，前半截被当成「已完成」收起来）。
     const interjected = opts?.priority === "now";
+    notePrompt(id);
     set((s) => ({
       items: { ...s.items, [id!]: appendUser(s.items[id!] ?? [], bubble.text, bubble.images, interjected) },
       conversations: s.conversations.map((c) => (c.id === id ? { ...c, last_active: now } : c)),
@@ -2115,6 +2155,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const prev = eventSeq.get(sid) ?? 0;
       if (ev.seq > prev) eventSeq.set(sid, ev.seq);
     }
+    // 任何一条会话帧都算「上游出声了」：正文 / 思考 / 工具 / 结果 / 审批 / 状态流转
+    // 都说明这条链路是活的。放在去重之后、switch 之前，是因为下面每个分支都会
+    // `return`，而这一条对所有分支都成立。
+    // 后端已经把 `keep_alive` 单独丢掉了（AGENTS 4.2.3），到这里就说明确实有内容。
+    if (sid) noteFrame(sid);
     switch (ev.kind) {
       case "claude.update": {
         // 系统通道推来的「有新版」信号。推送只带版本号，完整状态照旧走
@@ -2467,4 +2512,5 @@ export function __resetSyncState(): void {
   pendingLive.clear();
   syncTimers.clear();
   awaitingReplay.clear();
+  lastSoundAt.clear();
 }

@@ -206,6 +206,11 @@ id 会复用进程，重复调用不会多起 claude。没有历史对话时后�
   `CLAUDE_CODE_OVERLOADED_RETRY_MAX_WAIT_MS=5000` 与
   `CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES=0`，避免 CLI 默认重试 10 次、约 2.5 分钟后
   才把限流错误抛到界面上。瞬时抖动仍有 2 次重试。
+- **上游不回字时 60 秒判失败**：注入 `CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS=60000`
+  （CLI 默认 5 分钟才报 `ConnectionIdle`）。注意不能用同名的
+  `CLAUDE_STREAM_IDLE_TIMEOUT_MS`——它有 300000ms 下限，设小反而更慢。
+  等待期间对话页的计时行会在 15 秒没有收到任何帧时补一句「上游 Ns 没有响应」，
+  有工具在本地跑时不提示（那时本来就没有上游帧）。
 - **部署**：从 npm 平台包按版本下载 claude（x64 / arm64 / musl 自动匹配），可选
   npmmirror、腾讯云、华为云或官方 registry；下载后按官方 `dist.integrity`（sha512）校验，
   镜像被换包会直接失败；安装中可以取消，临时目录会被清理。

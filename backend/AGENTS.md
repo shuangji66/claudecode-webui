@@ -193,6 +193,11 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `CLAUDE_CODE_OVERLOADED_RETRY_MAX_WAIT_MS=5000`、
   `CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES=0`。CLI 默认对 429/529 重试 10 次，
   额度/频率限制会让用户等约 2.5 分钟才看到错误；这几个值把等待压到几秒。
+- **上游「一个字节都不回」的阈值是 `CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS=60000`**，
+  不是 `CLAUDE_STREAM_IDLE_TIMEOUT_MS`：后者的取值被 CLI 用 `Math.max(v, 300000)`
+  抬到 5 分钟下限（实测 2.1.329），并且设了它之后会跳过 firstParty 的 180s 默认分支，
+  设成 60s 等于**越设越慢**。前者直接生效（设 20000 时 20s 即报
+  `stream idle: no bytes for 20000ms`）。改这个值前先按这条实测，别再被名字误导。
 - `Env()` 只注入选中提供商的值：`ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY`（或无 key 时
   `ANTHROPIC_AUTH_TOKEN`）/ `ANTHROPIC_MODEL`，并把三个别名变量也指向同一模型，
   使 CLI「固定使用默认模型」。

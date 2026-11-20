@@ -581,6 +581,17 @@ func (v Settings) Env() []string {
 		"CLAUDE_CODE_OVERLOADED_RETRY_MAX_WAIT_MS=5000",
 		"CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES=0",
 	)
+	// 上游「一个字节都不回」的判定阈值（默认 5 分钟，实测 2.1.329）。
+	//
+	// 必须用 CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS，**不是** CLAUDE_STREAM_IDLE_TIMEOUT_MS：
+	// 后者的取值会被 `Math.max(v, 300000)` 抬到 5 分钟下限，设成 60s 反而把它从
+	// 「firstParty 默认 180s」改成「5 分钟」，越设越慢（实测）。
+	// 前者直接生效：实测设 20000 时 20s 就报 `stream idle: no bytes for 20000ms`。
+	//
+	// 本项目的典型上游是自建中转：它把响应攒完才下发、或者冷启动慢的时候，
+	// 5 分钟才判失败会让人以为会话卡死（用户侧唯一能看到的反馈只有计时器在走）。
+	// 60 秒覆盖得住正常的中转首包延迟，也不再让人干等五分钟。
+	out = append(out, "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS=60000")
 	if v.DisableUnknownModelWindow {
 		out = append(out, "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1")
 	}
