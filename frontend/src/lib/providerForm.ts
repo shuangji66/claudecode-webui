@@ -8,15 +8,14 @@
 
 import type { ModelSpec, PublicProvider, PublicSettings } from "../transport/types";
 
-/** 协议选项；与后端 settings 包常量一致。 */
-export const PROTOCOLS = [
-  { value: "anthropic-messages", label: "Anthropic Messages" },
-  { value: "openai-completions", label: "OpenAI Chat Completions" },
-  { value: "openai-responses", label: "OpenAI Responses" },
-  { value: "google-generative-ai", label: "Gemini API" },
-] as const;
-
-/** CLI `--effort` 接受的档位（见 claude --help）。 */
+/**
+ * CLI `--effort` 接受的档位（见 claude --help）。
+ *
+ * 没有「协议」选项：claude CLI 只会说 Anthropic Messages，请求体、路径与鉴权
+ * 都不是可切换的。任何原生 API 不是 Anthropic Messages 的服务，要接进来只能靠
+ * 服务商自己提供 Anthropic 兼容端点（`/anthropic` 之类）或用户自架中转——
+ * 那个事实写在预设目录的筛选里，不写成一个假装能选的下拉。
+ */
 export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 /** 「默认」档：不向 API 声明推理等级，也是没有任何显式选择时的取值。 */
@@ -28,7 +27,6 @@ export interface ProviderForm {
   /** 提供商 ID；新建时必须由用户手动输入。 */
   id: string;
   name: string;
-  protocol: string;
   baseUrl: string;
   /** 空串表示「不修改已保存的密钥」。 */
   apiKey: string;
@@ -45,7 +43,6 @@ export interface ProviderForm {
 export interface ProviderPatch {
   id: string;
   name: string;
-  protocol: string;
   base_url: string;
   api_key?: string;
   auth_token?: string;
@@ -110,7 +107,6 @@ function fromPublic(p: PublicProvider): ProviderForm {
     uid: p.id,
     id: p.id,
     name: p.name || "",
-    protocol: p.protocol || "anthropic-messages",
     baseUrl: p.base_url ?? "",
     apiKey: "",
     authToken: "",
@@ -165,7 +161,6 @@ export function blankProvider(existing: ProviderForm[]): ProviderForm {
     uid,
     id: "",
     name: "",
-    protocol: "anthropic-messages",
     baseUrl: "",
     apiKey: "",
     authToken: "",
@@ -186,7 +181,6 @@ export function buildProviderPatches(forms: ProviderForm[]): ProviderPatch[] {
     const patch: ProviderPatch = {
       id: f.id.trim(),
       name: f.name.trim() || f.id.trim(),
-      protocol: f.protocol,
       base_url: f.baseUrl.trim(),
       models_path: f.modelsPath.trim(),
       models,

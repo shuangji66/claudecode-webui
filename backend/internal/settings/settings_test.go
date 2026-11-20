@@ -35,12 +35,11 @@ func TestSaveProvidersAndReload(t *testing.T) {
 	s, path := openTemp(t)
 	if _, err := s.Apply(Patch{
 		Providers: &[]ProviderPatch{{
-			ID:       "gw",
-			Name:     "我的网关",
-			Protocol: ProtocolAnthropic,
-			BaseURL:  "https://gw.example/",
-			APIKey:   "sk-ant-secret-123456",
-			Models:   []string{"cn:deepseek", "cn:qwen", "cn:deepseek"},
+			ID:      "gw",
+			Name:    "我的网关",
+			BaseURL: "https://gw.example/",
+			APIKey:  "sk-ant-secret-123456",
+			Models:  []string{"cn:deepseek", "cn:qwen", "cn:deepseek"},
 		}},
 		Selected: &Selection{Provider: "gw", Model: "cn:deepseek"},
 	}); err != nil {
@@ -198,8 +197,10 @@ func TestLegacyMigration(t *testing.T) {
 	if p.BaseURL != "http://127.0.0.1:7863" || p.APIKey != "sk-old" {
 		t.Fatalf("迁移字段不对: %+v", p)
 	}
-	if p.Protocol != ProtocolOpenAI {
-		t.Fatalf("协议未迁移: %q", p.Protocol)
+	// api_protocol 已废弃：旧的 openai-completions 值被忽略（协议恒为 Anthropic
+	// Messages），迁移后那个键被清掉，下次写盘不会再留下它。
+	if got.LegacyProtocol != "" {
+		t.Fatalf("废弃的 api_protocol 应被清空: %q", got.LegacyProtocol)
 	}
 	// 四个别名槽位去重成两个模型
 	if len(p.Models) != 2 {
@@ -258,23 +259,29 @@ func TestPublicEmptyModelsIsArrayNotNull(t *testing.T) {
 	}
 }
 
-// OpenAI/Gemini 协议的 base 带 /v1，对话时必须剥掉，否则 CLI 拼成 /v1/v1/messages。
-func TestChatBaseURLStripsV1ForOpenAI(t *testing.T) {
+// base 是否带 /v1 由用户决定，两条路径都应该落到同一个地址：
+// CLI 自己拼 /v1/messages，所以尾部的 /v1 必须剥掉。
+func TestChatBaseURLStripsV1(t *testing.T) {
 	cases := []struct {
-		protocol, base, want string
+		base, want string
 	}{
-		{ProtocolOpenAI, "http://127.0.0.1:7863/v1", "http://127.0.0.1:7863"},
-		{ProtocolOpenAI, "http://127.0.0.1:7863/v1/", "http://127.0.0.1:7863"},
-		{ProtocolResponses, "https://gw.example/openai/v1", "https://gw.example/openai"},
-		{ProtocolGemini, "https://gw.example/v1beta", "https://gw.example/v1beta"},
-		// Anthropic 协议保持原样：官方地址本身没有 /v1
-		{ProtocolAnthropic, "https://api.anthropic.com", "https://api.anthropic.com"},
-		{ProtocolAnthropic, "https://gw.example/v1", "https://gw.example/v1"},
+		{"http://127.0.0.1:7863/v1", "http://127.0.0.1:7863"},
+		{"http://127.0.0.1:7863/v1/", "http://127.0.0.1:7863"},
+		{"https://gw.example/openai/v1", "https://gw.example/openai"},
+		{"https://gw.example/v1beta", "https://gw.example/v1beta"},
+		{"https://api.anthropic.com", "https://api.anthropic.com"},
+		// 带 /v1 的 Anthropic 地址以前原样保留 → 变成 /v1/v1/messages，现在也剥。
+		{"https://api.anthropic.com/v1", "https://api.anthropic.com"},
+		{"https://api.deepseek.com/anthropic", "https://api.deepseek.com/anthropic"},
 	}
 	for _, c := range cases {
-		p := Provider{Protocol: c.protocol, BaseURL: c.base}
+		p := Provider{BaseURL: c.base}
 		if got := p.ChatBaseURL(); got != c.want {
-			t.Fatalf("%s + %s → %q, want %q", c.protocol, c.base, got, c.want)
+			t.Fatalf("%s → %q, want %q", c.base, got, c.want)
+		}
+		// 列表地址与对话地址必须同源，否则就是「列表拉得到、对话 404」。
+		if got, want := p.ListBaseURL(), p.ChatBaseURL(); got != want {
+			t.Fatalf("%s: 列表 base %q 与对话 base %q 不一致", c.base, got, want)
 		}
 	}
 }
@@ -282,15 +289,13 @@ func TestChatBaseURLStripsV1ForOpenAI(t *testing.T) {
 func TestEnvUsesChatBaseURL(t *testing.T) {
 	v := Settings{
 		Providers: []Provider{{
-			ID: "gw", Protocol: ProtocolOpenAI, BaseURL: "http://127.0.0.1:7863/v1",
+			ID: "gw", BaseURL: "http://127.0.0.1:7863/v1",
 			APIKey: "sk-1", Models: []string{"cn:deepseek"},
 		}},
 		Selected: Selection{Provider: "gw", Model: "cn:deepseek"},
 	}
 	env := strings.Join(v.Env(), ",")
-	if !strings.Contains(env, "ANTHROPIC_BASE_URL=http://127.0.0.1:7863,") &&
-		!strings.HasSuffix(env, "ANTHROPIC_BASE_URL=http://127.0.0.1:7863") &&
-		!strings.Contains(env, "ANTHROPIC_BASE_URL=http://127.0.0.1:7863") {
+	if !strings.Contains(env, "ANTHROPIC_BASE_URL=http://127.0.0.1:7863") {
 		t.Fatalf("对话地址应剥掉 /v1: %v", env)
 	}
 	if strings.Contains(env, "ANTHROPIC_BASE_URL=http://127.0.0.1:7863/v1") {

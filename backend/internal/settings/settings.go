@@ -24,19 +24,20 @@ import (
 	"ccweb/backend/internal/authz"
 )
 
-// DefaultAPIProtocol 是未指定协议时的默认值（Claude Code 走 Anthropic Messages）。
-const DefaultAPIProtocol = "anthropic-messages"
-
-// 支持的协议，与 DSH 的命名一致。
-const (
-	ProtocolAnthropic = "anthropic-messages"
-	ProtocolOpenAI    = "openai-completions"
-	ProtocolResponses = "openai-responses"
-	ProtocolGemini    = "google-generative-ai"
-)
-
-// SupportedProtocols 是允许选择的协议。
-var SupportedProtocols = []string{ProtocolAnthropic, ProtocolOpenAI, ProtocolResponses, ProtocolGemini}
+// 对话协议只有一种：claude CLI 只会说 Anthropic Messages。它自己拼
+// `POST {ANTHROPIC_BASE_URL}/v1/messages`，没有任何开关能把它换成
+// OpenAI Chat Completions 或 Gemini 的请求体。
+//
+// 所以「协议」不是提供商的一个可选项，而是这条链路的事实。以前设置页提供
+// anthropic / openai-completions / openai-responses / google-generative-ai 四选一，
+// 那三个对对话**完全不生效**：选了 openai 也只是让拉模型列表换个地址，
+// 对话照旧打到 `{base}/v1/messages`（对面 404）。而预置目录里 42 条有 19 条
+// 原生就不是 Anthropic Messages——挂着这个下拉就是在暗示它们能用。
+//
+// 现在归一：任何拿着非 Anthropic 原生 API 的服务，要接进来只能靠服务商自己
+// 提供 Anthropic 兼容端点（DeepSeek / Z.AI / Kimi / Qwen / MiniMax / 小米等的
+// `/anthropic` 路径），或用户自己架中转。
+const ProtocolAnthropic = "anthropic-messages"
 
 // 界面偏好的默认值与允许范围。语言与字号落在服务端；
 // **主题不持久化**：它只缓存在浏览器（localStorage），换设备各自决定。
@@ -123,21 +124,20 @@ func (m ModelSpec) Clone() ModelSpec {
 }
 
 // Provider 是一个第三方模型提供商。
+//
+// 没有 protocol 字段：对话协议恒为 Anthropic Messages（见 ProtocolAnthropic）。
 type Provider struct {
 	// ID 是小写唯一标识，用于稳定引用（改名不影响已选模型）。
 	ID string `json:"id"`
 	// Name 是显示名。
 	Name string `json:"name"`
-	// Protocol 决定「获取模型列表」时用哪种地址与鉴权。
-	// 注意：对话始终走 Anthropic Messages（claude CLI 只支持这一种）。
-	Protocol string `json:"protocol"`
 	// BaseURL 是该提供商的基础地址，列表与对话都用它。
 	BaseURL string `json:"base_url"`
 	// APIKey 对应 x-api-key；对话时注入 ANTHROPIC_API_KEY。
 	APIKey string `json:"api_key"`
 	// AuthToken 是可选 Bearer 令牌；没有 APIKey 时注入 ANTHROPIC_AUTH_TOKEN。
 	AuthToken string `json:"auth_token"`
-	// ModelsPath 覆盖模型列表路径，留空按协议推导。
+	// ModelsPath 覆盖模型列表路径，留空用默认的 `{root}/v1/models`。
 	ModelsPath string `json:"models_path"`
 	// Models 是从该提供商处选中并添加的模型 ID。
 	Models []string `json:"models"`
@@ -247,7 +247,6 @@ type Public struct {
 type PublicProvider struct {
 	ID           string               `json:"id"`
 	Name         string               `json:"name"`
-	Protocol     string               `json:"protocol"`
 	BaseURL      string               `json:"base_url"`
 	APIKeySet    bool                 `json:"api_key_set"`
 	APIKeyMasked string               `json:"api_key_masked"`
@@ -261,7 +260,6 @@ type PublicProvider struct {
 type ProviderPatch struct {
 	ID         string               `json:"id"`
 	Name       string               `json:"name"`
-	Protocol   string               `json:"protocol"`
 	BaseURL    string               `json:"base_url"`
 	APIKey     string               `json:"api_key"`
 	AuthToken  string               `json:"auth_token"`
@@ -417,14 +415,9 @@ func migrateLegacy(s *Settings) {
 			models = append(models, m)
 		}
 	}
-	proto := s.LegacyProtocol
-	if proto == "" {
-		proto = DefaultAPIProtocol
-	}
 	s.Providers = []Provider{{
 		ID:         "default",
 		Name:       "默认",
-		Protocol:   proto,
 		BaseURL:    s.LegacyBaseURL,
 		APIKey:     s.LegacyAPIKey,
 		AuthToken:  s.LegacyAuthToken,
@@ -439,6 +432,8 @@ func migrateLegacy(s *Settings) {
 
 func clearLegacy(s *Settings) {
 	s.LegacyBaseURL, s.LegacyAPIKey, s.LegacyAuthToken = "", "", ""
+	// api_protocol 已废弃（协议恒为 Anthropic Messages），旧值读盘时被 Go 忽略，
+	// 这里一并清掉，下次写盘就不会再留一个说着「协议可选」的残键。
 	s.LegacyProtocol, s.LegacyModel = "", ""
 	s.LegacyOpus, s.LegacySonnet, s.LegacyHaiku = "", "", ""
 	s.LegacyPath, s.LegacyKnown = "", ""
@@ -671,7 +666,6 @@ func (s *Store) Public() Public {
 		pub.Providers = append(pub.Providers, PublicProvider{
 			ID:           p.ID,
 			Name:         p.Name,
-			Protocol:     p.Protocol,
 			BaseURL:      p.BaseURL,
 			APIKeySet:    p.APIKey != "",
 			APIKeyMasked: Mask(p.APIKey),
@@ -851,17 +845,12 @@ func mergeProviders(old []Provider, in []ProviderPatch) ([]Provider, error) {
 		}
 		seen[id] = true
 
-		proto := strings.TrimSpace(patch.Protocol)
-		if proto == "" {
-			proto = DefaultAPIProtocol
-		}
 		prev, existed := oldByID[id]
 
 		models := dedupe(patch.Models)
 		p := Provider{
 			ID:         id,
 			Name:       strings.TrimSpace(patch.Name),
-			Protocol:   proto,
 			BaseURL:    strings.TrimRight(strings.TrimSpace(patch.BaseURL), "/"),
 			ModelsPath: strings.TrimSpace(patch.ModelsPath),
 			Models:     models,

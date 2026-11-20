@@ -148,22 +148,32 @@ func TestParseModelsEmptyBody(t *testing.T) {
 	}
 }
 
-// 列表路径规则照 DSH：Anthropic 需要把 base 末尾的 /v1 剥掉再拼 /v1/models。
-func TestListingURLPerProtocol(t *testing.T) {
+// 列表路径只有一条规则：剥掉 base 末尾的 /v1 再拼 /v1/models。
+// 用户填带不带 /v1 都应该落到同一个地址。
+func TestListingURLStripsVersionSuffix(t *testing.T) {
 	cases := []struct {
-		base, protocol, want string
+		base, want string
 	}{
-		{"https://api.anthropic.com", ProtocolAnthropic, "https://api.anthropic.com/v1/models?limit=1000"},
-		{"https://gw.example/v1", ProtocolAnthropic, "https://gw.example/v1/models?limit=1000"},
-		{"https://gw.example/v1/", ProtocolAnthropic, "https://gw.example/v1/models?limit=1000"},
-		{"https://gw.example/v1", ProtocolOpenAI, "https://gw.example/v1/models"},
-		{"https://gw.example/openai/v1", ProtocolResponses, "https://gw.example/openai/v1/models"},
-		{"https://gw.example/v1beta", ProtocolGemini, "https://gw.example/v1beta/models?pageSize=1000"},
+		{"https://api.anthropic.com", "https://api.anthropic.com/v1/models?limit=1000"},
+		{"https://gw.example/v1", "https://gw.example/v1/models?limit=1000"},
+		{"https://gw.example/v1/", "https://gw.example/v1/models?limit=1000"},
+		{"https://gw.example/api/anthropic", "https://gw.example/api/anthropic/v1/models?limit=1000"},
 	}
 	for _, c := range cases {
-		if got := ListingURL(c.base, c.protocol, ""); got != c.want {
-			t.Fatalf("ListingURL(%q,%q) = %q, want %q", c.base, c.protocol, got, c.want)
+		base := stripVersionSuffix(c.base)
+		if got := ListingURL(base, ""); got != c.want {
+			t.Fatalf("ListingURL(strip(%q)) = %q, want %q", c.base, got, c.want)
 		}
+	}
+}
+
+// 覆盖路径原样拼接，不经过 /v1 推导。
+func TestListingURLOverride(t *testing.T) {
+	if got := ListingURL("https://gw.example", "/models"); got != "https://gw.example/models" {
+		t.Fatalf("override = %q", got)
+	}
+	if got := ListingURL("https://gw.example", "models"); got != "https://gw.example/models" {
+		t.Fatalf("override 缺前导斜杠 = %q", got)
 	}
 }
 
@@ -200,65 +210,55 @@ func TestFetchModelsAnthropicUsesKeyHeader(t *testing.T) {
 	}
 }
 
-func TestFetchModelsOpenAIUsesBearer(t *testing.T) {
-	var gotAuth, gotKey string
+func TestFetchModelsBearerToken(t *testing.T) {
+	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/models" {
+		if r.URL.Path != "/v1/models" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		gotAuth = r.Header.Get("authorization")
-		gotKey = r.Header.Get("x-api-key")
 		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-x"}]}`))
+		_, _ = w.Write([]byte(`{"data":[{"id":"glm-x"}]}`))
 	}))
 	defer srv.Close()
 
-	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, APIKey: "k2", Protocol: ProtocolOpenAI})
+	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, AuthToken: "b2"})
 	if len(res.Models) != 1 {
 		t.Fatalf("应拿到模型: %+v", res)
 	}
-	if gotAuth != "Bearer k2" {
-		t.Fatalf("OpenAI 协议应发 Bearer，实际 %q", gotAuth)
+	if gotAuth != "Bearer b2" {
+		t.Fatalf("填了 Bearer 令牌就应该发 Bearer，实际 %q", gotAuth)
 	}
-	if gotKey != "" {
-		t.Fatalf("OpenAI 协议不应发 x-api-key: %q", gotKey)
+	if !res.Auth.AuthTokenSent {
+		t.Fatal("Auth.AuthTokenSent 应为 true")
 	}
 }
 
-func TestFetchModelsGeminiUsesGoogHeader(t *testing.T) {
-	var got string
+// 凭据填在 APIKey 上、但网关只认 Bearer 时，用同一把密钥换 Bearer 重试一次。
+func TestFetchModelsBearerFallback(t *testing.T) {
+	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/models" {
-			w.WriteHeader(http.StatusNotFound)
+		calls++
+		// 只认 Bearer：x-api-key 的第一次请求回 401。
+		if r.Header.Get("authorization") != "Bearer k3" {
+			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		got = r.Header.Get("x-goog-api-key")
 		w.Header().Set("content-type", "application/json")
-		_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-1.5-pro"}]}`))
+		_, _ = w.Write([]byte(`{"data":[{"id":"m"}]}`))
 	}))
 	defer srv.Close()
 
-	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, APIKey: "g1", Protocol: ProtocolGemini})
-	if len(res.Models) != 1 || res.Models[0].ID != "gemini-1.5-pro" {
-		t.Fatalf("应拿到 Gemini 模型: %+v", res)
+	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, APIKey: "k3"})
+	if len(res.Models) != 1 {
+		t.Fatalf("应拿到模型: %+v", res)
 	}
-	if got != "g1" {
-		t.Fatalf("应发 x-goog-api-key，实际 %q", got)
+	if !res.Auth.BearerFallback {
+		t.Fatal("BearerFallback 应为 true")
 	}
-}
-
-// 不支持的协议应直接提示手动录入，而不是发请求后报「没有模型」。
-func TestFetchModelsUnsupportedProtocol(t *testing.T) {
-	res := FetchModels(t.Context(), Provider{BaseURL: "https://gw.example", Protocol: "azure-openai"})
-	if res.Supported {
-		t.Fatal("Supported 应为 false")
-	}
-	if !strings.Contains(res.Detail, "手动填写") {
-		t.Fatalf("提示不清楚: %q", res.Detail)
-	}
-	if res.Status != 0 {
-		t.Fatalf("不应发出请求，Status = %d", res.Status)
+	if calls != 2 {
+		t.Fatalf("应请求两次（x-api-key 失败后换 Bearer），实际 %d", calls)
 	}
 }
 
@@ -346,7 +346,7 @@ func TestFetchModelsRejectsBadScheme(t *testing.T) {
 func TestDefaultModelAndEnv(t *testing.T) {
 	v := Settings{
 		Providers: []Provider{
-			{ID: "gw", Name: "GW", Protocol: ProtocolAnthropic, BaseURL: "https://gw.example", APIKey: "sk-1", Models: []string{"cn:deepseek"}},
+			{ID: "gw", Name: "GW", BaseURL: "https://gw.example", APIKey: "sk-1", Models: []string{"cn:deepseek"}},
 		},
 		Selected: Selection{Provider: "gw", Model: "cn:deepseek"},
 	}

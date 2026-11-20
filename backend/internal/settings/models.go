@@ -38,7 +38,6 @@ type Attempt struct {
 type ModelsResult struct {
 	Models    []Model   `json:"models"`
 	Endpoint  string    `json:"endpoint"`
-	Protocol  string    `json:"protocol"`
 	Status    int       `json:"status"`
 	Detail    string    `json:"detail"`
 	Raw       string    `json:"raw,omitempty"`
@@ -48,13 +47,15 @@ type ModelsResult struct {
 	Supported bool      `json:"supported"`
 }
 
-// ListingURL 按协议拼出模型列表地址（规则与 DSH 的 discovery 一致）：
-//   - anthropic-messages：`{root}/v1/models?limit=1000`，root 会去掉一层尾部 `/v1`
-//   - openai-completions / openai-responses：`{base}/models`
-//   - google-generative-ai：`{base}/models?pageSize=1000`
+// ListingURL 拼出模型列表地址：`{root}/v1/models?limit=1000`。
 //
-// override 非空时直接用 `{base}{override}`，便于覆盖各家不统一的路径。
-func ListingURL(baseURL, protocol, override string) string {
+// 只有 Anthropic Messages 一种协议，所以规则也只有一条。root 用 ListBaseURL
+// 剥过 `/v1`，这里无条件拼 `/v1/models`——用户填 `https://api.anthropic.com/v1`
+// 与填 `https://api.anthropic.com` 得到同一个地址。
+//
+// override 非空时直接用 `{base}{override}`，便于覆盖各家不统一的路径
+// （例如中转把列表放在 `/models` 而不是 `/v1/models`）。
+func ListingURL(baseURL, override string) string {
 	base := strings.TrimRight(baseURL, "/")
 	if o := strings.TrimSpace(override); o != "" {
 		if !strings.HasPrefix(o, "/") {
@@ -62,44 +63,27 @@ func ListingURL(baseURL, protocol, override string) string {
 		}
 		return base + o
 	}
-	switch protocol {
-	case ProtocolGemini:
-		return base + "/models?pageSize=1000"
-	case ProtocolAnthropic:
-		root := base
-		if strings.HasSuffix(root, "/v1") {
-			root = strings.TrimSuffix(root, "/v1")
-		}
-		return root + "/v1/models?limit=1000"
-	default:
-		return base + "/models"
-	}
+	return base + "/v1/models?limit=1000"
 }
 
 const rawPreviewBytes = 600
 
-// FetchModels 按提供商的协议询问端点「你提供哪些模型」。
+// FetchModels 询问端点「你提供哪些模型」。
 //
 // 这是尽力而为的便利路径：端点用什么格式作答由它自己决定，
 // 拿不到时手动输入模型名效果相同。
 func FetchModels(ctx context.Context, p Provider) ModelsResult {
-	protocol := p.ProtocolOrDefault()
 	res := ModelsResult{
-		Protocol:  protocol,
-		Supported: listableProtocols[protocol],
 		Endpoint:  p.Root(),
+		Supported: true,
 		Auth:      AuthInfo{APIKeySent: p.APIKey != "", AuthTokenSent: p.AuthToken != ""},
 	}
 	if !strings.HasPrefix(res.Endpoint, "http://") && !strings.HasPrefix(res.Endpoint, "https://") {
 		res.Detail = "地址必须以 http:// 或 https:// 开头"
 		return res
 	}
-	if !res.Supported {
-		res.Detail = fmt.Sprintf("协议 %s 不支持自动获取模型列表，请手动填写模型名", protocol)
-		return res
-	}
 
-	url := ListingURL(res.Endpoint, protocol, p.ModelsPath)
+	url := ListingURL(p.ListBaseURL(), p.ModelsPath)
 	// 展示用路径相对主机根，避免 base 带 /v1 时显示成 /models 而误导排查。
 	display := url
 	if u, err := neturl.Parse(url); err == nil {
@@ -111,7 +95,7 @@ func FetchModels(ctx context.Context, p Provider) ModelsResult {
 	res.Tried = []string{display}
 
 	client := proxyClient()
-	status, body, truncated, err := doAuth(ctx, client, http.MethodGet, url, p, nil, authKind(protocol))
+	status, body, truncated, err := doAuth(ctx, client, http.MethodGet, url, p, nil)
 	res.Status = status
 	attempt := Attempt{Path: display, Status: status}
 
@@ -131,16 +115,16 @@ func FetchModels(ctx context.Context, p Provider) ModelsResult {
 			attempt.Note = fmt.Sprintf("200，%d 个模型", len(models))
 			res.Models = models
 			res.Attempts = []Attempt{attempt}
-			res.Detail = fmt.Sprintf("共 %d 个模型（%s，%s）", len(models), display, protocol)
+			res.Detail = fmt.Sprintf("共 %d 个模型（%s）", len(models), display)
 			return res
 		}
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		// 同一把密钥换成 Bearer 再试一次：不少中转只认 Bearer。
-		if p.APIKey != "" && p.AuthToken == "" && protocol != ProtocolGemini {
+		if p.APIKey != "" && p.AuthToken == "" {
 			alt := p
 			alt.AuthToken = p.APIKey
 			alt.APIKey = ""
-			if s2, b2, _, e2 := doAuth(ctx, client, http.MethodGet, url, alt, nil, "bearer"); e2 == nil {
+			if s2, b2, _, e2 := doAuth(ctx, client, http.MethodGet, url, alt, nil); e2 == nil {
 				res.Auth.BearerFallback = true
 				if models, perr := parseModels(b2); perr == nil && len(models) > 0 {
 					attempt.Status = s2
@@ -148,7 +132,7 @@ func FetchModels(ctx context.Context, p Provider) ModelsResult {
 					res.Models = models
 					res.Status = s2
 					res.Attempts = []Attempt{attempt}
-					res.Detail = fmt.Sprintf("共 %d 个模型（%s，%s，Bearer 鉴权）", len(models), display, protocol)
+					res.Detail = fmt.Sprintf("共 %d 个模型（%s，Bearer 鉴权）", len(models), display)
 					return res
 				}
 			}

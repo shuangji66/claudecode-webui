@@ -34,35 +34,38 @@ type ProbeResult struct {
 	Detail    string `json:"detail"`
 }
 
-// 协议是否支持自动获取模型列表。
-var listableProtocols = map[string]bool{
-	ProtocolAnthropic: true,
-	ProtocolOpenAI:    true,
-	ProtocolResponses: true,
-	ProtocolGemini:    true,
-}
-
-// ProtocolOrDefault 返回生效的协议。
-func (p Provider) ProtocolOrDefault() string {
-	if v := strings.TrimSpace(p.Protocol); v != "" {
-		return v
-	}
-	return DefaultAPIProtocol
-}
-
-// ChatBaseURL 返回**对话**用的基础地址。
+// stripVersionSuffix 去掉尾部的 `/v1`。
 //
-// claude CLI 只会说 Anthropic Messages：它在 baseURL 后面自己拼 `/v1/messages`。
-// 而 OpenAI / Gemini 协议的 base 习惯上带 `/v1`（列表地址是 `{base}/models`），
-// 两者直接共用会拼成 `/v1/v1/messages` → 404。
-// 因此非 Anthropic 协议要剥掉这层 `/v1`；Anthropic 协议按用户填的原样使用。
-func (p Provider) ChatBaseURL() string {
-	base := p.Root()
-	if p.ProtocolOrDefault() != ProtocolAnthropic {
+// 两个用途共用一个规则，因为它们必须一致：
+//   - **列表**：Anthropic 的列表是 `{root}/v1/models`，base 若已带 `/v1` 会拼成
+//     `/v1/v1/models`；
+//   - **对话**：claude 在 `ANTHROPIC_BASE_URL` 后面自己拼 `/v1/messages`，同样怕
+//     `/v1/v1/messages`。
+//
+// 曾经只有对话剥、列表对 anthropic 不剥，于是「列表拉得到、对话 404」或反过来，
+// 取决于用户填的地址带不带 `/v1`。协议归一之后没有理由再分叉。
+func stripVersionSuffix(base string) string {
+	base = strings.TrimRight(base, "/")
+	if strings.HasSuffix(base, "/v1") {
 		base = strings.TrimSuffix(base, "/v1")
-		base = strings.TrimRight(base, "/")
 	}
-	return base
+	return strings.TrimRight(base, "/")
+}
+
+// ChatBaseURL 返回**对话**用的基础地址（注入 ANTHROPIC_BASE_URL）。
+//
+// claude CLI 只会说 Anthropic Messages：它在 baseURL 后面自己拼 `/v1/messages`，
+// 所以这里必须去掉用户可能带上的那层 `/v1`。
+func (p Provider) ChatBaseURL() string {
+	return stripVersionSuffix(p.Root())
+}
+
+// ListBaseURL 返回**拉模型列表**用的基础地址。
+//
+// 与 ChatBaseURL 同一份规则（见 stripVersionSuffix），列表路径再在这之上拼
+// `/v1/models`。
+func (p Provider) ListBaseURL() string {
+	return stripVersionSuffix(p.Root())
 }
 
 // Root 返回去掉尾斜杠的地址。
@@ -74,10 +77,10 @@ func (p Provider) Root() string {
 	return base
 }
 
-// Probe 检查「地址 + 协议 + 凭据」是否可用。
+// Probe 检查「地址 + 凭据」是否可用。
 //
-// 先问模型列表（不计费）；不支持或失败时，用第一个已添加模型发一次
-// max_tokens=1 的请求。401/403 视为鉴权失败直接返回。
+// 先问模型列表（不计费）；拿不到时，用第一个已添加模型发一次
+// max_tokens=1 的对话请求。401/403 视为鉴权失败直接返回。
 func Probe(ctx context.Context, p Provider) ProbeResult {
 	res := ProbeResult{Endpoint: p.Root()}
 	if !strings.HasPrefix(res.Endpoint, "http://") && !strings.HasPrefix(res.Endpoint, "https://") {
@@ -87,28 +90,25 @@ func Probe(ctx context.Context, p Provider) ProbeResult {
 
 	start := time.Now()
 	client := proxyClient()
-	protocol := p.ProtocolOrDefault()
 
-	if listableProtocols[protocol] {
-		url := ListingURL(p.Root(), protocol, p.ModelsPath)
-		status, body, _, err := doAuth(ctx, client, http.MethodGet, url, p, nil, authKind(protocol))
-		res.Method = "GET " + url
-		res.Status = status
-		res.LatencyMs = time.Since(start).Milliseconds()
-		switch {
-		case err != nil:
-			res.Detail = "请求失败：" + err.Error()
-			return res
-		case status >= 200 && status < 300:
-			if models, perr := parseModels(body); perr == nil && len(models) > 0 {
-				res.OK = true
-				res.Detail = fmt.Sprintf("端点可用，返回 %d 个模型", len(models))
-				return res
-			}
-		case status == http.StatusUnauthorized || status == http.StatusForbidden:
-			res.Detail = "鉴权失败：" + snippet(body)
+	url := ListingURL(p.Root(), p.ModelsPath)
+	status, body, _, err := doAuth(ctx, client, http.MethodGet, url, p, nil)
+	res.Method = "GET " + url
+	res.Status = status
+	res.LatencyMs = time.Since(start).Milliseconds()
+	switch {
+	case err != nil:
+		res.Detail = "请求失败：" + err.Error()
+		return res
+	case status >= 200 && status < 300:
+		if models, perr := parseModels(body); perr == nil && len(models) > 0 {
+			res.OK = true
+			res.Detail = fmt.Sprintf("端点可用，返回 %d 个模型", len(models))
 			return res
 		}
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		res.Detail = "鉴权失败：" + snippet(body)
+		return res
 	}
 
 	// 退回一次最小对话请求
@@ -124,7 +124,7 @@ func Probe(ctx context.Context, p Provider) ProbeResult {
 		"max_tokens": 1,
 		"messages":   []map[string]any{{"role": "user", "content": "ping"}},
 	})
-	status, body, _, err := doAuth(ctx, client, http.MethodPost, p.Root()+"/v1/messages", p, payload, authKind(protocol))
+	status, body, _, err = doAuth(ctx, client, http.MethodPost, p.ChatBaseURL()+"/v1/messages", p, payload)
 	res.Method = "POST /v1/messages"
 	res.Status = status
 	res.LatencyMs = time.Since(start).Milliseconds()
@@ -159,7 +159,7 @@ func VerifyModel(ctx context.Context, p Provider, model string) ProbeResult {
 	})
 	start := time.Now()
 	client := &http.Client{Timeout: ProbeTimeout}
-	status, body, _, err := doAuth(ctx, client, http.MethodPost, p.Root()+"/v1/messages", p, payload, authKind(p.ProtocolOrDefault()))
+	status, body, _, err := doAuth(ctx, client, http.MethodPost, p.ChatBaseURL()+"/v1/messages", p, payload)
 	res.Status = status
 	res.LatencyMs = time.Since(start).Milliseconds()
 	switch {
@@ -210,40 +210,27 @@ func sendRequest(c *http.Client, req *http.Request, limit int64) (int, []byte, b
 	return resp.StatusCode, b, false, nil
 }
 
-// doAuth 按指定鉴权方式发请求（同时用于列表与对话测试）。
-func doAuth(ctx context.Context, c *http.Client, method, url string, p Provider, body []byte, kind string) (int, []byte, bool, error) {
+// doAuth 按 Anthropic Messages 的规则发请求（列表与对话测试共用）。
+//
+// 两种凭据并存不是二选一：APIKey 走 x-api-key，AuthToken 走 Bearer，
+// 同时设置就都发（claude CLI 自己也是这么做的）。不少中转只认 Bearer，
+// 那种情况下用户把密钥填到「Bearer 令牌」即可——不再需要按协议切换鉴权方式。
+func doAuth(ctx context.Context, c *http.Client, method, url string, p Provider, body []byte) (int, []byte, bool, error) {
 	req, err := newRequest(ctx, method, url, body)
 	if err != nil {
 		return 0, nil, false, err
 	}
-	switch kind {
-	case "bearer":
-		key := firstNonEmpty(p.AuthToken, p.APIKey)
-		if key != "" {
-			req.Header.Set("authorization", "Bearer "+key)
-		}
-	case "google":
-		key := firstNonEmpty(p.APIKey, p.AuthToken)
-		if key != "" {
-			req.Header.Set("x-goog-api-key", key)
-		}
-	case "anthropic":
-		if p.APIKey != "" {
-			req.Header.Set("x-api-key", p.APIKey)
-		}
-		if p.AuthToken != "" {
-			req.Header.Set("authorization", "Bearer "+p.AuthToken)
-		}
-	default:
-		if p.APIKey != "" {
-			req.Header.Set("x-api-key", p.APIKey)
-		}
+	if p.APIKey != "" {
+		req.Header.Set("x-api-key", p.APIKey)
+	}
+	if p.AuthToken != "" {
+		req.Header.Set("authorization", "Bearer "+p.AuthToken)
 	}
 	return sendRequest(c, req, readLimitModels)
 }
 
 // doAuthSmall 用于错误体等小响应。
-func doAuthSmall(ctx context.Context, c *http.Client, method, url string, p Provider, body []byte, kind string) (int, []byte, error) {
+func doAuthSmall(ctx context.Context, c *http.Client, method, url string, p Provider, body []byte) (int, []byte, error) {
 	req, err := newRequest(ctx, method, url, body)
 	if err != nil {
 		return 0, nil, err
@@ -277,16 +264,4 @@ func snippet(b []byte) string {
 		s = "（无响应体）"
 	}
 	return s
-}
-
-// authKind 决定用哪种鉴权头。
-func authKind(protocol string) string {
-	switch protocol {
-	case ProtocolGemini:
-		return "google"
-	case ProtocolAnthropic:
-		return "anthropic"
-	default:
-		return "bearer"
-	}
 }

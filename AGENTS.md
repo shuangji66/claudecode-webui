@@ -1287,6 +1287,33 @@ hub ── manager ── session ── process ── claude (NDJSON)
   非空就跳过），失败静默保留首条消息标题，出站请求必须接 `netproxy`。
   别把它做成同步等结果——那会把一份本来能秒开的列表拖成几秒。
 
+### 4.22 提供商没有「协议」这个选项（`internal/settings` 的 `ProtocolAnthropic`）
+
+- **对话协议不可配置**：claude CLI 只发 `POST {ANTHROPIC_BASE_URL}/v1/messages`，
+  请求体是 Anthropic Messages。没有环境变量、没有控制请求、没有启动参数能把它换成
+  OpenAI Chat Completions / OpenAI Responses / Gemini —— 那需要在 CLI 外面做协议翻译。
+- **以前的「协议」四选一是个假开关**：`Provider.Protocol` 只影响两件事——拉模型列表的
+  地址（`ListingURL`）与鉴权头（`authKind`）——对对话零影响。用户选了
+  `openai-completions`，请求照旧打到 `{base}/v1/messages`，对面 404。它摆在 API 地址
+  正上方、排最显眼的位置，读起来就是「选了这个就能用这个协议」，这是误导。
+  现在字段全删（`Provider` / `ProviderPatch` / `PublicProvider` /
+  `gateway.providerRef` / `ModelsResult.protocol`），只留常量 `ProtocolAnthropic`。
+  旧 `settings.json` 里的 `protocol` / `api_protocol` 键被 Go 忽略，写盘时消失。
+- **预置目录按「能不能对话」筛，不按「能不能拉列表」筛**：`frontend/src/lib/providerCatalog.ts`
+  只收录 Anthropic 兼容端点。原生非 Anthropic 的（OpenAI / xAI / Groq / Mistral /
+  Gemini / Bedrock / Azure / Together / Cerebras / NVIDIA / HuggingFace / Meta /
+  ant-ling / kimi-coding / cloudflare-workers-ai 等 19 个）**已整批删除**——
+  留着它们等于在下拉里摆一堆选中后必然 404 的项，`chatCompatible` 那个标记也是
+  同一类谎话（标 false 但照样能被选中、能保存）。想接这类模型只有两条路：
+  服务商自己提供 `/anthropic` 端点，或用户自架中转。
+- **列表地址与对话地址必须同源**：`stripVersionSuffix` 一处剥 `/v1`，`ChatBaseURL` 与
+  `ListBaseURL` 都走它。以前只有对话剥、列表对 anthropic 不剥，于是「列表拉得到、
+  对话 404」（或反过来）取决于用户填的地址带不带 `/v1`。现在填不填都一样。
+  `ListingURL` 因此只剩一个签名 `(baseURL, override)`，override 仍然原样拼。
+- **鉴权不再按协议分叉**：`x-api-key` 与 `Authorization: Bearer` 是同时可用的两种凭据
+  （不是二选一），`doAuth` 都发；列表 401 时仍用同一把密钥换 Bearer 重试一次。
+  Gemini 的 `x-goog-api-key` 随协议一起删掉了。
+
 ## 5. 命令速查
 
 ```bash
@@ -1308,6 +1335,8 @@ cd frontend && npx tsc --noEmit
 - [ ] 是否新增了硬编码路径 / 端口 / 前缀？
 - [ ] 新 HTTP 路由是否挂了鉴权？WS 是否校验 token？鉴权判定是否用了 `channelOf(r)`（而不是写死通道）？
 - [ ] 改动 `protocol` 后是否同步了 `session` 与前端 `transport/types.ts`？
+- [ ] 新增的提供商 / 预置是否真的是 **Anthropic 兼容端点**？别把「能拉到模型列表」
+      当成「能对话」（见 4.22）；也不要重新引入任何形式的协议选择器。
 - [ ] 新增工具卡片是否注册进 `ToolCardHost`，且未删除兜底？
 - [ ] 流式路径是否仍满足「替换而非追加」？
 - [ ] 对话恢复是否用稳定 UUID `--resume`？空对话/归档/删除是否会被误恢复？

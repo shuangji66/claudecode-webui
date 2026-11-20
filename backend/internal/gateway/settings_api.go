@@ -118,7 +118,6 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 // providerRef 是「用存储里的 provider」或「用一组临时参数」的联合入参。
 type providerRef struct {
 	ProviderID string `json:"provider_id"`
-	Protocol   string `json:"protocol"`
 	BaseURL    string `json:"base_url"`
 	APIKey     string `json:"api_key"`
 	AuthToken  string `json:"auth_token"`
@@ -149,7 +148,6 @@ func (s *Server) resolve(ref providerRef) (settings.Provider, bool) {
 	return settings.Provider{
 		ID:         "draft",
 		Name:       "draft",
-		Protocol:   ref.Protocol,
 		BaseURL:    ref.BaseURL,
 		APIKey:     ref.APIKey,
 		AuthToken:  ref.AuthToken,

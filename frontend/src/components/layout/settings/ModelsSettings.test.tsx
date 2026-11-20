@@ -44,7 +44,7 @@ describe("模型页凭证输入框的自动填充", () => {
     await act(async () => {
       render(<ModelsSettings />);
     });
-    const url = await screen.findByPlaceholderText("https://gateway.example/v1");
+    const url = await screen.findByPlaceholderText("https://api.deepseek.com/anthropic");
     expect(url.getAttribute("autocomplete")).toBe("off");
     expect(url.getAttribute("data-1p-ignore")).toBe("true");
     expect(url.getAttribute("data-lpignore")).toBe("true");

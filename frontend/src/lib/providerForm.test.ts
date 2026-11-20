@@ -20,7 +20,6 @@ const sample: PublicSettings = {
     {
       id: "gw",
       name: "我的网关",
-      protocol: "anthropic-messages",
       base_url: "https://gw.example",
       api_key_set: true,
       api_key_masked: "sk-•••1234",

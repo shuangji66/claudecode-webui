@@ -4,7 +4,6 @@ import { useAppStore } from "../../../store/useAppStore";
 import { useT } from "../../../lib/i18n";
 import {
   EFFORT_LEVELS,
-  PROTOCOLS,
   blankProvider,
   buildProviderPatches,
   formatCapacity,
@@ -131,7 +130,10 @@ export function ModelsSettings({
       <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto pr-2 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] md:pb-6">
         <div className="mx-auto max-w-2xl space-y-4">
           <p className="text-[11px] leading-relaxed text-muted">
-            {t("按协议添加提供商，拉取或手动添加模型；每个模型可以声明推理强度与图片支持。", "Add providers by protocol, fetch or add models manually, and declare reasoning efforts and image support per model.")}
+            {t(
+              "添加提供商，拉取或手动添加模型；每个模型可以声明推理强度与图片支持。对话固定走 Anthropic Messages，所以端点必须是 Anthropic 兼容的（官方地址、或各家提供的 /anthropic 路径、或你自己的中转）。",
+              "Add providers, then fetch or add models manually; each model can declare reasoning efforts and image support. Chat always uses Anthropic Messages, so the endpoint must be Anthropic-compatible (official, a provider's /anthropic path, or your own relay).",
+            )}
           </p>
 
           {forms.length === 0 && (
@@ -279,7 +281,6 @@ function ProviderCard({
       onChange({
         id: "",
         name: "",
-        protocol: "anthropic-messages",
         baseUrl: "",
         apiKey: "",
         authToken: "",
@@ -347,38 +348,27 @@ function ProviderCard({
               onChange={applyPreset}
               options={[
                 { value: "", label: t("自定义（手动填写）", "Custom (fill manually)") },
-                ...PROVIDER_PRESETS.map((item) => ({
-                  value: item.id,
-                  label: item.chatCompatible ? item.name : `${item.name} · ${t("需兼容端点", "needs compatible endpoint")}`,
-                })),
+                ...PROVIDER_PRESETS.map((item) => ({ value: item.id, label: item.name })),
               ]}
               menuWidth={280}
             />
             {preset?.note && (
-              <p className={`mt-1 text-[10px] leading-relaxed ${preset.chatCompatible ? "text-muted" : "text-warn"}`}>{preset.note}</p>
+              <p className={`mt-1 text-[10px] leading-relaxed ${preset.needsBaseUrl ? "text-warn" : "text-muted"}`}>{preset.note}</p>
             )}
           </label>
         )}
-
-        <label className="block">
-          <span className="block text-[10.5px] text-faint">{t("协议", "Protocol")}</span>
-          <Select
-            className="mt-0.5 px-2 py-1.5"
-            ariaLabel={t("协议", "Protocol")}
-            value={provider.protocol}
-            onChange={(next) => onChange({ protocol: next })}
-            options={PROTOCOLS.map((p) => ({ value: p.value, label: p.label }))}
-          />
-        </label>
 
         <label className="block">
           <span className="block text-[10.5px] text-faint">{t("API 地址", "API base URL")}</span>
           <input {...NO_AUTOFILL}
             value={provider.baseUrl}
             onChange={(e) => onChange({ baseUrl: e.target.value })}
-            placeholder={preset?.needsBaseUrl ? t("填写完整 Base URL（账号 / 区域 / 网关路径）", "Full base URL (account / region / gateway path)") : "https://gateway.example/v1"}
+            placeholder={preset?.needsBaseUrl ? t("填写完整 Base URL（账号 / 区域 / 网关路径）", "Full base URL (account / region / gateway path)") : "https://api.deepseek.com/anthropic"}
             className="mt-0.5 w-full rounded-lg border border-line-strong bg-canvas px-2 py-1.5 font-mono text-[11.5px] outline-none focus:border-brand/60"
           />
+          <p className="mt-1 text-[10px] leading-relaxed text-faint">
+            {t("必须是 Anthropic 兼容端点；填不填结尾的 /v1 都可以。", "Must be an Anthropic-compatible endpoint; the trailing /v1 is optional.")}
+          </p>
         </label>
 
         <label className="block">

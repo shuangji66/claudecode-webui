@@ -190,10 +190,10 @@ id 会复用进程，重复调用不会多起 claude。没有历史对话时后�
   重启用 `--resume` 恢复同一对话 id，对话记录不会丢；
   代理同时写入 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `SOCKS_PROXY`（大小写都有），
   `localhost` 与 `127.0.0.1` 自动走 `NO_PROXY`。
-- **模型**（左侧栏功能区第一项）：按协议管理提供商。新建提供商时可以先从**预置提供商**里选（Anthropic、DeepSeek、
-  Z.AI、Kimi、Qwen、MiniMax、小米、OpenRouter 等 40+ 家），自动填协议、Base URL 和默认模型；
-  也可以选「自定义」手动填写 ID。标注「需兼容端点」的预置只能用于拉取模型列表，
-  对话需要该服务提供 Anthropic 兼容端点。提供商列表在只有一个时默认展开、多个时默认折叠。每个模型可配置显示名（留空跟随模型 ID）、
+- **模型**（左侧栏功能区第一项）：管理提供商。新建提供商时可以先从**预置提供商**里选（Anthropic、DeepSeek、
+  Z.AI、Kimi、Qwen、MiniMax、小米、OpenRouter 等 20+ 家），自动填 Base URL 和默认模型；
+  也可以选「自定义」手动填写 ID。预置只收录 **Anthropic 兼容端点**——原生 API 是
+  OpenAI / Gemini / Bedrock 的服务这里注定跑不通，因此不在目录里。提供商列表在只有一个时默认展开、多个时默认折叠。每个模型可配置显示名（留空跟随模型 ID）、
   **推理强度档位**（`low` / `medium` / `high` / `xhigh` / `max`）和**图片输入支持**，
   以及**上下文窗口**与**最大输出 token 数**（支持 `128K` / `1M` 写法，留空表示不声明）。
   从网关拉取模型时会用返回的 `context_length` / `max_output_tokens` 预填，仍可手改。
@@ -252,35 +252,39 @@ claude 干活时（回合进行中）你照样可以接着说话：
 
 ## 第三方模型 / 中继接入
 
-在左侧栏「模型」（功能区第一项，整页视图）里按**协议**添加「提供商」，每家填自己的 API 地址与密钥，
+在左侧栏「模型」（功能区第一项，整页视图）里添加「提供商」，每家填自己的 API 地址与密钥，
 然后从它那里获取模型列表、勾选要添加的模型。
 
 ### 添加提供商
 
 | 字段 | 说明 |
 |---|---|
-| 协议 | 决定「获取可用模型」用哪种列表地址与鉴权（见下表） |
-| API 地址 | 该提供商的基础地址，列表与对话都用它 |
+| 预置提供商 | 可选，填好 id / 地址 / 默认模型；只收录 Anthropic 兼容端点 |
+| API 地址 | 该提供商的**Anthropic 兼容**基础地址，列表与对话都用它 |
 | API 密钥 | 对话时注入 `ANTHROPIC_API_KEY`（`x-api-key`）；留空表示不修改，清除要点「清除」再保存 |
+| Bearer 令牌 | 只认 `Authorization: Bearer` 的端点把密钥填这里 |
 | 模型 | 勾选添加后出现，可单独移除或点 ✓ 验证 |
 
-协议 → 列表地址与鉴权（规则与 DSH 的 discovery 一致）：
+**没有「协议」选项，对话恒为 Anthropic Messages**：claude CLI 只会发
+`POST {base}/v1/messages`，请求体、路径、鉴权都没有开关可换。所以原生 API 是
+OpenAI Chat Completions / OpenAI Responses / Gemini / Bedrock 的服务在这个应用里
+**用不了**——它们的模型列表再顺畅也换不来一次能跑通的对话，预置目录里那类条目已整批移除。
+要接这类模型，只有两条路：服务商自己提供 Anthropic 兼容端点（DeepSeek / Z.AI / Kimi /
+Qwen / MiniMax / 小米等的 `/anthropic` 路径），或者你自己架一层中转。
 
-| 协议 | 列表地址 | 鉴权 |
-|---|---|---|
-| `anthropic-messages` | `{root}/v1/models?limit=1000`（base 末尾的 `/v1` 会先剥掉） | `x-api-key` + `anthropic-version` |
-| `openai-completions` / `openai-responses` | `{base}/models` | `Authorization: Bearer` |
-| `google-generative-ai` | `{base}/models?pageSize=1000` | `x-goog-api-key` |
+列表地址与鉴权同样只有一条规则：
 
-**对话始终走 Anthropic Messages**——claude CLI 只支持这一种协议。因此**地址会被归一化**：
+| 项 | 值 |
+|---|---|
+| 列表地址 | `{root}/v1/models?limit=1000`，root 先剥掉尾部 `/v1` |
+| 鉴权 | `x-api-key` + `anthropic-version: 2023-06-01`；填了 Bearer 令牌则改发 `Authorization: Bearer` |
 
-- `anthropic-messages`：对话地址就是你填的地址（官方地址本身不带 `/v1`）；
-- `openai-*` / `google-generative-ai`：这类地址习惯带 `/v1`（列表是 `{base}/models`），
-  对话时**自动剥掉尾部 `/v1`**，否则 CLI 会拼成 `/v1/v1/messages` 而 404。
+**对话地址与列表地址同源**：CLI 自己在 base 后面拼 `/v1/messages`，所以尾部 `/v1`
+一律剥掉，填不填都落到同一个地址，不会拼成 `/v1/v1/messages`。
 
-例：协议 OpenAI、地址 `http://127.0.0.1:7863/v1`
+例：地址 `http://127.0.0.1:7863/v1`
 → 拉列表 `…/v1/models`，对话 `…/v1/messages`。</br>
-401 时会自动用同一把密钥换 `Bearer` 再试一次。
+列表接口 401 时会自动用同一把密钥换 `Bearer` 再试一次。
 
 获取不到列表是正常情况：端点什么格式由它自己决定，手动输入模型名效果完全相同。
 

@@ -23,7 +23,7 @@ func TestFetchModelsViaProxy(t *testing.T) {
 	SetProxySource(func() string { return proxy.URL })
 	defer SetProxySource(nil)
 
-	p := Provider{ID: "x", Protocol: ProtocolOpenAI, BaseURL: "http://api.invalid.example"}
+	p := Provider{ID: "x", BaseURL: "http://api.invalid.example"}
 	res := FetchModels(context.Background(), p)
 
 	if len(seen) == 0 {

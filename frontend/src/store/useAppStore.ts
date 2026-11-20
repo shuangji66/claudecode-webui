@@ -718,7 +718,6 @@ function waitForOpen(id: string, timeoutMs = 8000): Promise<boolean> {
 function providerRef(form: ProviderForm) {
   return {
     provider_id: form.isNew ? "" : form.id,
-    protocol: form.protocol,
     base_url: form.baseUrl,
     api_key: form.apiKey,
     auth_token: form.authToken,

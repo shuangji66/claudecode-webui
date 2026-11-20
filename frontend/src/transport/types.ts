@@ -391,11 +391,10 @@ export interface ModelSpec {
   max_output_tokens?: number;
 }
 
-/** 一个第三方模型提供商的脱敏视图。 */
+/** 一个第三方模型提供商的脱敏视图（对话协议恒为 Anthropic Messages）。 */
 export interface PublicProvider {
   id: string;
   name: string;
-  protocol: string;
   base_url: string;
   api_key_set: boolean;
   api_key_masked: string;
@@ -461,7 +460,6 @@ export interface GatewayModel {
 export interface ModelsResult {
   models: GatewayModel[] | null;
   endpoint: string;
-  protocol: string;
   supported: boolean;
   status: number;
   detail: string;
