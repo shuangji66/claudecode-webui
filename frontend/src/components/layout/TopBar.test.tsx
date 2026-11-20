@@ -53,6 +53,25 @@ describe("TopBar 子智能体", () => {
     render(bar({ subagents: [] }));
     expect(screen.queryByLabelText(/子智能体/)).toBeNull();
   });
+
+  it("列表左侧的状态标记：运行中转圈、完成绿点、被中断主题色、失败红点", () => {
+    const all: SubagentEntry[] = [
+      { agentId: "r", taskId: "r", label: "在跑", status: "running" },
+      { agentId: "c", taskId: "c", label: "跑完了", status: "completed" },
+      { agentId: "s", taskId: "s", label: "被打断", status: "stopped" },
+      { agentId: "f", taskId: "f", label: "失败了", status: "failed" },
+    ];
+    render(bar({ subagents: all }));
+    fireEvent.click(screen.getByLabelText("子智能体 4 个"));
+
+    const mark = (label: string) =>
+      screen.getByText(label).closest("button")!.querySelector("[data-state]");
+    // running 是进度环（svg.state-dot-spinner），其余是圆点，状态写在 data-state 上。
+    expect(mark("在跑")!.classList.contains("state-dot-spinner")).toBe(true);
+    expect(mark("跑完了")!.getAttribute("data-state")).toBe("done");
+    expect(mark("被打断")!.getAttribute("data-state")).toBe("brand");
+    expect(mark("失败了")!.getAttribute("data-state")).toBe("fail");
+  });
 });
 
 describe("TopBar 更多菜单", () => {

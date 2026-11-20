@@ -639,6 +639,24 @@ export interface TranscriptPayload {
   cwd?: string;
   lines: unknown[];
   truncated?: boolean;
+  /**
+   * 本对话子代理的收尾状态（后端读 `subagents/*.meta.json`）。
+   *
+   * 主转录里没有 `system/task_*` 行，后台子代理的结论只靠 `<task-notification>`
+   * 那条 user 行，而被中断（TaskStop）的子代理**不写通知**——不靠这份补，重开对话后
+   * 它们会永远停在「运行中」。
+   */
+  subagents?: SubagentState[];
+}
+
+/** 一个子代理的收尾状态（见 TranscriptPayload.subagents）。 */
+export interface SubagentState {
+  agent_id: string;
+  /** 发起它的那次 Agent 调用，用来把状态折回对应的工具卡片。 */
+  tool_use_id?: string;
+  description?: string;
+  /** claude 已收尾。**收尾 ≠ 成功**：成败看通知里的 status。 */
+  finished: boolean;
 }
 
 /** 子代理转录旁的 meta.json（读不到时后端不带这个字段）。 */

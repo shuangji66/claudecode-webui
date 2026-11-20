@@ -358,12 +358,17 @@ pre {
   background: currentColor;
 }
 
-.state-dot-approval {
+.state-dot-approval,
+.state-dot-brand {
   color: var(--c-brand);
 }
 
 .state-dot-done {
   color: var(--c-ok);
+}
+
+.state-dot-fail {
+  color: var(--c-danger);
 }
 
 .state-dot-spinner {

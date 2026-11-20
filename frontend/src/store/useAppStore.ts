@@ -21,6 +21,7 @@ import {
   isTurnResult,
   mergeReplayed,
   prependSystem,
+  settleSubagents,
   subagentFrame,
   turnsFromTranscript,
 } from "../lib/normalize";
@@ -743,6 +744,10 @@ function itemsFromTranscript(tr: TranscriptPayload): Item[] {
   // 转录里没有 result 行（claude 只把 result 写 stdout），所以「本轮耗时 ·
   // 输出 tok」必须从 assistant / api-request 行自己推，否则刷新后全丢。
   next = attachTurnUsage(next, turnsFromTranscript(tr.lines ?? []));
+  // 子代理的收尾状态只在 `subagents/*.meta.json` 里：主转录没有 `system/task_*`，
+  // 被中断（TaskStop）的那些连 `<task-notification>` 都不写——不在这里结算，
+  // 重开对话后页头会一直给它们转圈。
+  next = settleSubagents(next, tr.subagents);
   // 后端只回放最近 20k 行 / 16MB；被截断时必须说出来，否则用户会以为
   // 这段对话本来就这么短。
   if (tr.truncated) next = prependSystem(next, "更早的消息已被省略（只保留最近一段转录）");

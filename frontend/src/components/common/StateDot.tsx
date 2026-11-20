@@ -5,7 +5,16 @@
 // 颜色与动画在 styles.css 的 .state-dot* 里，这里只管形状：圆点走 ::after，
 // 进度环是 SVG（两个同心圆，一个淡色轨道 + 一段会呼吸的弧）。
 
-export type StateDotState = "ongoing" | "approval" | "done" | "off";
+/**
+ * 圆点状态：
+ *   - `ongoing` 进度环（唯一允许的循环动画）；
+ *   - `approval` 主题色点（需要人工介入）；
+ *   - `brand` 主题色点，但语义是「已结束、既不是完成也不是失败」（子代理被中断/停止）；
+ *   - `done` 绿点、`off` 灰点。`fail` 红点（子代理失败）。
+ *
+ * `approval` 与 `brand` 画出来一样，分开只为让调用处的意图一眼看得出来。
+ */
+export type StateDotState = "ongoing" | "approval" | "brand" | "done" | "fail" | "off";
 
 interface Props {
   state: StateDotState;

@@ -12,6 +12,7 @@ import {
   mergeReplayed,
   isLocalCommandEcho,
   isTaskNotification,
+  settleSubagents,
   subagentFromResult,
   prependSystem,
   stripAnsi,
@@ -814,6 +815,194 @@ describe("子代理任务事件", () => {
 
   it("subagentFromResult 对普通工具输出返回 undefined", () => {
     expect(subagentFromResult("just output", false)).toBeUndefined();
+  });
+
+  // 后台子代理（run_in_background:true）的 tool_result 只是**启动回执**：
+  // 它带 agentId 却不带 <usage>。早先一律判成 completed，卡片一出现就是绿点，
+  // 「运行中转圈」那一档永远看不到（截图复现过）。
+  it("后台子代理的启动回执是 running，不是 completed", () => {
+    const receipt = [
+      "Async agent launched successfully. (This tool result is internal metadata — never quote or paste)",
+      "agentId: abc123 (internal ID - do not mention to user.)",
+      "The agent is working in the background. You will be notified automatically when it completes.",
+    ].join("\n");
+    expect(subagentFromResult(receipt, false)).toMatchObject({
+      agentId: "abc123",
+      status: "running",
+      background: true,
+    });
+    // 没有回执文案、只有 agentId 的老形态仍按「跑完了」处理（回放历史时只有最终报告）。
+    expect(subagentFromResult("agentId: abc123", false)?.status).toBe("completed");
+  });
+
+  it("同步子代理的报告带 <usage>，仍判完成；失败判 failed", () => {
+    const report = [
+      "done",
+      "agentId: abc123",
+      "<usage>subagent_tokens: 15",
+      "tool_uses: 2",
+      "duration_ms: 83</usage>",
+    ].join("\n");
+    expect(subagentFromResult(report, false)?.status).toBe("completed");
+    expect(subagentFromResult(report, true)?.status).toBe("failed");
+  });
+
+  it("task-notification 把后台子代理收成完成，并整条不进消息流", () => {
+    let items = applyCLI([], toolUse);
+    // 启动回执：卡片出现时是运行中。
+    items = applyCLI(items, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_01",
+            content: "Async agent launched successfully.\nagentId: agent-7\nthe background.",
+          },
+        ],
+      },
+    });
+    expect((items[0] as Extract<Item, { kind: "tool" }>).subagent).toMatchObject({
+      status: "running",
+      agentId: "agent-7",
+      background: true,
+    });
+    expect(items).toHaveLength(1);
+
+    // 完成通知：折进卡片，且不生成用户气泡。
+    items = applyCLI(items, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: [
+              "<task-notification>",
+              "<task-id>agent-7</task-id>",
+              "<tool-use-id>toolu_01</tool-use-id>",
+              "<status>completed</status>",
+              '<summary>Agent "跑单测" finished</summary>',
+              "<result>全通过</result>",
+              "<usage>subagent_tokens: 40131",
+              "tool_uses: 1",
+              "duration_ms: 9166</usage>",
+              "</task-notification>",
+            ].join("\n"),
+          },
+        ],
+      },
+    });
+    const sub = (items[0] as Extract<Item, { kind: "tool" }>).subagent;
+    expect(sub).toMatchObject({
+      status: "completed",
+      summary: 'Agent "跑单测" finished',
+      usage: { totalTokens: 40131, toolUses: 1, durationMs: 9166 },
+    });
+    // 通知本身不是用户消息。
+    expect(items).toHaveLength(1);
+  });
+
+  it("task-notification 的 killed 记成被中断，不是失败", () => {
+    let items = applyCLI([], toolUse);
+    items = applyCLI(items, {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: [
+              "<task-notification>",
+              "<task-id>agent-9</task-id>",
+              "<tool-use-id>toolu_01</tool-use-id>",
+              "<status>killed</status>",
+              '<summary>Agent "长任务" was stopped</summary>',
+              "</task-notification>",
+            ].join("\n"),
+          },
+        ],
+      },
+    });
+    expect((items[0] as Extract<Item, { kind: "tool" }>).subagent).toMatchObject({
+      status: "stopped",
+      summary: 'Agent "长任务" was stopped',
+    });
+    expect(items).toHaveLength(1);
+  });
+
+  // 被中断（TaskStop）的子代理**不写 task-notification**：转录里只有那条启动回执。
+  // 不靠 meta.json 的 finished 结算，重开对话后它永远是 running——页头一直转圈。
+  describe("settleSubagents（回放时用 meta 的 finished 结算）", () => {
+    function started(toolUseId: string, agentId: string): Item[] {
+      let items = applyCLI([], {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: toolUseId, name: "Agent", input: { description: "活", subagent_type: "general-purpose" } }],
+        },
+      });
+      items = applyCLI(items, {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: toolUseId, content: `Async agent launched successfully.\nagentId: ${agentId}` }],
+        },
+      });
+      return items;
+    }
+
+    it("finished 的收成 stopped，正在跑的不动", () => {
+      let items = started("tu-1", "a1");
+      items = applyCLI(items, {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tu-2", name: "Agent", input: { description: "还在跑", subagent_type: "general-purpose" } }],
+        },
+      });
+      items = applyCLI(items, {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tu-2", content: "Async agent launched successfully.\nagentId: a2" }],
+        },
+      });
+      const out = settleSubagents(items, [
+        { agent_id: "a1", tool_use_id: "tu-1", finished: true },
+        { agent_id: "a2", tool_use_id: "tu-2", finished: false },
+      ]);
+      const sub = (i: number) => (out[i] as Extract<Item, { kind: "tool" }>).subagent!;
+      expect(sub(0).status).toBe("stopped");
+      expect(sub(1).status).toBe("running");
+    });
+
+    // 收尾 ≠ 成功：能拿到通知的早被标成 completed/failed 了，
+    // 这里剩下的只能是「收尾了但没通知」，记完成会给出一个骗人的绿点。
+    it("只动 running，已完成的不会被改回 stopped", () => {
+      let items = started("tu-1", "a1");
+      items = applyCLI(items, {
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: '<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>tu-1</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>',
+            },
+          ],
+        },
+      });
+      const out = settleSubagents(items, [{ agent_id: "a1", finished: true }]);
+      expect((out[0] as Extract<Item, { kind: "tool" }>).subagent!.status).toBe("completed");
+    });
+
+    it("没有 meta（老转录 / 读不到）时原样返回", () => {
+      const items = started("tu-1", "a1");
+      expect(settleSubagents(items, undefined)).toBe(items);
+      expect(settleSubagents(items, [])).toBe(items);
+    });
   });
 });
 

@@ -324,6 +324,31 @@ type Transcript struct {
 	Cwd       string            `json:"cwd,omitempty"`
 	Lines     []json.RawMessage `json:"lines"`
 	Truncated bool              `json:"truncated,omitempty"`
+	// Subagents 是本次对话的子代理状态（`subagents/*.meta.json` 的摘要）。
+	//
+	// 主转录里**没有** `system/task_*` 行，后台子代理的结论只靠 `<task-notification>`
+	// 那条 user 行；而被中断（TaskStop）的子代理**根本不写通知**——重开对话后它们
+	// 就永远停在「运行中」，页头上一直转圈（踩过）。meta.json 的 `finished` 是唯一
+	// 权威的收尾标记，所以随转录一起下发。
+	Subagents []SubagentState `json:"subagents,omitempty"`
+}
+
+// SubagentState 是子代理收尾状态的摘要，只带前端回放要用的字段。
+type SubagentState struct {
+	AgentID string `json:"agent_id"`
+	// ToolUseID 是发起它的那次 Agent 调用——前端靠它把状态折回对应的工具卡片。
+	ToolUseID   string `json:"tool_use_id,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Finished 表示这个子代理**已经不会再产出内容了**。
+	//
+	// 两个来源取或：`meta.json` 的 `finished`（claude 正常收尾时写）与转录尾部
+	// （见 subagentEnded）。被 TaskStop 打断的子代理**不写 finished 也不写
+	// <task-notification>**，只剩转录末尾那条 `[Request interrupted by user…]`，
+	// 只看 meta 会把它永远留在「运行中」（截图复现过）。
+	//
+	// **收尾 ≠ 成功**：真实成败要看通知里的 status，拿不到时按「已结束但原因未知」
+	// 处理，不能想当然地标成完成。
+	Finished bool `json:"finished"`
 }
 
 // 回放上限：太长会把浏览器和 JSON 响应一起拖垮，只保留最近的一段。
@@ -349,7 +374,109 @@ func LoadTranscript(projectsDir, id string) (Transcript, error) {
 	}
 	defer f.Close()
 	// 主转录里丢掉 sidechain 行：子代理的消息不能混进主消息流。
-	return scanTranscript(f, id, false)
+	tr, err := scanTranscript(f, id, false)
+	if err != nil {
+		return Transcript{}, err
+	}
+	tr.Subagents = subagentStates(filepath.Dir(path), id)
+	return tr, nil
+}
+
+// subagentStates 读 <project>/<session>/subagents/*.meta.json 里的收尾状态。
+//
+// best-effort：目录不存在、单个文件坏掉都只跳过那一条，不能让整份转录读不出来。
+func subagentStates(projectDir, sessionID string) []SubagentState {
+	dir := filepath.Join(projectDir, sessionID, "subagents")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := make([]SubagentState, 0, len(entries))
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasPrefix(name, "agent-") || !strings.HasSuffix(name, ".meta.json") {
+			continue
+		}
+		agentID := strings.TrimSuffix(strings.TrimPrefix(name, "agent-"), ".meta.json")
+		if !validAgentID(agentID) {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		var m SubagentMeta
+		if json.Unmarshal(b, &m) != nil {
+			continue
+		}
+		out = append(out, SubagentState{
+			AgentID:     agentID,
+			ToolUseID:   m.ToolUseID,
+			Description: m.Description,
+			Finished:    m.Finished || subagentEnded(filepath.Join(dir, "agent-"+agentID+".jsonl")),
+		})
+	}
+	return out
+}
+
+// subagentEnded 判断一个子代理的转录是否已经收尾。
+//
+// `meta.json` 的 `finished` **不是唯一信号**：子代理被 TaskStop 打断时，claude
+// 既不写 `finished`、也不写 `<task-notification>`，只在转录末尾留一条合成的
+// `[Request interrupted by user]` / `… for tool use`。只看 meta 的话，这些被中断
+// 的子代理重开对话后会永远停在「运行中」（实测复现）。
+//
+// 判据取「最后一条 user/assistant 行」：中断标记 → 收尾；assistant 的
+// `stop_reason` 非空（`end_turn` / `tool_use` 之外的真收尾）→ 收尾。
+// 只读文件尾部一段，不把整份子代理转录（可能几百 KB）读进内存。
+func subagentEnded(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	const tailBytes = 64 << 10
+	st, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	offset := st.Size() - tailBytes
+	if offset < 0 {
+		offset = 0
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return false
+	}
+	buf, err := io.ReadAll(f)
+	if err != nil {
+		return false
+	}
+	lines := strings.Split(string(buf), "\n")
+	// 从后往前找第一条真正的内容行（sidechain 文件里也有 queue-operation 之类）。
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		// offset>0 时第一条可能是被截断的半行，解析失败就跳过。
+		var rec struct {
+			Type    string `json:"type"`
+			Message struct {
+				Content    json.RawMessage `json:"content"`
+				StopReason string          `json:"stop_reason"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		switch rec.Type {
+		case "assistant":
+			return rec.Message.StopReason == "end_turn"
+		case "user":
+			return isInterruptMarker(extractText(rec.Message.Content))
+		}
+	}
+	return false
 }
 
 // scanTranscript 读一份 jsonl 里可回放的行。

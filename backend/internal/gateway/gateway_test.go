@@ -78,6 +78,10 @@ func (f *fakeMgr) Create(cwd, model, mode string) (manager.Info, error) {
 }
 
 func (f *fakeMgr) Resume(id, cwd, model, mode string) (manager.Info, error) {
+	if f.failOn == "resume" {
+		f.resumed = append(f.resumed, id)
+		return manager.Info{}, errFake
+	}
 	f.resumed = append(f.resumed, id)
 	f.register(id, cwd)
 	return manager.Info{ID: id, Cwd: cwd, State: "ready"}, nil
@@ -737,6 +741,11 @@ func TestSettingsModelMetaAndPreferences(t *testing.T) {
 
 func TestApplyProxyPersistsAndRestartsSessions(t *testing.T) {
 	srv, mgr := newTestServer(t, "")
+	// 有转录才走 --resume（空对话走同 id 新建，见下面两个用例）。
+	// id 必须是合法会话 id（长度 ≥8，`sess-1` 不在 TranscriptExists 的范围内）。
+	id := "11111111-2222-4333-8444-555555555555"
+	writeTranscript(t, srv.d.HistoryDir, id, srv.d.ProjectsRoot)
+	mgr.listed = []manager.Info{{ID: id, Cwd: srv.d.ProjectsRoot, State: "ready"}}
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/settings/proxy", strings.NewReader(`{"proxy_url":"socks5://127.0.0.1:1080"}`)))
 	if rec.Code != http.StatusOK {
@@ -754,14 +763,59 @@ func TestApplyProxyPersistsAndRestartsSessions(t *testing.T) {
 	if body.Settings.ProxyURL != "socks5://127.0.0.1:1080" {
 		t.Fatalf("proxy_url = %q", body.Settings.ProxyURL)
 	}
-	if len(mgr.closed) != 1 || mgr.closed[0] != "sess-1" {
+	if len(mgr.closed) != 1 || mgr.closed[0] != id {
 		t.Fatalf("旧会话应被关闭: %v", mgr.closed)
 	}
-	if len(mgr.resumed) != 1 || mgr.resumed[0] != "sess-1" {
+	if len(mgr.resumed) != 1 || mgr.resumed[0] != id {
 		t.Fatalf("应按原对话 id 恢复: %v", mgr.resumed)
 	}
 	if len(body.Sessions) != 1 {
 		t.Fatalf("sessions = %+v", body.Sessions)
+	}
+}
+
+// 改代理时「还没发过消息的空对话」必须按**同一个 id** 重起（StartFresh），
+// 不能退回按目录 ensure —— 那会换一个新 uuid，前端 activeId 与队列跟着丢。
+func TestApplyProxyRestartsEmptyConversationWithSameID(t *testing.T) {
+	srv, mgr := newTestServer(t, "")
+	id := "44444444-5555-4666-8777-888888888888"
+	mgr.listed = []manager.Info{{ID: id, Cwd: srv.d.ProjectsRoot, State: "ready"}}
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/settings/proxy", strings.NewReader(`{"proxy_url":"http://127.0.0.1:8080"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(mgr.resumed) != 0 {
+		t.Fatalf("没有转录时不该走 --resume: %v", mgr.resumed)
+	}
+	if len(mgr.fresh) != 1 || mgr.fresh[0] != id {
+		t.Fatalf("空对话应用同一 id 重起: fresh = %v, want [%s]", mgr.fresh, id)
+	}
+	if len(mgr.created) != 0 {
+		t.Fatalf("不该造新对话（ensure 会换 uuid）: %v", mgr.created)
+	}
+}
+
+// 有转录的对话在改代理时 Resume 失败，只能如实报 warning，不能悄悄换一个 id。
+func TestApplyProxyKeepsIDWhenResumeFails(t *testing.T) {
+	srv, mgr := newTestServer(t, "")
+	id := "55555555-6666-4777-8888-999999999999"
+	writeTranscript(t, srv.d.HistoryDir, id, srv.d.ProjectsRoot)
+	mgr.listed = []manager.Info{{ID: id, Cwd: srv.d.ProjectsRoot, State: "ready"}}
+	mgr.failOn = "resume"
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/settings/proxy", strings.NewReader(`{"proxy_url":"http://127.0.0.1:8080"}`)))
+	var body struct {
+		Warning string `json:"warning"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if body.Warning == "" {
+		t.Fatal("Resume 失败必须如实报 warning")
+	}
+	if len(mgr.created) != 0 || len(mgr.fresh) != 0 {
+		t.Fatalf("不能换个新 id 顶上去: created=%v fresh=%v", mgr.created, mgr.fresh)
 	}
 }
 

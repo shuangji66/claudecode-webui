@@ -29,6 +29,17 @@ func writeJSONL(t *testing.T, path string, lines ...string) {
 	}
 }
 
+// writeFile 写一份非 jsonl 文本（子代理的 meta.json / 空转录）。
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+}
+
 func TestListEmptyDirWhenMissing(t *testing.T) {
 	got, err := List(filepath.Join(t.TempDir(), "nope"))
 	if err != nil {
@@ -188,6 +199,137 @@ func TestLoadTranscriptFiltersAndOrders(t *testing.T) {
 	}
 	if _, err := LoadTranscript(root, "../etc/passwd"); err == nil {
 		t.Fatal("非法 id 应报错")
+	}
+}
+
+// 被中断（TaskStop）的子代理不写 <task-notification>，状态只留在 meta.json 的
+// finished 里。不随转录下发的话，重开对话后它们永远停在「运行中」。
+func TestLoadTranscriptIncludesSubagentStates(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-4555-8666-777777777777"
+	proj := filepath.Join(root, "p")
+	writeJSONL(t, filepath.Join(proj, id+".jsonl"),
+		`{"type":"user","message":{"role":"user","content":"hi"}}`,
+	)
+	sub := filepath.Join(proj, id, "subagents")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(sub, "agent-done.jsonl"), "")
+	writeFile(t, filepath.Join(sub, "agent-done.meta.json"),
+		`{"agentType":"general-purpose","description":"跑完了","toolUseId":"tu-1","finished":true}`)
+	writeFile(t, filepath.Join(sub, "agent-killed.jsonl"), "")
+	// 被中断的那份**没有 finished 字段**（不是 false，是压根不写）。
+	writeFile(t, filepath.Join(sub, "agent-killed.meta.json"),
+		`{"agentType":"general-purpose","description":"被打断","toolUseId":"tu-2"}`)
+	// 坏文件只跳过它自己。
+	writeFile(t, filepath.Join(sub, "agent-broken.meta.json"), `{not json`)
+
+	tr, err := LoadTranscript(root, id)
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+	byAgent := map[string]SubagentState{}
+	for _, s := range tr.Subagents {
+		byAgent[s.AgentID] = s
+	}
+	if len(byAgent) != 2 {
+		t.Fatalf("subagents = %+v", tr.Subagents)
+	}
+	if got := byAgent["done"]; !got.Finished || got.ToolUseID != "tu-1" || got.Description != "跑完了" {
+		t.Fatalf("done = %+v", got)
+	}
+	if got := byAgent["killed"]; got.Finished || got.ToolUseID != "tu-2" {
+		t.Fatalf("killed = %+v", got)
+	}
+}
+
+// 没有 subagents 目录时不该报错（大多数对话都没有子代理）。
+func TestLoadTranscriptWithoutSubagents(t *testing.T) {
+	root := t.TempDir()
+	id := "44444444-5555-4666-8777-888888888888"
+	writeJSONL(t, filepath.Join(root, "p", id+".jsonl"),
+		`{"type":"user","message":{"role":"user","content":"hi"}}`,
+	)
+	tr, err := LoadTranscript(root, id)
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+	if len(tr.Subagents) != 0 {
+		t.Fatalf("subagents = %+v", tr.Subagents)
+	}
+}
+
+// 被 TaskStop 打断的子代理**既不写 meta.finished、也不写 <task-notification>**，
+// 只剩转录末尾那条 `[Request interrupted by user]`。只看 meta 会让它永远「运行中」。
+func TestSubagentStateFromTranscriptTail(t *testing.T) {
+	root := t.TempDir()
+	id := "55555555-6666-4777-8888-999999999999"
+	proj := filepath.Join(root, "p")
+	writeJSONL(t, filepath.Join(proj, id+".jsonl"),
+		`{"type":"user","message":{"role":"user","content":"hi"}}`,
+	)
+	sub := filepath.Join(proj, id, "subagents")
+	cases := []struct {
+		agent string
+		meta  string
+		tail  []string
+		want  bool
+	}{
+		{
+			agent: "interrupted",
+			meta:  `{"toolUseId":"tu-i"}`, // 没有 finished
+			tail: []string{
+				`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"在跑"}],"stop_reason":null}}`,
+				`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}`,
+			},
+			want: true,
+		},
+		{
+			agent: "interruptedtool",
+			meta:  `{"toolUseId":"tu-it"}`,
+			tail: []string{
+				`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}`,
+			},
+			want: true,
+		},
+		{
+			agent: "naturally",
+			meta:  `{"toolUseId":"tu-n"}`,
+			tail: []string{
+				`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"做完了"}],"stop_reason":"end_turn"}}`,
+			},
+			want: true,
+		},
+		{
+			agent: "stillrunning",
+			meta:  `{"toolUseId":"tu-r"}`,
+			tail: []string{
+				`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read"}],"stop_reason":"tool_use"}}`,
+			},
+			want: false,
+		},
+	}
+	for _, c := range cases {
+		writeFile(t, filepath.Join(sub, "agent-"+c.agent+".jsonl"), "")
+		if len(c.tail) > 0 {
+			writeJSONL(t, filepath.Join(sub, "agent-"+c.agent+".jsonl"), c.tail...)
+		}
+		writeFile(t, filepath.Join(sub, "agent-"+c.agent+".meta.json"), c.meta)
+	}
+
+	tr, err := LoadTranscript(root, id)
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+	got := map[string]bool{}
+	for _, s := range tr.Subagents {
+		got[s.AgentID] = s.Finished
+	}
+	for _, c := range cases {
+		if got[c.agent] != c.want {
+			t.Errorf("%s: finished = %v, want %v", c.agent, got[c.agent], c.want)
+		}
 	}
 }
 

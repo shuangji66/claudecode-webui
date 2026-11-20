@@ -255,6 +255,65 @@ export function isTaskNotification(text: string): boolean {
   return taskNotificationRE.test(t);
 }
 
+const NOTIFY_STATUS: Record<string, SubagentInfo["status"]> = {
+  completed: "completed",
+  failed: "failed",
+  error: "failed",
+  killed: "stopped",
+  stopped: "stopped",
+  cancelled: "stopped",
+  running: "running",
+  in_progress: "running",
+};
+
+/**
+ * 把 `<task-notification>` 的结论折进对应的 Agent 卡片。
+ *
+ * **后台子代理的完成只在这里**：`run_in_background` 的 Agent，tool_result 只是一条
+ * 启动回执（见 subagentFromResult），真正的 status / usage / summary 随这条通知到达。
+ * 而它**同时是转录里唯一的一份**——主 jsonl 没有 `system/task_*` 行（实测整份转录里
+ * 一条 system 都没有），所以回放历史时也靠它，否则重开对话后那条子代理永远停在
+ * 「运行中」。
+ *
+ * 折完仍然整条丢弃：它是 CLI 注入的 user 行，不是用户说的话。
+ */
+function applyTaskNotification(items: Item[], text: string): Item[] {
+  const t = text.trim();
+  const status = NOTIFY_STATUS[tagValue(t, "status") ?? ""];
+  const toolUseId = tagValue(t, "tool-use-id");
+  const summary = tagValue(t, "summary");
+  const usageMatch = SUBAGENT_USAGE_RE.exec(t);
+  if (!status && !usageMatch) return items;
+
+  return items.map((it) => {
+    if (it.kind !== "tool") return it;
+    // 匹配不到就用 task-id：通知里的 `<task-id>` 就是 agentId。
+    const taskId = tagValue(t, "task-id");
+    const hit =
+      (toolUseId !== undefined && it.toolUseId === toolUseId) ||
+      (taskId !== undefined && (it.subagent?.taskId === taskId || it.subagent?.agentId === taskId));
+    if (!hit) return it;
+    const prev: SubagentInfo = it.subagent ?? { taskId: taskId ?? "", status: "running" };
+    const next: SubagentInfo = { ...prev };
+    if (status) next.status = status;
+    if (summary) next.summary = summary;
+    if (usageMatch) {
+      next.usage = {
+        totalTokens: Number(usageMatch[1]),
+        toolUses: Number(usageMatch[2]),
+        durationMs: Number(usageMatch[3]),
+      };
+    }
+    return { ...it, subagent: next };
+  });
+}
+
+/** 取 `<tag>…</tag>` 里的文本（任务通知是一份扁平 XML，不需要通用解析器）。 */
+function tagValue(text: string, tag: string): string | undefined {
+  const m = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(text);
+  return m?.[1]?.trim() || undefined;
+}
+
 // 回合被中断时，CLI 会往流里写一条**合成的 user 消息**当标记：
 //   `[Request interrupted by user]`（按 Esc）
 //   `[Request interrupted by user for tool use]`（工具执行中被打断）
@@ -285,6 +344,50 @@ export function settleStreaming(items: Item[]): Item[] {
     if ((it.kind !== "assistant" && it.kind !== "thinking") || !it.streaming) return it;
     changed = true;
     return { ...it, streaming: false };
+  });
+  return changed ? out : items;
+}
+
+/**
+ * 转录回放之后，用子代理的收尾状态（`meta.json` 的 `finished`）结算还挂在
+ * 「运行中」的 Agent 卡片。
+ *
+ * 为什么需要：主转录里**没有** `system/task_*` 行，后台子代理的结论只靠
+ * `<task-notification>` 那条 user 行；而被中断（TaskStop）的子代理**根本不写通知**，
+ * 于是重开对话后它们永远停在 `running`——页头上一直转圈（截图复现过）。
+ *
+ * **只把 `running` 收成 `stopped`，不改其它状态**：
+ *   - `finished` 只说明「claude 收尾了」，不说明成功。能拿到通知的早就被
+ *     `applyTaskNotification` 标成 completed/failed/stopped 了，这里轮到的一定是
+ *     「收尾了但没有通知」——中断、进程被杀、或通知帧丢了。统一记「已停止」，
+ *     比猜成「完成」（绿点）诚实：用户看到的是一次被打断的活儿。
+ *   - `finished` 为 false 的（正在跑）保持 `running`，别把活着的任务标成结束。
+ */
+export function settleSubagents(
+  items: Item[],
+  states: ReadonlyArray<{ agent_id: string; tool_use_id?: string; finished: boolean }> | undefined,
+): Item[] {
+  if (!states || states.length === 0) return items;
+  const done = new Set<string>();
+  const doneTools = new Set<string>();
+  for (const s of states) {
+    if (!s.finished) continue;
+    if (s.agent_id) done.add(s.agent_id);
+    if (s.tool_use_id) doneTools.add(s.tool_use_id);
+  }
+  if (done.size === 0 && doneTools.size === 0) return items;
+  let changed = false;
+  const out = items.map((it) => {
+    if (it.kind !== "tool" || !it.subagent) return it;
+    const sub = it.subagent;
+    if (sub.status !== "running") return it;
+    const hit =
+      (sub.agentId !== undefined && done.has(sub.agentId)) ||
+      (sub.taskId !== "" && done.has(sub.taskId)) ||
+      doneTools.has(it.toolUseId);
+    if (!hit) return it;
+    changed = true;
+    return { ...it, subagent: { ...sub, status: "stopped" as const } };
   });
   return changed ? out : items;
 }
@@ -649,15 +752,31 @@ const SUBAGENT_USAGE_RE =
   /<usage>[\s\S]*?subagent_tokens:\s*(\d+)[\s\S]*?tool_uses:\s*(\d+)[\s\S]*?duration_ms:\s*(\d+)[\s\S]*?<\/usage>/;
 
 /**
+ * 后台子代理的 tool_result 是**启动回执**，不是结果：
+ * `Async agent launched successfully. … agentId: … The agent is working in the background.`
+ *
+ * 它带 `agentId:` 却不带 `<usage>`——那是唯一能把「已启动」与「跑完了」区分开的信号。
+ */
+const ASYNC_LAUNCH_RE = /Async agent launched successfully/;
+
+/**
  * 从 Agent 工具的 tool_result 里读回 agentId 与用量。
  *
  * 回放历史时只有这段文本（主转录里没有 task_* 行），「查看子代理对话」要靠它。
+ *
+ * **只有带 `<usage>` 才算跑完**：`run_in_background` 的 Agent 一启动就回一条
+ * 只带 agentId 的回执，把它判成 completed 会让卡片一出现就是绿点，真实的
+ * status/usage 稍后才随 `<task-notification>` 到达（见 applyTaskNotification）。
  */
 export function subagentFromResult(text: string, isError: boolean): Partial<SubagentInfo> | undefined {
   const idMatch = AGENT_ID_RE.exec(text);
   const usageMatch = SUBAGENT_USAGE_RE.exec(text);
   if (!idMatch && !usageMatch) return undefined;
-  const out: Partial<SubagentInfo> = { status: isError ? "failed" : "completed" };
+  const launched = !usageMatch && ASYNC_LAUNCH_RE.test(text);
+  const out: Partial<SubagentInfo> = {
+    status: isError ? "failed" : launched ? "running" : "completed",
+  };
+  if (launched) out.background = true;
   if (idMatch) out.agentId = idMatch[1];
   if (usageMatch) {
     out.usage = {
@@ -773,7 +892,10 @@ function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): 
   // 后台任务通知同样是 CLI 注入的 user 行（`isMeta` 是 null，绕过顶上那道过滤）。
   // 不丢的话，停掉一个后台命令再重进对话，界面上就多出一坨 `<task-notification>`
   // 的原始 XML，还带着一串 task-id 与英文说明。
-  if (isTaskNotification(textOfContent(content))) return items;
+  // 先把结论折进卡片再丢：后台子代理的 status / usage 只在这条里。
+  if (isTaskNotification(textOfContent(content))) {
+    return applyTaskNotification(items, textOfContent(content));
+  }
 
   // CLI 的中断标记：单独渲染成一句中性的「已中断」，不占用户气泡。
   // 连续中断（用户连按 Esc）只留一条，否则每按一次多一行。

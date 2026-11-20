@@ -1,9 +1,10 @@
 import { useState } from "react";
 import type { SessionInfo } from "../../transport/types";
 import { useT } from "../../lib/i18n";
-import { runningSubagents, type SubagentEntry } from "../../lib/subagents";
+import { type SubagentEntry } from "../../lib/subagents";
 import type { BackgroundTaskEntry } from "../../lib/backgroundTasks";
 import { Menu } from "../common/Menu";
+import { StateDot, type StateDotState } from "../common/StateDot";
 import {
   IconCheck,
   IconCopy,
@@ -17,13 +18,30 @@ import {
   IconTerminal,
 } from "../common/Icons";
 
-/** 子代理状态点配色（与侧栏对话状态点一致：进行中强调色、完成绿、失败红、停止琥珀）。 */
-const SUBAGENT_TONE = {
-  running: "bg-brand",
-  completed: "bg-ok",
-  failed: "bg-danger",
-  stopped: "bg-warn",
-} as const;
+/**
+ * 子代理状态 → 状态标记。
+ *
+ * 用 `StateDot` 而不是就地画一个彩色圆点：运行中是转圈（进行中的唯一视觉语言，
+ * 与侧栏对话行、回合计时器同一套），完成是绿点、被中断是主题色点、失败是红点。
+ * 一眼就能看出「还在跑 / 已经跑完了 / 被打断」，不再是一排同形的点靠颜色猜。
+ */
+const SUBAGENT_DOT: Record<SubagentEntry["status"], StateDotState> = {
+  running: "ongoing",
+  completed: "done",
+  stopped: "brand",
+  failed: "fail",
+};
+
+/**
+ * 列表左侧那颗状态标记。
+ *
+ * 尺寸分开给：`StateDot` 的进度环画的是 SVG 外框，圆点只占外框的内 60%，
+ * 同一个数值下环看着比点小一号，两者并排时高度差会顺着文字垂直对齐一起抖。
+ */
+function SubagentMark({ status }: { status: SubagentEntry["status"] }) {
+  const state = SUBAGENT_DOT[status];
+  return <StateDot state={state} size={state === "ongoing" ? 13 : 10} />;
+}
 
 interface Props {
   session: SessionInfo | null;
@@ -106,7 +124,6 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, backgr
           >
             <IconSpark size={15} />
             <span className="text-[11.5px] font-medium">{subagents.length}</span>
-            {runningSubagents(subagents) > 0 && <span className="h-1.5 w-1.5 rounded-full bg-brand" />}
           </button>
         )}
         <Menu
@@ -115,7 +132,7 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, backgr
           items={subagents.map((sub) => ({
             id: sub.agentId,
             label: sub.label,
-            icon: <span className={`h-1.5 w-1.5 rounded-full ${SUBAGENT_TONE[sub.status]}`} />,
+            icon: <SubagentMark status={sub.status} />,
             hint: sub.type,
             onSelect: () => onOpenSubagent(sub.agentId, sub.label),
           }))}

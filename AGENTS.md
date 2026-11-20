@@ -118,7 +118,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
 4. **`--permission-prompt-tool stdio` 不能删**（`process.Args`）。删了之后需要审批的工具
    会被 fail-closed 静默拒绝，前端永远收不到 `can_use_tool`。
 5. **`initialize` 必须由客户端先发**，且要在进程启动后立刻发。顺序错了会死锁。
-6. **控制响应不得阻塞读循环**。`session.handleLine` 里的写操作走 `writeLine`（带锁）。
+6. **控制响应不得阻塞读循环**。`session.handleLine` 里的写操作一律走 `writeAsync`：
+   入队就返回，不等 ack（队列满直接 `Close`，绝不把读 stdin 卡死在写不进去上）。
+   串行化由独立的 `writeLoop` 保证（`writeNow` 里 `wmu` 加锁）。`writeLine` 是
+   「要拿到写入结果」的版本，只能用在读循环**之外**的地方。
 7. **未实现的控制请求子类型必须回 `unsupported_request`**，不能让 CLI 干等。
 8. **鉴权按通道区分，且端口访问默认关闭**。新增 HTTP 路由要挂 `s.authed`；WS 必须校验 token。
    环境变量 `CCWEB_AUTH_TOKEN` 两条通道都校验；端口访问开启后，TCP 通道必须登录
@@ -739,6 +742,43 @@ hub ── manager ── session ── process ── claude (NDJSON)
   审批面板据此标「来自子代理 X」并能跳过去。丢掉它，用户就分不清是谁在申请权限。
 - **页头的「子智能体 N」从消息流现算**（`lib/subagents.ts` 的 `subagentEntries`），
   不额外存一份状态；点开列表用 `showSubagent` 打开右侧栏标签。
+- **后台子代理（`run_in_background`）的状态有两条独立来源，缺一不可**：
+  ① `tool_result` 只是一条**启动回执**（`Async agent launched successfully.` + `agentId:`，
+  **没有 `<usage>`**）——它必须判成 `running`。早先「有 agentId 就算 completed」，
+  于是卡片一出现就是绿点，「运行中转圈」那一档永远看不到（截图复现过）。
+  ② 真正的结论随 `<task-notification>` user 行到达，而那条行**同时是转录里唯一的一份**
+  （主 jsonl 没有 `system/task_*` 行，实测整份转录里一条 system 都没有）。所以
+  `isTaskNotification` 不能把它直接丢掉，要先 `applyTaskNotification` 折进卡片
+  （`<status>` → status、`<summary>`、`<usage>`，按 `tool-use-id` 匹配、回落 `<task-id>`；
+  `killed`/`stopped`/`cancelled` 记成 `stopped` 而不是失败），折完再丢。
+  少了这一步，回放历史时那条子代理永远停在「运行中」。
+  **同步子代理不受影响**：它的 tool_result 带 `<usage>`，照旧判完成。
+  ③ **被中断（TaskStop）的子代理连通知都不写**——上面那条 `<task-notification>`
+  只在子代理**自己跑完**时才产生。所以重开对话后它们既没有结论、也没有通知，
+  会永远停在 `running`（截图复现过：页头上被杀掉的几条一直在转圈）。
+  真源有两处，**取或**：
+  ① `subagents/agent-<id>.meta.json` 的 **`finished`**——claude 正常收尾时写；
+  ② **转录尾部**（`history.subagentEnded`）——被打断时 claude 既不写 `finished`
+  也不写通知，只在转录末尾留一条合成的 `[Request interrupted by user]` /
+  `… for tool use`；assistant 的 `stop_reason: "end_turn"` 同样算收尾。
+  **只看 meta 会漏掉全部被中断的**（第一版就踩了，截图里还剩一个在转圈）。
+  `subagentEnded` 只读文件尾部 64KB，不把整份子代理转录（几百 KB）读进内存；
+  `tool_use` 中的 `stop_reason` 不算收尾（它只是在等工具返回）。
+  链路：`history.LoadTranscript` 汇总后随转录以 `subagents[]`
+  （`agent_id` / `tool_use_id` / `finished`）下发 →
+  前端 `itemsFromTranscript` 调 `normalize.settleSubagents` 结算。
+  **只把 `running` 收成 `stopped`**：`finished` 只说明「结束了」，不说明成功——
+  能拿到通知的早被 `applyTaskNotification` 标成 completed/failed/stopped 了，
+  轮到这里的一定是「结束了但没通知」，记成完成就是给用户一个骗人的绿点。
+  读 meta 是 best-effort：目录不存在、单个文件坏掉都只跳过那一条，
+  不能让整份转录读不出来。
+- **列表左侧的状态标记复用 `common/StateDot`**（`TopBar.SUBAGENT_DOT`）：运行中是转圈、
+  完成是绿点、被中断（`stopped`）是主题色点、失败是红点。四种状态不能都画成同形的圆点
+  只靠颜色区分——「还在跑」「跑完了」「被打断了」是三种不同的处境，转圈是界面里
+  「进行中」的唯一视觉语言（与侧栏对话行、回合计时器同一套）。
+  **页头触发器（火花图标 + 数量）上不再挂转圈**：它是「本会话有多少个子代理」的入口，
+  跟当下跑没跑无关；把进度环摆在图标旁边，页头就多了一处一直转的动画，而真正要看的
+  状态在点开的列表里各占一行。`runningSubagents()` 因此只剩单测在用。
 - **「子代理」与「后台操作」是两套东西，不能混在一个列表里**（`lib/backgroundTasks.ts`）：
   两者都发 `task_*`、都带 task_id 与 description，但子代理有转录可查看，后台命令
   （`Bash` + `run_in_background`）与 MCP 调用没有——混在一起会让页头列出几十条

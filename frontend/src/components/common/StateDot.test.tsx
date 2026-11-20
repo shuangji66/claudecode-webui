@@ -12,7 +12,7 @@ describe("StateDot", () => {
   });
 
   it("其余状态是圆点，颜色由 data-state 决定", () => {
-    for (const state of ["approval", "done", "off"] as const) {
+    for (const state of ["approval", "brand", "done", "fail", "off"] as const) {
       const { container, unmount } = render(<StateDot state={state} />);
       const dot = container.querySelector(`.state-dot-${state}`);
       expect(dot).not.toBeNull();
