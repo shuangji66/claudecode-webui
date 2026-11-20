@@ -86,6 +86,35 @@ describe("Write 与工具结果图片", () => {
     const img = screen.getByAltText("工具结果图片") as HTMLImageElement;
     expect(img.src).toContain("data:image/png;base64,");
   });
+
+  it("缩略图可点开大图，标题用 Read 的文件路径", () => {
+    render(
+      <ToolCardHost
+        item={tool({
+          name: "Read",
+          input: { file_path: "/tmp/shot.png" },
+          result: "[图片 image/png，约 1 KB]",
+          images: [{ mediaType: "image/png", data: "iVBORw0KGgo=" }],
+        })}
+      />,
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /预览图片/ }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getAllByText("/tmp/shot.png").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: /关闭|Close/ }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("灯箱里不给「在右侧栏打开」（工具结果没有工作区相对路径）", () => {
+    render(
+      <ToolCardHost
+        item={tool({ images: [{ mediaType: "image/jpeg", data: "AAA" }] })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /预览图片/ }));
+    expect(screen.queryByRole("button", { name: /在右侧栏打开/ })).toBeNull();
+  });
 });
 
 describe("ToolCardHost 紧凑模式", () => {
