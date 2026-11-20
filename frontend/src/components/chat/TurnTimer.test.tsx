@@ -119,6 +119,8 @@ describe("TurnTimer 的上游沉默提示", () => {
     } as never);
     render(<TurnTimer startedAt={NOW - 90_000} sessionId="s1" />);
     expect(screen.queryByText(/没有响应/)).toBeNull();
-    expect(screen.getByText(/hook h1 正在跑/)).toBeInTheDocument();
+    // 显示的是 hook 的名字（`hook_name`），不是它这次运行的 `hook_id`：
+    // 一串 UUID 对用户没有意义。
+    expect(screen.getByText(/hook fmt 正在跑/)).toBeInTheDocument();
   });
 });

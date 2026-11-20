@@ -389,10 +389,20 @@ func IsTaskEvent(raw []byte) bool {
 	return false
 }
 
+// HookRef 是一个正在跑的 hook：`ID` 用于配对 `hook_started` / `hook_response`，
+// `Name` 是给人看的名字（`PostToolUse:Read`、`SessionStart`……）。
+//
+// 两个都要留着：只留 id 的话界面上会显示一串 UUID（`hook 19d74da8-…-ee8e79d1b7e4
+// 正在跑`），用户认不出那是哪个 hook；只留名字的话并行跑两个同名 hook 时摘不掉。
+type HookRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
 // LocalBusy 是「CLI 在自己的进程里干活、没在等上游」的状态（`system/status` 的压缩态
 // 与 hook 的开始/结束）。
 //
-// 为什么需要它：`system/snapshot` 要回答「现在到底在等谁」。压缩期间 CLI 只发一条
+// 为什么需要它：`system.snapshot` 要回答「现在到底在等谁」。压缩期间 CLI 只发一条
 // `status: compacting` 就安静了（实测一次手动压缩 25.3 秒），这段时间既不是「模型在
 // 想」也不是「上游没声」。前端只按「最后一条帧」判断沉默，压缩途中刷新页面就完全
 // 拿不到这个状态——于是界面照样误报「上游没有响应」。
@@ -401,8 +411,8 @@ func IsTaskEvent(raw []byte) bool {
 type LocalBusy struct {
 	// Status 是 `system/status` 的 status 值（`compacting` / `requesting` / `null`）。
 	Compacting bool `json:"compacting"`
-	// Hooks 是正在跑的 hook id（`hook_started` 之后、`hook_response` 之前）。
-	Hooks []string `json:"hooks,omitempty"`
+	// Hooks 是正在跑的 hook（`hook_started` 之后、`hook_response` 之前）。
+	Hooks []HookRef `json:"hooks,omitempty"`
 }
 
 // CompactStatusOf 读 `system/status` 的 status 值；不是这条消息时 ok 为 false。
@@ -428,20 +438,21 @@ func CompactStatusOf(raw []byte) (status string, null bool, ok bool) {
 	return s, false, true
 }
 
-// HookIDOf 读 hook 生命周期帧的 id 与 subtype；不是这类帧时 ok 为 false。
-func HookIDOf(raw []byte) (id, subtype string, ok bool) {
+// HookRefOf 读 hook 生命周期帧的 id / 名字与 subtype；不是这类帧时 ok 为 false。
+func HookRefOf(raw []byte) (id, name, subtype string, ok bool) {
 	var msg struct {
-		Type    string `json:"type"`
-		Subtype string `json:"subtype"`
-		HookID  string `json:"hook_id"`
+		Type     string `json:"type"`
+		Subtype  string `json:"subtype"`
+		HookID   string `json:"hook_id"`
+		HookName string `json:"hook_name"`
 	}
 	if err := json.Unmarshal(raw, &msg); err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
 	if msg.Type != TypeSystem || (msg.Subtype != "hook_started" && msg.Subtype != "hook_response") {
-		return "", "", false
+		return "", "", "", false
 	}
-	return msg.HookID, msg.Subtype, true
+	return msg.HookID, msg.HookName, msg.Subtype, true
 }
 
 // SetPermissionMode 构造切换权限模式的控制请求。

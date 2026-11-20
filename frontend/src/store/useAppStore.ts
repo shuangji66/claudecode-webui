@@ -2257,18 +2257,26 @@ export const useAppStore = create<AppState>()((set, get) => ({
               tasks?: LiveTask[];
               // 「CLI 在自己进程里干活」的状态（压缩中 / hook 在跑）。压缩途中刷新页面
               // 拿不到那条 `status: compacting`（只发一次、不进转录），靠它补上。
-              busy?: { compacting?: boolean; hooks?: string[] };
+              // hook 的每一项是 `{id, name}`：id 只用来配对结束，显示的是 name。
+              busy?: { compacting?: boolean; hooks?: { id?: string; name?: string }[] };
               seq?: number;
               epoch?: string;
             }
           | undefined;
-        if (data?.busy) {
-          localWorkAt.set(sid, {
-            compacting: data.busy.compacting === true,
-            compactChars: 0,
-            hooks: Array.isArray(data.busy.hooks) ? data.busy.hooks.filter((h) => typeof h === "string") : [],
-          });
-        }
+        // 快照是**这一刻**的权威状态，与上面那张后台任务表同一条规矩：`busy` 缺席
+        // 也按「没有本地活」处理——本地那份是过程态（压缩中的心跳、hook 的起止），
+        // 跨连接之后本来就该以后端为准，留着旧值只会让「正在压缩」永远挂着。
+        localWorkAt.set(sid, {
+          compacting: data?.busy?.compacting === true,
+          // 快照里没有这个数（后端不记它，它只是「摘要正在写」的进度提示），
+          // 刷新之后从 0 重新开始，下一次 `status: compacting` 会补上真实的数。
+          compactChars: 0,
+          hooks: Array.isArray(data?.busy?.hooks)
+            ? data!.busy!.hooks!
+                .filter((h) => h && typeof h.id === "string" && h.id !== "")
+                .map((h) => ({ id: h.id!, name: typeof h.name === "string" && h.name !== "" ? h.name : h.id! }))
+            : [],
+        });
         if (data?.init) set((s) => ({ inits: { ...s.inits, [sid]: data.init! } }));
         // info.mode 是会话**此刻**的模式（后端记录 CLI 最近一次上报的值）；
         // init 里那份只是启动时的快照，重连后不能拿它顶替。

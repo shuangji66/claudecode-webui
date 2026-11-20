@@ -96,19 +96,25 @@ describe("localWorkFrom", () => {
       hook_name: "fmt",
       hook_event: "PostToolUse",
     });
-    expect(w.hooks).toEqual(["h1"]);
+    // 显示的用 name（实测 CLI 给的是 `PostToolUse:Read` 这种），id 只用来配对结束。
+    expect(w.hooks).toEqual([{ id: "h1", name: "fmt" }]);
     expect(hasLocalWork(w)).toBe(true);
     w = localWorkFrom(w, { type: "system", subtype: "hook_response", hook_id: "h1", outcome: "success" });
     expect(w.hooks).toEqual([]);
     expect(hasLocalWork(w)).toBe(false);
   });
 
+  it("hook 没有 hook_name 时退回 id（至少能指出是哪一个）", () => {
+    const w = localWorkFrom(NO_LOCAL_WORK, { type: "system", subtype: "hook_started", hook_id: "h1" });
+    expect(w.hooks).toEqual([{ id: "h1", name: "h1" }]);
+  });
+
   it("多个 hook 并行时逐个结束", () => {
-    let w = localWorkFrom(NO_LOCAL_WORK, { type: "system", subtype: "hook_started", hook_id: "a" });
-    w = localWorkFrom(w, { type: "system", subtype: "hook_started", hook_id: "b" });
-    expect(w.hooks).toEqual(["a", "b"]);
+    let w = localWorkFrom(NO_LOCAL_WORK, { type: "system", subtype: "hook_started", hook_id: "a", hook_name: "A" });
+    w = localWorkFrom(w, { type: "system", subtype: "hook_started", hook_id: "b", hook_name: "B" });
+    expect(w.hooks.map((h) => h.id)).toEqual(["a", "b"]);
     w = localWorkFrom(w, { type: "system", subtype: "hook_response", hook_id: "a" });
-    expect(w.hooks).toEqual(["b"]);
+    expect(w.hooks.map((h) => h.id)).toEqual(["b"]);
   });
 
   it("没有 hook_id 的帧不记账（记下来永远清不掉）", () => {
@@ -119,9 +125,9 @@ describe("localWorkFrom", () => {
   it("压缩与 hook 互不干扰", () => {
     let w = localWorkFrom(NO_LOCAL_WORK, { type: "system", subtype: "status", status: "compacting" });
     w = localWorkFrom(w, { type: "system", subtype: "hook_started", hook_id: "h1" });
-    expect(w).toMatchObject({ compacting: true, hooks: ["h1"] });
+    expect(w).toMatchObject({ compacting: true, hooks: [{ id: "h1", name: "h1" }] });
     w = localWorkFrom(w, { type: "system", subtype: "status", status: "requesting" });
-    expect(w).toMatchObject({ compacting: false, hooks: ["h1"] });
+    expect(w).toMatchObject({ compacting: false, hooks: [{ id: "h1", name: "h1" }] });
   });
 
   it("认不出的帧原样返回", () => {

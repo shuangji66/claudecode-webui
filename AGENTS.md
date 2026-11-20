@@ -636,7 +636,12 @@ hub ── manager ── session ── process ── claude (NDJSON)
   **状态要随 `session.snapshot` 下发**（后端 `Session.LocalBusy`）：压缩途中的连接
   拿不到那条只发一次的 `status: compacting`，它又不进转录——不补这一份，刷新页面之后
   界面照样误报。前后端是同一套规则的**两份镜像**（`lib/localWork.ts` /
-  `session.noteLocalBusy`），两边都要改。
+  `session.noteLocalBusy`），两边都要改。快照是**这一刻**的权威答案：
+  `busy` 缺席就按「没在本地干活」处理（与 `tasks: []` 同一条规矩），留着本地旧值的话，
+  压缩途中进程被杀、重连之后界面会永远停在「正在压缩上下文」。
+  hook 那一项是 `{id, name}` 而不是裸 id：`id` 只用来配对 `hook_started` /
+  `hook_response`，**显示的是 `hook_name`**（实测 `PostToolUse:Read`）——直接显示 id
+  的话界面上是一串 `hook 19d74da8-… 正在跑`，用户认不出是哪个 hook。
 - **`system/commands_changed` 要替换斜杠命令缓存**（CLI 原话：clients should REPLACE
   their cached command list）。会话中途装的技能、动态发现的命令靠它进 `/` 菜单。
   它**不进消息流**，由 store 的 `cli` 分支用 `commandsChanged` 写回 `inits[sid].commands`。

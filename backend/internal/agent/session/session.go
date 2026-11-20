@@ -682,7 +682,7 @@ func (s *Session) LocalBusy() protocol.LocalBusy {
 	defer s.busyMu.Unlock()
 	return protocol.LocalBusy{
 		Compacting: s.busy.Compacting,
-		Hooks:      append([]string(nil), s.busy.Hooks...),
+		Hooks:      append([]protocol.HookRef(nil), s.busy.Hooks...),
 	}
 }
 
@@ -702,7 +702,7 @@ func (s *Session) noteLocalBusy(raw json.RawMessage) {
 		}
 		return
 	}
-	if id, subtype, ok := protocol.HookIDOf(raw); ok {
+	if id, name, subtype, ok := protocol.HookRefOf(raw); ok {
 		// 没有 id 的记录配对不上结束，记下来就清不掉了。
 		if id == "" {
 			return
@@ -712,15 +712,15 @@ func (s *Session) noteLocalBusy(raw json.RawMessage) {
 		switch subtype {
 		case "hook_started":
 			for _, h := range s.busy.Hooks {
-				if h == id {
+				if h.ID == id {
 					return
 				}
 			}
-			s.busy.Hooks = append(s.busy.Hooks, id)
+			s.busy.Hooks = append(s.busy.Hooks, protocol.HookRef{ID: id, Name: name})
 		case "hook_response":
 			out := s.busy.Hooks[:0]
 			for _, h := range s.busy.Hooks {
-				if h != id {
+				if h.ID != id {
 					out = append(out, h)
 				}
 			}

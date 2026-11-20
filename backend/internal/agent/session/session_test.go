@@ -1449,7 +1449,8 @@ func TestLocalBusyTracksHooks(t *testing.T) {
 	for time.Now().Before(deadline) && len(sess.LocalBusy().Hooks) == 0 {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got := sess.LocalBusy().Hooks; len(got) != 1 || got[0] != "h1" {
+	// id 用来配对结束，name 用来显示：只带 id 的话界面上是一串 UUID。
+	if got := sess.LocalBusy().Hooks; len(got) != 1 || got[0].ID != "h1" || got[0].Name != "fmt" {
 		t.Fatalf("hook 表 = %v", got)
 	}
 

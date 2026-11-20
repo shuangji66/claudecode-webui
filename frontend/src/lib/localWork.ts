@@ -30,8 +30,16 @@ export interface LocalWork {
    * 一个会动的数字，**不能**反过来拿它判死。
    */
   compactChars: number;
-  /** 正在运行的 hook id（`hook_started` 之后、`hook_response` 之前）。 */
-  hooks: readonly string[];
+  /** 正在运行的 hook（`hook_started` 之后、`hook_response` 之前）。 */
+  hooks: readonly LocalHook[];
+}
+
+/** 一个正在跑的 hook。`id` 只用来配对结束，显示的是 `name`。 */
+export interface LocalHook {
+  /** `hook_id`：CLI 用它配对 `hook_started` / `hook_response`。 */
+  id: string;
+  /** `hook_name`（`PostToolUse:Read`、`SessionStart`…）；为空时退回 id。 */
+  name: string;
 }
 
 export const NO_LOCAL_WORK: LocalWork = { compacting: false, compactChars: 0, hooks: [] };
@@ -97,13 +105,16 @@ export function localWorkFrom(prev: LocalWork, msg: unknown): LocalWork {
   if (subtype === "hook_started") {
     const id = typeof m.hook_id === "string" && m.hook_id ? m.hook_id : "";
     // 没有 id 的帧无法配对结束，按「不记」处理：记下来就永远清不掉。
-    if (!id || prev.hooks.includes(id)) return prev;
-    return { ...prev, hooks: [...prev.hooks, id] };
+    if (!id || prev.hooks.some((h) => h.id === id)) return prev;
+    // `hook_name` 才是给人看的那个（实测 `PostToolUse:Read`）；缺了退回 id，
+    // 至少还能指出是哪一个。
+    const name = typeof m.hook_name === "string" && m.hook_name ? m.hook_name : id;
+    return { ...prev, hooks: [...prev.hooks, { id, name }] };
   }
   if (subtype === "hook_response") {
     const id = typeof m.hook_id === "string" ? m.hook_id : "";
-    if (!id || !prev.hooks.includes(id)) return prev;
-    return { ...prev, hooks: prev.hooks.filter((h) => h !== id) };
+    if (!id || !prev.hooks.some((h) => h.id === id)) return prev;
+    return { ...prev, hooks: prev.hooks.filter((h) => h.id !== id) };
   }
   return prev;
 }

@@ -70,7 +70,9 @@ export function TurnTimer({ startedAt, sessionId = null, watchSilence = true, cl
             `Compacting · ${formatTokens(work.compactChars)} chars written`,
           )
         : t("正在压缩上下文", "Compacting the conversation")
-      : t(`hook ${work.hooks[0]} 正在跑`, `hook ${work.hooks[0]} is running`)
+      : // 显示的是 hook 的名字（`PostToolUse:Read`），不是它那次运行的 UUID——
+        // 一串 `19d74da8-…` 对用户没有任何意义。
+        t(`hook ${work.hooks[0].name} 正在跑`, `hook ${work.hooks[0].name} is running`)
     : warn
       ? t(`上游 ${silentSeconds(silent)}s 没有响应`, `no response from upstream for ${silentSeconds(silent)}s`)
       : "";
