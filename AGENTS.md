@@ -1124,6 +1124,15 @@ hub ── manager ── session ── process ── claude (NDJSON)
   敲出空格就不再是补全，那已经是在发指令了，菜单必须让位。
   高亮按**名字**记而不是下标（敲字会让列表变短，下标一挪就落到别的指令上），
   候选变多超过一屏时同样要 `scrollIntoView({block:"nearest"})` 跟随。
+  列表**只许纵向滚**：`overflow-y-auto` 单独写时另一轴被 CSS 算成 `auto`，长参数提示
+  一超宽就整块横着滚，必须显式 `overflow-x-hidden`；指令名 `shrink-0` 不截断，
+  参数提示与说明 `min-w-0 truncate` 吃剩余宽度。
+- **`COMMAND_LABELS` 要跟得上 CLI 的命令集**：`/` 菜单列全量之后，没收录的命令会露出
+  CLI 的英文长句（`Use this skill to configure the Claude Code harness via setti…`）。
+  2.1.329 实测的完整命令名可以直接从二进制里捞：
+  `strings claude | grep -oE '\{type:"(local|local-jsx|prompt)",name:"[a-z0-9-]+"'`，
+  再与 `COMMAND_LABELS` 的 key 做差集。**仍然只补语义确定的**——不确定就留空回落原文
+  （见 `COMMAND_LABELS` 上方那段注释）。
 - **「从飞牛选择」只在飞牛宿主里出现**（与 `+` 菜单同一个宿主选择器 `pickUserFile`）：
   判定是 `lib/fnos.canPickFnos`（在宿主内 **且** 不是 TCP 直连端口通道，与页头
   「在飞牛打开工作区」同一条规则）——不在宿主里时这一行不摆，摆了也只会得到

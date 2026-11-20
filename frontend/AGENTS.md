@@ -137,6 +137,11 @@ src/
     `+` 菜单里明明有。匹配与排序在 `lib/commands.matchCommands`（前缀命中优先于子串命中，
     空查询给全部）；`↑↓` 选、`Enter` 填入、`Esc` 只关这一次，`Tab` 不拦（这里没有下钻）。
     高亮按**名字**记而不是下标——敲字会让列表变短，下标一挪就落到别的指令上。
+    **列表只许纵向滚**：`overflow-y-auto` 单独写时另一轴会被 CSS 算成 `auto`，长
+    `argumentHint`（`[...]` 那种）一超宽整块列表就横着滚，必须显式
+    `overflow-x-hidden`。行内是「指令名 `shrink-0` 永不截断 + 参数提示与说明
+    `min-w-0 truncate` 吃剩余宽度」，不要给说明写死 `max-w-[55%]`——两段一起超宽时
+    只会把文字推出可视区。
     **桌面截图要能直接 Ctrl+V**：textarea 的 `onPaste` 用 `lib/attachments.clipboardFiles`
     取文件（优先 `items.getAsFile()`，Safari/部分 Linux 的 `files` 是空的），有文件才
     `preventDefault`——纯文本粘贴必须原样交给浏览器。读成附件的路径与「+ → 本地文件」共用

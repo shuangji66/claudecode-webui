@@ -84,6 +84,18 @@ describe("commandDescription", () => {
     expect(commandDescription("verify", en, "zh")).toBe("跑起来确认改动生效");
   });
 
+  it("2.1.329 里出现、以前漏收录的命令都有中文", () => {
+    // 清单取自 `claude` 二进制里 `{type:"local",name:"…"}` 的定义（2.1.329 共 99 条），
+    // 这里抽查几条曾经的漏网之鱼：`/` 菜单列全量之后它们都会露出来。
+    expect(commandDescription("update-config", "Use this skill to configure…", "zh")).toBe(
+      "修改设置：钩子、权限、环境变量",
+    );
+    expect(commandDescription("commit", "Create a git commit", "zh")).toBe("提交当前改动");
+    expect(commandDescription("theme", "Change the theme", "zh")).toBe("切换主题");
+    expect(commandDescription("remote-control", "Control this session…", "zh")).toBe("从手机或网页控制本会话");
+    expect(commandDescription("tui", "Set the terminal UI renderer", "zh")).toBe("选择终端界面渲染方式");
+  });
+
   it("没收录的命令回落 CLI 描述；英文环境直接用原文", () => {
     // 用户自己写的 skill / MCP 命令不可能有中文，只能回落原文。
     expect(commandDescription("my-own-skill", "Does my thing", "zh")).toBe("Does my thing");

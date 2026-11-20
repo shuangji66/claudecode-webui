@@ -305,6 +305,29 @@ describe("Composer 指令补全", () => {
       delete Element.prototype.scrollIntoView;
     }
   });
+
+  it("长参数提示与长说明不会把列表撑出横向滚动", () => {
+    setup({
+      commands: [
+        {
+          name: "design-sync",
+          description: "把设计系统同步给 Claude Design",
+          argumentHint: '[<project hint, e.g. "Acme DS">]',
+        },
+      ],
+    });
+    fireEvent.change(textarea(), { target: { value: "/" } });
+
+    // 只写 overflow-y-auto 时另一轴会被算成 auto，于是整块列表横着滚；
+    // overflow-x-hidden 必须显式写出来。
+    expect(screen.getByLabelText("指令候选").className).toContain("overflow-x-hidden");
+    // 指令名永不截断；参数提示与说明吃剩余宽度并截断。
+    const row = screen.getByLabelText("指令候选").querySelector("li button")!;
+    const spans = row.querySelectorAll("span");
+    expect(spans[0].className).toContain("shrink-0");
+    expect(spans[1].className).toContain("truncate");
+    expect(spans[2].className).toContain("truncate");
+  });
 });
 
 describe("Composer 权限模式", () => {

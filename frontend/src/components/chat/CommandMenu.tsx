@@ -38,7 +38,12 @@ export function CommandMenu({ rows, highlight, onHover, onPick }: Props) {
 
   return (
     <div className="mb-2 overflow-hidden rounded-xl border border-line bg-canvas shadow-soft">
-      <ul className="max-h-56 overflow-y-auto p-1" aria-label={t("指令候选", "Command candidates")}>
+      {/* `overflow-x-hidden` 不是多余的：只写 `overflow-y-auto` 时，按 CSS 规则另一轴会被
+          算成 auto，于是长 argumentHint 一超宽整块列表就横着滚。这里只许纵向滚。 */}
+      <ul
+        className="max-h-56 overflow-y-auto overflow-x-hidden p-1"
+        aria-label={t("指令候选", "Command candidates")}
+      >
         {rows.map((row) => {
           const active = row.name === highlight;
           return (
@@ -54,9 +59,16 @@ export function CommandMenu({ rows, highlight, onHover, onPick }: Props) {
                   active ? "bg-panel-strong" : ""
                 }`}
               >
+                {/* 指令名是主信息，永远完整；参数提示与说明吃剩余宽度，装不下就截断。 */}
                 <span className="shrink-0 font-mono font-medium text-ink">/{row.name}</span>
-                {row.argumentHint && <span className="shrink-0 text-faint">{row.argumentHint}</span>}
-                {row.desc && <span className="ml-auto max-w-[55%] truncate text-[11px] text-muted">{row.desc}</span>}
+                {row.argumentHint && (
+                  <span className="min-w-0 shrink truncate text-faint">{row.argumentHint}</span>
+                )}
+                {row.desc && (
+                  <span className="ml-auto min-w-0 flex-1 truncate text-right text-[11px] text-muted">
+                    {row.desc}
+                  </span>
+                )}
               </button>
             </li>
           );
