@@ -159,6 +159,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
     一旦用户配了第二个模型就会重新长出回退。
     副作用只有一个（可接受）：上下文压缩本来会**换模型**生成摘要，现在压缩失败会明确
     报 `model substitution is disabled`，而不是静默换一个模型去做。
+18. **本地 AI 开发禁止开分支提交**。所有改动直接提交到当前分支（`master`），
+    不要 `git checkout -b` / `git switch -c`、不要建 worktree、不要开 PR 走分支流程。
+    这是单人本地开发：分支只会让「刚才改的那份代码在哪」变模糊，而项目没有需要隔离的
+    并行协作方。注意这与「AI 默认先开分支」的通用习惯相反——那条习惯**不适用于本仓库**。
 
 ## 4. 踩过的坑（都已在代码里修好，别改回去）
 
@@ -1300,6 +1304,7 @@ cd frontend && npx tsc --noEmit
 
 ## 6. 修改前自查
 
+- [ ] 提交是否落在**当前分支**（`master`）？没开分支、没建 worktree（约定 18）。
 - [ ] 是否新增了硬编码路径 / 端口 / 前缀？
 - [ ] 新 HTTP 路由是否挂了鉴权？WS 是否校验 token？鉴权判定是否用了 `channelOf(r)`（而不是写死通道）？
 - [ ] 改动 `protocol` 后是否同步了 `session` 与前端 `transport/types.ts`？
