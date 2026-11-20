@@ -72,9 +72,13 @@ func LoadPreview(projectsDir, id string) (Preview, error) {
 		if l.IsSidechain || l.IsMeta {
 			continue
 		}
+		if l.Type == "user" && isInjectedUserRow(l.IsCompactSummary, l.IsVisibleInTranscriptOnly) {
+			continue
+		}
 		switch l.Type {
 		case "user":
-			text := extractText(l.Message.Content)
+			// 压缩续接提示与用户那句话拼在一起时只要后半截（见 history.stripContinuation）。
+			text := stripContinuation(extractText(l.Message.Content))
 			// 中断标记也是 CLI 写的合成 user 行，不是用户说的话。
 			if text == "" || isLocalCommandEcho(text) || isInterruptMarker(text) {
 				continue
@@ -93,10 +97,12 @@ func LoadPreview(projectsDir, id string) (Preview, error) {
 
 // previewLine 只解析预览需要的字段。
 type previewLine struct {
-	Type        string `json:"type"`
-	IsSidechain bool   `json:"isSidechain"`
-	IsMeta      bool   `json:"isMeta"`
-	Message     struct {
+	Type                      string `json:"type"`
+	IsSidechain               bool   `json:"isSidechain"`
+	IsMeta                    bool   `json:"isMeta"`
+	IsCompactSummary          bool   `json:"isCompactSummary"`
+	IsVisibleInTranscriptOnly bool   `json:"isVisibleInTranscriptOnly"`
+	Message                   struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 }

@@ -13,6 +13,8 @@
 // (input + cache_read + cache_creation) ÷ contextWindow —— 都是同一套数据算出来的，
 // 不在界面上编造。
 
+import { isInjectedUserRow, splitContinuation } from "./continuation";
+
 /** 一次请求的 token 用量（字段名与 CLI 一致，这里转成驼峰）。 */
 export interface UsageTotals {
   input: number;
@@ -142,6 +144,34 @@ export function plausibleContext(context: number, window: number | undefined): n
   return context;
 }
 
+/**
+ * 读 `compact_boundary` 的元数据。
+ *
+ * **字段名两边不同**：实时帧是 `compact_metadata` + `pre_tokens` / `post_tokens`（snake），
+ * 转录里落盘成 `compactMetadata` + `preTokens` / `postTokens`（camel，2.1.329 实测）。
+ * 只认一个的话，压缩提示与占用回落只在「实时看」或「重开对话」其中一边生效。
+ */
+export function compactMetaOf(m: Record<string, unknown>): {
+  trigger: string;
+  preTokens?: number;
+  postTokens?: number;
+} {
+  const meta = (m.compact_metadata ?? m.compactMetadata) as Record<string, unknown> | undefined;
+  if (!meta || typeof meta !== "object") return { trigger: "" };
+  const pick = (...keys: string[]): number | undefined => {
+    for (const k of keys) {
+      const v = meta[k];
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+    }
+    return undefined;
+  };
+  return {
+    trigger: typeof meta.trigger === "string" ? meta.trigger : "",
+    preTokens: pick("pre_tokens", "preTokens"),
+    postTokens: pick("post_tokens", "postTokens"),
+  };
+}
+
 /** 输出里用于思考的 token；字段缺失或为 0 时返回 undefined（不显示一行 0）。 */
 function thinkingTokensOf(usage: unknown): number | undefined {
   const details = (usage as Record<string, unknown> | undefined)?.output_tokens_details;
@@ -252,6 +282,26 @@ export function applyUsageMessage(
     const est = typeof m.estimated_tokens === "number" ? m.estimated_tokens : undefined;
     if (est === undefined) return undefined;
     return { ...(prev ?? { contextTokens: 0 }), thinkingTokens: est };
+  }
+
+  // `system/compact_boundary`：压缩完成了，**上下文确实变小了**。
+  //
+  // 上下文占用只认「最近一次请求的输入侧」，而压缩不是一次请求：压缩完到下一次请求
+  // 之间，快照里还留着压缩前那个数（实测压完 368.9K / 1M，实际只剩 9.0K），
+  // 界面上就是「压了上下文，占用却没小」。所以压缩边界直接改写上下文占用：
+  // `post_tokens` 是压缩后 CLI 自己算出来的实际大小，比任何推算都准。
+  // 紧接着的那次请求会带着真实 usage 覆盖它，两者不会打架。
+  // 明细（新输入 / 命中 / 新建缓存）与命中率描述的是「某一次请求」，压缩后已经过时，
+  // 一并摘掉，等下一次请求填回来。
+  if (m.type === "system" && m.subtype === "compact_boundary") {
+    const post = compactMetaOf(m).postTokens;
+    if (post === undefined || !(post > 0)) return undefined;
+    const next: UsageSnapshot = { ...(prev ?? { contextTokens: 0 }), contextTokens: post };
+    delete next.cacheHitRate;
+    delete next.inputTokens;
+    delete next.cacheReadTokens;
+    delete next.cacheCreationTokens;
+    return next;
   }
 
   if (m.type === "stream_event") {
@@ -396,9 +446,12 @@ export function applyUsageMessage(
 
 /** 转录里这条 user 行是「用户的提问」（一轮的开始），而不是工具回包或命令回显。 */
 function isPromptLine(m: Record<string, unknown>): boolean {
+  // 压缩后续接提示是一条 CLI 注入的 user 行，不能当一轮的开始：
+  // 它没有真正的用量，认下来会把下一轮的 token 记到它头上。
+  if (isInjectedUserRow(m)) return false;
   const content = (m.message as Record<string, unknown> | undefined)?.content;
   if (typeof content === "string") {
-    const text = content.trim();
+    const text = splitContinuation(content).rest.trim();
     // /model 这类本地命令的回显也是 user 行，它不结束也不开始一轮。
     return text !== "" && !text.startsWith("<command-name>") && !text.startsWith("<local-command-");
   }
@@ -437,12 +490,22 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
   let sessionInput = 0;
   let sessionOutput = 0;
   let window: number | undefined;
+  // 最近一次压缩之后上下文有多大（`compact_boundary` 的 `post_tokens`）。
+  //
+  // 上下文占用只认「最近一次请求的输入侧」，而压缩不是一次请求：压缩完到下一次请求
+  // 之间，快照里还留着压缩前那个数（实测 368.9K / 1M，压缩后实际只剩 9.0K）。
+  // 用户看到的就是「压了上下文，占用却没小」。后面只要发过请求就清掉它——那次请求的
+  // 输入侧才是新的真实值。
+  let compactedTokens: number | undefined;
   for (const line of lines) {
     if (!line || typeof line !== "object") continue;
     const m = line as Record<string, unknown>;
     const ts = typeof m.timestamp === "string" ? Date.parse(m.timestamp) : NaN;
     if (m.type === "api-request") {
       if (Number.isFinite(ts)) lastRequestAt = ts;
+    } else if (m.type === "system" && m.subtype === "compact_boundary") {
+      const post = compactMetaOf(m).postTokens;
+      if (post !== undefined && post > 0) compactedTokens = post;
     } else if (m.type === "user") {
       if (!isPromptLine(m)) continue;
       turnInput = 0;
@@ -459,6 +522,8 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
       lastRequestAt = undefined;
       if (!t) continue;
       lastTotals = t;
+      // 真的发过一次请求：它的输入侧才是新的上下文，压缩留下的那个数作废。
+      compactedTokens = undefined;
       turnInput += contextTokens(t);
       turnOutput += t.output;
       sessionInput += contextTokens(t);
@@ -484,11 +549,14 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
     }
   }
   const apiMs = turnApiMs > 0 ? turnApiMs : apiMsFromCost;
-  if (!lastTotals && apiMs === undefined) return undefined;
+  // 压缩之后还没发过新请求：上下文占用按压缩后的实际大小报（见上面 compactedTokens）。
+  const compacted = compactedTokens !== undefined;
+  if (!lastTotals && apiMs === undefined && !compacted) return undefined;
   return {
-    contextTokens: lastTotals ? contextTokens(lastTotals) : 0,
-    cacheHitRate: lastTotals ? cacheHitRate(lastTotals) : undefined,
-    ...(lastTotals ? inputParts(lastTotals) : {}),
+    contextTokens: compacted ? compactedTokens! : lastTotals ? contextTokens(lastTotals) : 0,
+    // 命中率与三项明细描述的是「最近一次请求」，压缩之后它们已经过时，不给。
+    cacheHitRate: compacted ? undefined : lastTotals ? cacheHitRate(lastTotals) : undefined,
+    ...(compacted || !lastTotals ? {} : inputParts(lastTotals)),
     outputTokens: turnOutput,
     turnInputTokens: turnInput,
     sessionInputTokens: sessionInput || undefined,

@@ -146,6 +146,44 @@ describe("applyUsageMessage", () => {
     expect(snap.outputTokens).toBe(3);
   });
 
+  // 压缩完到下一次请求之间不会再有 usage 帧：不认 compact_boundary 的 post_tokens 的话，
+  // 底栏会一直显示压缩前的占用（实测 368704 / 1000000 → 实际 9254）。
+  it("compact_boundary 用 post_tokens 改写上下文占用", () => {
+    const before = applyUsageMessage(undefined, MESSAGE_START)!;
+    const snap = applyUsageMessage(before, {
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "manual", pre_tokens: 368934, post_tokens: 9254 },
+    })!;
+    expect(snap.contextTokens).toBe(9254);
+    // 明细与命中率描述的是上一次请求，压缩之后已经过时，等新请求填回来。
+    expect(snap.cacheHitRate).toBeUndefined();
+    expect(snap.inputTokens).toBeUndefined();
+    expect(snap.cacheReadTokens).toBeUndefined();
+  });
+
+  it("compact_boundary 缺 post_tokens 时不动快照", () => {
+    const before = applyUsageMessage(undefined, MESSAGE_START)!;
+    expect(
+      applyUsageMessage(before, { type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto" } }),
+    ).toBeUndefined();
+  });
+
+  it("压缩后的下一次请求覆盖回真实占用", () => {
+    let snap = applyUsageMessage(undefined, MESSAGE_START)!;
+    snap = applyUsageMessage(snap, {
+      type: "system",
+      subtype: "compact_boundary",
+      compact_metadata: { trigger: "manual", pre_tokens: 368934, post_tokens: 9254 },
+    })!;
+    snap = applyUsageMessage(snap, {
+      type: "stream_event",
+      event: { type: "message_start", message: { usage: { input_tokens: 40, cache_read_input_tokens: 9800, output_tokens: 1 } } },
+    })!;
+    expect(snap.contextTokens).toBe(9840);
+    expect(snap.cacheHitRate).toBeCloseTo(9800 / 9840, 5);
+  });
+
   it("result 补上 contextWindow 与 API 耗时", () => {
     const snap = applyUsageMessage(undefined, RESULT)!;
     expect(snap.contextWindow).toBe(200000);
@@ -465,6 +503,45 @@ describe("usageFromTranscript", () => {
   it("转录里没有 usage 时返回 undefined，不编数字", () => {
     expect(usageFromTranscript([{ type: "user", message: { content: "hi" } }])).toBeUndefined();
     expect(usageFromTranscript([])).toBeUndefined();
+  });
+
+  // 压缩不是一次请求，边界行里才有压缩后的真实大小（`post_tokens`）。
+  // 不认它的话，压缩完到下一次请求之间底栏还挂着压缩前的数——
+  // 实测 368.9K / 1M 压完只剩 9.0K，界面上就是「压了上下文，占用却没小」。
+  const BIG_TURN = {
+    type: "assistant",
+    message: { usage: { input_tokens: 320, cache_read_input_tokens: 368384, output_tokens: 2207 } },
+  };
+  const BOUNDARY = {
+    type: "system",
+    subtype: "compact_boundary",
+    compact_metadata: { trigger: "manual", pre_tokens: 368934, post_tokens: 9000 },
+  };
+
+  it("压缩之后按 post_tokens 报上下文，不留在压缩前的数上", () => {
+    const snap = usageFromTranscript([
+      { type: "user", message: { content: "hi" } },
+      BIG_TURN,
+      BOUNDARY,
+      // 压缩后 CLI 塞回来的续接提示（一条 16KB 的 user 行），它不是新的一轮。
+      { type: "user", isCompactSummary: true, message: { content: "This session is being continued from…" } },
+    ])!;
+    expect(snap.contextTokens).toBe(9000);
+    // 明细与命中率描述的是「上一次请求」，压缩后已经过时。
+    expect(snap.cacheHitRate).toBeUndefined();
+    expect(snap.inputTokens).toBeUndefined();
+  });
+
+  it("压缩之后又发过请求时，以那次请求的输入侧为准", () => {
+    const snap = usageFromTranscript([
+      { type: "user", message: { content: "hi" } },
+      BIG_TURN,
+      BOUNDARY,
+      { type: "user", message: { content: "接着来" } },
+      { type: "assistant", message: { usage: { input_tokens: 100, cache_read_input_tokens: 4400, output_tokens: 50 } } },
+    ])!;
+    expect(snap.contextTokens).toBe(4500);
+    expect(snap.inputTokens).toBe(100);
   });
 });
 

@@ -568,6 +568,29 @@ hub ── manager ── session ── process ── claude (NDJSON)
     这是用户唯一能看见「我这个 hook 挂了」的地方，输出在 `output`/`stdout`/`stderr` 里。
   - `model_fallback` / `model_refusal_fallback` / `informational`：CLI 自己在 `content` 里
     写好了人话，走通用分支即可。
+  - `compact_boundary`：压缩真的发生过，不提示就是「历史无缘无故变短了」。
+    **元数据两处字段名不同**——实时帧是 `compact_metadata` + `pre_tokens`/`post_tokens`，
+    转录里落盘成 `compactMetadata` + `preTokens`/`postTokens`（2.1.329 实测）。
+    统一走 `lib/usage.compactMetaOf` 两样都认，只认一个会变成「实时看得见、重开对话后消失」。
+- **压缩后的续接提示不是用户消息**（`lib/continuation.ts` + 后端 `history` 的同名镜像）：
+  压缩完成后 CLI 把摘要当成一条 **user 行**塞回上下文（`isCompactSummary: true`，转录里
+  还多一个 `isVisibleInTranscriptOnly: true`），正文是
+  `This session is being continued from a previous conversation…` 开头的一万多字英文。
+  不挡的话界面上就是一条占满半屏的米色气泡，里面全是英文摘要；后端那边标题、消息数、
+  预览也一起被它污染（压缩过的对话在侧栏里叫「This session is being continued…」）。
+  两处都要挡，而且**有两种落点**：
+  ① 独立成行（带标记）→ 整条丢掉；
+  ② **和用户下一句话拼成同一条**（压缩正赶上用户发消息）→ 只能按文本切：摘要正文之后
+     跟一句固定收尾语，收尾语之后才是用户真敲的字（三种变体见 `CONTINUATION_TRAILERS`）。
+     整条丢掉等于吞掉用户刚说的话，整条显示就是一大段英文。
+  认不出收尾语时**按整条注入处理**（丢掉）：代价是那条消息里的提问看不见，但比糊一屏英文轻。
+- **上下文占用要跟着压缩回落**（`lib/usage` 的 `compact_boundary` 分支）：上下文只认
+  「最近一次请求的输入侧」，而压缩**不是一次请求**——压完到下一次请求之间，快照里还留着
+  压缩前那个数（实测 368.9K / 1M 压完只剩 9.0K），界面上就是「压了上下文，占用却没小」。
+  `post_tokens` 是压缩后 CLI 自己算出来的实际大小，比任何推算都准，直接改写上下文占用，
+  明细与命中率一并摘掉（它们描述的是「某一次请求」，已经过时）；紧接着的请求会带着真实
+  usage 覆盖回来，两者不打架。实时路径（`applyUsageMessage`）与转录回放
+  （`usageFromTranscript`）两条都要做——每条路径各自维护自己的「压缩后上下文」状态。
 - **`system/commands_changed` 要替换斜杠命令缓存**（CLI 原话：clients should REPLACE
   their cached command list）。会话中途装的技能、动态发现的命令靠它进 `/` 菜单。
   它**不进消息流**，由 store 的 `cli` 分支用 `commandsChanged` 写回 `inits[sid].commands`。
@@ -1368,6 +1391,8 @@ cd frontend && npx tsc --noEmit
 - [ ] 是否新增了会被静默吞掉的 `system/*` 子类型？只有结构化字段（`api_retry`、`hook_response`、
       `status` 的压缩态）的那些**必须显式接**，否则就是「界面毫无反应」的一类 bug。
 - [ ] 转录回放是否过滤 sidechain/meta，并保留原始时间戳？被截断（20k 行 / 16MB）时有没有提示？
+- [ ] 动手碰 `user` 行/用量/标题的地方，是否也挡了**压缩后的续接提示**
+      （`isCompactSummary` / `isVisibleInTranscriptOnly` / 正文前缀，见 4.7）？
 - [ ] 新增右侧栏路由是否过了 `authorizedCwd` / 路径围栏？raw 预览是否仍在白名单？
 - [ ] 右侧栏标签切走、收起整条侧栏时是否都只隐藏不卸载（终端 PTY 不能被杀）？Git 是否仍只 pull？
 - [ ] 终端是否仍走二进制帧、多开时每个标签各自一条 WS？

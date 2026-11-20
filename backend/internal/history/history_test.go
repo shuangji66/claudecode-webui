@@ -40,6 +40,16 @@ func writeFile(t *testing.T, path, body string) {
 	}
 }
 
+// mustJSON 把一段文本编码成 JSON 字符串字面量（测试里要往 jsonl 里塞带换行的正文）。
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return b
+}
+
 func TestListEmptyDirWhenMissing(t *testing.T) {
 	got, err := List(filepath.Join(t.TempDir(), "nope"))
 	if err != nil {
@@ -857,5 +867,70 @@ func TestSummarizeSkipsTaskNotificationForTitle(t *testing.T) {
 	// 通知不算一条消息：只数后面那条提问。
 	if s.Messages != 1 {
 		t.Fatalf("消息数 = %d, want 1（任务通知不该计数）", s.Messages)
+	}
+}
+
+// 压缩之后 CLI 会把摘要写成一条 user 行（`isCompactSummary` / `isVisibleInTranscriptOnly`）。
+// 不挡的话压缩过一轮的对话在侧栏里会叫
+// "This session is being continued from a previous conversation that ran out of…"。
+func TestSummarizeSkipsCompactSummaryForTitle(t *testing.T) {
+	dir := t.TempDir()
+	id := "55555555-6666-4777-8888-999999999999"
+	path := filepath.Join(dir, "p", id+".jsonl")
+	writeJSONL(t, path,
+		`{"type":"user","sessionId":"`+id+`","message":{"role":"user","content":"压缩前的问题"},"timestamp":"2026-01-01T00:00:00Z"}`,
+		`{"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"sessionId":"`+id+`","message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context. …"},"timestamp":"2026-01-01T00:00:01Z"}`,
+		`{"type":"assistant","sessionId":"`+id+`","message":{"role":"assistant","content":[{"type":"text","text":"继续"}]},"timestamp":"2026-01-01T00:00:02Z"}`,
+	)
+	s := summarize(path, "p")
+	if s.Title != "压缩前的问题" {
+		t.Fatalf("标题 = %q, want 压缩前的那句提问", s.Title)
+	}
+	// 续接提示不算一条消息：一条提问 + 一条回答。
+	if s.Messages != 2 {
+		t.Fatalf("消息数 = %d, want 2（续接提示不该计数）", s.Messages)
+	}
+}
+
+// 压缩正好赶上用户发消息时，CLI 把续接提示与用户那句话拼成一条 user 行。
+// 整条丢掉会吞掉用户的提问，整条显示就是一大段英文摘要——只留后半截。
+func TestSummarizeCutsContinuationPrefix(t *testing.T) {
+	dir := t.TempDir()
+	id := "66666666-7777-4888-9999-aaaaaaaaaaaa"
+	path := filepath.Join(dir, "p", id+".jsonl")
+	text := "This session is being continued from a previous conversation that ran out of context.\n\n" +
+		"Summary:\n1. Primary Request: 一大堆英文摘要\n\n" +
+		"Continue the conversation from where it left off without asking the user any further questions. " +
+		"Resume directly — do not acknowledge the summary, do not recap what was happening, " +
+		"do not preface with \"I'll continue\" or similar. Pick up the last task as if the break never happened.\n\n" +
+		"The messages after this summary are the most recent messages from before compaction, kept verbatim. " +
+		"The summary was written without seeing them, so something it says has not happened yet may already have happened in them. 压缩之后接着干"
+	writeJSONL(t, path,
+		`{"type":"user","sessionId":"`+id+`","message":{"role":"user","content":`+string(mustJSON(t, text))+`},"timestamp":"2026-01-01T00:00:00Z"}`,
+	)
+	s := summarize(path, "p")
+	if s.Title != "压缩之后接着干" {
+		t.Fatalf("标题 = %q, want 用户那半句", s.Title)
+	}
+	if s.Messages != 1 {
+		t.Fatalf("消息数 = %d, want 1", s.Messages)
+	}
+}
+
+func TestScanTranscriptDropsContinuationRows(t *testing.T) {
+	root := t.TempDir()
+	id := "77777777-8888-4999-aaaa-bbbbbbbbbbbb"
+	writeJSONL(t, filepath.Join(root, "p", id+".jsonl"),
+		`{"type":"user","cwd":"/tmp/work","message":{"role":"user","content":"你好"}}`,
+		`{"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context. …"}}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"收到"}]}}`,
+	)
+	tr, err := LoadTranscript(root, id)
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+	// 续接提示有 16KB，不在这里丢掉的话每次压缩都白传一遍。
+	if len(tr.Lines) != 2 {
+		t.Fatalf("lines = %d, want 2（续接提示不该回放）", len(tr.Lines))
 	}
 }

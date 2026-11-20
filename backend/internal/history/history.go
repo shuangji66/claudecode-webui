@@ -47,6 +47,9 @@ type transcriptLine struct {
 	Timestamp   string `json:"timestamp"`
 	IsSidechain bool   `json:"isSidechain"`
 	IsMeta      bool   `json:"isMeta"`
+	// 上下文压缩后 CLI 把摘要当一条 user 行塞回上下文（见 isCompactSummary）。
+	IsCompactSummary          bool `json:"isCompactSummary"`
+	IsVisibleInTranscriptOnly bool `json:"isVisibleInTranscriptOnly"`
 	// CustomTitle / AiTitle 是 CLI 自己写进转录的标题行（`type: "custom-title"` /
 	// `"ai-title"`）：终端 `/rename`、IDE 插件、`--name` 与它自己的自动标题都落在
 	// 这里。同一份转录里可能有多行，**最后一行才是当前名字**。
@@ -158,9 +161,23 @@ func summarize(path, project string) Session {
 			if l.Type == "user" && isTaskNotification(extractText(l.Message.Content)) {
 				return true
 			}
+			// 压缩后的续接提示同理（见 isInjectedUserRow / stripContinuation）：
+			// 整条是微缩摘要就直接跳过；与用户那句话拼在一起时只留用户那半句。
+			// 不挡的话压缩过一轮的对话在侧栏里会叫
+			// "This session is being continued from a previous conversation…"。
+			userText := ""
+			if l.Type == "user" {
+				if isInjectedUserRow(l.IsCompactSummary, l.IsVisibleInTranscriptOnly) {
+					return true
+				}
+				userText = stripContinuation(extractText(l.Message.Content))
+				if userText == "" {
+					return true
+				}
+			}
 			s.Messages++
 			if l.Type == "user" && !titleDone && lines <= maxTitleScanLines {
-				if txt := extractText(l.Message.Content); txt != "" {
+				if txt := userText; txt != "" {
 					s.Title = truncate(txt, 80)
 					titleDone = true
 				}
@@ -303,6 +320,50 @@ func isTaskNotification(text string) bool {
 		return false
 	}
 	return taskNotificationRE.MatchString(t)
+}
+
+// isInjectedUserRow 判断一条 user 行是不是上下文压缩后 CLI 塞回上下文的续接提示。
+//
+// 压缩完成后 CLI 把摘要写成一条 **user 行**（`isCompactSummary: true`，转录里还多一个
+// `isVisibleInTranscriptOnly: true`）：它只该出现在模型上下文里，不该当成用户说的话。
+// 认不出来的后果是列表里那一行的标题变成
+//
+//	This session is being continued from a previous conversation that ran out of…
+//
+// 消息数也多一格。前端 `lib/continuation.ts` 是同一条规则的镜像（两边都要改）。
+func isInjectedUserRow(compactSummary, transcriptOnly bool) bool {
+	return compactSummary || transcriptOnly
+}
+
+// continuationPrefix 是续接提示的固定开头（与前端 lib/continuation.ts 一致）。
+const continuationPrefix = "This session is being continued from a previous conversation"
+
+// stripContinuation 去掉「续接提示 + 用户那句话」拼在一起时前面的摘要。
+//
+// 压缩正好赶上用户发消息时，CLI 把两者拼成同一条 user 行的正文，这时不能整条丢掉
+// （用户的提问在末尾）。认不出结尾时按整条丢弃：宁可少显示一句提问，也不要把 16KB
+// 英文摘要当气泡画出来。
+func stripContinuation(text string) string {
+	if !strings.HasPrefix(text, continuationPrefix) {
+		return text
+	}
+	// 三种收尾语（见前端 CONTINUATION_TRAILERS），取最靠后的那一个。
+	last := -1
+	for _, tail := range []string{
+		"may already have happened in them.",
+		"as if the break never happened.",
+		"read only in the terminal session where it was written. If you need details from the earlier conversation, ask the user.",
+	} {
+		if i := strings.LastIndex(text, tail); i >= 0 {
+			if end := i + len(tail); end > last {
+				last = end
+			}
+		}
+	}
+	if last < 0 {
+		return ""
+	}
+	return strings.TrimSpace(text[last:])
 }
 
 func truncate(s string, n int) string {
@@ -496,6 +557,10 @@ func scanTranscript(r io.Reader, id string, keepSidechain bool) (Transcript, err
 			IsSidechain bool   `json:"isSidechain"`
 			IsMeta      bool   `json:"isMeta"`
 			Cwd         string `json:"cwd"`
+			// 压缩后的续接提示（一条 16KB 的 user 行）不参与回放：前端有同一条过滤，
+			// 但先在这里丢掉能省下每次压缩 16KB 的传输与解析。
+			IsCompactSummary          bool `json:"isCompactSummary"`
+			IsVisibleInTranscriptOnly bool `json:"isVisibleInTranscriptOnly"`
 		}
 		if err := json.Unmarshal(line, &meta); err != nil {
 			return true
@@ -504,6 +569,9 @@ func scanTranscript(r io.Reader, id string, keepSidechain bool) (Transcript, err
 			out.Cwd = meta.Cwd
 		}
 		if meta.IsMeta || (meta.IsSidechain && !keepSidechain) {
+			return true
+		}
+		if meta.Type == "user" && isInjectedUserRow(meta.IsCompactSummary, meta.IsVisibleInTranscriptOnly) {
 			return true
 		}
 		switch meta.Type {

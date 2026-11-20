@@ -558,6 +558,21 @@ describe("compact_boundary", () => {
     expect(text).toContain("上下文已自动压缩");
     expect(text).toContain("195.3K");
   });
+
+  // 转录里落盘的是 camelCase（`compactMetadata` / `preTokens`），实时帧才是 snake_case。
+  // 只认一个的话，这条提示在「实时看得见、重开对话后消失」之间来回切。
+  it("转录里的 camelCase 元数据同样认（重开对话后提示还在）", () => {
+    const items = applyCLI([], {
+      type: "system",
+      subtype: "compact_boundary",
+      content: "Conversation compacted",
+      compactMetadata: { trigger: "manual", preTokens: 368934, postTokens: 9254 },
+    });
+    expect(items).toHaveLength(1);
+    const text = (items[0] as Extract<Item, { kind: "system" }>).text;
+    expect(text).toContain("上下文已手动压缩");
+    expect(text).toContain("360.3K");
+  });
 });
 
 describe("tool_result 里的图片", () => {
@@ -1597,6 +1612,69 @@ describe("applyCLI 跳过 sidechain / meta 行", () => {
   it("isSidechain 的帧同样不进主消息流", () => {
     const items = applyCLI([], userRow("子代理说的话", { isSidechain: true }));
     expect(items).toHaveLength(0);
+  });
+});
+
+// 上下文压缩后 CLI 会把摘要当成一条 user 行塞回上下文（实测 2.1.329：
+// `isCompactSummary: true`，转录里还多一个 `isVisibleInTranscriptOnly: true`，
+// 正文开头是 "This session is being continued from a previous conversation"）。
+// 它是给模型看的续接提示，不是用户说的话——不挡的话界面上就是一条占满半屏的
+// 米色气泡，里面 16KB 英文摘要。
+describe("压缩后的续接提示不当用户消息", () => {
+  const SUMMARY =
+    "This session is being continued from a previous conversation that ran out of context. " +
+    "The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Primary Request";
+
+  it("带 isCompactSummary 的整条丢掉", () => {
+    const items = applyCLI([], {
+      type: "user",
+      isCompactSummary: true,
+      message: { role: "user", content: SUMMARY },
+    });
+    expect(items).toHaveLength(0);
+  });
+
+  it("带 isVisibleInTranscriptOnly 的也丢掉（转录里两者同时出现）", () => {
+    const items = applyCLI([], {
+      type: "user",
+      isCompactSummary: true,
+      isVisibleInTranscriptOnly: true,
+      message: { role: "user", content: SUMMARY },
+    });
+    expect(items).toHaveLength(0);
+  });
+
+  // 压缩正好赶上用户发消息时，CLI 把续接提示与用户那句话**拼成一条** user 行。
+  // 整条丢掉等于把用户刚说的话吞了；整条显示就是一大段英文摘要。
+  it("与用户那句话拼在一起时只留用户那半句", () => {
+    const text =
+      SUMMARY +
+      "\n\nContinue the conversation from where it left off without asking the user any further questions. " +
+      "Resume directly — do not acknowledge the summary, do not recap what was happening, " +
+      "do not preface with \"I'll continue\" or similar. Pick up the last task as if the break never happened.\n\n" +
+      "The messages after this summary are the most recent messages from before compaction, kept verbatim. " +
+      "The summary was written without seeing them, so something it says has not happened yet may already have happened in them." +
+      " 压缩上下文之后返回了这么一段，然后上下文占用也没小";
+    const items = applyCLI([], { type: "user", message: { role: "user", content: text } });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "user", text: "压缩上下文之后返回了这么一段，然后上下文占用也没小" });
+  });
+
+  it("认不出收尾语时按整条注入处理（宁可不显示，也不糊一屏英文）", () => {
+    const items = applyCLI([], {
+      type: "user",
+      message: { role: "user", content: SUMMARY + "\n\n（未来的版本换了措辞）" },
+    });
+    expect(items).toHaveLength(0);
+  });
+
+  it("普通提问照样进消息流", () => {
+    const items = applyCLI([], {
+      type: "user",
+      message: { role: "user", content: [{ type: "text", text: "继续" }] },
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "user", text: "继续" });
   });
 });
 

@@ -10,6 +10,7 @@
 import {
   applyUsageMessage,
   cacheHitRate,
+  compactMetaOf,
   contextTokens,
   formatTokens,
   totalsFromUsage,
@@ -18,6 +19,7 @@ import {
 import { interruptReason } from "./model";
 import type { Item, SubagentInfo, ToolImage, TurnUsage, UserImage } from "./model";
 import type { CommandInfo } from "../transport/types";
+import { isInjectedUserRow, splitContinuation } from "./continuation";
 
 let idCounter = 0;
 function nextId(): string {
@@ -182,6 +184,10 @@ export function applyCLI(
   // 不挡的话它会被当成用户又发了一句，气泡里凭空多出一条 `[Image: source: /tmp/…]`，
   // 而且轮次刻度也跟着多一格。
   if (m.isSidechain === true || m.isMeta === true) return items;
+  // 压缩之后 CLI 会把摘要当一条 user 行塞回上下文（`isCompactSummary` /
+  // `isVisibleInTranscriptOnly`）。它是给模型看的续接提示，不是用户说的话——
+  // 不挡的话界面里就是一条占满半屏的英文摘要气泡（见 lib/continuation.ts）。
+  if (m.type === "user" && isInjectedUserRow(m)) return items;
   switch (m.type) {
     case "stream_event":
       return applyStreamEvent(items, m, at);
@@ -862,6 +868,11 @@ function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): 
   const blocks = Array.isArray(content) ? content : [];
   const images = userImagesOf(blocks);
   const results = blocks.filter((b) => asRecord(b)?.type === "tool_result");
+  // 上下文压缩后 CLI 会把续接提示**拼在用户下一句话前面**写成同一条 user 行
+  // （见 lib/continuation.ts）。摘要是给模型看的，界面只该留用户真敲的那段；
+  // 一个字的用户正文都没剩下时整条丢掉。
+  const split = splitContinuation(textOfContent(content));
+  if (split.injected && split.rest === "" && images.length === 0) return items;
 
   if (results.length > 0) {
     // tool_use_result 是**整条消息**上的单值；一条 user 行里出现多个 tool_result 时
@@ -941,7 +952,9 @@ function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): 
   if (attachmentEcho) {
     // 空数组不能走 textOfContent：它会把「无可读文本」降级成 JSON 预览（"[]"），
     // 拼出来的气泡就变成 "[]\n附件：a.txt"。
-    const prompt = promptBlocks.length > 0 ? textOfContent(promptBlocks) : "";
+    const raw = promptBlocks.length > 0 ? textOfContent(promptBlocks) : "";
+    // 续接提示与用户这句话拼在同一条里时，只留用户真敲的那段（见 applyUser 开头）。
+    const prompt = splitContinuation(raw).rest;
     const names = fileBlocks
       .map(fileNameOfBlock)
       .filter((n): n is string => typeof n === "string" && n !== "");
@@ -979,7 +992,7 @@ function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): 
 
   // 纯用户文本：本地发送时已经插过一条，这里按内容去重，避免重复。
   // 转录回放例外（见 `ApplyOptions.replay`）：那里的每条 user 行都是真的发过的。
-  const text = textOfContent(content);
+  const text = split.rest;
   if (!text) return items;
   if (!opts.replay && echoAlreadyShown(items, text)) return items;
   return [...items, { id: nextId(), seq: seqOf(items), ts: at, kind: "user", text }];
@@ -1115,16 +1128,21 @@ export function turnsFromTranscript(lines: unknown[]): TranscriptTurn[] {
   return out.filter((t) => t.ts > 0);
 }
 
-/** 这条 user 行是用户的提问，而不是工具回包 / 本地命令回显。 */
+/** 这条 user 行是用户的提问，而不是工具回包 / 本地命令回显 / CLI 注入的续接提示。 */
 function isPromptLine(line: Raw): boolean {
+  // 压缩后塞回上下文的摘要不是用户的话，不能当一轮的开始（否则那一轮的用量被算进它）。
+  if (isInjectedUserRow(line)) return false;
   const content = asRecord(line.message)?.content;
-  if (typeof content === "string") return !isLocalCommandEcho(content) && content.trim() !== "";
+  if (typeof content === "string") {
+    const text = splitContinuation(content).rest;
+    return !isLocalCommandEcho(text) && text.trim() !== "";
+  }
   if (!Array.isArray(content)) return false;
   if (content.some((b) => asRecord(b)?.type === "tool_result")) return false;
   // 只发了图片/PDF 的提问没有 text block，但它照样是「一轮的开始」：不认的话这一轮的
   // 用量会被并进上一轮（lib/usage.ts 的同名判定早已按这个口径，两处必须一致）。
   if (content.some((b) => ["image", "document"].includes(str(asRecord(b)?.type)))) return true;
-  const text = content.map((b) => str(asRecord(b)?.text)).join("");
+  const text = splitContinuation(content.map((b) => str(asRecord(b)?.text)).join("")).rest;
   return text.trim() !== "" && !isLocalCommandEcho(text);
 }
 
@@ -1320,11 +1338,14 @@ function applySystem(items: Item[], m: Raw, at: number): Item[] {
 
   // 上下文压缩是回合之间真实发生过的事，转录里也有；不显示的话用户会以为
   // 历史无缘无故变短了。
+  //
+  // 字段名两边不同：**实时帧是 `compact_metadata`（snake），转录里落盘成
+  // `compactMetadata`（camel）**。只认一个的话，实时看得见这条提示、重开对话后它就消失
+  // （或者反过来）。两个都认。
   if (m.subtype === "compact_boundary") {
-    const meta = asRecord(m.compact_metadata);
-    const trigger = meta?.trigger === "manual" ? "手动" : "自动";
-    const pre =
-      typeof meta?.pre_tokens === "number" ? `，压缩前 ${formatTokens(meta.pre_tokens)} tokens` : "";
+    const meta = compactMetaOf(m);
+    const trigger = meta.trigger === "manual" ? "手动" : "自动";
+    const pre = meta.preTokens !== undefined ? `，压缩前 ${formatTokens(meta.preTokens)} tokens` : "";
     return pushSystem(items, at, "compact_boundary", `上下文已${trigger}压缩${pre}`);
   }
   // 本地命令回显也可能走 system 通道，同样整条丢弃。
