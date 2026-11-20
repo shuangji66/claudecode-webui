@@ -90,8 +90,14 @@ const (
 	// 好几个标签页都收到了同一个 can_use_tool，其中一台批准之后，CLI 只会
 	// 继续往下跑，不会再发任何东西暗示「这条已经处理完」，所以必须由后端广播。
 	KindPermissionResolved = "permission.resolved"
-	KindError              = "error"
-	KindClosed             = "closed"
+	// KindSessionReplaced 表示 CLI 换了会话 id（`/clear` 之后它会新开一份转录，
+	// 之后的轮次都写在新 id 下）。
+	//
+	// 上层必须据此把对话元数据迁到新 id：否则重开对话时按旧 id `--resume`，
+	// 用户会拿回**自己刚刚清掉**的上下文。`data` 是 `{from, to}`。
+	KindSessionReplaced = "session.replaced"
+	KindError           = "error"
+	KindClosed          = "closed"
 )
 
 // writeReq 是一条待写入 stdin 的行；ack 非空时调用方等待写入结果。
@@ -149,6 +155,16 @@ type Session struct {
 	// 模型自己 ExitPlanMode、用户在别处切换、重连后进程换了默认模式，都只在这里体现。
 	modeMu sync.RWMutex
 	mode   string
+
+	// cliSID 是 CLI 当前正在用的会话 id（`system/init` 的 session_id）。
+	//
+	// 它与 New 传进来的 ID 通常相同，但**`/clear` 之后会变成另一个**：CLI 会新开
+	// 一份转录，后续轮次都写在那个 id 下。上层要拿它去迁移对话元数据，否则重开对话
+	// 时 `--resume 旧 id` 会把用户刚刚清掉的上下文又读回来。
+	//
+	// 只由读循环写（handleLine），由 CLI sessionID() 读。
+	cliMu  sync.RWMutex
+	cliSID string
 
 	// seq 给「一次性的控制请求」发号：request_id 重复会让 pending 表互相覆盖
 	// （set_permission_mode 尤其明显——用户可能在几秒内连点两下档位）。
@@ -250,6 +266,13 @@ func New(id, cwd string, tr Transport, emit func(Event)) *Session {
 		tasks:     make(map[string]taskRef),
 		done:      make(chan struct{}),
 		epoch:     newEpoch(),
+		// 初值取我们启动/恢复用的那个 id（`--session-id` / `--resume` 传进去的）。
+		//
+		// **不能留空等第一个 system/init 来填**：那样第一个 init 会走「首次记录、
+		// 不算变」的分支，而 `/clear` 之后紧跟的那条 init 恰恰可能就是它——新会话
+		// 第一次进 handleLine 时就已经换了 id，`session.replaced` 永远发不出去
+		// （实测踩过：链路全对，就是不触发）。
+		cliSID: id,
 	}
 	s.state.Store(StateStarting)
 	s.idle.Store(time.Now().UnixNano())
@@ -335,6 +358,39 @@ func (s *Session) Mode() string {
 	defer s.modeMu.RUnlock()
 	return s.mode
 }
+
+// CLISessionID 返回 CLI 当前实际在用的会话 id（最近一条 `system/init` 的 session_id）。
+//
+// 正常情况下等于 s.ID；**`/clear` 之后会变成另一个**（CLI 新开一份转录）。
+// 还没收到任何 init 时回退到 s.ID，调用方不用判空。
+func (s *Session) CLISessionID() string {
+	s.cliMu.RLock()
+	defer s.cliMu.RUnlock()
+	if s.cliSID != "" {
+		return s.cliSID
+	}
+	return s.ID
+}
+
+// noteCLISession 记下 CLI 报上来的 session_id；**真的变了才返回 true**。
+//
+// 首次记录（空 → 值）**不算变**：那是会话正常启动时的第一个 init。之后每次 init
+// 都带 session_id（每个回合都有一条），与已记下的相同就是正常一轮；不同才是
+// `/clear` 那种「CLI 换了会话」。
+func (s *Session) noteCLISession(id string) bool {
+	if id == "" {
+		return false
+	}
+	s.cliMu.Lock()
+	defer s.cliMu.Unlock()
+	if s.cliSID == id {
+		return false
+	}
+	first := s.cliSID == ""
+	s.cliSID = id
+	return !first
+}
+
 
 // justFinishedTurn 表示最近一条 result 还在 TurnHandoffWindow 之内。
 func (s *Session) justFinishedTurn() bool {
@@ -850,6 +906,39 @@ func (s *Session) handleLine(line []byte) {
 	}
 
 	switch env.Type {
+	case protocol.TypeKeepAlive:
+		// 纯心跳，无载荷。**直接丢弃**：走到 default 会被当成一条 cli 事件转给前端
+		// 并进入重放缓冲——长时间的控制请求期间 CLI 会周期性发它，几十条垃圾事件足以
+		// 把真正需要补发的历史挤出 replayMaxEvents。前端也不该看见它（normalize 会忽略）。
+		return
+
+	case protocol.TypeControlCancelRequest:
+		// CLI 撤回自己先前发出的控制请求。对我们来说只会是 can_use_tool：
+		// 用户中断了整轮、另一台设备已经作答、或者 remote worker 接手了这张卡片。
+		// 我们这边必须把卡片撤掉，否则它会永远挂在界面上（多设备时尤其明显）。
+		//
+		// 语义上**不回包**：撤回是单向的，回一条 control_response 反而会让 CLI
+		// 以为有人在回答一条已经作废的请求。
+		if id := env.CancelTarget(); id != "" {
+			s.forgetPermission(id)
+			// 也可能撤回的是我们自己发出的控制请求（拦截/切模型之类）。
+			// 不在这里收尾的话，request() 会一直挂到超时才返回，期间读循环虽然没被
+			// 阻塞，但调用方（网关的 HTTP 请求）白等一场。回一条 error 让它立刻结束。
+			s.pmu.Lock()
+			call, pending := s.pending[id]
+			if pending {
+				delete(s.pending, id)
+			}
+			s.pmu.Unlock()
+			if pending {
+				select {
+				case call.ch <- controlResponse{subtype: "error", errText: "claude 撤回了这条请求"}:
+				case <-call.done:
+				}
+			}
+		}
+		return
+
 	case protocol.TypeControlResponse:
 		// request_id 在 response.request_id，不在顶层。
 		s.pmu.Lock()
@@ -907,7 +996,17 @@ func (s *Session) handleLine(line []byte) {
 		// 同样会走到这里。界面据此对齐，而不是自己记一份可能过期的状态。
 		if mode, ok := protocol.PermissionModeOf(env.Raw); ok {
 			s.setMode(mode)
-			s.emitData(KindSessionState, map[string]any{"mode": mode})
+			s.emitData(KindSessionState, map[string]any{"id": s.ID, "mode": mode})
+		}
+		// CLI 换了会话 id（`/clear` 之后会这样）：后续轮次写进另一份转录。
+		// 上层要拿它迁移对话元数据，否则重开对话时 --resume 旧 id 会把用户刚刚
+		// 清掉的上下文又读回来。
+		//
+		// **以 system/init 的 session_id 为准，不用 conversation_reset 的
+		// new_conversation_id**：实测两者是不同的 UUID，而后者在磁盘上根本
+		// 不存在转录（见 AGENTS.md 4.7）。
+		if sid, ok := protocol.SessionIDOf(env.Raw); ok && s.noteCLISession(sid) {
+			s.emitData(KindSessionReplaced, map[string]any{"from": s.ID, "to": sid})
 		}
 		// 后台任务的 task_id 只在这条流里出现，记下来随快照发给后来连上的设备
 		// （它们靠转录回放拿不到，见 LiveTasks）。

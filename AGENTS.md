@@ -121,6 +121,19 @@ hub ── manager ── session ── process ── claude (NDJSON)
 16. **对话 id 必须稳定**。新建会话用 UUID 作为 `--session-id`，恢复用同一个 UUID `--resume`；
     `Info.ID`、转录文件名、`conversations.json`、前端 active id 必须是同一个值。
     不要用「按 cwd ensure 一个新的」来恢复旧对话——那会造出新对话、丢掉上下文。
+    **唯一的例外是 `/clear`**（见 4.7 的 `conversation_reset`）：claude 自己换了会话 id
+    并把后续轮次写进新转录，我们跟着它走——否则重开对话会按旧 id `--resume`，
+    把用户**刚刚清掉**的上下文又读回来。这条路径是 `session.KindSessionReplaced`
+    → `conversation.Rekey`，只迁应用元数据、不动转录，旧 id 留一份 `superseded_by`
+    墓碑（列表不列、历史记录仍可翻）。它稳住的正是本条规则的用意，不是绕开它。
+17. **禁止模型回退**。`settings.Env()` 固定注入 `CLAUDE_CODE_NO_MODEL_FALLBACK=1`。
+    CLI 会在好几条路径上悄悄换模型：可用性回退链（主模型不可达时换 tier 默认值）、
+    积分 consent gate 的替换、**拒答回退**（换个模型绕过 `stop_reason=refusal`）。
+    界面上写着「当前模型」就必须真的是那个模型。别靠「`ANTHROPIC_DEFAULT_*` 恰好都指向
+    同一个模型」来保证——那只是让回退链被 CLI 的「不得回退到自身」过滤掉，
+    一旦用户配了第二个模型就会重新长出回退。
+    副作用只有一个（可接受）：上下文压缩本来会**换模型**生成摘要，现在压缩失败会明确
+    报 `model substitution is disabled`，而不是静默换一个模型去做。
 
 ## 4. 踩过的坑（都已在代码里修好，别改回去）
 
@@ -180,6 +193,27 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `canUseTool` 不被调用，提问到不了前端，模型会自己往下走。
 - 作答草稿按 `request_id` 存浏览器本地（`lib/askDrafts.ts`）：切对话 / 重载回来还在；
   提交成功、`permission.resolved`、进程结束、中断时清掉，避免下次同 id 的卡片带着过期答案回填。
+
+### 4.2.2 CLI 撤回审批（`control_cancel_request`）
+
+- 除了「用户按停止」（走 `Interrupt` → `clearPermissions`），CLI 还会**自己**撤回一张
+  `can_use_tool`：另一台设备已经作答、remote worker 接手、或者上游判定这张卡不必再问。
+  撤回走的是**另一种帧**：
+  `{"type":"control_cancel_request","request_id":"<被撤回的 id>"}`。
+- **语义是单向的，不回包**：发送方立刻停止等待并忽略之后到达的同 id `control_response`；
+  收到的一方直接当作废。我们回一条 `control_response` 等于在回答一条已经取消的请求。
+- `session.handleLine` 认这个类型 → `forgetPermission(request_id)`，复用已有的
+  `permission.resolved` 广播链路（多设备撤卡靠的就是它）。**不处理的话，卡片会永远挂着**，
+  和 4.2 里记的「多设备卡片永远挂着」是同一类问题的另一半。
+- 顺手也收掉我们自己发的、被撤回的控制请求（`pending[id]` 立刻回 error），
+  否则那个 `request()` 会一直挂到超时。
+
+### 4.2.3 `keep_alive` 必须丢弃
+
+- CLI 在长跑的控制请求期间会周期发 `{"type":"keep_alive"}`（无载荷）。
+  它**不能走 default 分支**：那样会被当成一条普通 cli 事件转给前端、并进入重放缓冲
+  （`replayMaxEvents=4096`）。几十条心跳足以把真正需要补发的历史挤掉，
+  断线重连时就少一段消息。`session.handleLine` 里第一个 case 直接 `return`。
 
 ### 4.3 Go 侧
 
@@ -468,6 +502,53 @@ hub ── manager ── session ── process ── claude (NDJSON)
   每句话显示两遍；`lib/normalize.ts` 的做法是「摘掉流式气泡后按内容块顺序重建」——
   一条消息里的多个 text 块各自成段，thinking 排在正文之前（曾经只取第一个 text 块，
   还把 thinking 挤到答案下面）。
+- **`thinking_delta` 也要走流式**（2.1.329 实测帧序：`message_start` →
+  `content_block_start(thinking)` → 多条 `thinking_delta`（中间夹 `system/thinking_tokens`）
+  → `signature_delta` → `content_block_stop` → `assistant`）。只认 `text_delta` 时，
+  模型思考几十秒到几分钟期间界面**完全静止**，用户会以为会话卡死。
+  `ThinkingItem.streaming` 与 `AssistantItem.streaming` 各自维护自己的流式气泡
+  （两者交替到达，不能互相吞掉），完整消息到达时各自「摘掉流式、按块重建」。
+  `settleStreaming` 必须同时收掉两者——只收正文的话，被中断的回合里思考块的光标永远在闪。
+- **`system/*` 里有一批只有结构化字段、没有 `content` 的消息**，早先全部静默穿过。
+  已接的分支与理由（都在 `applySystem`）：
+  - `api_retry`：上游 429/5xx 重试。高峰期很常见，不显示就是「莫名卡住」。
+  - `status: compacting` / `compact_result: "failed"`：压缩要跑几十秒；失败是静默的数据损失，
+    原因只在 `compact_error` 里。`compacting` 用 `pushOngoing` **去重**（一次压缩会连发很多条）。
+  - `hook_response`（只报非 success）/ `stop_hook_summary`（`hookErrors` 非空）：
+    这是用户唯一能看见「我这个 hook 挂了」的地方，输出在 `output`/`stdout`/`stderr` 里。
+  - `model_fallback` / `model_refusal_fallback` / `informational`：CLI 自己在 `content` 里
+    写好了人话，走通用分支即可。
+- **`system/commands_changed` 要替换斜杠命令缓存**（CLI 原话：clients should REPLACE
+  their cached command list）。会话中途装的技能、动态发现的命令靠它进 `/` 菜单。
+  它**不进消息流**，由 store 的 `cli` 分支用 `commandsChanged` 写回 `inits[sid].commands`。
+- **`conversation_reset`（`/clear`）必须显示**：实测常驻会话里的帧序是
+  `result` → `conversation_reset{trigger:"clear"}` → `system/background_tasks_changed`
+  → `system/init{session_id: <新 id>}`。CLI 会**换一个会话 id**并把之后的轮次写到
+  新转录里；旧转录停在 clear 之前。界面上不提示的话，「刚才说过的话模型怎么不记得了」
+  完全无从解释。`trigger` 有 `clear` / `plan_mode_exit` / `fresh_session` / `onboarding`，
+  未知值说「已重置」，别硬猜成 `/clear`。
+  注意 **`new_conversation_id` 不等于之后用的 `session_id`**（实测两者不同，且前者
+  在磁盘上没有转录）。真正该跟的是 `system/init` 里的 `session_id`，
+  见下面那条「换 id」。
+- **`/clear` 换 id 的完整链路**（跟 claude 走，不留在旧 id 上）：
+  ① `session` 用 `protocol.SessionIDOf` 认 `system/init` 的 `session_id`，
+  变了就广播 `session.replaced{from,to}`（`KindSessionReplaced`）；
+  ② 装配层（`cmd/ccweb`）调 `conversation.Rekey` 把元数据迁到新 id，旧 id 留
+  `superseded_by` 墓碑——**旧转录仍在磁盘上、标题也还在**，不留墓碑的话
+  `handleListConversations` 第 1 步扫转录会把「清空前」那条重新列出来，侧栏同时出现两条；
+  ③ 前端把**描述同一个进程**的状态（states/inits/modes/queued/liveTasks/doneIds）
+  搬过去，把**描述被清掉那段上下文**的状态（items/usage/subagentItems）丢掉——
+  搬过去的话新会话会显示清空前的历史 + 满格上下文占用，而 claude 那边是空的；
+  挂起的审批也丢掉（旧会话的挂起表已作废）。`activeId` 与 localStorage 里的
+  `ccweb-active-session` 一起换。
+  用户从历史记录点回旧 id 时，`Touch` 会清掉 `superseded_by`——他显式回到了那份历史，
+  不该再被藏起来。
+- **`system/init` 的 `mcp_servers` 要提示**：它是「这个会话实际连上了什么」的唯一来源，
+  设置 → MCP 的探测回答不了。非 `connected`/`disabled` 的条目在 ChatPane 顶部挂一条横幅。
+- **`tool_progress` 的 `subagent_retry`** 写进 `ToolItem.progressNote`（单独字段：
+  秒数每秒在变，说明只在事件到达时变，混在一起标签会抖）。
+- `system/thinking_tokens` 是思考 token 的**实时估算**，只写 `thinkingTokens`，
+  **不参与上下文/输出/合计任何一处计算**（它是估算值，不是计费口径）。
 - 工具集会随 CLI 版本漂移（实测 2.1.325 的 API 请求只带 12 个工具，且有
   `ToolSearch` / `DeferredToolPlaceholder`）。**必须保留 `GenericCard` 兜底**，
   禁止硬编码工具清单。
@@ -1041,6 +1122,8 @@ cd frontend && npx tsc --noEmit
 - [ ] 新增工具卡片是否注册进 `ToolCardHost`，且未删除兜底？
 - [ ] 流式路径是否仍满足「替换而非追加」？
 - [ ] 对话恢复是否用稳定 UUID `--resume`？空对话/归档/删除是否会被误恢复？
+- [ ] 是否新增了会被静默吞掉的 `system/*` 子类型？只有结构化字段（`api_retry`、`hook_response`、
+      `status` 的压缩态）的那些**必须显式接**，否则就是「界面毫无反应」的一类 bug。
 - [ ] 转录回放是否过滤 sidechain/meta，并保留原始时间戳？被截断（20k 行 / 16MB）时有没有提示？
 - [ ] 新增右侧栏路由是否过了 `authorizedCwd` / 路径围栏？raw 预览是否仍在白名单？
 - [ ] 右侧栏标签切走、收起整条侧栏时是否都只隐藏不卸载（终端 PTY 不能被杀）？Git 是否仍只 pull？

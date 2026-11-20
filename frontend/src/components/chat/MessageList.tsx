@@ -127,7 +127,7 @@ const MessageRow = memo(function MessageRow({
     case "thinking":
       return (
         <div {...box(dense)}>
-          <ThinkingBlock text={item.text} dense={dense} />
+          <ThinkingBlock text={item.text} dense={dense} streaming={item.streaming} />
         </div>
       );
     case "tool":
@@ -257,9 +257,15 @@ const TurnRows = memo(function TurnRows({
                   </div>
                 );
               } else if (entry.type === "thinking") {
+                // 连续的思考块合成一行：**只要其中任意一块还在流，整行就算在流**
+                // （CLI 一次思考常被拆成好几块，流式期间最后一块在长）。
                 row = (
                   <div key={entry.key} className={dense ? "mt-1" : undefined}>
-                    <ThinkingBlock text={entry.items.map((it) => it.text).join("\n\n")} dense={dense} />
+                    <ThinkingBlock
+                      text={entry.items.map((it) => it.text).join("\n\n")}
+                      dense={dense}
+                      streaming={entry.items.some((it) => it.streaming === true)}
+                    />
                   </div>
                 );
               } else {

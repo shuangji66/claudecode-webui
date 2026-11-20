@@ -117,3 +117,52 @@ func TestTopicIsolationAfterFailure(t *testing.T) {
 		t.Fatalf("s2 不应受影响，实际 %d", h.Count("s2"))
 	}
 }
+
+// `/clear` 之后会话 id 变了：订阅要跟着搬，否则已经连着的页面从此收不到任何事件。
+func TestRekeyMovesSubscribers(t *testing.T) {
+	h := New()
+	c := &fakeClient{}
+	h.Subscribe("old", c)
+
+	h.Rekey("old", "new")
+
+	if h.Count("old") != 0 {
+		t.Fatalf("旧 topic 上还有 %d 个订阅者", h.Count("old"))
+	}
+	if h.Count("new") != 1 {
+		t.Fatalf("新 topic 上有 %d 个订阅者，want 1", h.Count("new"))
+	}
+	// 真的能收到：事件按新 topic 广播，那个连接要收到。
+	h.Broadcast("new", map[string]string{"k": "v"})
+	if len(c.got) != 1 {
+		t.Fatalf("订阅者没收到事件（sent=%d）", len(c.got))
+	}
+}
+
+// 目标 topic 上已有的订阅者要保留（别的连接），两边合并。
+func TestRekeyMergesSubscribers(t *testing.T) {
+	h := New()
+	a, b := &fakeClient{}, &fakeClient{}
+	h.Subscribe("old", a)
+	h.Subscribe("new", b)
+
+	h.Rekey("old", "new")
+
+	if h.Count("new") != 2 {
+		t.Fatalf("新 topic 上有 %d 个订阅者，want 2", h.Count("new"))
+	}
+	h.Broadcast("new", map[string]string{"k": "v"})
+	if len(a.got) != 1 || len(b.got) != 1 {
+		t.Fatalf("合并后两个连接都该收到（a=%d b=%d）", len(a.got), len(b.got))
+	}
+}
+
+// 旧 topic 没有订阅者 / 同一个 topic 时是空操作。
+func TestRekeyNoop(t *testing.T) {
+	h := New()
+	h.Rekey("missing", "new")
+	h.Rekey("x", "x")
+	if h.Count("new") != 0 {
+		t.Fatal("不该凭空建出订阅者")
+	}
+}

@@ -17,6 +17,7 @@ import {
 } from "./usage";
 import { interruptReason } from "./model";
 import type { Item, SubagentInfo, ToolImage, TurnUsage, UserImage } from "./model";
+import type { CommandInfo } from "../transport/types";
 
 let idCounter = 0;
 function nextId(): string {
@@ -125,6 +126,27 @@ export function isTurnResult(msg: unknown): boolean {
 }
 
 /**
+ * `system/commands_changed` 的斜杠命令列表；不是这条消息就返回 undefined。
+ *
+ * CLI 的语义是**替换**整份缓存列表（会话中途发现新技能、加载了插件都会推它）。
+ * 不进消息流：它只影响 `/` 菜单，渲染成一条系统提示只是噪音。
+ */
+export function commandsChanged(msg: unknown): CommandInfo[] | undefined {
+  const m = asRecord(msg);
+  if (!m || m.type !== "system" || m.subtype !== "commands_changed") return undefined;
+  if (!Array.isArray(m.commands)) return undefined;
+  return m.commands
+    .map((c) => asRecord(c))
+    .filter((c): c is Raw => !!c && typeof c.name === "string" && c.name !== "")
+    .map((c) => ({
+      name: c.name as string,
+      ...(typeof c.description === "string" ? { description: c.description } : {}),
+      ...(typeof c.argumentHint === "string" ? { argumentHint: c.argumentHint } : {}),
+      ...(typeof c.builtin === "boolean" ? { builtin: c.builtin } : {}),
+    }));
+}
+
+/**
  * applyCLI 的调用方式选项。
  *
  * `replay` 表示「这是磁盘上的转录回放」，而不是实时流：**回显去重必须关掉**。
@@ -172,6 +194,21 @@ export function applyCLI(
     case "system":
       // 任务事件（子代理 / 后台命令）要先折进对应的工具卡片，再走通用 system 渲染。
       return applyTaskEvent(items, m, at) ?? applySystem(items, m, at);
+    case "conversation_reset":
+      // `/clear`（以及退出计划模式时选「清空上下文」）让 CLI 丢掉整份对话历史。
+      // 这是**用户必须知道**的事：他的上下文被清空了，而界面上还留着清空前的消息。
+      // 不显示的话，「刚才说过的话模型怎么不记得了」完全无从解释。
+      return [
+        ...items,
+        {
+          id: nextId(),
+          seq: seqOf(items),
+          ts: at,
+          kind: "system",
+          subtype: "conversation_reset",
+          text: resetText(m),
+        },
+      ];
     case "tool_progress":
       return applyToolProgress(items, m);
     default:
@@ -216,16 +253,20 @@ export function isInterruptMarker(text: string): boolean {
  *
  * 只有完整 assistant 消息到达才会摘掉 `streaming`；一旦这一轮没有完整消息
  * （用户中断、进程崩溃、结果里只有错误），气泡会一直显示流式光标，看起来像还在写。
+ *
+ * **思考气泡同样要收**：`thinking_delta` 走的是同一套流式标记，不一起收的话，
+ * 一轮被中断时那个思考块会永远显示「还在写」。
  */
 export function settleStreaming(items: Item[]): Item[] {
   let changed = false;
   const out = items.map((it) => {
-    if (it.kind !== "assistant" || !it.streaming) return it;
+    if ((it.kind !== "assistant" && it.kind !== "thinking") || !it.streaming) return it;
     changed = true;
     return { ...it, streaming: false };
   });
   return changed ? out : items;
 }
+
 
 /** 本回合（最后一条 result 之后）是否出现过中断标记。 */
 function interruptedThisTurn(items: Item[]): boolean {
@@ -241,7 +282,25 @@ function applyStreamEvent(items: Item[], m: Raw, at: number): Item[] {
   const ev = asRecord(m.event);
   if (!ev || ev.type !== "content_block_delta") return items;
   const delta = asRecord(ev.delta);
-  if (!delta || delta.type !== "text_delta" || typeof delta.text !== "string") return items;
+  if (!delta) return items;
+
+  // 思考的逐字增量。**必须单独处理**：只认 text_delta 时，模型长时间思考（几十秒
+  // 到几分钟）界面上完全静止，要等完整 assistant 消息到齐思考块才出现——用户会
+  // 以为会话卡死。思考与正文是两种块，各自维护自己的流式气泡。
+  if (delta.type === "thinking_delta") {
+    const piece = typeof delta.thinking === "string" ? delta.thinking : "";
+    if (!piece) return items;
+    const last = items[items.length - 1];
+    if (last && last.kind === "thinking" && last.streaming) {
+      return [...items.slice(0, -1), { ...last, text: last.text + piece }];
+    }
+    return [
+      ...items,
+      { id: nextId(), seq: seqOf(items), ts: at, kind: "thinking", text: piece, streaming: true },
+    ];
+  }
+
+  if (delta.type !== "text_delta" || typeof delta.text !== "string") return items;
 
   const last = items[items.length - 1];
   if (last && last.kind === "assistant" && last.streaming) {
@@ -259,6 +318,28 @@ function applyStreamEvent(items: Item[], m: Raw, at: number): Item[] {
     },
   ];
 }
+
+/**
+ * 摘掉列表里所有「还在流」的思考气泡，返回新列表与它们拼起来的文字。
+ *
+ * 完整 assistant 消息到达时，思考的**完整内容**在它自己的 thinking 块里；留着流式
+ * 那一份会让同一段思考出现两遍。与正文流式气泡的处理同理，只是两者各管各的。
+ */
+function takeStreamingThoughts(items: Item[]): { rest: Item[]; leftover: string; at: number } {
+  const rest: Item[] = [];
+  let leftover = "";
+  let at = -1;
+  for (const it of items) {
+    if (it.kind === "thinking" && it.streaming) {
+      if (at < 0) at = rest.length;
+      leftover += it.text;
+      continue;
+    }
+    rest.push(it);
+  }
+  return { rest, leftover, at };
+}
+
 
 function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
   const message = asRecord(m.message);
@@ -288,6 +369,14 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
   }
   // 流式气泡原来的位置：只有增量、没有正文块时要把字补回这里，别挪到工具卡片后面。
   if (insertAt < 0) insertAt = out.length;
+
+  // 思考的流式气泡同样要先摘掉：完整消息里带着完整 thinking 块，留着会显示两遍。
+  // 它和正文的流式气泡是两种块，各自记录自己的残留文字与插入位置。
+  const thought = takeStreamingThoughts(out);
+  out = thought.rest;
+  let thoughtInsertAt = thought.at;
+  if (thoughtInsertAt < 0) thoughtInsertAt = out.length;
+  let thoughtCount = 0;
 
   let textCount = 0;
   // 上游中继（Anthropic 兼容代理）会把同一条消息的内容块重放多份：实测一次 /doctor
@@ -326,6 +415,7 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
       if (prevKind === "thinking" && prevText === block.thinking) continue;
       prevKind = "thinking";
       prevText = block.thinking;
+      thoughtCount += 1;
       out = [
         ...out,
         { id: nextId(), seq: seqOf(out), ts: at, kind: "thinking", text: block.thinking },
@@ -366,6 +456,21 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
       ...out.slice(0, insertAt),
       { id: nextId(), seq: seqOf(out), ts: at, kind: "assistant", text: leftover, streaming: false, ...(apiError ? { apiError } : {}) },
       ...out.slice(insertAt),
+    ];
+  }
+  // 思考同理：只有 thinking_delta、完整消息里却没有 thinking 块时，把已收到的补回去。
+  if (thoughtCount === 0 && thought.leftover) {
+    out = [
+      ...out.slice(0, thoughtInsertAt),
+      {
+        id: nextId(),
+        seq: seqOf(out),
+        ts: at,
+        kind: "thinking",
+        text: thought.leftover,
+        streaming: false,
+      },
+      ...out.slice(thoughtInsertAt),
     ];
   }
   return out;
@@ -490,10 +595,25 @@ function applyToolProgress(items: Item[], m: Raw): Item[] {
   const toolUseId = str(m.tool_use_id);
   const elapsed = int(m.elapsed_time_seconds);
   if (!toolUseId || elapsed === undefined) return items;
+  // 子代理正在重试（`subagent_retry`）：不带这条的话，重试期间卡片上的秒数照走，
+  // 用户只看到「跑了很久」，看不出是在重试、第几次、为什么。
+  const retry = asRecord(m.subagent_retry);
+  const retryNote = retry
+    ? [
+        `重试第 ${int(retry.attempt) ?? 1}${int(retry.max_retries) !== undefined ? `/${int(retry.max_retries)}` : ""} 次`,
+        int(retry.error_status) !== undefined ? `HTTP ${int(retry.error_status)}` : "",
+        str(retry.error_category),
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
   return items.map((it) =>
-    it.kind === "tool" && it.toolUseId === toolUseId ? { ...it, progress: elapsed } : it,
+    it.kind === "tool" && it.toolUseId === toolUseId
+      ? { ...it, progress: elapsed, ...(retryNote ? { progressNote: retryNote } : {}) }
+      : it,
   );
 }
+
 
 const AGENT_ID_RE = /\bagentId:\s*([A-Za-z0-9_-]{1,128})/;
 const SUBAGENT_USAGE_RE =
@@ -970,8 +1090,62 @@ function applyResult(items: Item[], m: Raw, at: number, usageHint?: UsageSnapsho
 }
 
 function applySystem(items: Item[], m: Raw, at: number): Item[] {
-  // init 只用于填充顶栏元信息，不进消息流；status 同理。
-  if (m.subtype === "init" || m.subtype === "status") return items;
+  const subtype = typeof m.subtype === "string" ? m.subtype : undefined;
+
+  // init 只用于填充顶栏元信息，不进消息流。
+  if (m.subtype === "init") return items;
+
+  // status 平时只是 permissionMode 的载体（由 store 消费），但两处**必须显示**：
+  //   - `compacting`：上下文压缩可能要跑几十秒（大上下文会话尤其），期间界面上
+  //     什么都不动，用户会以为会话死了；
+  //   - `compact_result: "failed"`：压缩失败是静默的数据损失（历史被截断却没压缩成），
+  //     原因只在 `compact_error` 里。
+  if (m.subtype === "status") {
+    if (m.status === "compacting") {
+      return pushOngoing(items, at, "status", "正在压缩上下文…");
+    }
+    if (m.compact_result === "failed") {
+      const reason = typeof m.compact_error === "string" ? m.compact_error.trim() : "";
+      return pushError(items, at, reason ? `上下文压缩失败：${reason}` : "上下文压缩失败");
+    }
+    return items;
+  }
+
+  // 上游 429/5xx 的重试。**载荷里没有 content**（全是结构化字段），会静默穿过这里。
+  // 中转/官方在高峰期重试好几次很常见，期间界面毫无反应，用户会以为卡死去按停止。
+  if (m.subtype === "api_retry") {
+    const attempt = typeof m.attempt === "number" ? m.attempt : 0;
+    const max = typeof m.max_retries === "number" ? m.max_retries : 0;
+    const status = typeof m.error_status === "number" ? ` HTTP ${m.error_status}` : "";
+    const kind = typeof m.error === "string" && m.error !== "unknown" ? `（${m.error}）` : "";
+    const delay = typeof m.retry_delay_ms === "number" ? `，${(m.retry_delay_ms / 1000).toFixed(1)}s 后重试` : "";
+    const counter = max > 0 ? `第 ${attempt}/${max} 次` : `第 ${attempt} 次`;
+    return pushSystem(items, at, "api_retry", `上游请求失败${status}${kind}，${counter}${delay}`);
+  }
+
+  // hook 的输出。**载荷在 output/stdout/stderr 里，没有 content**，同样会静默穿过。
+  // 成功的不必逐条报（一个回合可能触发几十次），失败才是用户唯一能看见
+  // 「我这个 hook 挂了」的地方。
+  if (m.subtype === "hook_response") {
+    const outcome = typeof m.outcome === "string" ? m.outcome : "";
+    if (outcome === "success") return items;
+    const name = typeof m.hook_name === "string" && m.hook_name ? m.hook_name : "hook";
+    const event = typeof m.hook_event === "string" && m.hook_event ? `（${m.hook_event}）` : "";
+    const code = typeof m.exit_code === "number" ? `，退出码 ${m.exit_code}` : "";
+    const detail = [m.stderr, m.stdout, m.output]
+      .map((v) => (typeof v === "string" ? v.trim() : ""))
+      .find((v) => v !== "");
+    const head = `${name}${event} ${outcome === "cancelled" ? "被取消" : "执行失败"}${code}`;
+    return pushSystem(items, at, "hook_response", detail ? `${head}\n${stripAnsi(detail)}` : head);
+  }
+
+  // Stop hook 的汇总：整条只有结构化字段，`hookErrors` 非空才值得说。
+  if (m.subtype === "stop_hook_summary") {
+    const errors = Array.isArray(m.hookErrors) ? m.hookErrors.filter((e) => typeof e === "string") : [];
+    if (errors.length === 0) return items;
+    return pushSystem(items, at, "stop_hook_summary", `Stop hook 出错：${errors.join("；")}`);
+  }
+
   // 上下文压缩是回合之间真实发生过的事，转录里也有；不显示的话用户会以为
   // 历史无缘无故变短了。
   if (m.subtype === "compact_boundary") {
@@ -979,35 +1153,61 @@ function applySystem(items: Item[], m: Raw, at: number): Item[] {
     const trigger = meta?.trigger === "manual" ? "手动" : "自动";
     const pre =
       typeof meta?.pre_tokens === "number" ? `，压缩前 ${formatTokens(meta.pre_tokens)} tokens` : "";
-    return [
-      ...items,
-      {
-        id: nextId(),
-        seq: seqOf(items),
-        ts: at,
-        kind: "system",
-        subtype: "compact_boundary",
-        text: `上下文已${trigger}压缩${pre}`,
-      },
-    ];
+    return pushSystem(items, at, "compact_boundary", `上下文已${trigger}压缩${pre}`);
   }
   // 本地命令回显也可能走 system 通道，同样整条丢弃。
   if (typeof m.content === "string" && isLocalCommandEcho(m.content)) return items;
   // hooks 输出等以 system + content 字符串形式上送，需要展示（并清洗 ANSI）。
+  // `model_fallback` / `model_refusal_fallback` / `informational` 这些也走这条路：
+  // CLI 自己在 `content` 里写好了人话，逐条再翻译反而会丢掉细节。
   if (typeof m.content === "string" && m.content) {
-    return [
-      ...items,
-      {
-        id: nextId(),
-        seq: seqOf(items),
-        ts: at,
-        kind: "system",
-        subtype: typeof m.subtype === "string" ? m.subtype : undefined,
-        text: stripAnsi(m.content),
-      },
-    ];
+    return pushSystem(items, at, subtype, stripAnsi(m.content));
   }
   return items;
+}
+
+/** 追加一条 system 文本（清掉 ANSI：hook 输出与进度条会带颜色与光标控制）。 */
+function pushSystem(items: Item[], at: number, subtype: string | undefined, text: string): Item[] {
+  return [...items, { id: nextId(), seq: seqOf(items), ts: at, kind: "system", subtype, text }];
+}
+
+/**
+ * 追加一条「进行中」类的状态提示，**相同文案不叠加**。
+ *
+ * `status: compacting` 在一次压缩里会连发很多条（每次 summary 增长都发一条），
+ * 逐条落地就是一屏「正在压缩上下文…」。同一条提示连续出现时只保留第一条即可。
+ */
+function pushOngoing(items: Item[], at: number, subtype: string, text: string): Item[] {
+  const last = items[items.length - 1];
+  if (last && last.kind === "system" && last.subtype === subtype && last.text === text) return items;
+  return pushSystem(items, at, subtype, text);
+}
+
+/** 追加一条错误提示（压缩失败这类「静默的数据损失」用它，比灰色小字显眼）。 */
+function pushError(items: Item[], at: number, text: string): Item[] {
+  return [...items, { id: nextId(), seq: seqOf(items), ts: at, kind: "error", text }];
+}
+
+/**
+ * `conversation_reset` 的人话。
+ *
+ * `trigger` 是 CLI 自己给的：`clear`（/clear、/reset、/new）、`plan_mode_exit`
+ * （退出计划模式时选了清空上下文）、`fresh_session`、`onboarding`。
+ * 未知取值说「已重置」，别硬猜成 /clear。
+ */
+function resetText(m: Raw): string {
+  switch (m.trigger) {
+    case "clear":
+      return "上下文已清空（/clear）";
+    case "plan_mode_exit":
+      return "退出计划模式，上下文已清空";
+    case "fresh_session":
+      return "已开始新的上下文（为执行已批准的计划）";
+    case "onboarding":
+      return "已重新跑一遍引导流程，上下文已清空";
+    default:
+      return "上下文已重置";
+  }
 }
 
 // CSI（颜色/光标/清屏）、OSC（窗口标题、超链接）、其余单字符 ESC 序列。

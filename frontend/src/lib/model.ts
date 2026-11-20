@@ -86,6 +86,14 @@ export interface AssistantItem extends BaseItem {
 export interface ThinkingItem extends BaseItem {
   kind: "thinking";
   text: string;
+  /**
+   * true 表示还在流式增长（收到完整 assistant 消息后转 false）。
+   *
+   * `--include-partial-messages` 会先给 `thinking_delta` 逐字增量、再给完整消息。
+   * 不给标记的话，长时间思考期间界面上什么都不动（要等整条消息到齐才出现），
+   * 用户会以为会话卡死了。
+   */
+  streaming?: boolean;
 }
 
 /** 一个子代理（claude 的 Task/Agent 任务）的实时状态。 */
@@ -138,7 +146,16 @@ export interface ToolItem extends BaseItem {
   subagent?: SubagentInfo;
   /** tool_progress 给的已运行秒数；没有进度事件时为空。 */
   progress?: number;
+  /**
+   * 进度事件里附带的一行说明（目前只有子代理重试：
+   * `重试第 2/3 次 · HTTP 529 · overloaded`）。
+   *
+   * 单独一个字段而不是拼进 `progress`：秒数每秒都在变，说明只在事件到达时变，
+   * 两者混在一起会让「运行中 12s」这种标签跟着抖。
+   */
+  progressNote?: string;
 }
+
 
 export interface SystemItem extends BaseItem {
   kind: "system";

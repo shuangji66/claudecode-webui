@@ -28,6 +28,7 @@ export function toolStatus(item: ToolItem, t: (zh: string, en?: string) => strin
   return { label: t("完成", "Done"), className: "bg-panel-strong text-muted", tone: "ok" };
 }
 
+
 const denseTone: Record<ToolStatus["tone"], string> = {
   run: "text-brand",
   fail: "text-danger",
@@ -83,6 +84,9 @@ export function ToolShell({ item, icon, title, subtitle, status, dense = false, 
           {subtitle && (
             <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted">{subtitle}</span>
           )}
+          {item.progressNote && item.result === undefined && (
+            <span className="shrink-0 text-[10.5px] text-warn">{item.progressNote}</span>
+          )}
           <span className={`ml-auto shrink-0 text-[10.5px] ${denseTone[badge.tone]}`}>{badge.label}</span>
         </button>
         {open && <div className="border-t border-line/70 pt-1.5 pb-1">{children}</div>}
@@ -100,6 +104,9 @@ export function ToolShell({ item, icon, title, subtitle, status, dense = false, 
         <span className="shrink-0 text-muted">{icon}</span>
         <span className="min-w-0 shrink-0 max-w-[50%] truncate font-medium text-ink">{title}</span>
         {subtitle && <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted">{subtitle}</span>}
+        {item.progressNote && item.result === undefined && (
+          <span className="min-w-0 shrink-0 truncate text-[10.5px] text-warn">{item.progressNote}</span>
+        )}
         <span className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10px] ${badge.className}`}>
           {badge.label}
         </span>

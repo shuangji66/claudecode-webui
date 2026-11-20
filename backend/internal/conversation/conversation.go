@@ -44,6 +44,13 @@ type Record struct {
 	// Usage 是前端算好的用量快照（上下文 / 缓存命中 / tok/s 的原料）。
 	// 后端不解释内容，只保证它是合法 JSON 对象；重开对话时原样返回给前端。
 	Usage json.RawMessage `json:"usage,omitempty"`
+	// SupersededBy 非空表示这条对话的历史已经被「另一个 id」接管了
+	// （`/clear` 让 claude 换了会话 id，见 Rekey）。
+	//
+	// 旧转录仍在磁盘上、标题也还在，光靠转录扫描它会被重新列出来——侧栏里就会
+	// 同时出现「清空前」和「清空后」两条，用户还以为 /clear 失败了。所以留一份
+	// 指向新 id 的标记，列表里跳过它（记录本身不删，历史记录仍可找回）。
+	SupersededBy string `json:"superseded_by,omitempty"`
 }
 
 // maxUsageBytes 是单条用量快照的上限：它只有几个数字，正常不到 200 字节。
@@ -138,6 +145,9 @@ func (s *Store) Ensure(rec Record) error {
 }
 
 // Touch 更新对话的最近活跃时间；首次出现时创建记录。
+//
+// 顺带清掉 `SupersededBy`：调用方是「用户打开了这条对话」（`/api/session` 的
+// resume 路径）。他显式回到清空前那份历史，就不该再被当成「已被取代」藏起来。
 func (s *Store) Touch(id, cwd string) error {
 	if strings.TrimSpace(id) == "" {
 		return errors.New("conversation: id 不能为空")
@@ -152,6 +162,7 @@ func (s *Store) Touch(id, cwd string) error {
 			rec.Cwd = filepath.Clean(cwd)
 		}
 		rec.LastActive = now
+		rec.SupersededBy = ""
 		f.Records[id] = rec
 		return nil
 	})
@@ -257,6 +268,54 @@ func (s *Store) Delete(id string) error {
 	})
 }
 
+// Rekey 把一条对话的记录从 oldID 搬到 newID（`/clear` 让 claude 换了会话 id）。
+//
+// **这是 AGENTS.md 第 16 条「对话 id 必须稳定」唯一的例外**，而且它稳住的正是那条
+// 规则的用意（「别让用户丢掉上下文」）：`/clear` 之后 claude 把后续轮次写进另一份
+// 转录，我们若还拿着旧 id 去 `--resume`，重开对话时会拿回用户刚刚清掉的上下文。
+// 所以这里跟 claude 走，把记录迁到它实际在用的 id 上。
+//
+// 语义细节：
+//   - 旧记录不存在：视为「这不是我们登记的对话」（例如 CLI 自己在别处清了一次），
+//     直接返回 ErrNotFound，让调用方忽略。
+//   - 目标 id 已有记录：**不覆盖**。那说明新 id 上已经有一条独立对话（用户重新打开
+//     过它），盖掉等于吞并用户的置顶/标题/归档状态。
+//   - 旧记录本来就带墓碑（已删除）或归档状态：一并搬过去，不能因为迁移就复活它。
+func (s *Store) Rekey(oldID, newID string) error {
+	oldID = strings.TrimSpace(oldID)
+	newID = strings.TrimSpace(newID)
+	if oldID == "" || newID == "" {
+		return errors.New("conversation: id 不能为空")
+	}
+	if oldID == newID {
+		return nil
+	}
+	return s.mutate(func(f *storedFile) error {
+		rec, ok := f.Records[oldID]
+		if !ok {
+			return ErrNotFound
+		}
+		if _, taken := f.Records[newID]; taken {
+			return fmt.Errorf("conversation: 目标对话 %s 已存在", newID)
+		}
+		rec.ID = newID
+		delete(f.Records, oldID)
+		f.Records[newID] = rec
+		// 旧 id 留一份墓碑，指向新对话。旧转录还在磁盘上、标题也还在，不留的话
+		// 列表会把「清空前」那条重新扫出来，侧栏同时出现两条。
+		// 时间戳沿用原记录，`LastFor` 之类的「最近活跃」判定不会因为它多算一条。
+		f.Records[oldID] = Record{
+			ID:           oldID,
+			Cwd:          rec.Cwd,
+			Title:        rec.Title,
+			CreatedAt:    rec.CreatedAt,
+			LastActive:   rec.CreatedAt,
+			SupersededBy: newID,
+		}
+		return nil
+	})
+}
+
 // LastFor 返回 cwd（或它的子目录）下最近活跃、未归档、未删除的对话。
 // 按最长工作区匹配由调用方保证；这里只要求 cwd 相等或位于其下。
 func (s *Store) LastFor(cwd string) (Record, bool) {
@@ -270,6 +329,10 @@ func (s *Store) LastFor(cwd string) (Record, bool) {
 	found := false
 	for _, rec := range s.cur.Records {
 		if rec.Deleted || rec.Archived || rec.Cwd == "" {
+			continue
+		}
+		// 被 /clear 取代的那份历史不参与「默认恢复哪一条」：它是旧上下文。
+		if rec.SupersededBy != "" {
 			continue
 		}
 		inside := rec.Cwd == cwd || strings.HasPrefix(rec.Cwd, cwd+string(filepath.Separator))

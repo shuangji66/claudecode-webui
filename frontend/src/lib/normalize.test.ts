@@ -6,6 +6,7 @@ import {
   appendUser,
   appendPromptEcho,
   __resetIds,
+  commandsChanged,
   imagesOfContent,
   isInterruptMarker,
   mergeReplayed,
@@ -16,6 +17,7 @@ import {
   subagentFrame,
   textOfContent,
 } from "./normalize";
+
 import type { Item } from "./model";
 
 function assistantText(text: string) {
@@ -1524,3 +1526,234 @@ describe("mergeReplayed", () => {
     expect(merged.some((i) => i.kind === "assistant" && i.streaming)).toBe(false);
   });
 });
+
+function thinkingDelta(text: string) {
+  return { type: "stream_event", event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: text } } };
+}
+
+function assistantThinking(thinking: string, text?: string) {
+  const content: unknown[] = [{ type: "thinking", thinking }];
+  if (text) content.push({ type: "text", text });
+  return { type: "assistant", message: { role: "assistant", content } };
+}
+
+describe("思考流式（thinking_delta）", () => {
+  beforeEach(() => __resetIds());
+
+  // 真实帧序（2.1.329 实测）：message_start → content_block_start(thinking) →
+  // 多条 thinking_delta（中间夹 system/thinking_tokens）→ signature_delta →
+  // content_block_stop → assistant（完整消息）。只认 text_delta 时，这整段时间
+  // 界面上什么都不动——模型思考几十秒，用户会以为会话卡死了。
+  it("thinking_delta 逐字累积成一个流式思考块", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, thinkingDelta("让我"));
+    items = applyCLI(items, thinkingDelta("想想"));
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "thinking", text: "让我想想", streaming: true });
+  });
+
+  it("完整消息把流式思考替换掉，不重复显示", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, thinkingDelta("让我想想"));
+    items = applyCLI(items, assistantThinking("让我想想", "答案是 42。"));
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ kind: "thinking", text: "让我想想" });
+    expect(items[0]).not.toMatchObject({ streaming: true });
+    expect(items[1]).toMatchObject({ kind: "assistant", text: "答案是 42。" });
+  });
+
+  it("思考与正文各自维护流式气泡，交替到达时不会互相吞掉", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, thinkingDelta("先想"));
+    items = applyCLI(items, delta("再答"));
+    items = applyCLI(items, thinkingDelta("补一句"));
+    expect(items.map((i) => i.kind)).toEqual(["thinking", "assistant", "thinking"]);
+  });
+
+  it("完整消息里没有 thinking 块时保留已收到的思考文字（中断的回合）", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, thinkingDelta("想到一半被打断"));
+    // 只有正文、没有 thinking 块（上游在中断后只回正文的形态）。
+    items = applyCLI(items, { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "好的" }] } });
+    expect(items[0]).toMatchObject({ kind: "thinking", text: "想到一半被打断", streaming: false });
+    expect(items[1]).toMatchObject({ kind: "assistant", text: "好的" });
+  });
+
+  it("被中断时流式思考块也要收尾（否则光标一直闪）", () => {
+    let items: Item[] = [];
+    items = applyCLI(items, thinkingDelta("一直想"));
+    items = applyCLI(items, { type: "result", subtype: "error_during_execution", is_error: true, errors: [] });
+    expect(items.some((i) => i.kind === "thinking" && i.streaming)).toBe(false);
+  });
+});
+
+describe("system 消息里的可显示状态", () => {
+  beforeEach(() => __resetIds());
+
+  // api_retry 的载荷全是结构化字段、没有 content，早先会静默穿过。
+  it("api_retry 显示成一条重试提示", () => {
+    const items = applyCLI([], {
+      type: "system",
+      subtype: "api_retry",
+      attempt: 2,
+      max_retries: 10,
+      error_status: 529,
+      error: "overloaded_error",
+      retry_delay_ms: 1038,
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("system");
+    expect((items[0] as { text: string }).text).toContain("2/10");
+    expect((items[0] as { text: string }).text).toContain("529");
+  });
+
+  // compacting 会连发很多条（每次 summary 增长一条），不能叠一屏。
+  it("status=compacting 只留一条提示", () => {
+    let items: Item[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      items = applyCLI(items, { type: "system", subtype: "status", status: "compacting" });
+    }
+    expect(items).toHaveLength(1);
+    expect((items[0] as { text: string }).text).toContain("压缩");
+  });
+
+  it("压缩失败显示原因（静默失败会让人以为历史无故变短）", () => {
+    const items = applyCLI([], {
+      type: "system",
+      subtype: "status",
+      status: "requesting",
+      compact_result: "failed",
+      compact_error: "prompt too long",
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("error");
+    expect((items[0] as { text: string }).text).toContain("prompt too long");
+  });
+
+  it("普通 status 不进消息流", () => {
+    const items = applyCLI([], { type: "system", subtype: "status", status: "requesting" });
+    expect(items).toHaveLength(0);
+  });
+
+  // hook 的输出在 output/stdout/stderr 里，没有 content，早先同样静默。
+  it("hook 失败显示 hook 名与 stderr，成功的报告不显示", () => {
+    const ok = applyCLI([], {
+      type: "system",
+      subtype: "hook_response",
+      hook_name: "fmt",
+      hook_event: "PostToolUse",
+      outcome: "success",
+      stdout: "fine",
+    });
+    expect(ok).toHaveLength(0);
+
+    const bad = applyCLI([], {
+      type: "system",
+      subtype: "hook_response",
+      hook_name: "fmt",
+      hook_event: "PostToolUse",
+      outcome: "error",
+      exit_code: 2,
+      stderr: "gofmt: no such file",
+    });
+    expect(bad).toHaveLength(1);
+    const text = (bad[0] as { text: string }).text;
+    expect(text).toContain("fmt");
+    expect(text).toContain("2");
+    expect(text).toContain("gofmt: no such file");
+  });
+
+  it("Stop hook 的 hookErrors 非空才显示", () => {
+    const clean = applyCLI([], { type: "system", subtype: "stop_hook_summary", hookErrors: [] });
+    expect(clean).toHaveLength(0);
+    const bad = applyCLI([], {
+      type: "system",
+      subtype: "stop_hook_summary",
+      hookErrors: ["JSON validation failed"],
+    });
+    expect(bad).toHaveLength(1);
+    expect((bad[0] as { text: string }).text).toContain("JSON validation failed");
+  });
+
+  // 模型回退在 ccweb 里已经用 CLAUDE_CODE_NO_MODEL_FALLBACK 关掉了，但旧版本 /
+  // 环境变量失效时仍可能收到这条：它的 content 是 CLI 写好的入话，照常显示。
+  it("model_fallback 的 content 照常显示", () => {
+    const items = applyCLI([], {
+      type: "system",
+      subtype: "model_fallback",
+      trigger: "overloaded",
+      original_model: "a",
+      fallback_model: "b",
+      content: "Switched to b for this turn",
+    });
+    expect(items).toHaveLength(1);
+    expect((items[0] as { text: string }).text).toContain("Switched to b");
+  });
+});
+
+describe("commands_changed", () => {
+  beforeEach(() => __resetIds());
+
+  // CLI 的原话：clients should REPLACE their cached command list。
+  // 不接的话，会话中途装的技能永远进不了 `/` 菜单。
+  it("解析出完整命令列表（replace 语义）", () => {
+    const cmds = commandsChanged({
+      type: "system",
+      subtype: "commands_changed",
+      commands: [
+        { name: "review", description: "审查代码", argumentHint: "<path>", builtin: false },
+        { name: "clear", builtin: true },
+        { 缺名字: 1 },
+        "垃圾",
+      ],
+    });
+    expect(cmds).toEqual([
+      { name: "review", description: "审查代码", argumentHint: "<path>", builtin: false },
+      { name: "clear", builtin: true },
+    ]);
+  });
+
+  it("不是这条消息时返回 undefined", () => {
+    expect(commandsChanged({ type: "system", subtype: "status" })).toBeUndefined();
+    expect(commandsChanged({ type: "system", subtype: "commands_changed" })).toBeUndefined();
+    expect(commandsChanged(null)).toBeUndefined();
+  });
+
+  it("不进消息流", () => {
+    const items = applyCLI([], {
+      type: "system",
+      subtype: "commands_changed",
+      commands: [{ name: "review" }],
+    });
+    expect(items).toHaveLength(0);
+  });
+});
+
+describe("conversation_reset", () => {
+  beforeEach(() => __resetIds());
+
+  // 实测帧序（2.1.329，--input-format stream-json 的常驻会话）：
+  //   result → conversation_reset{trigger:"clear"} → system/background_tasks_changed
+  //   → system/init{session_id: <新 id>}
+  // 它必须显示：上下文被清空了，而界面上的旧消息还在，否则
+  // 「刚才说过的话模型怎么不记得了」完全无从解释。
+  it("/clear 显示成一条上下文已清空的提示", () => {
+    const items = applyCLI([], {
+      type: "conversation_reset",
+      trigger: "clear",
+      new_conversation_id: "new-id",
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("system");
+    expect((items[0] as { text: string }).text).toContain("清空");
+  });
+
+  it("未知 trigger 说「已重置」，不硬猜成 /clear", () => {
+    const items = applyCLI([], { type: "conversation_reset", trigger: "something-new" });
+    const text = (items[0] as { text: string }).text;
+    expect(text).toContain("重置");
+    expect(text).not.toContain("/clear");
+  });
+});
+
+

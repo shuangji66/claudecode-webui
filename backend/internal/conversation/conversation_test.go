@@ -198,3 +198,101 @@ func TestSetUsage(t *testing.T) {
 		t.Fatal("超长快照应报错")
 	}
 }
+
+// `/clear` 让 claude 换了会话 id：记录要跟着搬，否则重开对话时按旧 id --resume
+// 会把用户刚刚清掉的上下文又读回来。
+func TestRekeyMovesRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conversations.json")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Ensure(Record{ID: "old", Cwd: "/work", Title: "我的对话", Pinned: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Rekey("old", "new"); err != nil {
+		t.Fatalf("Rekey: %v", err)
+	}
+	// 旧 id 上留一份墓碑指向新对话，但没有内容：旧转录还在磁盘上，不留墓碑的话
+	// 列表会把「清空前」那条重新扫出来，侧栏同时出现两条。
+	if old, ok := s.Get("old"); !ok || old.SupersededBy != "new" {
+		t.Fatalf("旧 id 上应当留一份指向 new 的墓碑，得到 %+v (ok=%v)", old, ok)
+	}
+	rec, ok := s.Get("new")
+	if !ok {
+		t.Fatal("新 id 上没有记录")
+	}
+	if rec.ID != "new" || rec.Title != "我的对话" || rec.Cwd != "/work" || !rec.Pinned {
+		t.Fatalf("迁移后的记录 = %+v", rec)
+	}
+	if rec.SupersededBy != "" {
+		t.Fatalf("新记录不该带墓碑标记: %+v", rec)
+	}
+
+	// 落盘过了才算真迁：进程重启后要还是新 id。
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s2.Get("new"); !ok {
+		t.Fatal("迁移没有落盘")
+	}
+	if old, ok := s2.Get("old"); !ok || old.SupersededBy != "new" {
+		t.Fatal("墓碑没有落盘")
+	}
+	// 被取代的那条不能是「默认恢复哪一条」。
+	if last, ok := s2.LastFor("/work"); ok && last.ID == "old" {
+		t.Fatal("被 /clear 取代的历史不该成为默认恢复目标")
+	}
+}
+
+// 旧记录不存在（这条对话没登记过元数据）不算错误，返回 ErrNotFound 让调用方忽略。
+func TestRekeyMissingIsErrNotFound(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "conversations.json"))
+	if err := s.Rekey("nope", "new"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// 新 id 上已经有独立记录时**不能覆盖**：那说明用户重新打开过它，
+// 盖掉等于吞并对方的标题/置顶/归档状态。
+func TestRekeyDoesNotOverwriteExisting(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "conversations.json"))
+	if err := s.Ensure(Record{ID: "old", Cwd: "/a", Title: "旧的"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Ensure(Record{ID: "new", Cwd: "/b", Title: "已存在"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Rekey("old", "new"); err == nil {
+		t.Fatal("目标 id 已存在时应当报错")
+	}
+	if rec, _ := s.Get("new"); rec.Title != "已存在" {
+		t.Fatalf("目标记录被覆盖了: %+v", rec)
+	}
+	if _, ok := s.Get("old"); !ok {
+		t.Fatal("迁移失败时不该删掉旧记录")
+	}
+}
+
+// 软删除 / 归档状态要一起搬过去，不能因为迁移把它复活。
+func TestRekeyKeepsDeletedFlag(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "conversations.json"))
+	if err := s.Ensure(Record{ID: "old", Cwd: "/w"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete("old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Rekey("old", "new"); err != nil {
+		t.Fatalf("Rekey: %v", err)
+	}
+	rec, ok := s.Get("new")
+	if !ok {
+		t.Fatal("新 id 上没有记录")
+	}
+	if !rec.Deleted {
+		t.Fatal("墓碑没有跟着迁移，已删除的对话被复活了")
+	}
+}

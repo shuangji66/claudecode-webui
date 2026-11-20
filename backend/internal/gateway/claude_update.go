@@ -10,7 +10,14 @@ import (
 // 订阅它，因此「没有打开任何对话」的标签页也能收到更新提示。
 const systemTopic = "__system__"
 
-// BroadcastClaudeUpdate 在「有新版可用」时把提示推给所有打开的面板。
+// BroadcastConversationsChanged 推一条「对话列表变了」，让各端重拉列表。
+//
+// 与 `claude.update` 同一条系统通道：这条事件跟「打开了哪条对话」无关，
+// 没有会话连接的标签页也要收到（`/clear` 会把一条对话的 id 换掉，侧栏必须跟着变）。
+func (s *Server) BroadcastConversationsChanged() {
+	s.d.Hub.Broadcast(systemTopic, WireEvent{Kind: "conversations.changed"})
+}
+
 //
 // 推送只带版本号，前端收到后照旧调 /api/claude/status 拿完整快照：状态里还有
 // 已安装列表、生效版本与安装进度，重复实现一份解析只会两边不一致。
