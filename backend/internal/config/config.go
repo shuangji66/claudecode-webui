@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // EnvPrefix 是所有环境变量的统一前缀。
@@ -52,8 +51,6 @@ type Config struct {
 	AutoStart bool
 	// MaxSessions 是最多同时常驻的 claude 子进程数（CCWEB_MAX_SESSIONS）。
 	MaxSessions int
-	// IdleTimeout 是会话空闲多久后被回收（CCWEB_IDLE_TIMEOUT）。
-	IdleTimeout time.Duration
 	// PermissionMode 是新建会话的默认权限模式（CCWEB_PERMISSION_MODE）。
 	PermissionMode string
 	// Model 是新建会话的默认模型（CCWEB_MODEL），空表示用 CLI 默认。
@@ -128,13 +125,6 @@ func Load(version string) Config {
 		}
 	}
 
-	idle := 30 * time.Minute
-	if v := EnvOr("IDLE_TIMEOUT", ""); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			idle = d
-		}
-	}
-
 	baseURL := EnvOr("BASEURL", "")
 	if baseURL != "" && !strings.HasPrefix(baseURL, "/") {
 		baseURL = "/" + baseURL
@@ -156,7 +146,6 @@ func Load(version string) Config {
 		SchedulesFile:     EnvOr("SCHEDULES_FILE", filepath.Join(dataDir, "schedules.json")),
 		AutoStart:         envBool("AUTO_START", true),
 		MaxSessions:       maxSessions,
-		IdleTimeout:       idle,
 		PermissionMode:    EnvOr("PERMISSION_MODE", ""),
 		Model:             EnvOr("MODEL", ""),
 		TerminalShell:     EnvOr("TERMINAL_SHELL", ""),

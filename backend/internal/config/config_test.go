@@ -10,7 +10,7 @@ func TestLoadDefaults(t *testing.T) {
 	// 清掉所有可能干扰的环境变量
 	for _, k := range []string{
 		"ADMIN_SOCK", "BASEURL", "AUTH_TOKEN", "PROJECTS_ROOT",
-		"DATA_DIR", "HOME", "MAX_SESSIONS", "IDLE_TIMEOUT", "PERMISSION_MODE", "MODEL",
+		"DATA_DIR", "HOME", "MAX_SESSIONS", "PERMISSION_MODE", "MODEL",
 		"WORKSPACES_FILE", "AUTO_START",
 	} {
 		t.Setenv(EnvPrefix+k, "")
@@ -57,7 +57,6 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(EnvPrefix+"BASEURL", "app/ccweb/")
 	t.Setenv(EnvPrefix+"AUTH_TOKEN", "tok")
 	t.Setenv(EnvPrefix+"MAX_SESSIONS", "3")
-	t.Setenv(EnvPrefix+"IDLE_TIMEOUT", "5m")
 	t.Setenv(EnvPrefix+"PERMISSION_MODE", "acceptEdits")
 	t.Setenv(EnvPrefix+"MODEL", "sonnet")
 	t.Setenv(EnvPrefix+"DATA_DIR", "/var/lib/ccweb")
@@ -73,9 +72,6 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.AuthToken != "tok" || cfg.MaxSessions != 3 {
 		t.Fatalf("cfg = %+v", cfg)
-	}
-	if cfg.IdleTimeout.String() != "5m0s" {
-		t.Fatalf("IdleTimeout = %s", cfg.IdleTimeout)
 	}
 	if cfg.PermissionMode != "acceptEdits" || cfg.Model != "sonnet" {
 		t.Fatalf("cfg = %+v", cfg)
@@ -97,12 +93,8 @@ func TestLoadOverrides(t *testing.T) {
 
 func TestLoadIgnoresBadNumbers(t *testing.T) {
 	t.Setenv(EnvPrefix+"MAX_SESSIONS", "abc")
-	t.Setenv(EnvPrefix+"IDLE_TIMEOUT", "not-a-duration")
 	cfg := Load("v")
 	if cfg.MaxSessions != 8 {
 		t.Fatalf("非法数字应回退默认值，实际 %d", cfg.MaxSessions)
-	}
-	if cfg.IdleTimeout.Minutes() != 30 {
-		t.Fatalf("非法时长应回退默认值，实际 %s", cfg.IdleTimeout)
 	}
 }

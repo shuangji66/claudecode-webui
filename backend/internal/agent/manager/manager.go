@@ -700,8 +700,25 @@ func (m *Manager) reapLoop() {
 	}
 }
 
+// idleTimeout 返回当前的回收阈值。
+//
+// 唯一来源是设置项（设置 → 通用的「空闲回收」，单位分钟），改完下一次扫描就生效。
+// store 为 nil 只会出现在单测装配里，那时才回落到默认值——**不要**再加环境变量：
+// 「端口 = 设置项，不是环境变量」是同一条规矩，两处都配只会让人猜哪个先生效。
+func (m *Manager) idleTimeout() time.Duration {
+	if m.store == nil {
+		return settings.DefaultIdleMinutes * time.Minute
+	}
+	return time.Duration(m.store.IdleMinutes()) * time.Minute
+}
+
+// reapIdle 回收空闲超时的会话。
 func (m *Manager) reapIdle() {
-	deadline := time.Now().Add(-m.cfg.IdleTimeout)
+	timeout := m.idleTimeout()
+	if timeout <= 0 {
+		return
+	}
+	deadline := time.Now().Add(-timeout)
 	var victims []string
 	m.mu.Lock()
 	for id, s := range m.sessions {

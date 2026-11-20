@@ -425,6 +425,8 @@ export interface PublicSettings {
   locale?: "zh" | "en" | string;
   font_size?: number;
   proxy_url?: string;
+  /** 空闲会话回收阈值（分钟，默认 10，范围 5–60）。 */
+  idle_minutes?: number;
   /** 端口访问开关（默认关闭）。 */
   tcp_enabled?: boolean;
   /** TCP 直连端口（默认 3141，可在「设置 → 访问」里改）。 */

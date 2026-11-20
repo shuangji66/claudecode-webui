@@ -72,6 +72,25 @@ const (
 	MaxTCPPort = 65535
 )
 
+// 空闲会话回收阈值（分钟）。超过这个时间没有任何读写的会话会被结束，释放常驻进程。
+//
+// 单位是分钟而不是 time.Duration：这是给界面用的数值设置（±/输入框），存整数最省事；
+// 换算成 time.Duration 只在 manager 里做一次。范围 5–60：小于 5 分钟会让「去倒杯水
+// 回来」的对话被回收（重新打开要 --resume，虽然不丢上下文但要多等一次握手），
+// 大于 60 分钟等于让 NAS 白养一堆进程。
+const (
+	DefaultIdleMinutes = 10
+	MinIdleMinutes     = 5
+	MaxIdleMinutes     = 60
+	// StepIdleMinutes 是界面上 ± 按钮的步进。它只约束**界面**能产生哪些值，
+	// 不做后端校验：手改配置文件写 7 分钟仍然有效（回收循环本来就按分钟算），
+	// 界面下一次按键会把它归到最近的档位上。
+	StepIdleMinutes = 5
+)
+
+// ValidIdleMinutes 判断空闲回收阈值是否在可设范围内。
+func ValidIdleMinutes(m int) bool { return m >= MinIdleMinutes && m <= MaxIdleMinutes }
+
 // ValidTCPPort 判断端口是否在可监听范围内。
 func ValidTCPPort(port int) bool { return port >= MinTCPPort && port <= MaxTCPPort }
 
@@ -162,6 +181,10 @@ type Settings struct {
 	// ProxyURL 是派给 claude 子进程的 HTTP/HTTPS/SOCKS5 代理；空表示直连。
 	ProxyURL string `json:"proxy_url"`
 
+	// IdleMinutes 是空闲会话的回收阈值（分钟），0 表示用默认值。
+	// 由 manager 的回收循环现读，改完立刻对下一次扫描生效。
+	IdleMinutes int `json:"idle_minutes"`
+
 	// TCP 直连访问：默认关闭，端口默认 3141。开启后必须登录（访问密码，无用户名），
 	// 密码只存 PBKDF2 摘要、绝不落明文；unix socket（前置网关）不校验这个密码。
 	TCPEnabled      bool   `json:"tcp_enabled"`
@@ -201,6 +224,9 @@ type Public struct {
 	FontSize int    `json:"font_size"`
 
 	ProxyURL string `json:"proxy_url"`
+
+	// IdleMinutes 是空闲会话的回收阈值（分钟）。
+	IdleMinutes int `json:"idle_minutes"`
 
 	SearchBaseURL    string `json:"search_base_url"`
 	SearchAPIKeySet  bool   `json:"search_api_key_set"`
@@ -255,6 +281,7 @@ type Patch struct {
 	Locale                    *string          `json:"locale"`
 	FontSize                  *int             `json:"font_size"`
 	ProxyURL                  *string          `json:"proxy_url"`
+	IdleMinutes               *int             `json:"idle_minutes"`
 
 	TCPEnabled  *bool   `json:"tcp_enabled"`
 	TCPPort     *int    `json:"tcp_port"`
@@ -304,6 +331,14 @@ func normalizePreferences(v *Settings) {
 	}
 	if v.FontSize < MinFontSize || v.FontSize > MaxFontSize {
 		v.FontSize = DefaultFontSize
+	}
+	// 空闲回收：0 是「老配置里没这个字段」，补默认值；越界的写下不进去
+	// （Apply 会挡），但配置文件被手改过也要能起来。
+	if v.IdleMinutes == 0 {
+		v.IdleMinutes = DefaultIdleMinutes
+	}
+	if !ValidIdleMinutes(v.IdleMinutes) {
+		v.IdleMinutes = DefaultIdleMinutes
 	}
 	// 搜索：老配置里没有这两个字段，补默认值而不是留空
 	// （空基地址会让「测试连接」直接报错，用户也看不出该填什么）。
@@ -436,6 +471,20 @@ func (s *Store) TCPAccess() (enabled bool, passwordHash string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.cur.TCPEnabled, s.cur.TCPPasswordHash
+}
+
+// IdleMinutes 返回当前的空闲会话回收阈值（分钟），永远落在合法区间内。
+//
+// 与其他读取口同理不做深拷贝：manager 每分钟的回收扫描都要读一次。
+// 越界值在 Open/Apply 就已经被挡掉了，这里再夹一次是为了防手改的配置文件。
+func (s *Store) IdleMinutes() int {
+	s.mu.RLock()
+	n := s.cur.IdleMinutes
+	s.mu.RUnlock()
+	if !ValidIdleMinutes(n) {
+		return DefaultIdleMinutes
+	}
+	return n
 }
 
 // Provider 按 id 查找提供商。
@@ -588,6 +637,7 @@ func (s *Store) Public() Public {
 		Locale:                    cur.Locale,
 		FontSize:                  cur.FontSize,
 		ProxyURL:                  cur.ProxyURL,
+		IdleMinutes:               cur.IdleMinutes,
 		TCPEnabled:                cur.TCPEnabled,
 		TCPPort:                   cur.TCPPort,
 		TCPPasswordSet:            cur.TCPPasswordHash != "",
@@ -684,6 +734,13 @@ func (s *Store) Apply(p Patch) (Public, error) {
 			return Public{}, err
 		}
 		next.ProxyURL = proxy
+	}
+	if p.IdleMinutes != nil {
+		if !ValidIdleMinutes(*p.IdleMinutes) {
+			s.mu.Unlock()
+			return Public{}, fmt.Errorf("settings: 空闲回收时间必须在 %d–%d 分钟之间", MinIdleMinutes, MaxIdleMinutes)
+		}
+		next.IdleMinutes = *p.IdleMinutes
 	}
 	if p.TCPEnabled != nil {
 		next.TCPEnabled = *p.TCPEnabled

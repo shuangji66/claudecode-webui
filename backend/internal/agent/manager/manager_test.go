@@ -11,6 +11,7 @@ import (
 
 	"ccweb/backend/internal/agent/process"
 	"ccweb/backend/internal/agent/session"
+	"ccweb/backend/internal/settings"
 )
 
 func TestNewUUIDAndValidation(t *testing.T) {
@@ -196,5 +197,35 @@ func TestSessionToolRulesAlwaysAllowsTaskTools(t *testing.T) {
 	}
 	if len(deny) != 1 || deny[0] != "WebSearch" {
 		t.Fatalf("禁用项应原样带出：%v", deny)
+	}
+}
+
+// 空闲回收阈值的唯一来源是设置项；没有 store（单测）时回落到默认值。
+//
+// 这一条挡的是「界面上改成 45 分钟，进程仍按启动时那份配置回收」——
+// 阈值必须是每次扫描现读，不能是启动快照。
+func TestIdleTimeoutReadsSettingsLive(t *testing.T) {
+	store, err := settings.Open(filepath.Join(t.TempDir(), "settings.json"))
+	if err != nil {
+		t.Fatalf("settings.Open: %v", err)
+	}
+	m := &Manager{store: store}
+
+	if got := m.idleTimeout(); got != 10*time.Minute {
+		t.Fatalf("默认应取设置项 10 分钟，实际 %s", got)
+	}
+
+	want := 45
+	if _, err := store.Apply(settings.Patch{IdleMinutes: &want}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := m.idleTimeout(); got != 45*time.Minute {
+		t.Fatalf("改完设置应立刻生效，实际 %s", got)
+	}
+
+	// 没接 store（单测装配）时回落到默认值，不会算出 0 让回收循环疯转。
+	bare := &Manager{}
+	if got := bare.idleTimeout(); got != 10*time.Minute {
+		t.Fatalf("没有 store 时应回落到默认值，实际 %s", got)
 	}
 }

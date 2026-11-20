@@ -79,7 +79,6 @@ location /app/ccweb/ {
 | `CCWEB_PROJECTS_ROOT` | `$HOME` | 首次启动时自动授权的默认目录 |
 | `CCWEB_AUTO_START` | `1` | 启动后恢复当前工作区最近一条对话（`0/false` 关闭；没有对话则不新建） |
 | `CCWEB_MAX_SESSIONS` | `8` | 常驻会话上限（单会话约 176 MB 内存） |
-| `CCWEB_IDLE_TIMEOUT` | `30m` | 空闲会话回收阈值 |
 | `CCWEB_PERMISSION_MODE` | 空 | 新会话默认权限模式 |
 | `CCWEB_MODEL` | 空 | 新会话默认模型 |
 | `CCWEB_TERMINAL_SHELL` | 空 | 右侧栏内置终端使用的 shell；空则依次尝试 `$SHELL` / `bash` / `sh` |

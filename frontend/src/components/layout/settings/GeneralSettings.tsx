@@ -25,6 +25,11 @@ const PERMISSION_MODES = ["default", "acceptEdits", "plan", "dontAsk", "bypassPe
 const THEMES = ["light", "dark", "system"] as const;
 const LOCALES = ["zh", "en"] as const;
 
+/** 空闲回收的步进与范围（分钟），与后端 settings.Min/Max/StepIdleMinutes 对齐。 */
+const IDLE_MIN = 5;
+const IDLE_MAX = 60;
+const IDLE_STEP = 5;
+
 /** 分段控件（外观 / 语言）：两三项用不到下拉，直接并排更少一次点击。 */
 function Segmented<T extends string>({
   value,
@@ -89,6 +94,23 @@ export function GeneralSettings() {
     if (next === shownFontSize) return;
     setPendingFontSize(next);
     void save({ font_size: next }).then(() => setPendingFontSize(null));
+  };
+  // 空闲回收同上：按本地递进值算，连点两次不会都从同一个旧值起步。
+  // 步进 5 分钟（5–60 共 12 档）：一分钟一档要点十几次才从默认值挪到半小时，
+  // 而这个值本来就是粗粒度的时间尺度，不需要那个精度。
+  const idleMinutes = settings?.idle_minutes || 10;
+  const [pendingIdle, setPendingIdle] = useState<number | null>(null);
+  const shownIdle = pendingIdle ?? idleMinutes;
+  /**
+   * 每次按键挪一档。**在 5 的整数倍上算档位**，而不是 `shownIdle + delta`：
+   * 配置文件被手改成 7 这类不在档位上的值时，加一次要落到 10 而不是 12。
+   */
+  const bumpIdle = (delta: number) => {
+    const index = Math.round(shownIdle / IDLE_STEP) + delta;
+    const next = Math.min(IDLE_MAX, Math.max(IDLE_MIN, index * IDLE_STEP));
+    if (next === shownIdle) return;
+    setPendingIdle(next);
+    void save({ idle_minutes: next }).then(() => setPendingIdle(null));
   };
   // 过程展示只存本设备（和主题同理）：手机要挤、桌面可以宽松。
   const view = useProcessView();
@@ -227,6 +249,36 @@ export function GeneralSettings() {
               </button>
             </div>
             <span className="text-[11.5px] text-muted">px</span>
+          </div>
+        </SettingRow>
+
+        <SettingRow
+          title={t("空闲回收", "Idle recycle")}
+          desc={t("会话闲置这么久了就结束进程，下次打开会重新接上。", "End the process after this much idle time; reopening reconnects it.")}
+        >
+          <div className="flex items-center gap-1.5">
+            <div className="inline-flex items-center rounded-lg bg-panel dark:bg-panel-strong">
+              <button
+                type="button"
+                onClick={() => bumpIdle(-1)}
+                disabled={shownIdle <= IDLE_MIN}
+                className="h-8 w-8 rounded-l-lg text-[13px] text-muted hover:bg-panel-strong hover:text-ink disabled:opacity-30 dark:hover:bg-line disabled:hover:bg-transparent"
+                aria-label={t("缩短空闲回收", "Decrease idle timeout")}
+              >
+                −
+              </button>
+              <span className="w-8 text-center font-mono text-[12.5px] text-ink tabular-nums">{shownIdle}</span>
+              <button
+                type="button"
+                onClick={() => bumpIdle(1)}
+                disabled={shownIdle >= IDLE_MAX}
+                className="h-8 w-8 rounded-r-lg text-[13px] text-muted hover:bg-panel-strong hover:text-ink disabled:opacity-30 dark:hover:bg-line disabled:hover:bg-transparent"
+                aria-label={t("延长空闲回收", "Increase idle timeout")}
+              >
+                +
+              </button>
+            </div>
+            <span className="text-[11.5px] text-muted">{t("分钟", "min")}</span>
           </div>
         </SettingRow>
 

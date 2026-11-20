@@ -135,6 +135,7 @@ export function normalizeSettings(s: PublicSettings | null): PublicSettings | nu
     locale: s.locale || "zh",
     font_size: s.font_size || 15,
     proxy_url: s.proxy_url || "",
+    idle_minutes: s.idle_minutes || 10,
     providers: providers.map((p) => {
       const models = ((p.models as unknown as string[] | null | undefined) ?? []).filter(Boolean);
       const rawMeta = (p.model_meta as unknown as Record<string, ModelSpec> | null | undefined) ?? {};

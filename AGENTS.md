@@ -40,7 +40,7 @@
   其余折成一行「展开其余 N 个会话」（`sidebarView.SESSION_GROUP_LIMIT`，收起工作区时
   复位；搜索时全露）。折叠的是**排好序之后的尾部**，所以「最近更新」在收起状态下也成立；
 - 设置页分「通用 / 模型 / 目录 / 代理 / 部署 / 访问 / 关于」：默认权限（置顶）、主题、语言、字号、
-  代理、每个模型的推理强度/图片能力/上下文窗口/最大输出、claude 版本的下载源/安装/切换，
+  空闲回收（分钟）、代理、每个模型的推理强度/图片能力/上下文窗口/最大输出、claude 版本的下载源/安装/切换，
   以及飞牛已授权目录的查看/添加/撤销、端口访问开关、TCP 端口与访问密码（单密码，无用户名）；
 - 左侧栏功能区（对齐 DSH）是**整页视图**，不是弹窗：插件 / MCP / 技能中心 / 自动化任务 /
   历史记录打开后接管「左侧栏以外的剩余区域」（移动端铺满视口），入口在原地高亮，再点一次
@@ -1123,7 +1123,29 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 装配层的 `Server.BroadcastConversationsChanged` 是**唯一**出口（`broadcastXxx` 那份
   重复实现已合并），`Hub` 为 nil 时静默返回（单测/无面板部署）。
 
-### 4.19 自动化任务（`internal/schedule` + `/api/schedules` + `ccweb mcp-schedule`）
+### 4.19 空闲会话回收（设置 → 通用的「空闲回收」）
+
+- **这是设置项，不是环境变量**（`settings.IdleMinutes`，默认 10，范围 **5–60** 分钟，
+  界面步进 **5** 分钟）：与「TCP 端口 = 设置项」同一条规矩，**不要**再加
+  `CCWEB_IDLE_TIMEOUT` 之类的环境变量——两处都能配只会让人猜哪个先生效，
+  而且启动快照改了要重启才生效，与界面上的即时性自相矛盾。
+- **步进只约束界面，不做后端校验**：`settings.StepIdleMinutes` 只用于 ± 按钮，
+  手改配置文件写 7 分钟仍然有效（回收本来就按分钟算）。前端 `bumpIdle` 是
+  「先把当前值归到最近的 5 的倍数，再挪一档」，不是 `当前值 ± 5`——否则
+  手改成 7 之后按一次会落到 12。不做输入框：5–60 只有 12 档，点几下比键入快，
+  也不用处理「7.5 / 空 / 越界」这些边界。
+- **阈值每次扫描现读**（`settings.Store.IdleMinutes()` → `manager.idleTimeout()`）：
+  `Manager.cfg` 是启动时的快照，按它回收的话界面上改完不生效。`store` 为 nil 只出现在
+  单测装配里，那时才回落到 `settings.DefaultIdleMinutes`。
+- **扫描周期固定 1 分钟**（`manager.reapLoop`），所以实际回收发生在「阈值 ~ 阈值+1min」之间。
+- **只回收 `StateReady` 的会话**：`busy`（正在跑，含审批挂起）与 `starting`（握手中）一律不动——
+  审批挂起时状态是 `busy`，即使 `LastActive` 过去几小时也不会被回收（见 4.2 的内存占用那条）。
+- `LastActive`（`session.Session.LastActive`，底层是 `idle` 原子时间戳）在三处刷新：
+  创建时、每次往 claude 写（`writeNow`）、每次读到 claude 的一行输出（含 `keep_alive`）。
+- 回收走 `Manager.Close` → `Session.Close` → `KindClosed` → `NoteSessionClosed`，
+  所以**别的设备的侧栏会同步变成灰点**（见 4.18 的「进程结束必须无条件推」）。
+
+### 4.20 自动化任务（`internal/schedule` + `/api/schedules` + `ccweb mcp-schedule`）
 
 - **宿主级，不是 claude 的 cron**：claude 自己的 `CronCreate` / `ScheduleWakeup` / `/loop`
   是 **session-scoped**（二进制里 SDK 字段的原话：`cron tasks … that will wake this session

@@ -130,6 +130,7 @@ export interface SettingsPatch {
   locale?: string;
   font_size?: number;
   proxy_url?: string;
+  idle_minutes?: number;
   tcp_enabled?: boolean;
   tcp_port?: number;
   /** 留空表示沿用已保存的密码。 */

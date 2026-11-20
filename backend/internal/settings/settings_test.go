@@ -508,6 +508,39 @@ func TestPreferencesPatchAndDefaults(t *testing.T) {
 	}
 }
 
+// 空闲回收阈值：默认 10 分钟、改完落盘、越界拒绝，坏配置文件回落默认值。
+//
+// 它决定 manager 多久回收一次常驻进程，所以「读回来的值」必须永远落在
+// 合法区间内——手改 settings.json 写个 0 或 999 不能让回收循环疯转或永不触发。
+func TestIdleMinutesDefaultsAndValidation(t *testing.T) {
+	s, path := openTemp(t)
+	if got := s.IdleMinutes(); got != DefaultIdleMinutes {
+		t.Fatalf("默认空闲回收 = %d, want %d", got, DefaultIdleMinutes)
+	}
+	if got := s.Public().IdleMinutes; got != DefaultIdleMinutes {
+		t.Fatalf("Public 里的默认值 = %d", got)
+	}
+
+	want := 25
+	if _, err := s.Apply(Patch{IdleMinutes: &want}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.IdleMinutes(); got != want {
+		t.Fatalf("重开后 = %d, want %d", got, want)
+	}
+
+	for _, bad := range []int{0, 4, 61, -1} {
+		v := bad
+		if _, err := s.Apply(Patch{IdleMinutes: &v}); err == nil {
+			t.Fatalf("%d 分钟应被拒绝", bad)
+		}
+	}
+}
+
 func TestProxyURLPersistAndEnv(t *testing.T) {
 	s, path := openTemp(t)
 	if _, err := s.Apply(Patch{ProxyURL: strPtr("socks5://127.0.0.1:1080")}); err != nil {
