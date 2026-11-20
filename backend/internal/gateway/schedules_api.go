@@ -654,7 +654,7 @@ func (s *Server) NoteSessionTitle(sid string, data json.RawMessage) {
 // **与回合结束不同，这里必须无条件推**：进程结束是「列表里那一行从活跃变灰」，
 // 而 `closed` 事件只发给订阅了**该会话 topic** 的连接——别的设备没打开这条对话，
 // 就永远收不到，它侧栏里那一行会一直显示「活跃」，直到自己下次刷新列表。
-// 触发它的事件全都低频（用户点停止、空闲回收默认 30 分钟一次、删版本），
+// 触发它的事件全都低频（用户点停止、空闲回收默认 10 分钟一次、删版本），
 // 不像 prompt 那样每条都来，所以不需要「只在有标记时推」这层节流。
 func (s *Server) NoteSessionClosed(sid string) {
 	// 先收掉待通知的回合（任务投递的那条要补写标题）。finishPendingTurn 自己

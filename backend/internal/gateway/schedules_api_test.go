@@ -468,7 +468,7 @@ func TestScheduledSessionClosedRefreshesConversationList(t *testing.T) {
 
 // 没有任何待通知标记的普通对话被关闭时也要推：`closed` 事件只发给订阅了该会话
 // topic 的连接（`h.Broadcast(sid, …)`），别的设备没打开这条对话就收不到，它侧栏里
-// 那一行会一直显示「活跃」——用户点停止、空闲回收（默认 30 分钟）、删版本都走这条路。
+// 那一行会一直显示「活跃」——用户点停止、空闲回收（默认 10 分钟）、删版本都走这条路。
 func TestSessionClosedRefreshesListWithoutPendingTurn(t *testing.T) {
 	f := newSchedServer(t)
 	rec := &recClient{}

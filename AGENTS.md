@@ -1114,7 +1114,7 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **进程结束必须无条件推，不能只靠 `pendingTurns` 那层节流**：`closed` 事件由
   `h.Broadcast(sid, …)` 只发给订阅了**该会话 topic** 的连接，别的设备没打开这条对话
   就永远收不到，侧栏那一行会一直显示「活跃」。触发它的路径全都低频（用户点停止、
-  空闲回收 `manager.reapIdle` 默认 30 分钟、删除 claude 版本时的 `CloseSessionsUsing`、
+  空闲回收 `manager.reapIdle` 默认 10 分钟、删除 claude 版本时的 `CloseSessionsUsing`、
   归档/删除对话），不像 prompt 那样每条都来。`NoteSessionClosed` 的写法是
   「`finishPendingTurn` 推过就不再推」，两种情况都只发一条。
 - **不要按 prompt 逐条推**：每条消息都只改 `last_active`，为它让**每个连接的每个回合**
