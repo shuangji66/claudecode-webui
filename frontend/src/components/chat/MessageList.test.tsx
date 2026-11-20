@@ -75,6 +75,19 @@ describe("MessageList 长对话", () => {
     expect(screen.getByRole("button", { name: /加载更早的 40 条/ })).toBeInTheDocument();
   });
 
+  // 回归：「加载更早」按钮与第一条消息之间那 20px，原来由同一个 `space-y-5` 容器提供
+  // （容器里放的是按钮和每一轮的 Fragment）。行树抽成 `TurnRows` 之后它变成兄弟节点，
+  // 容器一旦跟着挪进 `TurnRows` 里，这里就会贴在一起（`space-y-5` 只作用于直接子元素，
+  // 套在按钮自己身上无效——它只有一个子元素）。
+  it("「加载更早」与消息行仍在同一个 space-y-5 容器里", () => {
+    setProcessView("detailed"); // 只有非紧凑档才有这层间距
+    render(<MessageList items={many(200)} />);
+    const container = screen.getByRole("button", { name: /加载更早/ }).closest(".space-y-5");
+    expect(container).not.toBeNull();
+    // 按钮那一格 + 行树，正好两个直接子元素。
+    expect(container!.children).toHaveLength(2);
+  });
+
   // 回归：一轮的过程（工具调用）轻易超过 80 条，按条数硬切会把这一轮的
   // 用户消息整个切出去——界面上只剩「正在分析请求」，用户以为刚发的话丢了。
   it("长过程的那一轮：用户消息必须还在窗口里", () => {
@@ -231,6 +244,47 @@ describe("MessageList 滚动性能", () => {
     expect(querySpy.mock.calls.length).toBe(0);
     rectSpy.mockRestore();
     querySpy.mockRestore();
+  });
+
+  // 离屏跳过布局/绘制只留给高度稳定的紧凑过程行。正文气泡的高度不可估（一行字 vs
+  // 两千像素的代码块），估错了会在滚动帧里现算布局并把滚动位置顶跳；而且被跳过的
+  // 内容不做样式/布局，挂在上面的入场动画会等到「变得相关」才从头播一遍——滚过一屏
+  // 就重放一次淡入，正是「上下消息慢半拍」的来源。
+  describe("离屏跳过与入场动画", () => {
+    it("正文气泡不挂 content-visibility，且保留入场动画", () => {
+      setSessionRunning(false);
+      render(<MessageList items={[userItem(0), assistantItem(0)]} />);
+      const bubble = screen.getByText("回复 0");
+      const row = bubble.closest(".animate-rise") as HTMLElement | null;
+      expect(row).not.toBeNull();
+      expect(row!.style.contentVisibility).toBe("");
+      expect(row!.style.containIntrinsicSize).toBe("");
+    });
+
+    it("紧凑过程行保留离屏跳过，但不挂入场动画（否则滚动时重放淡入）", () => {
+      setSessionRunning(true); // 过程组在跑时才不会被收起
+      setProcessView("standard");
+      const thinking: Item = { id: "th1", seq: 1, ts: 0, kind: "thinking", text: "先看看" };
+      render(<MessageList items={[userItem(0), thinking]} />);
+
+      const row = screen.getByText("思考过程").closest("[style]") as HTMLElement | null;
+      expect(row).not.toBeNull();
+      expect(row!.style.contentVisibility).toBe("auto");
+      expect(row!.style.containIntrinsicSize).toBe("auto 32px");
+      expect(row!.className).not.toContain("animate-rise");
+    });
+
+    it("展开的过程组内部一律不跳过（用户正看着，估算只会让高度反复回缩）", () => {
+      setSessionRunning(true);
+      setProcessView("detailed");
+      const thinking: Item = { id: "th1", seq: 1, ts: 0, kind: "thinking", text: "先看看" };
+      render(<MessageList items={[userItem(0), thinking]} />);
+
+      // 详细档不分组，思考行直接铺开：这时它是「用户主动看的正文」，不该跳过。
+      const row = screen.getByText("思考过程").closest(".animate-rise") as HTMLElement | null;
+      expect(row).not.toBeNull();
+      expect(row!.style.contentVisibility).toBe("");
+    });
   });
 });
 

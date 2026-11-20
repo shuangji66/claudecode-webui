@@ -6,8 +6,8 @@
 //
 // **必须挂在 body 上的 Portal**：`position: fixed` 是相对最近一个「建立了包含块」的
 // 祖先定位的，而 `contain: paint`（`content-visibility: auto` 隐含它）、`transform`、
-// `filter`、`will-change` 都会建立这种包含块。消息行为了离屏跳过绘制就带着
-// `content-visibility: auto`（见 `MessageList` 的 OFFSCREEN_TEXT），于是用户气泡里
+// `filter`、`will-change` 都会建立这种包含块。消息行为了离屏跳过绘制带着
+// `content-visibility: auto`（见 `MessageList` 的 `OFFSCREEN_ROW`），于是用户气泡里
 // 点开的图片灯箱被关进那一条消息：遮罩只剩一个方块、图片缩在里头、关闭按钮连同
 // 其余部分一起被 `contain: paint` 裁掉，桌面模式也没法关（点击穿透到底下的正文）。
 // 挂在 body 上就不受任何祖先的包含块与裁剪影响。

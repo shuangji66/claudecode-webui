@@ -27,7 +27,7 @@ import {
   type ProcessEntry,
   type TurnSpan,
 } from "../../lib/process";
-import { useCollapseTiming, useFoldedReplies, useProcessView } from "../../lib/viewMode";
+import { useCollapseTiming, useFoldedReplies, useProcessView, type CollapseTiming } from "../../lib/viewMode";
 import { useFollowGrowth } from "../../lib/scrollFollow";
 import { useAppStore } from "../../store/useAppStore";
 import { ProcessGroup } from "./ProcessGroup";
@@ -53,13 +53,15 @@ function entryTouchesProcess(entry: ProcessEntry): boolean {
  */
 const VISIBLE_STEP = 80;
 /**
- * 离屏行不参与布局/绘制；估算高度给滚动条一个稳定长度。
+ * 离屏跳过布局/绘制**只给密集的单行过程行**：它们的高度稳定在一行（~28px），32px 的
+ * 占位与真实值几乎一致，滚动过程中不会来回回缩。
  *
- * **估算值必须贴近真实高度**：估高了，展开一组 80 行时滚动高度会比真实值多出上千像素，
- * 随着行真正渲染再一路回缩——滚起来就是「内容加载不过来」+ 位置乱跳。紧凑过程行只有
- * 一行高（~28px），气泡/卡片才接近 120px，所以按行类型分开估。
+ * **正文气泡与卡片不要加**（原来那份 `contain-intrinsic-size: auto 120px` 已删）。一条
+ * 回答可能是 60px，也可能是一张 2000px 的代码块或表格，估算必然差很远；估算被真实高度
+ * 替换时滚动高度会变、滚动位置跟着跳，而且新进入视口的那一行得在**滚动帧里**现算布局
+ * ——表现就是「滚起来上下的消息慢半拍」。条数窗口（`VISIBLE_STEP`）已经把 DOM 压住了，
+ * 气泡这边交给浏览器自己的离屏绘制跳过。
  */
-const OFFSCREEN_TEXT = { contentVisibility: "auto", containIntrinsicSize: "auto 120px" } as const;
 const OFFSCREEN_ROW = { contentVisibility: "auto", containIntrinsicSize: "auto 32px" } as const;
 
 /** 单条消息。memo 化：流式追加时只有最后一个气泡需要重渲染。 */
@@ -85,9 +87,22 @@ const MessageRow = memo(function MessageRow({
   offscreen?: boolean;
 }) {
   const t = useT();
+  /**
+   * 只有紧凑过程行才挂 `content-visibility: auto`，而且它们**不挂入场动画**。
+   *
+   * 正文气泡 / 完整卡片的高度是**不可估**的（一行字 vs 一张两千像素的代码块），
+   * 加离屏跳过等于让浏览器在「这一行进入视口的那一帧」现算布局与绘制——正好落在
+   * 滚动帧上，用户看到的就是「滚一下，内容慢半拍才跟上来」。
+   *
+   * 紧凑行高度稳定（一行 ~28px），可以留离屏跳过；但**不能同时挂 `animate-rise`**：
+   * 被跳过的内容不做样式与布局，入场动画实际是等这一行「变得相关」时才从头播的
+   * （`rise-in` 从 `opacity: 0` 起），于是每滚过一屏过程行就重放一遍淡入。
+   * 这是「上下消息慢半拍」最直观的来源，去掉后滚动立刻顺畅（实测）。
+   * 入场动画只留给挂载时就在的那批（历史回放、新消息追加），滚动经过时不该再演一次。
+   */
   const box = (dense: boolean) => ({
-    className: "animate-rise",
-    style: offscreen === false ? undefined : dense ? OFFSCREEN_ROW : OFFSCREEN_TEXT,
+    className: offscreen === false || !dense ? "animate-rise" : undefined,
+    style: offscreen === false || !dense ? undefined : OFFSCREEN_ROW,
   });
   switch (item.kind) {
     case "user":
@@ -142,19 +157,13 @@ const MessageRow = memo(function MessageRow({
     }
     case "system":
       return (
-        <pre
-          style={OFFSCREEN_TEXT}
-          className="overflow-x-auto whitespace-pre-wrap break-words rounded-xl border border-line bg-panel px-3 py-2 font-mono text-[11px] leading-relaxed text-muted"
-        >
+        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-xl border border-line bg-panel px-3 py-2 font-mono text-[11px] leading-relaxed text-muted">
           {item.text}
         </pre>
       );
     case "error":
       return (
-        <div
-          style={OFFSCREEN_TEXT}
-          className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-danger dark:border-rose-900/60 dark:bg-rose-950/30"
-        >
+        <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-danger dark:border-rose-900/60 dark:bg-rose-950/30">
           <IconAlert size={15} className="mt-0.5 shrink-0" />
           <span className="min-w-0 whitespace-pre-wrap break-words">{item.text}</span>
         </div>
@@ -162,6 +171,127 @@ const MessageRow = memo(function MessageRow({
     default:
       return null;
   }
+});
+
+/**
+ * 一整屏消息行。
+ *
+ * **单独 memo 出来是为了让滚动帧不碰它**：`onScroll` 里 `setAtBottom` / `setActiveTurn`
+ * 每次都会让 `MessageList` 重渲染，而重渲染就会把 `spans.map` 里几百个 React 元素从头
+ * 建一遍（`MessageRow` 自己 memo 只能省掉子组件，省不掉外层这些 div 与 props 对象）。
+ * 一次滚动几十帧、每帧重建几百个元素，就是「滚起来上下的消息慢半拍」。
+ *
+ * 这里的 props 在滚动时**全是稳定的引用**（都是 useMemo / useState 出来的）：
+ * 行内容只在消息变化、窗口展开、折叠状态变化时才重算。
+ */
+const TurnRows = memo(function TurnRows({
+  spans,
+  shown,
+  rows,
+  copies,
+  hiddenReplies,
+  dense,
+  manual,
+  timing,
+  onToggleTurn,
+}: {
+  spans: TurnSpan[];
+  shown: Item[];
+  rows: ProcessEntry[][];
+  copies: Map<string, string>;
+  hiddenReplies: Set<string> | null;
+  dense: boolean;
+  manual: Record<string, boolean>;
+  timing: CollapseTiming;
+  onToggleTurn: (key: string, collapsed: boolean) => void;
+}) {
+  /** 某一轮此刻是不是收起态。 */
+  const isCollapsed = (span: TurnSpan, index: number): boolean => {
+    if (span.process.length === 0) return false; // 没有过程可收：纯问答不该多一行
+    if (!span.finished) return false; // 还在跑：过程必须看得见
+    const touched = manual[shown[span.start].id];
+    if (touched !== undefined) return !touched;
+    return !(timing === "onNextSend" && index === spans.length - 1);
+  };
+
+  return (
+    <div className={dense ? "" : "space-y-5"}>
+      {spans.map((span, index) => {
+        const collapsed = isCollapsed(span, index);
+        const turnRows = rows[index];
+        /**
+         * 收起/展开那一行（DSH 的「已完成，用时 …」）。
+         *
+         * **位置在用户消息下方、这一轮第一条答复上方**：放到轮首会跑到用户气泡
+         * 上方，一进来只看见一行「已完成」还以为自己刚发的话被折没了。
+         * 有过程才出现——纯问答不该多一行。
+         */
+        const collapseRow = span.process.length > 0 && span.finished && (
+          <TurnCollapse
+            durationMs={span.durationMs}
+            open={!collapsed}
+            onToggle={() => onToggleTurn(shown[span.start].id, collapsed)}
+          />
+        );
+        // 只有窗口截断把用户消息切掉时，第一行才不是用户消息：那种情况放在最前面。
+        const head = turnRows[0];
+        const headIsUser = head?.type === "item" && head.item.kind === "user";
+        return (
+          <Fragment key={shown[span.start].id}>
+            {!headIsUser && collapseRow}
+            {turnRows.map((entry, rowIndex) => {
+              // 过程收起来了：整批跳过，只留正文。正文与用户消息是「结果」，
+              // 收起要藏的只有过程（思考与工具调用）。
+              if (collapsed && entryTouchesProcess(entry)) return null;
+              // 「仅最终回答」：阶段回复整行跳过，不缩成一行占位。
+              if (entry.type === "item" && hiddenReplies?.has(entry.item.id)) return null;
+              let row: ReactNode = null;
+              if (entry.type === "process") {
+                row = (
+                  <div key={entry.key} className={dense ? "mt-1" : undefined}>
+                    <ProcessGroup items={entry.items}>
+                      {entry.items.map((item) => (
+                        <MessageRow key={item.id} item={item} dense={dense} offscreen={false} />
+                      ))}
+                    </ProcessGroup>
+                  </div>
+                );
+              } else if (entry.type === "thinking") {
+                row = (
+                  <div key={entry.key} className={dense ? "mt-1" : undefined}>
+                    <ThinkingBlock text={entry.items.map((it) => it.text).join("\n\n")} dense={dense} />
+                  </div>
+                );
+              } else {
+                row = (
+                  <div
+                    key={entry.key}
+                    data-item-id={entry.item.id}
+                    className={dense ? (isProcessItem(entry.item) ? "mt-1" : "mt-5") : undefined}
+                  >
+                    <MessageRow
+                      item={entry.item}
+                      dense={dense}
+                      copyText={entry.item.kind === "assistant" ? copies.get(entry.item.id) : undefined}
+                    />
+                  </div>
+                );
+              }
+              if (rowIndex === 0 && headIsUser) {
+                return (
+                  <Fragment key={entry.key}>
+                    {row}
+                    {collapseRow}
+                  </Fragment>
+                );
+              }
+              return <Fragment key={entry.key}>{row}</Fragment>;
+            })}
+          </Fragment>
+        );
+      })}
+    </div>
+  );
 });
 
 export function MessageList({
@@ -267,24 +397,25 @@ export function MessageList({
    */
   const spans = useMemo(() => turnSpans(shown, running), [shown, running]);
   const [manual, setManual] = useState<Record<string, boolean>>({});
-  /** 某一轮此刻是不是收起态。 */
-  const isCollapsed = (span: TurnSpan, index: number): boolean => {
-    if (span.process.length === 0) return false; // 没有过程可收：纯问答不该多一行
-    if (!span.finished) return false; // 还在跑：过程必须看得见
-    const key = shown[span.start].id;
-    const touched = manual[key];
-    if (touched !== undefined) return !touched;
-    return !(timing === "onNextSend" && index === spans.length - 1);
-  };
-  /** 每轮各自成行：分组只在轮内发生，跨轮的分组没有意义。 */
+  /**
+   * 手动开合某一轮的过程。
+   *
+   * **必须 useCallback**：它要作为 `TurnRows` 的 prop，每次渲染新建一个函数会让那个
+   * memo 失效，滚动帧照样重建整棵树。
+   */
+  const toggleTurn = useCallback((key: string, collapsed: boolean) => {
+    // `manual` 记的是「用户要它展开吗」：点一下就是取反当前的收起态。
+    setManual((prev) => ({ ...prev, [key]: collapsed }));
+  }, []);
+  /**
+   * 每轮各自成行：分组只在轮内发生，跨轮的分组没有意义。
+   *
+   * 不再把 `row.start` 平移成「在整份 `shown` 里的下标」——那个字段没有任何消费方
+   * （轮级收起重构之后，定位一律走 `data-item-id` 与 `span.start`）。每行多复制一个
+   * 对象、每轮多一次 `slice` 平移，在流式输出时是白付的。
+   */
   const rows = useMemo(
-    () =>
-      spans.map((span) =>
-        buildProcessRows(shown.slice(span.start, span.end), grouping).map((row) => ({
-          ...row,
-          start: row.start + span.start,
-        })),
-      ),
+    () => spans.map((span) => buildProcessRows(shown.slice(span.start, span.end), grouping)),
     [spans, shown, grouping],
   );
   /**
@@ -293,15 +424,24 @@ export function MessageList({
    *
    * **这一轮没结束就一个都不给**：跑到一半时「最后一条正文」只是半句话，挂个复制按钮
    * 既没意义，又会在过程里冒出来（用户看到的就是「思考过程下面多了一个复制按钮」）。
+   *
+   * **每轮只问一条**：`replyCopy` 只会给「本轮最后一条有正文的回答」返回值，所以从后
+   * 往前找到第一条够格的再问就行。以前是对轮内每条 assistant 都调一次（每次都把整轮
+   * 扫一遍），流式输出时每个 token 都要重算一遍整份 `shown`，一轮两百条就是四万次比较
+   * ——那是「边输出边滚动最卡」的来源之一。
    */
   const copies = useMemo(() => {
     const map = new Map<string, string>();
     for (const span of spans) {
+      if (!span.finished) continue;
       const slice = shown.slice(span.start, span.end);
-      for (const item of slice) {
-        if (item.kind !== "assistant") continue;
-        const text = replyCopy(slice, item.id, span.finished);
+      // 从后往前跳过「不算正文」的条目，与 `replyCopy` 自己的过滤口径一致。
+      for (let i = slice.length - 1; i >= 0; i -= 1) {
+        const item = slice[i];
+        if (item.kind !== "assistant" || item.apiError || !item.text.trim()) continue;
+        const text = replyCopy(slice, item.id, true);
         if (text !== undefined) map.set(item.id, text);
+        break;
       }
     }
     return map;
@@ -521,6 +661,9 @@ export function MessageList({
     // 保持当前状态，不要拿它改判。阈值给 2px 抖动量，避免亚像素误差来回翻。
     if (prev !== null && top < prev - 2) stick.current = false;
     else if (bottom <= 2) stick.current = true;
+    // 这两个 setState 在值没变时会被 React 自己挡掉（`Object.is` 相同即跳过重渲染），
+    // 不必再手写一层比较。真正会变的是 `syncActiveTurn` 里的 `activeTurn`——它一变
+    // `MessageList` 就重渲染，所以行树才要单独 memo 成 `TurnRows`（见那里的注释）。
     setAtBottom(stick.current);
     if (stick.current) setUnseen(false);
     if (rafPending.current === null) {
@@ -579,6 +722,13 @@ export function MessageList({
           // 会叠出一大片空白（底部跟随之后那片空白更显眼）。
           className={`mx-auto w-full max-w-[820px] px-4 pb-2 pt-6 md:px-6 md:pb-3 md:pt-8 ${turns.length >= 2 ? "md:pr-10" : ""}`}
         >
+          {/*
+            「加载更早」按钮与消息行之间那 20px 间距原来由**同一个** `space-y-5` 容器提供
+            （容器里放的是按钮和每一轮的 Fragment）。行树抽成 `TurnRows` 之后它自己是一个
+            兄弟节点，所以这一层容器要留着：`space-y-5` 只作用于直接子元素，套在按钮自己
+            身上是无效的（它只有一个子元素）。`TurnRows` 内部还有一层，负责轮与轮之间的
+            间距——两层各管一段，缺一层就会有一处贴在一起。
+          */}
           <div className={dense ? "" : "space-y-5"}>
             {hidden > 0 && (
               <div className={`flex justify-center ${dense ? "mt-3" : ""}`}>
@@ -591,84 +741,17 @@ export function MessageList({
                 </button>
               </div>
             )}
-            {spans.map((span, index) => {
-              const collapsed = isCollapsed(span, index);
-              const turnRows = rows[index];
-              /**
-               * 收起/展开那一行（DSH 的「已完成，用时 …」）。
-               *
-               * **位置在用户消息下方、这一轮第一条答复上方**：放到轮首会跑到用户气泡
-               * 上方，一进来只看见一行「已完成」还以为自己刚发的话被折没了。
-               * 有过程才出现——纯问答不该多一行。
-               */
-              const collapseRow = span.process.length > 0 && span.finished && (
-                <TurnCollapse
-                  durationMs={span.durationMs}
-                  open={!collapsed}
-                  onToggle={() => {
-                    // `manual` 记的是「用户要它展开吗」：点一下就是取反当前的收起态。
-                    const key = shown[span.start].id;
-                    setManual((prev) => ({ ...prev, [key]: collapsed }));
-                  }}
-                />
-              );
-              // 只有窗口截断把用户消息切掉时，第一行才不是用户消息：那种情况放在最前面。
-              const head = turnRows[0];
-              const headIsUser = head?.type === "item" && head.item.kind === "user";
-              return (
-                <Fragment key={shown[span.start].id}>
-                  {!headIsUser && collapseRow}
-                  {turnRows.map((entry, rowIndex) => {
-                    // 过程收起来了：整批跳过，只留正文。正文与用户消息是「结果」，
-                    // 收起要藏的只有过程（思考与工具调用）。
-                    if (collapsed && entryTouchesProcess(entry)) return null;
-                    // 「仅最终回答」：阶段回复整行跳过，不缩成一行占位。
-                    if (entry.type === "item" && hiddenReplies?.has(entry.item.id)) return null;
-                    let row: ReactNode = null;
-                    if (entry.type === "process") {
-                      row = (
-                        <div key={entry.key} className={dense ? "mt-1" : undefined}>
-                          <ProcessGroup items={entry.items}>
-                            {entry.items.map((item) => (
-                              <MessageRow key={item.id} item={item} dense={dense} offscreen={false} />
-                            ))}
-                          </ProcessGroup>
-                        </div>
-                      );
-                    } else if (entry.type === "thinking") {
-                      row = (
-                        <div key={entry.key} className={dense ? "mt-1" : undefined}>
-                          <ThinkingBlock text={entry.items.map((it) => it.text).join("\n\n")} dense={dense} />
-                        </div>
-                      );
-                    } else {
-                      row = (
-                        <div
-                          key={entry.key}
-                          data-item-id={entry.item.id}
-                          className={dense ? (isProcessItem(entry.item) ? "mt-1" : "mt-5") : undefined}
-                        >
-                          <MessageRow
-                            item={entry.item}
-                            dense={dense}
-                            copyText={entry.item.kind === "assistant" ? copies.get(entry.item.id) : undefined}
-                          />
-                        </div>
-                      );
-                    }
-                    if (rowIndex === 0 && headIsUser) {
-                      return (
-                        <Fragment key={entry.key}>
-                          {row}
-                          {collapseRow}
-                        </Fragment>
-                      );
-                    }
-                    return <Fragment key={entry.key}>{row}</Fragment>;
-                  })}
-                </Fragment>
-              );
-            })}
+            <TurnRows
+              spans={spans}
+              shown={shown}
+              rows={rows}
+              copies={copies}
+              hiddenReplies={hiddenReplies}
+              dense={dense}
+              manual={manual}
+              timing={timing}
+              onToggleTurn={toggleTurn}
+            />
           </div>
           {/* 末尾留一小段呼吸：最后一条回答的用量行贴着输入区会很挤，但不必再给 24px。 */}
           <div className="h-1" />
@@ -706,7 +789,10 @@ export function MessageList({
           onClick={toBottom}
           aria-label={unseen ? t("有新内容，回到底部", "New messages — jump to bottom") : t("回到底部", "Scroll to bottom")}
           title={t("回到底部", "Scroll to bottom")}
-          className="absolute bottom-4 right-4 flex h-9 w-9 items-center justify-center rounded-full border border-line-strong bg-canvas/95 text-ink shadow-soft backdrop-blur transition hover:bg-panel-strong"
+          // 不用 `backdrop-blur`：它下面的内容正在滚，模糊得每帧重算一遍，而且覆盖的
+          // 是一整块滚动区域——这是滚动手感变钝的典型来源。底色本来就接近不透明，
+          // 视觉上没有可感知的差别。
+          className="absolute bottom-4 right-4 flex h-9 w-9 items-center justify-center rounded-full border border-line-strong bg-canvas/95 text-ink shadow-soft transition hover:bg-panel-strong"
         >
           <IconChevronDown size={16} />
           {unseen && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-brand" />}
