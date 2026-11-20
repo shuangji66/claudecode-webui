@@ -68,6 +68,23 @@ func (p Provider) ListBaseURL() string {
 	return stripVersionSuffix(p.Root())
 }
 
+// bearerFallback 返回「同一把密钥改成 Bearer 再试一次」的版本。
+//
+// 不少中转只认 `Authorization: Bearer`，用户把密钥填在「API 密钥」里就会一路
+// 401。FetchModels 与 Probe 都要这条兜底——只有一处有的时候，界面会出现
+// 「获取列表成功、测试连接鉴权失败」这种自相矛盾的结论。
+//
+// 已经填了 Bearer 令牌、或根本没填密钥时返回 false：换一个方向重试没有意义。
+func (p Provider) bearerFallback() (Provider, bool) {
+	if p.APIKey == "" || p.AuthToken != "" {
+		return Provider{}, false
+	}
+	alt := p
+	alt.AuthToken = p.APIKey
+	alt.APIKey = ""
+	return alt, true
+}
+
 // Root 返回去掉尾斜杠的地址。
 func (p Provider) Root() string {
 	base := strings.TrimRight(strings.TrimSpace(p.BaseURL), "/")
@@ -107,6 +124,21 @@ func Probe(ctx context.Context, p Provider) ProbeResult {
 			return res
 		}
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		// 与 FetchModels 同一条兜底：不少中转只认 Bearer，「用密钥换 Bearer 再试
+		// 一次」在那里能过、在这里却直接报鉴权失败，用户会看到「获取列表成功、
+		// 测试连接失败」这种自相矛盾的结论。
+		if alt, ok := p.bearerFallback(); ok {
+			if s2, b2, _, e2 := doAuth(ctx, client, http.MethodGet, url, alt, nil); e2 == nil {
+				if s2 >= 200 && s2 < 300 {
+					if models, perr := parseModels(b2); perr == nil && len(models) > 0 {
+						res.OK = true
+						res.Status = s2
+						res.Detail = fmt.Sprintf("端点可用，返回 %d 个模型（Bearer 鉴权）", len(models))
+						return res
+					}
+				}
+			}
+		}
 		res.Detail = "鉴权失败：" + snippet(body)
 		return res
 	}

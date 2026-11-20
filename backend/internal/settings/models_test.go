@@ -288,6 +288,29 @@ func TestFetchModelsRetriesWithBearer(t *testing.T) {
 	}
 }
 
+// 同一条 Bearer 兜底也要在「测试连接」上生效：只认 Bearer 的中转上，
+// 少了它就会出现「获取列表成功、测试连接鉴权失败」这种自相矛盾的结论。
+func TestProbeRetriesWithBearer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("authorization") != "Bearer sk-relay" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":"invalid api key"}`))
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	defer srv.Close()
+
+	res := Probe(t.Context(), Provider{BaseURL: srv.URL, APIKey: "sk-relay"})
+	if !res.OK {
+		t.Fatalf("测试连接应通过: %+v", res)
+	}
+	if !strings.Contains(res.Detail, "Bearer") {
+		t.Fatalf("应说明用了 Bearer 鉴权: %q", res.Detail)
+	}
+}
+
 func TestFetchModelsHTMLGivesActionableError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/html")

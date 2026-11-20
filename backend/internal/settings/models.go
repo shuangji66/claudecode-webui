@@ -121,11 +121,8 @@ func FetchModels(ctx context.Context, p Provider) ModelsResult {
 			return res
 		}
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		// 同一把密钥换成 Bearer 再试一次：不少中转只认 Bearer。
-		if p.APIKey != "" && p.AuthToken == "" {
-			alt := p
-			alt.AuthToken = p.APIKey
-			alt.APIKey = ""
+		// 同一把密钥换成 Bearer 再试一次：不少中转只认 Bearer（见 bearerFallback）。
+		if alt, ok := p.bearerFallback(); ok {
 			if s2, b2, _, e2 := doAuth(ctx, client, http.MethodGet, url, alt, nil); e2 == nil {
 				res.Auth.BearerFallback = true
 				if models, perr := parseModels(b2); perr == nil && len(models) > 0 {
