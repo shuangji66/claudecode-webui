@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type ReactNo
 import type { CommandInfo, WireAttachment } from "../../transport/types";
 import { useAppStore } from "../../store/useAppStore";
 import { commandDescription, permissionLabel } from "../../lib/labels";
-import { matchCommands } from "../../lib/commands";
+import { matchCommands, userCommands } from "../../lib/commands";
 import { canPickFnos, fnosHostAvailable, pickFnosFiles } from "../../lib/fnos";
 import { applyMention, formatMention, mentionPath, type MentionToken } from "../../lib/mention";
 import { MentionMenu } from "./MentionMenu";
@@ -517,7 +517,7 @@ export function Composer({
     },
   ];
 
-  const commandItems: MenuItem[] = commands.map((c) => {
+  const commandItems: MenuItem[] = userCommands(commands).map((c) => {
     const desc = commandDescription(c.name, c.description, locale);
     return {
       id: `cmd:${c.name}`,

@@ -1239,6 +1239,11 @@ hub ── manager ── session ── process ── claude (NDJSON)
   列表**只许纵向滚**：`overflow-y-auto` 单独写时另一轴被 CSS 算成 `auto`，长参数提示
   一超宽就整块横着滚，必须显式 `overflow-x-hidden`；指令名 `shrink-0` 不截断，
   参数提示与说明 `min-w-0 truncate` 吃剩余宽度。
+- **CLI 自己的内部命令不进菜单**（`lib/commands.userCommands`）：`initialize` 回包里的
+  `commands` 会带上 CLI 标了 `isHidden: true` 的那些——2.1.329 实测有
+  `__remote-workflow`（描述写着 "server-launched sessions only"）。它们只该由服务端
+  下发的会话调用，用户在这边敲出来做的是另一件事。按 CLI 自己的分界 `__` 前缀过滤，
+  不维护第二份名单（那份清单随版本漂移）。`/` 与 `+ → 指令` **两个入口都走它**。
 - **`COMMAND_LABELS` 要跟得上 CLI 的命令集**：`/` 菜单列全量之后，没收录的命令会露出
   CLI 的英文长句（`Use this skill to configure the Claude Code harness via setti…`）。
   2.1.329 实测的完整命令名可以直接从二进制里捞：

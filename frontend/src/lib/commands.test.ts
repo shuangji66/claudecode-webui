@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandQuery, matchCommands } from "./commands";
+import { commandQuery, matchCommands, userCommands } from "./commands";
 import type { CommandInfo } from "../transport/types";
 
 const command = (name: string): CommandInfo => ({ name, description: `${name} 的说明` });
@@ -56,5 +56,22 @@ describe("matchCommands", () => {
   it("不是补全状态时给空数组", () => {
     expect(matchCommands(LIST, "/compact ")).toEqual([]);
     expect(matchCommands(LIST, "普通正文")).toEqual([]);
+  });
+
+  // CLI 的 initialize 回包会带上它自己 isHidden 的内部命令（2.1.329 实测：
+  // `__remote-workflow`，描述写着 "server-launched sessions only"）。它们只该由
+  // 服务端下发的会话调用，用户在这边敲出来做的是另一件事。
+  it("不列 CLI 自己的内部命令（`__` 前缀）", () => {
+    const withInternal = [...LIST, command("__remote-workflow")];
+    expect(matchCommands(withInternal, "/").map((c) => c.name)).toEqual(LIST.map((c) => c.name));
+    expect(matchCommands(withInternal, "/__")).toEqual([]);
+    expect(matchCommands(withInternal, "/remote")).toEqual([]);
+  });
+});
+
+describe("userCommands", () => {
+  it("滤掉 `__` 前缀的内部命令，其余原样保留（顺序不变）", () => {
+    const all = [command("compact"), command("__remote-workflow"), command("model")];
+    expect(userCommands(all).map((c) => c.name)).toEqual(["compact", "model"]);
   });
 });
