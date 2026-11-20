@@ -7,6 +7,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useT } from "../../../lib/i18n";
+import { NO_AUTOFILL } from "../../../lib/autofill";
+import { hasFinePointer } from "../../../lib/pointer";
 import { formatCapacity } from "../../../lib/providerForm";
 import type { GatewayModel } from "../../../transport/types";
 import { Button } from "../../common/Button";
@@ -106,12 +108,15 @@ export function ModelPickerDialog({
       <div className="flex min-h-0 flex-1 flex-col px-4 py-3">
         <div className="flex items-center gap-2">
           <input
+            {...NO_AUTOFILL}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t("搜索模型…", "Search models…")}
             aria-label={t("搜索模型", "Search models")}
-            // 弹窗一打开就聚焦搜索框：目录动辄几十条，键盘直接筛比找滚动条快。
-            autoFocus
+            // 桌面上聚焦搜索框：目录动辄几十条，键盘直接筛比找滚动条快。
+            // 手机上不能自动聚焦——弹窗一开就弹键盘，把大半个列表顶走
+            // （与历史记录页的搜索框同一条规矩）。
+            autoFocus={hasFinePointer()}
             className="min-w-0 flex-1 rounded-md border border-line-strong bg-canvas px-2 py-1.5 text-[11.5px] outline-none focus:border-brand/60"
           />
           <Button size="sm" variant="secondary" disabled={filtered.length === 0} onClick={toggleAll}>
