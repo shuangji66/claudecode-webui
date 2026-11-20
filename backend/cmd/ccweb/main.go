@@ -8,6 +8,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"os/exec"
@@ -130,6 +132,9 @@ func main() {
 	// 会话事件的唯一出口：先广播给这个会话的观察者，再把「回合结束 / 进程结束」
 	// 转给网关——自动化任务投递的会话没人打开，只有网关知道那一条要刷新面板。
 	// 网关在 manager 之后才建出来（它自己依赖 manager），所以用原子指针接一下。
+	//
+	// manager 同理用指针间接引用：它的构造要传这个闭包，而闭包里又要调它的 Rename。
+	var mgrRef atomic.Pointer[manager.Manager]
 	var srvRef atomic.Pointer[gateway.Server]
 	mgr := manager.New(cfg, resolveClaude, store, func(sid string, ev session.Event) {
 		h.Broadcast(sid, gateway.WireEvent{Kind: ev.Kind, SID: sid, Data: ev.Data, Seq: ev.Seq})
@@ -142,8 +147,28 @@ func main() {
 			srv.NoteSessionState(sid, ev.Data)
 		case session.KindClosed:
 			srv.NoteSessionClosed(sid)
+		case session.KindSessionReplaced:
+			// CLI 换了会话 id（`/clear`）：把对话元数据迁到它实际在用的那个 id 上。
+			// 不迁的话，重开这条对话会按旧 id `--resume`，把用户刚刚清掉的上下文
+			// 又读回来。这里只动 conversations.json —— 转录本来就已经写在新 id 下了。
+			//
+			// manager 的键也要跟着换（只换键、不动进程）：不然列表里那条会显示
+			// `live:false`，后续 prompt 还会打到旧 id 上。
+			if from, to := sessionReplacedIDs(ev.Data); from != "" {
+				if m := mgrRef.Load(); m != nil {
+					m.Rename(from, to)
+				}
+				// 已经连着的页面订阅的是旧 topic，不搬就再也收不到事件。
+				h.Rekey(from, to)
+			}
+			var notify func()
+			if srv != nil {
+				notify = srv.BroadcastConversationsChanged
+			}
+			migrateConversationID(convStore, notify, ev.Data, logger)
 		}
 	})
+	mgrRef.Store(mgr)
 	defer mgr.CloseAll()
 
 	// 内置搜索的会话规则：只有「用户启用了搜索」且「这条 MCP 服务真的注册了」才生效。
@@ -278,8 +303,61 @@ func main() {
 	}
 }
 
+// sessionReplacedIDs 解析 `session.replaced` 的 `{from, to}`。
+func sessionReplacedIDs(data json.RawMessage) (string, string) {
+	var ev struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := json.Unmarshal(data, &ev); err != nil {
+		return "", ""
+	}
+	if ev.From == "" || ev.To == "" || ev.From == ev.To {
+		return "", ""
+	}
+	return ev.From, ev.To
+}
+
+// migrateConversationID 把对话元数据从 CLI 的旧会话 id 迁到新 id（`/clear` 之后）。
+//
+// **为什么必须迁**：`/clear` 让 claude 新开一份转录，后续轮次全写在新 id 下，旧转录
+// 停在 clear 之前。我们若继续按旧 id 记录对话，进程被回收后重新 `--resume 旧 id`
+// 会把用户**自己刚刚清掉**的上下文读回来——「清空」这个动作在重开之后失效了。
+//
+// **只迁应用自己的元数据，不动转录**：转录本来就已经在新 id 下，复制或改名都会造出
+// 两份历史。这也让「id 必须稳定」那条约定在实现上仍然成立——变的不是我们造的 id，
+// 而是跟着 claude 实际在用的那个走（见 conversation.Rekey 的注释）。
+//
+// 失败只记日志：迁移不上最多是重开对话时回到清空前的内容，不值得打断正在跑的会话。
+func migrateConversationID(conv *conversation.Store, notify func(), data json.RawMessage, logger *log.Logger) {
+	if conv == nil {
+		return
+	}
+	var ev struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := json.Unmarshal(data, &ev); err != nil || ev.From == "" || ev.To == "" || ev.From == ev.To {
+		return
+	}
+	if err := conv.Rekey(ev.From, ev.To); err != nil {
+		// ErrNotFound 是常态：这条对话可能压根没登记过元数据（还没发过消息）。
+		// 其余情况（目标 id 已被占用）说明新 id 上已经有一条独立对话，也不该覆盖。
+		if !errors.Is(err, conversation.ErrNotFound) {
+			logger.Printf("迁移对话 id 失败（%s → %s）: %v", ev.From, ev.To, err)
+		}
+		return
+	}
+	// 列表里那条对话的 id 变了：推一条让各端重拉，否则侧栏还挂着旧 id，
+	// 点进去会去 resume 一份用户已经清空的转录。
+	if notify != nil {
+		notify()
+	}
+}
+
 // latestTranscript 返回 cwd 下最近更新的 claude 转录；用于把旧版本留下的
 // 历史对话一次性收养进 conversation 元数据。
+
 func latestTranscript(projectsDir, cwd string, skip func(string) bool) (history.Session, bool) {
 	list, err := history.List(projectsDir)
 	if err != nil {

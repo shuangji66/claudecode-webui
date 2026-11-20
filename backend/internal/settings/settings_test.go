@@ -373,6 +373,26 @@ func TestEnvFailsFastOnRateLimit(t *testing.T) {
 	}
 }
 
+// 模型回退必须无条件关掉：CLI 会在好几条路径上悄悄换模型（可用性回退链、
+// 积分 consent gate、拒答回退）。界面上写着「当前模型」就必须真的是那个模型——
+// 换个模型重试对用户是不可见的行为改变，不能靠「ANTHROPIC_DEFAULT_* 恰好都指向
+// 同一个模型」这种巧合来保证（配了第二个模型就会重新长出回退）。
+func TestEnvDisablesModelFallback(t *testing.T) {
+	// 没有选中模型时也必须注入：回退是 CLI 的行为，与有没有配 provider 无关。
+	for _, v := range []Settings{
+		{},
+		{
+			Providers: []Provider{{ID: "gw", Models: []string{"m1"}}},
+			Selected:  Selection{Provider: "gw", Model: "m1"},
+		},
+	} {
+		env := strings.Join(v.Env(), ",")
+		if !strings.Contains(env, "CLAUDE_CODE_NO_MODEL_FALLBACK=1") {
+			t.Fatalf("没有关掉模型回退: %v", env)
+		}
+	}
+}
+
 func TestModelMetaAndEffort(t *testing.T) {
 	s, _ := openTemp(t)
 	if _, err := s.Apply(Patch{

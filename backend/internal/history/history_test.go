@@ -592,3 +592,52 @@ func TestIsInterruptMarker(t *testing.T) {
 		}
 	}
 }
+
+// 后台任务结束时 CLI 会写一条普通 user 行（isMeta 是 null，绕过 sidechain/meta 过滤）。
+// 它既不该算一条消息，也不能当会话标题——否则列表里会出现一条叫
+// `<task-notification> <task-id>…` 的对话。
+func TestIsTaskNotification(t *testing.T) {
+	yes := []string{
+		// 实测原样（后台命令被停止）。
+		"<task-notification>\n<task-id>bv3vaq2qk</task-id>\n<tool-use-id>call_00_ET_og59i9eP45vid7zHTkFU2465</tool-use-id>\n<output-file>/tmp/x.output</output-file>\n<status>killed</status>\n<summary>Background command \"Run 529 mock server\" was stopped</summary>\n<note>…</note>\n</task-notification>",
+		// 子代理完成的通知（带 <result>）。
+		"<task-notification>\n<task-id>afcc941f067953058</task-id>\n<status>completed</status>\n<result>ok</result>\n</task-notification>",
+	}
+	no := []string{
+		"",
+		"hello",
+		// 用户在正文里贴了这段 XML：前后还有自己的话，不能吞掉。
+		"帮我看下这个：\n<task-notification>\n<task-id>x</task-id>\n</task-notification>",
+		"<task-notification>缺结束标签",
+		"<div>hi</div>",
+	}
+	for _, v := range yes {
+		if !isTaskNotification(v) {
+			t.Fatalf("应判定为任务通知: %q", v)
+		}
+	}
+	for _, v := range no {
+		if isTaskNotification(v) {
+			t.Fatalf("不应判定为任务通知: %q", v)
+		}
+	}
+}
+
+// 以任务通知开头的对话，标题必须继续往后找真正的用户提问，而不是被那段 XML 占住。
+func TestSummarizeSkipsTaskNotificationForTitle(t *testing.T) {
+	dir := t.TempDir()
+	id := "44444444-5555-4666-8777-888888888888"
+	path := filepath.Join(dir, "p", id+".jsonl")
+	writeJSONL(t, path,
+		`{"type":"user","sessionId":"`+id+`","message":{"role":"user","content":"<task-notification>\n<task-id>x</task-id>\n<status>killed</status>\n</task-notification>"},"timestamp":"2026-01-01T00:00:00Z"}`,
+		`{"type":"user","sessionId":"`+id+`","message":{"role":"user","content":"这条才是用户说的话"},"timestamp":"2026-01-01T00:00:01Z"}`,
+	)
+	s := summarize(path, "p")
+	if s.Title != "这条才是用户说的话" {
+		t.Fatalf("标题 = %q, want 用户的真问题", s.Title)
+	}
+	// 通知不算一条消息：只数后面那条提问。
+	if s.Messages != 1 {
+		t.Fatalf("消息数 = %d, want 1（任务通知不该计数）", s.Messages)
+	}
+}

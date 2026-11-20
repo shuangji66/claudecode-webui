@@ -94,6 +94,35 @@ func (h *Hub) Count(topic string) int {
 	return len(h.subs[topic])
 }
 
+// Rekey 把 topic 下的所有订阅者搬到另一个 topic（`/clear` 之后 CLI 换了会话 id）。
+//
+// **不搬的话，已经连着的页面从此收不到任何事件**：订阅是在握手时按当时的会话 id
+// 建立的，而事件现在按新 id 广播——用户发消息后界面上什么都不动，直到他刷新页面。
+// 进程没变、连接也没断，只是这条对话的 id 换了，所以订阅要跟着搬而不是重连。
+//
+// 目标 topic 上已有的订阅者保留（那是别的连接，两边合并即可）。
+func (h *Hub) Rekey(oldTopic, newTopic string) {
+	if oldTopic == "" || newTopic == "" || oldTopic == newTopic {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	from, ok := h.subs[oldTopic]
+	if !ok {
+		return
+	}
+	to := h.subs[newTopic]
+	if to == nil {
+		to = make(map[Client]struct{}, len(from))
+		h.subs[newTopic] = to
+	}
+	for c := range from {
+		to[c] = struct{}{}
+	}
+	delete(h.subs, oldTopic)
+}
+
+
 // Topics 返回当前有订阅者的 topic 快照。
 func (h *Hub) Topics() []string {
 	h.mu.RLock()

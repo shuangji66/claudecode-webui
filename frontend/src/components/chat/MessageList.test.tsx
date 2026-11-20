@@ -815,3 +815,72 @@ describe("被中断的回合", () => {
     expect(screen.queryByText("已中断")).toBeNull();
   });
 });
+
+describe("最终回答前面的分隔线", () => {
+  /** 拿某个 item 那一行（渲染层把 id 挂在 data-item-id 上）。 */
+  const rowOf = (id: string): HTMLElement => {
+    const el = document.querySelector(`[data-item-id="${id}"]`);
+    if (!el) throw new Error(`找不到 ${id} 那一行`);
+    return el as HTMLElement;
+  };
+
+  it("跨过思考与工具之后的那段正文带分隔线，过渡正文不带", () => {
+    setProcessView("detailed"); // 详细档一步一行，不折成过程组，便于逐行断言
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "看一下这个文件" },
+      { id: "a1", seq: 1, ts: 0, kind: "assistant", text: "我先读一下。", streaming: false },
+      { id: "t1", seq: 2, ts: 0, kind: "thinking", text: "需要先看内容" },
+      { id: "b1", seq: 3, ts: 0, kind: "tool", toolUseId: "b1", name: "Read", input: {}, result: "ok" },
+      { id: "a2", seq: 4, ts: 0, kind: "assistant", text: "结论是这样的。", streaming: false },
+    ];
+    render(<MessageList items={items} />);
+
+    expect(rowOf("a1").className).not.toContain("border-t");
+    expect(rowOf("a2").className).toContain("border-t");
+  });
+
+  // 折叠之后过渡正文全部连在一起：逐段加线就是满屏横线（实测截图复现过）。
+  it("多段过渡正文只给最终回答画一条，中间那些不带线", () => {
+    setProcessView("detailed");
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "做一下" },
+      { id: "a1", seq: 1, ts: 0, kind: "assistant", text: "现在实现。", streaming: false },
+      { id: "t1", seq: 2, ts: 0, kind: "thinking", text: "想一下" },
+      { id: "a2", seq: 3, ts: 0, kind: "assistant", text: "先看容器布局。", streaming: false },
+      { id: "b1", seq: 4, ts: 0, kind: "tool", toolUseId: "b1", name: "Bash", input: {}, result: "ok" },
+      { id: "a3", seq: 5, ts: 0, kind: "assistant", text: "现在补测试。", streaming: false },
+      { id: "t2", seq: 6, ts: 0, kind: "thinking", text: "再想一下" },
+      { id: "a4", seq: 7, ts: 0, kind: "assistant", text: "全部完成。", streaming: false },
+    ];
+    render(<MessageList items={items} />);
+
+    // 中间那些过渡正文都不带线。
+    expect(rowOf("a1").className).not.toContain("border-t");
+    expect(rowOf("a2").className).not.toContain("border-t");
+    expect(rowOf("a3").className).not.toContain("border-t");
+    // 只有最终回答带。
+    expect(rowOf("a4").className).toContain("border-t");
+  });
+
+  it("中间没跨过过程时不加线（上游把一条回复拆成多块）", () => {
+    setProcessView("detailed");
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "在吗" },
+      { id: "a1", seq: 1, ts: 0, kind: "assistant", text: "在的，", streaming: false },
+      { id: "a2", seq: 2, ts: 0, kind: "assistant", text: "你说。", streaming: false },
+    ];
+    render(<MessageList items={items} />);
+    expect(rowOf("a1").className).not.toContain("border-t");
+    expect(rowOf("a2").className).not.toContain("border-t");
+  });
+
+  it("纯问答（没有任何过程）不会多出分隔线", () => {
+    setProcessView("detailed");
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "1+1" },
+      { id: "a1", seq: 1, ts: 0, kind: "assistant", text: "2", streaming: false },
+    ];
+    render(<MessageList items={items} />);
+    expect(rowOf("a1").className).not.toContain("border-t");
+  });
+});

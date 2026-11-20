@@ -535,6 +535,18 @@ func (v Settings) Env() []string {
 	if v.DisableUnknownModelWindow {
 		out = append(out, "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1")
 	}
+	// 模型回退一律关掉。CLI 会在好几条路径上悄悄把请求换到另一个模型上：
+	// 可用性回退链（主模型不可达时换 tier 默认值）、积分 consent gate 的替换、
+	// 以及**拒答回退**（换个模型绕过 stop_reason=refusal）。ccweb 的模型由设置页
+	// 显式选择，界面上「当前模型」必须就是真实在跑的那个——真要换就让用户自己改。
+	//
+	// 这和「所有 ANTHROPIC_DEFAULT_* 都指向同一个模型」是两件事：后者只是让回退
+	// 链恰好被过滤空（CLI 不允许回退到模型自身），一旦用户配了第二个模型就会
+	// 重新长出回退。这个变量是承诺，不是巧合。
+	//
+	// 旧版本不认它，忽略即可。副作用只有一个：上下文压缩本来会换模型生成摘要，
+	// 现在压缩失败会明确报「model substitution is disabled」，而不是静默换模型。
+	out = append(out, "CLAUDE_CODE_NO_MODEL_FALLBACK=1")
 	if proxy := strings.TrimSpace(v.ProxyURL); proxy != "" {
 		// 大小写都写：Node / curl / 各家 CLI 读的变量名不完全一致。
 		for _, key := range []string{

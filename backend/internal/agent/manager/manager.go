@@ -149,6 +149,50 @@ type pendingCreate struct {
 	err  error
 }
 
+// Rename 把一条会话在 manager 里的键从 oldID 换到 newID（`/clear` 之后用）。
+//
+// claude 换了会话 id 之后，进程本身没变（还是同一个 PID、同一条 stdin），但我们
+// 按 id 登记它：迁移前它挂在旧 id 下，而对话列表与前端都已经切到新 id——不换键的话
+// 列表里那条会显示 `live:false`（找不到活进程），而后续 prompt 还会打到旧 id 上。
+//
+// **只换键，不动进程**：不能 Close + Resume，那会杀掉正在跑的会话、丢掉它内存里的
+// 上下文，正是 `/clear` 之后用户还要继续用东西的部分。
+//
+// oldID 不存在时返回 false（例如进程已经被回收，或者这条对话压根没起过进程）。
+func (m *Manager) Rename(oldID, newID string) bool {
+	oldID = strings.TrimSpace(oldID)
+	newID = strings.TrimSpace(newID)
+	if oldID == "" || newID == "" || oldID == newID {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sess, ok := m.sessions[oldID]
+	if !ok {
+		return false
+	}
+	// 目标 id 上已经有会话：不动。那说明用户真的在同一个 id 上又起了一个进程，
+	// 覆盖会把那个进程从表里摘掉（之后谁也关不掉它）。
+	if _, taken := m.sessions[newID]; taken {
+		return false
+	}
+	delete(m.sessions, oldID)
+	m.sessions[newID] = sess
+	if p, ok := m.procs[oldID]; ok {
+		delete(m.procs, oldID)
+		m.procs[newID] = p
+	}
+	if mt, ok := m.metas[oldID]; ok {
+		delete(m.metas, oldID)
+		m.metas[newID] = mt
+	}
+	// 会话对象自己的 ID 也要跟着换：它的快照、session.state、closed 事件都带
+	// `id` 字段，前端按那个 id 分流。不换的话前端会收到一批「旧 id 的事件」，
+	// 落到已经搬空的那个桶里。
+	sess.ID = newID
+	return true
+}
+
 // createOnce 让同一个 key（会话 id 或目录）的并发创建共享一次结果。
 func (m *Manager) createOnce(key string, fn func() (Info, error)) (Info, error) {
 	m.createMu.Lock()

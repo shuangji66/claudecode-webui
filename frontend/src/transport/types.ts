@@ -7,6 +7,15 @@
 export type WireEventKind =
   | "session.snapshot"
   | "session.ready"
+  /**
+   * CLI 换了会话 id（`/clear` 之后它会新开一份转录）。
+   *
+   * `data` 是 `{from, to}`。后端已经把 conversations.json 的记录迁到 `to`；
+   * 前端要把本机按会话 id 存的状态一起搬过去，并把 activeId 切到新 id。
+   * 不搬的话，界面停在旧 id 上继续显示清空前的历史，而后端在往新 id 写转录——
+   * 两边各走各的，刷新就少一段。
+   */
+  | "session.replaced"
   | "session.state"
   /**
    * 断线重连后的补发：`sync {since, epoch}` 的应答，把断开期间漏掉的会话事件按原顺序
@@ -61,8 +70,26 @@ export interface InitPayload {
   account?: { tokenSource?: string; apiProvider?: string };
   session_state?: string;
   capabilities?: string[];
+  /**
+   * 本会话实际连上的 MCP 服务，含**连不上的**（status 非 connected）。
+   *
+   * 这是「会话真的连上了什么」的唯一来源：设置 → MCP 里的探测只说明「这条配置
+   * 能不能起来」，说明不了这个会话到底用了哪些。有失败的条目时界面要提示，
+   * 否则用户只能从「工具调不通」倒推。
+   */
+  mcp_servers?: McpRuntimeServer[];
   [k: string]: unknown;
 }
+
+/** init 里的一个 MCP 服务运行态。 */
+export interface McpRuntimeServer {
+  name: string;
+  /** connected / failed / needs-auth / pending / disabled …（开集，未知值照原样显示）。 */
+  status: string;
+  /** 定义来自哪（sdk / plugin / 某个配置作用域）。 */
+  source?: string;
+}
+
 
 export interface ModelInfo {
   value: string;

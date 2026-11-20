@@ -103,6 +103,14 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
   const bgTasks = useMemo(() => backgroundTasks(itemList, liveTasks), [itemList, liveTasks]);
   const stopTask = useAppStore((s) => s.stopTask);
   const init = activeId ? inits[activeId] : undefined;
+  // 这个会话里连不上的 MCP 服务。**只在这里说**：设置 → MCP 的探测只回答
+  // 「这条配置能不能起来」，回答不了「这个会话实际用了哪些、哪个没连上」——
+  // 少了这条，用户只能从「工具调不通」倒推。
+  const brokenMcp = useMemo(() => {
+    const list = init?.mcp_servers ?? [];
+    return list.filter((s) => s.status !== "connected" && s.status !== "disabled");
+  }, [init]);
+
   const conn = activeId ? (conns[activeId] ?? { state: "idle" as const }) : { state: "idle" as const };
   const state = activeId ? (states[activeId] ?? session?.state ?? "idle") : "idle";
   const busy = state === "busy";
@@ -330,6 +338,20 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
         <div className="mx-auto flex w-full max-w-[820px] items-start gap-2 px-4 pb-1 text-[11px] text-warn md:px-6">
           <IconAlert size={13} className="mt-0.5 shrink-0" />
           {t(`当前会话使用的是「${session?.provider}」，与所选模型的提供商不同。切换提供商的模型需要新建会话。`, `This session uses "${session?.provider}", which differs from the selected model's provider. Start a new session to switch providers.`)}
+        </div>
+      )}
+
+      {/* 这个会话里连不上的 MCP 服务。MCP 是会话启动时连接的，改完配置要重开会话，
+          所以这里不给「重试」，只说清是哪个、什么状态。 */}
+      {brokenMcp.length > 0 && (
+        <div className="mx-auto flex w-full max-w-[820px] items-start gap-2 px-4 pb-1 text-[11px] text-warn md:px-6">
+          <IconAlert size={13} className="mt-0.5 shrink-0" />
+          <span className="min-w-0">
+            {t(
+              `${brokenMcp.map((s) => `${s.name}（${s.status}）`).join("、")} 未连接，这些服务提供的工具本会话不可用。改完配置需要重开会话。`,
+              `${brokenMcp.map((s) => `${s.name} (${s.status})`).join(", ")} not connected; their tools are unavailable in this session. Reopen the session after fixing the config.`,
+            )}
+          </span>
         </div>
       )}
 

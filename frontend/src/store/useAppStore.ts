@@ -17,6 +17,7 @@ import {
   appendUser,
   applyCLI,
   attachTurnUsage,
+  commandsChanged,
   isTurnResult,
   mergeReplayed,
   prependSystem,
@@ -466,6 +467,31 @@ const flushPending = new Set<string>();
 // openSeq 记录「用户最近一次想打开/切换对话」的序号。openConversation 里有多段 await，
 // 迟到的旧请求不能在结束时把 activeId 改回它自己 —— 用户看到的是他最后点的那条。
 let openSeq = 0;
+
+/**
+ * 把一个「按会话 id 分桶」的 map 里 from 那条搬到 to 下。
+ *
+ * `/clear` 之后 CLI 换了会话 id，描述「同一个进程」的那几项状态（状态机、init、
+ * 权限模式、待发送队列…）必须跟着换：不换的话后续事件写进新桶、而界面读的是旧桶。
+ *
+ * **to 已有值时以它为准、不覆盖**：那说明新 id 上已经有内容（另一台设备先迁过、
+ * 或用户重开过那条对话）。覆盖等于把对方正在用的那份整个抹掉。
+ */
+function moveKey<T>(map: Record<string, T>, from: string, to: string): Record<string, T> {
+  if (from === to || !(from in map)) return map;
+  const next = { ...map };
+  if (!(to in next)) next[to] = next[from];
+  delete next[from];
+  return next;
+}
+
+/** 删掉一个按会话 id 分桶的键（`/clear` 之后「被清掉的那段」的状态不该跟过去）。 */
+function dropKey<T>(map: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in map)) return map;
+  const next = { ...map };
+  delete next[key];
+  return next;
+}
 
 /** purgeSession 清掉某个会话在 store 里的全部按 id 存的桶。
  *  删除/关闭对话后不清，这些数组（含整份 tool 结果）会一直常驻内存。 */
@@ -2187,6 +2213,53 @@ export const useAppStore = create<AppState>()((set, get) => ({
         void replayTranscript(sid, get);
         return;
       }
+      case "session.replaced": {
+        // CLI 换了会话 id（`/clear` 之后它会新开一份转录）。后端已经把
+        // conversations.json 的记录迁过去了，这里把本机状态跟着换。
+        //
+        // **哪些搬、哪些不搬是分开判断的**，因为 /clear 的语义是「上下文从头开始」：
+        //   - 搬：状态机、init（命令/模型）、权限模式、待发送队列、后台任务、未读标记。
+        //     它们描述的是**同一个正在跑的进程**，与上下文无关。
+        //   - 不搬：消息流、子代理消息、用量快照。它们描述的是**被清掉的那段对话**；
+        //     搬过去的话，界面上新会话会显示「清空前的历史 + 满格的上下文占用」，
+        //     而 claude 那边的上下文是空的——两边对不上，这正是 /clear 要避免的。
+        //     旧转录仍在磁盘上（历史记录里还能翻到），不丢任何东西。
+        //   - 丢：挂起的审批。旧会话的挂起表在 clear 之后已经作废。
+        const data = ev.data as { from?: string; to?: string } | undefined;
+        const to = data?.to;
+        if (!to || to === sid) return;
+        const old = sid;
+        // 浏览器里存的那份 active id 也要跟着换：不换的话刷新页面会按旧 id 恢复，
+        // 后端那边对话已经在新 id 上，界面就落回一条「用户以为已经清空」的旧转录。
+        if (readActiveId() === old) writeActiveId(to);
+        // 旧 id 的连接必须断开：它订阅的是旧 topic，继续留着只会在恢复时
+        // 又去 resume 一份用户已经清空的转录。
+        clients.get(old)?.close();
+        clients.delete(old);
+        set((s) => ({
+          states: moveKey(s.states, old, to),
+          inits: moveKey(s.inits, old, to),
+          modes: moveKey(s.modes, old, to),
+          queued: moveKey(s.queued, old, to),
+          liveTasks: moveKey(s.liveTasks, old, to),
+          doneIds: moveKey(s.doneIds, old, to),
+          perms: { ...s.perms, [old]: [] },
+          // 新会话从空的消息流与空的上下文占用开始（见上面那段取舍）。
+          // 旧桶直接丢掉：它描述的是被清掉的那段对话，留着只会在切回旧 id
+          // （比如从历史记录点进来）时把清空前的消息重新铺出来。真正的历史
+          // 在旧转录里，重新打开时由 `/api/history/transcript` 回放。
+          items: { ...dropKey(s.items, old), [to]: [] },
+          usage: dropKey(s.usage, old),
+          subagentItems: dropKey(s.subagentItems, old),
+          activeId: s.activeId === old ? to : s.activeId,
+          sessions: s.sessions.map((x) => (x.id === old ? { ...x, id: to } : x)),
+        }));
+        // 新 id 要连上自己的 WS 才能收后续事件。
+        void get().connect(to);
+        // 侧栏列表里那条对话的 id 已经变了，重拉一次拿到新 id 与标题。
+        void get().refreshConversations();
+        return;
+      }
       case "session.ready": {
         const data = ev.data as { init?: InitPayload } | undefined;
         if (data?.init) {
@@ -2309,6 +2382,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
                 [sid]: { ...byAgent, [sub.agentId]: applyCLI(prev, ev.data) },
               },
             };
+          });
+          return;
+        }
+        // 斜杠命令列表的中途变更（会话里发现新技能、加载了插件）：
+        // CLI 的语义是「用这份**替换**你缓存的整份列表」。不接的话，会话中途装的
+        // 技能永远不会出现在 `/` 菜单里，用户只能重开会话。
+        const cmds = commandsChanged(ev.data);
+        if (cmds) {
+          set((s) => {
+            const prev = s.inits[sid];
+            if (!prev) return {};
+            return { inits: { ...s.inits, [sid]: { ...prev, commands: cmds } } };
           });
           return;
         }

@@ -20,6 +20,16 @@ import (
 const (
 	TypeControlRequest  = "control_request"
 	TypeControlResponse = "control_response"
+	// TypeControlCancelRequest 是「撤回一条还没回包的控制请求」。
+	//
+	// CLI 用它撤掉自己先前发出的 can_use_tool（用户中断了整轮、另一台设备已经作答、
+	// remote worker 接手等）。语义：发送方**立刻停止等待**，并忽略之后到达的同
+	// request_id 的 control_response；收到的一方如果能中止就中止，否则把活干完，
+	// **对这条取消本身不回包**。
+	TypeControlCancelRequest = "control_cancel_request"
+	// TypeKeepAlive 是纯心跳（长时间的控制请求期间 CLI 会周期性发），无载荷、可直接丢弃。
+	// 不当成未知类型转给前端：它会进入重放缓冲，把真正需要补发的历史挤掉。
+	TypeKeepAlive       = "keep_alive"
 	TypeUser            = "user"
 	TypeAssistant       = "assistant"
 	TypeSystem          = "system"
@@ -69,6 +79,7 @@ type rawEnvelope struct {
 	} `json:"response"`
 }
 
+
 // Decode 解析一行 NDJSON。
 func Decode(line []byte) (Envelope, error) {
 	var r rawEnvelope
@@ -109,6 +120,23 @@ func (e Envelope) ResponseError() string {
 	}
 	return strings.TrimSpace(r.Response.Error)
 }
+
+// CancelTarget 取出 control_cancel_request 要撤回的那个 request_id。
+//
+// 只对 TypeControlCancelRequest 有意义；它**没有回包**，收到就当「这条审批作废」。
+func (e Envelope) CancelTarget() string {
+	if e.Type != TypeControlCancelRequest {
+		return ""
+	}
+	var r struct {
+		RequestID string `json:"request_id"`
+	}
+	if err := json.Unmarshal(e.Raw, &r); err != nil {
+		return ""
+	}
+	return r.RequestID
+}
+
 
 // ResponsePayload 取出 control_response 里 `response.response` 的载荷。
 // 结构形如：
@@ -277,6 +305,28 @@ func PermissionModeOf(raw []byte) (string, bool) {
 		return "", false
 	}
 	return msg.PermissionMode, true
+}
+
+// SessionIDOf 取出 `system/init` 里的 session_id。
+//
+// 这是**CLI 当前实际在用的会话 id**。正常运行期间它等于 `--session-id` 传进去的值；
+// `/clear` 之后变成另一个（CLI 新开一份转录），上层据此迁移对话元数据。
+//
+// **不要拿 `conversation_reset.new_conversation_id` 代替它**：实测两者是不同的 UUID，
+// 且 new_conversation_id 在磁盘上没有对应转录（2.1.329）。
+func SessionIDOf(raw []byte) (string, bool) {
+	var msg struct {
+		Type      string `json:"type"`
+		Subtype   string `json:"subtype"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return "", false
+	}
+	if msg.Type != TypeSystem || msg.Subtype != "init" || msg.SessionID == "" {
+		return "", false
+	}
+	return msg.SessionID, true
 }
 
 // IsTurnInit 判断一条 system 消息是不是「一轮开始」的 init。

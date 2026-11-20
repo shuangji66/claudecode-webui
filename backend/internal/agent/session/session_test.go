@@ -960,6 +960,89 @@ func TestInterruptClearsPendingPermissions(t *testing.T) {
 	}
 }
 
+// CLI 用 control_cancel_request 撤回自己发出的审批：卡片必须撤掉（否则永远挂着），
+// 而且**不能回包**——撤回是一条单向通知，回一条 control_response 等于在回答一条
+// 已经作废的请求。
+func TestControlCancelRequestWithdrawsPermission(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{
+		"type":       "control_request",
+		"request_id": "p-cancel",
+		"request": map[string]any{
+			"subtype":   "can_use_tool",
+			"tool_name": "Bash",
+			"input":     map[string]any{"command": "rm -rf /tmp/z"},
+		},
+	})
+	if _, ok := rec.wait(KindPermission, 2*time.Second); !ok {
+		t.Fatal("未收到 permission 事件")
+	}
+
+	fc.send(map[string]any{"type": "control_cancel_request", "request_id": "p-cancel"})
+	ev, ok := rec.wait(KindPermissionResolved, 2*time.Second)
+	if !ok {
+		t.Fatal("撤回了审批却没有广播 permission.resolved，其他设备上的卡片会一直挂着")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(ev.Data, &payload); err != nil {
+		t.Fatalf("结论载荷不是合法 JSON: %v", err)
+	}
+	if payload["request_id"] != "p-cancel" {
+		t.Fatalf("结论载荷 = %+v", payload)
+	}
+	// 撤掉之后挂起表里不该再有它：再来一条同 id 的 control_response 时，
+	// 会因为「无人认领」转给前端做审计，而不是被当成一次有效回包。
+	sess.permMu.Lock()
+	_, still := sess.perms["p-cancel"]
+	sess.permMu.Unlock()
+	if still {
+		t.Fatal("撤回后挂起表里还留着这条审批")
+	}
+	// 撤回之后读循环必须照常工作：发一条真的控制请求，它的回包要能到达。
+	// （撤回本身不回包，所以这里不能用「等回包」来验证，只能验会话没被卡住。）
+	fc.send(map[string]any{
+		"type":       "control_request",
+		"request_id": "p-after",
+		"request": map[string]any{
+			"subtype":   "can_use_tool",
+			"tool_name": "Bash",
+			"input":     map[string]any{"command": "echo hi"},
+		},
+	})
+	deadline := time.Now().Add(2 * time.Second)
+	for rec.count(KindPermission) < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := rec.count(KindPermission); n != 2 {
+		t.Fatalf("撤回之后的审批事件数 = %d, want 2（读循环被卡住了）", n)
+	}
+}
+
+// keep_alive 是纯心跳，不能进重放缓冲：长跑的控制请求期间 CLI 会周期性发它，
+// 当成普通 cli 事件转出去会把真正要补发的历史挤出 replayMaxEvents。
+func TestKeepAliveIsDropped(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	for i := 0; i < 50; i++ {
+		fc.send(map[string]any{"type": "keep_alive"})
+	}
+	// 再发一条正常消息当哨兵：它到达时，前面的心跳已经全部处理完（同一条管道、顺序读）。
+	fc.send(map[string]any{
+		"type":    "system",
+		"subtype": "informational",
+		"content": "哨兵",
+	})
+	if _, ok := rec.wait(KindCLI, 2*time.Second); !ok {
+		t.Fatal("没收到哨兵消息")
+	}
+	if n := rec.count(KindCLI); n != 1 {
+		t.Fatalf("cli 事件数 = %d, want 1（心跳不该被转发）", n)
+	}
+}
+
 // slowSink 的 Write 会一直阻塞，模拟「CLI 暂时不读 stdin」（大 prompt 正在处理、
 // 或者对端卡住）。读循环不能因此停摆，否则 stdout 没人排空，双向死锁。
 type slowSink struct {
@@ -1237,4 +1320,102 @@ func waitTasks(t *testing.T, sess *Session, want int) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("任务表 = %+v，want %d 条", sess.LiveTasks(), want)
+}
+
+// `/clear` 之后 CLI 会发一条带新 session_id 的 system/init：会话要认出来并广播
+// session.replaced，上层据此把对话元数据迁到新 id。
+//
+// **以 system/init 为准，不用 conversation_reset 的 new_conversation_id**：
+// 实测两者是不同的 UUID，且后者磁盘上没有转录。
+func TestInitWithNewSessionIDReportsReplaced(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	// 正常一轮的 init（与启动时同一个 id）：不该报「换了」。
+	fc.send(map[string]any{
+		"type":       "system",
+		"subtype":    "init",
+		"session_id": "s1",
+		"tools":      []any{},
+	})
+	if _, ok := rec.wait(KindCLI, 2*time.Second); !ok {
+		t.Fatal("没收到 init")
+	}
+	if n := rec.count(KindSessionReplaced); n != 0 {
+		t.Fatalf("同一个 session id 不该报 replaced（%d 次）", n)
+	}
+	if got := sess.CLISessionID(); got != "s1" {
+		t.Fatalf("CLISessionID = %q, want s1", got)
+	}
+
+	// /clear 之后的 init：新 id。
+	fc.send(map[string]any{
+		"type":       "system",
+		"subtype":    "init",
+		"session_id": "cleared-id",
+		"tools":      []any{},
+	})
+	ev, ok := rec.wait(KindSessionReplaced, 2*time.Second)
+	if !ok {
+		t.Fatal("换了会话 id 却没有广播 session.replaced")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(ev.Data, &payload); err != nil {
+		t.Fatalf("载荷不是合法 JSON: %v", err)
+	}
+	if payload["from"] != "s1" || payload["to"] != "cleared-id" {
+		t.Fatalf("载荷 = %+v", payload)
+	}
+	if got := sess.CLISessionID(); got != "cleared-id" {
+		t.Fatalf("CLISessionID = %q, want cleared-id", got)
+	}
+}
+
+// conversation_reset 本身不触发 session.replaced：它的 new_conversation_id
+// 与之后真正用的 session_id 不同，拿它去迁移会指向一个不存在的转录。
+func TestConversationResetAloneDoesNotReplaceSession(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{
+		"type":                  "conversation_reset",
+		"trigger":               "clear",
+		"new_conversation_id":   "bogus-id",
+		"session_id":            "s1",
+	})
+	// 哨兵：重置帧处理完之后再发一条，确保断言时前面的都处理完了。
+	fc.send(map[string]any{"type": "system", "subtype": "informational", "content": "哨兵"})
+	if _, ok := rec.wait(KindCLI, 2*time.Second); !ok {
+		t.Fatal("没收到哨兵")
+	}
+	if n := rec.count(KindSessionReplaced); n != 0 {
+		t.Fatalf("只凭 conversation_reset 就迁移了（%d 次）", n)
+	}
+	if got := sess.CLISessionID(); got != "s1" {
+		t.Fatalf("CLISessionID = %q, want s1", got)
+	}
+}
+
+// 启动时第一个 init 记下的 session_id 不能算「换了」——否则每次开会话都会误报
+// 一次 session.replaced，上层会把对话元数据迁到一个并不存在的新 id 上。
+//
+// startSession 的握手走的是 Start() 里的 request()（不经过 handleLine），所以
+// 这里覆盖的是「Start 之后第一个 init」这条真实路径。
+func TestFirstInitAfterStartIsNotAReplacement(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{
+		"type":       "system",
+		"subtype":    "init",
+		"session_id": "s1",
+		"tools":      []any{},
+	})
+	fc.send(map[string]any{"type": "system", "subtype": "informational", "content": "哨兵"})
+	if _, ok := rec.wait(KindCLI, 2*time.Second); !ok {
+		t.Fatal("没收到哨兵")
+	}
+	if n := rec.count(KindSessionReplaced); n != 0 {
+		t.Fatalf("第一个 init 被误判成换会话（%d 次）", n)
+	}
 }

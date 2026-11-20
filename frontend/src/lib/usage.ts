@@ -245,6 +245,15 @@ export function applyUsageMessage(
   if (!msg || typeof msg !== "object") return undefined;
   const m = msg as Record<string, unknown>;
 
+  // `system/thinking_tokens`：思考 token 的**实时估算**（redacted-thinking 阶段上游只发
+  // ping，这条是唯一的进度信号）。它是估算值、不是计费口径，所以只写 thinkingTokens，
+  // 绝不参与上下文/输出/合计任何一处计算。
+  if (m.type === "system" && m.subtype === "thinking_tokens") {
+    const est = typeof m.estimated_tokens === "number" ? m.estimated_tokens : undefined;
+    if (est === undefined) return undefined;
+    return { ...(prev ?? { contextTokens: 0 }), thinkingTokens: est };
+  }
+
   if (m.type === "stream_event") {
     const ev = m.event as Record<string, unknown> | undefined;
     if (!ev) return undefined;

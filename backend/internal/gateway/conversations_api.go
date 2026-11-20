@@ -43,6 +43,9 @@ type conversationEntry struct {
 func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request) {
 	byID := make(map[string]*conversationEntry)
 	deleted := make(map[string]bool)
+	// superseded 是「被 /clear 取代的旧历史」：记录还在（历史记录里能翻到），
+	// 但侧栏不列——旧转录仍在磁盘上，不挡的话会与清空后的那条并列出现。
+	superseded := make(map[string]bool)
 	// withTranscript 记住哪些 id 是 claude 真的写过转录的（第 1 步扫出来的）。
 	withTranscript := make(map[string]bool)
 	ensure := func(id string) *conversationEntry {
@@ -93,12 +96,19 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 				deleted[rec.ID] = true
 				delete(byID, rec.ID)
 			}
+			// 被 `/clear` 取代的旧历史：记录留着（历史记录里还能翻到），但不再
+			// 出现在侧栏。不留这一步的话，旧转录仍在磁盘上、标题也还在，第 1 步
+			// 扫转录会把「清空前」那条重新列出来，侧栏同时出现两条。
+			if rec.SupersededBy != "" {
+				superseded[rec.ID] = true
+				delete(byID, rec.ID)
+			}
 		}
 	}
 
 	// 3) 当前存活会话：空对话（还没有转录）也要出现在列表里。
 	for _, info := range s.d.Manager.List() {
-		if deleted[info.ID] {
+		if deleted[info.ID] || superseded[info.ID] {
 			continue
 		}
 		e := ensure(info.ID)
