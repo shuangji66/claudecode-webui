@@ -428,7 +428,7 @@ function TreeNode({ entry, depth, levels, loading, errors, loadDir, onOpenFile, 
         <button
           type="button"
           onClick={(e) => onMenu(e, entry)}
-          className="mr-0.5 rounded p-0.5 text-muted opacity-100 transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover/entry:opacity-100 md:focus:opacity-100"
+          className="mr-0.5 rounded p-0.5 text-muted opacity-100 transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover/entry:opacity-100 md:group-has-focus-visible/entry:opacity-100"
           aria-label={`${t("更多操作", "More actions")} ${entry.name}`}
           aria-haspopup="menu"
           title={t("更多", "More")}

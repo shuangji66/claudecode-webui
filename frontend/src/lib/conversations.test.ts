@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { belongs, conversationStatus, latestConversation, pinnedFirst, sortByRecent, workspaceFor } from "./conversations";
+import { belongs, conversationStatus, latestConversation, pinnedFirst, sortByRecent, timeValue, workspaceFor } from "./conversations";
 import type { ConversationInfo, WorkspaceEntry } from "../transport/types";
 
 function conv(id: string, cwd: string, last: string, archived = false): ConversationInfo {
@@ -48,6 +48,24 @@ describe("conversations", () => {
     const list = [conv("a", "/work", "2026-01-01T00:00:00Z"), conv("b", "/work", "2026-02-01T00:00:00Z", true), conv("c", "/work/sub", "2026-03-01T00:00:00Z")];
     expect(latestConversation("/work", list)?.id).toBe("c");
     expect(sortByRecent(list).map((c) => c.id)).toEqual(["c", "b", "a"]);
+  });
+
+  // 后端给的是 Go 的 RFC3339（时区偏移随值走），前端乐观更新写的是 `Z`：
+  // 按字符串比大小会把同一时刻的两条定死一个错误顺序（实测过）。
+  it("sortByRecent 按真实时刻排，不按时区字面量", () => {
+    const list = [
+      conv("local-tz", "/w", "2026-01-05T10:00:00.123456789+08:00"), // = 02:00:00.123Z
+      conv("utc", "/w", "2026-01-05T02:00:00.5Z"),
+      conv("older", "/w", "2026-01-05T09:00:00+08:00"), // = 01:00Z
+    ];
+    expect(sortByRecent(list).map((c) => c.id)).toEqual(["utc", "local-tz", "older"]);
+  });
+
+  it("timeValue 解析不了按最旧算，不抛错", () => {
+    expect(timeValue(undefined)).toBe(0);
+    expect(timeValue("")).toBe(0);
+    expect(timeValue("not-a-time")).toBe(0);
+    expect(timeValue("2026-01-05T02:00:00Z")).toBe(Date.parse("2026-01-05T02:00:00Z"));
   });
 });
 

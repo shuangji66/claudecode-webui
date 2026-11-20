@@ -104,6 +104,16 @@ export function IconFolder(props: Props) {
   );
 }
 
+/** 展开状态的工作区：文件夹掀开着（与折叠态的 IconFolder 是两张不同的图）。 */
+export function IconFolderOpen(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M3.5 17V7.5A2.5 2.5 0 0 1 6 5h3l1.6 2H18a2.5 2.5 0 0 1 2.5 2.5V11" />
+      <path d="M3.6 16.6 5.8 11.8a2 2 0 0 1 1.83-1.2h13.1a1.3 1.3 0 0 1 1.22 1.76l-1.9 5.1a2 2 0 0 1-1.88 1.34H6.2a2.7 2.7 0 0 1-2.6-2.2z" />
+    </Svg>
+  );
+}
+
 export function IconFolderPlus(props: Props) {
   return (
     <Svg {...props}>

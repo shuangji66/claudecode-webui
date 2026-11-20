@@ -23,6 +23,14 @@ export const FLAT_KEY = "__flat__";
 /** 「其他对话」（不在任何授权目录里）在手动顺序表里的键。 */
 export const OTHER_KEY = "__other__";
 
+/**
+ * 一个工作区最多先露几条会话（对齐 DSH）：超过就折叠成「展开其余 N 个会话」。
+ *
+ * 侧栏是导航，不是清单——一个跑了几十轮对话的目录会把下面几个工作区全挤出视口。
+ * 收起的是**排好序之后**的尾部，所以「最近更新的先露出来」这条在折叠状态下照样成立。
+ */
+export const SESSION_GROUP_LIMIT = 5;
+
 const GROUPS: GroupMode[] = ["workspace", "tree", "flat"];
 const SORTS: SortMode[] = ["recent", "manual"];
 const FILTERS: ArchiveFilter[] = ["hide", "all", "only"];

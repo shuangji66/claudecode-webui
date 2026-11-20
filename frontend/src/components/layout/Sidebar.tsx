@@ -9,6 +9,7 @@ import { belongs, conversationStatus, pinnedFirst, sortByRecent, type Conversati
 import {
   FLAT_KEY,
   OTHER_KEY,
+  SESSION_GROUP_LIMIT,
   applyOrder,
   canDrop,
   dropHalf,
@@ -40,6 +41,7 @@ import {
   IconCopy,
   IconDownload,
   IconFolder,
+  IconFolderOpen,
   IconFolderPlus,
   IconGitBranch,
   IconGlobe,
@@ -182,6 +184,13 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const [hover, setHover] = useState<HoverState | null>(null);
   const hoverTimer = useRef<number | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentWorkspace ? [currentWorkspace] : []));
+  /**
+   * 「展开其余 N 个会话」被点开的工作区。
+   *
+   * 收起工作区时一并清掉：折叠再来一次就该回到默认的前 5 条，
+   * 否则这条设置会让「展开其余」变成一次性开关，收起毫无意义。
+   */
+  const [moreSessions, setMoreSessions] = useState<Set<string>>(() => new Set());
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [wsMenu, setWsMenu] = useState<WsMenuState | null>(null);
   /**
@@ -486,7 +495,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
               // `hidden` 而不是 `opacity-0`：悬停后按钮组要真的把时间挤掉，否则三颗按钮会盖在标题上。
               menu?.id === c.id
                 ? "md:hidden"
-                : "md:group-hover/session:hidden md:group-focus-within/session:hidden"
+                : "md:group-hover/session:hidden md:group-has-focus-visible/session:hidden"
             }`}
           >
             {relativeTime(c.last_active, Date.now(), locale)}
@@ -498,7 +507,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
           className={`flex items-center gap-0.5 ${
             menu?.id === c.id
               ? "md:flex"
-              : "md:hidden md:group-hover/session:flex md:group-focus-within/session:flex"
+              : "md:hidden md:group-hover/session:flex md:group-has-focus-visible/session:flex"
           }`}
         >
           <button
@@ -572,6 +581,16 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     // 工作区行只是展开/收起开关：展开一组的会话列表不是导航，不切当前工作区，
     // 也不能替用户打开那个目录的最近一条对话（点一下就想看看列表，结果进了旧对话）。
     // 换工作区要么点具体对话（openConversation 自己会切），要么点行尾的「+」新建。
+    const open = expanded.has(g.path);
+    if (open) {
+      // 收起时把「展开其余」也复位：下次展开回到默认的前 5 条。
+      setMoreSessions((prev) => {
+        if (!prev.has(g.path)) return prev;
+        const next = new Set(prev);
+        next.delete(g.path);
+        return next;
+      });
+    }
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(g.path)) next.delete(g.path);
@@ -936,6 +955,15 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
           }
           const open = expanded.has(g.path) || Boolean(query.trim());
           const isCurrent = g.path === currentWorkspace;
+          // 组内会话里有当前这条（或它的子代理会话）→ 图标上主题色。
+          const holdsActive = Boolean(activeId) && g.conversations.some((c) => c.id === activeId);
+          // 这里只算「这一组现在露出几条」：可见项是排好序（最近更新优先）之后的尾部被折起来。
+          const shown = query.trim()
+            ? g.conversations
+            : moreSessions.has(g.path)
+              ? g.conversations
+              : g.conversations.slice(0, SESSION_GROUP_LIMIT);
+          const hiddenCount = g.conversations.length - shown.length;
           return (
             <div
               key={g.path}
@@ -958,22 +986,42 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                   aria-expanded={open}
                   className={`flex min-w-0 flex-1 items-center gap-2 text-left ${isCurrent ? "text-ink" : "text-ink-2"} ${!g.exists ? "opacity-50" : ""}`}
                 >
-                  {g.path === OTHER_KEY ? <IconTerminal size={15} className="shrink-0 text-muted" /> : <IconFolder size={15} className="shrink-0 text-muted" />}
+                  {/* 图标位（对齐 DSH）：平时是工作区文件夹，悬停/聚焦时换成展开箭头方向；
+                      收起与展开是两张不同的文件夹，一眼能看出这组现在开着还是关着——
+                      触屏没有 hover，状态只能靠这两张图区分。
+                      组里有当前对话时图标带主题色：不用展开也知道「人在哪一组」。
+                      两者叠在同一个 15px 的格子里靠透明度互换：换成背景色盖一层时，
+                      行的悬停底色和那个小方块对不上，会露出一块补丁。 */}
+                  <span
+                    data-ws-active={holdsActive ? "true" : undefined}
+                    className={`relative flex h-[15px] w-[15px] shrink-0 items-center justify-center ${
+                      holdsActive ? "text-brand" : "text-muted"
+                    }`}
+                  >
+                    <span className="flex items-center justify-center transition-opacity group-hover:opacity-0 group-has-focus-visible:opacity-0">
+                      {/* 「其他对话」不是真目录，仍然用终端图标区分开；折叠/展开的
+                          两张文件夹图只给真工作区。 */}
+                      {g.path === OTHER_KEY ? (
+                        <IconTerminal size={15} data-ws-icon="other" />
+                      ) : open ? (
+                        <IconFolderOpen size={15} data-ws-icon="open" />
+                      ) : (
+                        <IconFolder size={15} data-ws-icon="closed" />
+                      )}
+                    </span>
+                    <span className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100 group-has-focus-visible:opacity-100">
+                      {open ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
+                    </span>
+                  </span>
                   <span className="truncate text-[12.5px] font-medium">{g.name}</span>
                   {!g.exists && g.path !== OTHER_KEY && <span className="shrink-0 text-[10px] text-warn">{t("不可用", "Missing")}</span>}
-                  <span className="ml-auto flex shrink-0 items-center gap-1">
-                    {g.conversations.length > 0 && (
-                      <span className="rounded-full bg-black/[0.06] px-1.5 text-[10px] text-muted">{g.conversations.length}</span>
-                    )}
-                    {open ? <IconChevronDown size={14} className="text-muted" /> : <IconChevronRight size={14} className="text-muted" />}
-                  </span>
                 </button>
                 {g.path !== OTHER_KEY && (
                   <>
                     <button
                       type="button"
                       onClick={(e) => openWsMenu(e, g)}
-                      className="rounded-md p-1 text-muted transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+                      className="rounded-md p-1 text-muted transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover:opacity-100 md:group-has-focus-visible:opacity-100"
                       aria-label={`${t("工作区操作", "Workspace actions")} ${g.path}`}
                       aria-haspopup="menu"
                       title={t("更多", "More")}
@@ -987,7 +1035,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                         // 移动端：抽屉里发起的「新建对话」都要让出位置，直接落到新会话上。
                         onClose?.();
                       }}
-                      className="rounded-md p-1 text-muted transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+                      className="rounded-md p-1 text-muted transition hover:bg-black/5 hover:text-ink md:opacity-0 md:group-hover:opacity-100 md:group-has-focus-visible:opacity-100"
                       aria-label={`${t("在该工作区新建对话", "New conversation in this workspace")} ${g.path}`}
                       title={t("新建对话", "New conversation")}
                     >
@@ -1004,7 +1052,25 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                       {isCurrent && starting ? t("正在启动 Claude…", "Starting Claude…") : t("暂无对话", "No conversations")}
                     </p>
                   )}
-                  {g.conversations.map((c) => renderConversation(c, g.path, false))}
+                  {shown.map((c) => renderConversation(c, g.path, false))}
+                  {/* 超过 5 条时只露最近更新的前几条（对齐 DSH）：侧栏是导航，
+                      不是清单。折叠的是排好序之后的尾部，所以「最近更新优先」在
+                      收起状态下同样成立；搜索时一律全露，不然搜索结果会被截掉。 */}
+                  {hiddenCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setMoreSessions((prev) => {
+                          const next = new Set(prev);
+                          next.add(g.path);
+                          return next;
+                        })
+                      }
+                      className="side-row text-faint hover:text-ink-2"
+                    >
+                      <span className="pl-[22px] text-[11.5px]">{t(`展开其余 ${hiddenCount} 个会话`, `Show ${hiddenCount} more conversations`)}</span>
+                    </button>
+                  )}
                 </div>
               )}
             </div>
