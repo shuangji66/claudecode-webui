@@ -56,7 +56,7 @@ import type {
   WorkspacesPayload,
 } from "../transport/types";
 import { normalizeSettings, type ProviderForm } from "../lib/providerForm";
-import { belongs, latestConversation, workspaceFor } from "../lib/conversations";
+import { belongs, latestConversation, timeValue, workspaceFor } from "../lib/conversations";
 import {
   MAX_QUEUED,
   enqueuePrompt as pushQueued,
@@ -808,7 +808,7 @@ async function recoverSession(id: string, get: () => AppState): Promise<void> {
     const root = conv ? workspaceFor(conv.cwd, get().workspaces) || conv.cwd : cwd;
     const next = get()
       .conversations.filter((c) => c.id !== id && !c.archived && belongs(c.cwd, root))
-      .sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""))[0];
+      .sort((a, b) => timeValue(b.last_active) - timeValue(a.last_active))[0];
     if (next) {
       if (await get().openConversation(next.id, true)) return;
     }
@@ -1734,7 +1734,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         const root = conv ? workspaceFor(conv.cwd, get().workspaces) || conv.cwd : get().currentWorkspace;
         const next = get()
           .conversations.filter((c) => c.id !== id && !c.archived && belongs(c.cwd, root))
-          .sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""))[0];
+          .sort((a, b) => timeValue(b.last_active) - timeValue(a.last_active))[0];
         if (next) await get().openConversation(next.id);
         else {
           get().setActive(null);

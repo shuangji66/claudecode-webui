@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import type { ConversationInfo } from "../../transport/types";
 import { relativeTime } from "../../lib/labels";
+import { sortByRecent } from "../../lib/conversations";
 import { authorizeFnosDir } from "../../lib/fnos";
 import { useLocale, useT } from "../../lib/i18n";
 import { PageShell } from "./FeaturePage";
@@ -46,9 +47,9 @@ export function HistoryPage({ onClose, onOpenSidebar }: Props) {
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return conversations
-      .filter((c) => !q || (c.title || "").toLowerCase().includes(q) || c.cwd.toLowerCase().includes(q))
-      .sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""));
+    return sortByRecent(
+      conversations.filter((c) => !q || (c.title || "").toLowerCase().includes(q) || c.cwd.toLowerCase().includes(q)),
+    );
   }, [conversations, query]);
 
   const titleOf = (c: ConversationInfo) => c.title || t("新对话", "New chat");

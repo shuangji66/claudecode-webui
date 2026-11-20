@@ -18,8 +18,23 @@ export function workspaceFor(cwd: string, workspaces: WorkspaceEntry[]): string 
   );
 }
 
+/**
+ * 时间戳解析成毫秒；解析不了按 0（最旧）算。
+ *
+ * **不能拿字符串比大小**：后端给的是 Go 的 RFC3339，时区偏移跟着时间值的 Location 走
+ * （转录里解析出来的时间戳带 `+08:00`、`conversation.Touch` 用的是本机时区），
+ * 前端乐观更新写的却是 `new Date().toISOString()`（永远是 `Z`）。`localeCompare` 比的是
+ * 字面量，`2026-01-05T10:00:00+08:00` 会排在 `2026-01-05T02:00:00Z` 之后——
+ * 同一时刻的两条对话就此定死了一个错误顺序，这就是「最近更新排序偶尔不生效」的来源。
+ */
+export function timeValue(iso: string | undefined): number {
+  if (!iso) return 0;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : 0;
+}
+
 export function sortByRecent(conversations: ConversationInfo[]): ConversationInfo[] {
-  return [...conversations].sort((a, b) => (b.last_active ?? "").localeCompare(a.last_active ?? ""));
+  return [...conversations].sort((a, b) => timeValue(b.last_active) - timeValue(a.last_active));
 }
 
 /**

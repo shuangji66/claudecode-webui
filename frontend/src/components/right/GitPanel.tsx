@@ -657,7 +657,7 @@ function ChangeGroup({ title, rows, side, busy, active, onOpen, onStage, onUnsta
                     </span>
                   )}
                 </button>
-                <div className="flex shrink-0 items-center opacity-100 transition md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100">
+                <div className="flex shrink-0 items-center opacity-100 transition md:opacity-0 md:group-hover:opacity-100 md:group-has-focus-visible:opacity-100">
                   {side === "staged" && onUnstage && (
                     <button
                       type="button"

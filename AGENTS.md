@@ -29,6 +29,12 @@
   `xterm.js` 只做渲染）；
 - **授权目录 = 工作区**，持久化在 `workspaces.json`；对话列表来自 claude 转录 +
   `conversations.json` 元数据，启动时恢复上次对话（`--resume`）而不是新建；
+- 左侧栏的工作区行（对齐 DSH）**只有图标 + 名字**，不显示对话计数：平时是文件夹，
+  收起与展开用**两张不同的文件夹图**（`IconFolder` / `IconFolderOpen`），悬停/聚焦时
+  同一图标位换成展开方向箭头（触屏没有 hover，开没开着只能靠那两张图）；
+  组里有当前对话时图标带主题色。一个工作区的会话超过 5 条只露最近更新的那 5 条，
+  其余折成一行「展开其余 N 个会话」（`sidebarView.SESSION_GROUP_LIMIT`，收起工作区时
+  复位；搜索时全露）。折叠的是**排好序之后的尾部**，所以「最近更新」在收起状态下也成立；
 - 设置页分「通用 / 模型 / 目录 / 代理 / 部署 / 访问 / 关于」：默认权限（置顶）、主题、语言、字号、
   代理、每个模型的推理强度/图片能力/上下文窗口/最大输出、claude 版本的下载源/安装/切换，
   以及飞牛已授权目录的查看/添加/撤销、端口访问开关、TCP 端口与访问密码（单密码，无用户名）；
@@ -266,6 +272,13 @@ hub ── manager ── session ── process ── claude (NDJSON)
   新转录文件名就是我们生成的 UUID，与列表 / `activeId` 同源。不要自己去复制 jsonl。
   没有转录的空对话（400）与已删除的对话（409）必须在**起进程之前**挡掉：CLI 的
   `--resume` 找不到会话会直接退出，那时我们只会留下一条永远 resume 不了的元数据。
+- **「最近更新」排序必须按真实时刻比，不能比字符串**：`last_active` 后端给的是 Go 的
+  RFC3339（偏移跟着时间值走，转录解析出来常带 `+08:00`），前端乐观更新写的是
+  `new Date().toISOString()`（永远 `Z`）。`localeCompare` 比的是字面量，
+  `2026-01-05T10:00:00+08:00` 会排在 `2026-01-05T02:00:00Z` **之后**——同一时刻的两条
+  就此定死了一个错误顺序，这就是「排序偶尔不生效」的来源。统一走
+  `lib/conversations.timeValue`（`Date.parse`）+ `sortByRecent`，别再手写 `.sort(localeCompare)`；
+  侧栏、历史记录页、`store` 里两处「同工作区下一条」都用它。
 - **claude 转录会包含 sidechain / meta / queue-operation 行**：回放只取
   user/assistant/system/result 且跳过 `isSidechain`/`isMeta`，否则子代理和系统提醒会混进主消息流。
 - **`<task-notification>` 是 CLI 注入的 user 行，`isMeta` 是 `null` 不是 `true`**：

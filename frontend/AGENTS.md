@@ -312,6 +312,9 @@ src/
 27. **键盘焦点必须可见**：全局 `:focus-visible` 兜底在 `styles.css` 末尾（无 layer，
     优先于 utilities），所以页面上那 30 多个 `outline-none` 只影响鼠标。新增输入控件
     不需要自己写 focus 样式，也不要用 `!important` 去盖掉那条规则。
+    **反过来，「悬停才露出的东西」也必须用 `:focus-visible` 判定**（`group-has-focus-visible:*`，
+    不要用 `group-focus-within:*` 或 `md:focus:opacity-100`）：鼠标点过的按钮会留下焦点，
+    行会永远停在悬停态，鼠标移开也不复原，要随便点一下别处才刷新。
 28. **会话起不来 ≠ 历史读不到**：`openConversation` 在 `POST /api/session` 失败
     （claude 未安装 / 版本被删 / 409 并发冲突）时仍然要 `loadTranscript()` 回放转录，
     然后再报错。少了这一步，界面会显示「开始新的对话」，看起来像整段对话被弄丢。
@@ -496,6 +499,13 @@ src/
   只有时间与「⋯」常驻（归档 / 置顶在菜单里也能点，那是触屏唯一的入口）。
   操作组用 `md:hidden` ↔ `md:group-hover/session:flex` 切换（`display` 而不是 `opacity`）：
   三颗按钮必须真的把时间和标题挤掉，用透明度叠在时间槽上会盖住长标题。
+  **「键盘聚焦」那一档必须是 `md:group-has-focus-visible/session:`，不能是
+  `md:group-focus-within/session:`**：点工作区行/会话行之后焦点会留在那个
+  `<button>` 上，用 `:focus-within` 的话鼠标早就移开了、那一行却永远停在悬停态
+  （工作区图标一直画成展开箭头、操作组一直露着），要随便点一下别处才刷新——
+  截图复现过。`:has(:focus-visible)` 只认键盘导航，鼠标点击不触发，Tab 仍然能到。
+  同一规则适用于工作区行的图标切换、`GitPanel` / `FilesPanel` 的行内操作组；
+  说明写在 `styles.css` 那条注释里，别再写回去。
   **右键会话行等同点「⋯」**（`onContextMenu` → 同一个菜单，锚在整行上，并顺手收掉悬浮预览）
   ——不要把右键做成第二套菜单，也不要只在按钮上挂事件。
 - **置顶（`pinned`）只是排序偏好**（`lib/conversations.pinnedFirst`）：两种排序模式都先过它，

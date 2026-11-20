@@ -279,6 +279,11 @@ describe("Sidebar 会话行的管理入口", () => {
     const time = row.querySelector("button .ml-auto");
     expect(time).not.toBeNull();
     expect(time!.className).toContain("md:group-hover/session:hidden");
+
+    // 点击（鼠标）后焦点会留在行内的 <button> 上：这里必须是 :focus-visible，
+    // 用 :focus-within 的话鼠标移开后这一行还会挂着悬停态，要随便点别处才刷新。
+    expect(actions.className).toContain("md:group-has-focus-visible/session:flex");
+    expect(actions.className).not.toContain("focus-within");
   });
 
   // 行内按钮即点即生效：归档不动转录（软删除），置顶只是列表偏好。
@@ -761,5 +766,72 @@ describe("Sidebar 功能区入口", () => {
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.getByRole("button", { name: "历史记录" })).toBeInTheDocument();
+  });
+});
+
+describe("Sidebar 工作区行（对齐 DSH）", () => {
+  const cwd = "/w/demo";
+
+  function conv(id: string, last: string) {
+    return { id, cwd, title: id, created_at: "", last_active: last, messages: 1, archived: false, live: false };
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    resetHiddenFeaturesCache();
+    useAppStore.setState({
+      workspaces: [{ path: cwd, name: "demo", last_used: "", exists: true }],
+      currentWorkspace: cwd,
+      activeId: null,
+      conversations: [],
+    });
+  });
+
+  // 计数徽章已去掉：工作区行只留「文件夹图标 + 名字」，收起与展开各是一张图。
+  it("工作区行不再显示对话计数", () => {
+    useAppStore.setState({ conversations: [conv("c-1", "2026-01-02T00:00:00Z"), conv("c-2", "2026-01-01T00:00:00Z")] });
+    const { container } = renderSidebar();
+    const row = container.querySelector(`[data-workspace="${cwd}"]`)!;
+    expect(row.textContent).not.toMatch(/\d/);
+    expect(row.querySelector('[data-ws-icon="open"]')).not.toBeNull();
+    expect(row.querySelector('[data-ws-icon="closed"]')).toBeNull();
+  });
+
+  // 收起 ⇄ 展开是两张不同的图标；悬停时再叠一个方向箭头（同一图标位）。
+  // 点展开后焦点留在工作区按钮上：箭头/操作组的显隐只能认 :focus-visible，
+  // 认 :focus-within 的话鼠标移开了行还停在悬停态（实测复现过）。
+  it("收起用闭合文件夹图标，点开换成打开文件夹图标，且悬停态不认残留焦点", () => {
+    useAppStore.setState({ conversations: [conv("c-1", "2026-01-02T00:00:00Z")] });
+    const { container } = renderSidebar();
+    const row = container.querySelector(`[data-workspace="${cwd}"]`)!;
+    expect(row.querySelector('[data-ws-icon="open"]')).not.toBeNull();
+    expect(row.querySelector('[data-ws-icon="open"]')!.parentElement!.className).toContain("group-has-focus-visible");
+    expect(row.querySelector('[data-ws-icon="open"]')!.parentElement!.className).not.toContain("focus-within");
+
+    fireEvent.click(screen.getByText("demo").closest("button")!);
+    expect(row.querySelector('[data-ws-icon="closed"]')).not.toBeNull();
+    expect(row.querySelector('[data-ws-icon="open"]')).toBeNull();
+  });
+
+  // 组里有当前对话时图标带主题色：不展开也知道「人在哪一组」。
+  it("组内有当前对话时图标带主题色", () => {
+    useAppStore.setState({ conversations: [conv("c-1", "2026-01-02T00:00:00Z")], activeId: "c-1" });
+    const { container } = renderSidebar();
+    const slot = container.querySelector(`[data-workspace="${cwd}"] [data-ws-active]`)!;
+    expect(slot.className).toContain("text-brand");
+  });
+
+  // 侧栏是导航不是清单：超过 5 条只露最近更新的 5 条，其余折叠成一行。
+  it("超过 5 条会话只露最近更新的 5 条，点「展开其余」补齐", () => {
+    const list = Array.from({ length: 7 }, (_, i) => conv(`c-${i}`, `2026-01-${String(10 - i).padStart(2, "0")}T00:00:00Z`));
+    useAppStore.setState({ conversations: list });
+    renderSidebar();
+
+    for (const id of ["c-0", "c-1", "c-2", "c-3", "c-4"]) expect(screen.getByText(id)).toBeInTheDocument();
+    for (const id of ["c-5", "c-6"]) expect(screen.queryByText(id)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "展开其余 2 个会话" }));
+    expect(screen.getByText("c-5")).toBeInTheDocument();
+    expect(screen.getByText("c-6")).toBeInTheDocument();
   });
 });

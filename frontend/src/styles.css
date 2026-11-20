@@ -478,6 +478,14 @@ pre {
   outline: none;
 }
 
+/* 「悬停才露出的行内操作」必须用 `:has(:focus-visible)`，不能用 `:focus-within`。
+   侧栏工作区行点一下是「展开/收起」，焦点会留在这个 <button> 上；用 :focus-within
+   的话，鼠标早就移开了、那一行却永远停在悬停态（图标一直画成箭头、操作按钮一直露着），
+   要随便点别处才恢复——实测截图复现过。`:has(:focus-visible)` 只认键盘导航，
+   鼠标点击不触发，所以 Tab 仍然能到达并展开操作组。
+   Tailwind 里对应 `group-has-focus-visible:<util>`（`group-has-focus-visible/session:` 带名字），
+   见 Sidebar / GitPanel / FilesPanel 的行。 */
+
 /* docx-preview 的 wrapper 默认铺一层灰底 + 30/40px 内边距（模拟 Word 页面外区域）。
    右侧栏里那一圈会变成两条灰带，上下各压一块；页面本身（.docx）仍是白纸 + 阴影，
    观感不受影响，所以只把 wrapper 抹平。 */
