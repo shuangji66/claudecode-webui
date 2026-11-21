@@ -119,6 +119,35 @@ func (s *Server) handleFsComplete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, listing)
 }
 
+// handleFsSearch 是文件页顶部的搜索：按名字/相对路径子串在工作区里找。
+//
+// 与 `@` 补全一样先过 authorizedCwd，再走 fsapi 的路径围栏；结果只回相对路径。
+// 遍历有预算（fsapi.Search），前端按 300ms 防抖 + AbortController 取消上一次请求。
+func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
+	root, ok := s.openFsRoot(w, r)
+	if !ok {
+		return
+	}
+	hidden := false
+	if raw := r.URL.Query().Get("hidden"); raw != "" {
+		if v, err := strconv.ParseBool(raw); err == nil {
+			hidden = v
+		}
+	}
+	limit := 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil {
+			limit = v
+		}
+	}
+	listing, err := root.Search(r.Context(), r.URL.Query().Get("q"), hidden, limit)
+	if err != nil {
+		writeErr(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, listing)
+}
+
 // countingWriter 记录已经写出去的字节数：打包失败时用它判断还能不能改状态码。
 type countingWriter struct {
 	w io.Writer

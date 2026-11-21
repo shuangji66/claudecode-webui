@@ -17,9 +17,13 @@ const LINE_HEIGHT = 16;
  * 触控板的横向滑动（`deltaX`）本来就滚得动，不再插手。**斜着滑同样放行**：
  * 触控板几乎不会给出纯纵向的事件，两个增量同时非零时接管等于把横向那一半与
  * 惯性一起吃掉，用户会感觉「滑得一顿一顿的」。只有纯纵向（鼠标滚轮）才换算。
+ *
+ * `enabled` 用于「元素晚于首次渲染才出现」的容器（右侧栏分栏后的第二排标签条）：
+ * 那个 ref 在第一次 effect 跑时还是 null，不靠这个开关重跑一次就永远绑不上监听。
  */
-export function useWheelScrollX(ref: RefObject<HTMLElement | null>): void {
+export function useWheelScrollX(ref: RefObject<HTMLElement | null>, enabled = true): void {
   useEffect(() => {
+    if (!enabled) return;
     const el = ref.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
@@ -37,5 +41,5 @@ export function useWheelScrollX(ref: RefObject<HTMLElement | null>): void {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [ref]);
+  }, [ref, enabled]);
 }

@@ -263,6 +263,11 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 
 - `fsapi.Root` 同时保存传入路径与 `EvalSymlinks` 后的真实路径；每次解析都要求真实路径
   仍在根内。不要为了「方便」改成纯词法判断——符号链接可以从工作区跳到 `/etc`。
+- `fsapi.Search`（文件页搜索）与 `fsapi.Complete`（`@` 补全）共用排除名单与排序口径，
+  但**匹配规则是分开的**：搜索只认大小写不敏感的子串（名字完全命中 > 前缀 > 名字包含 >
+  路径包含），补全才允许子路径/子序列。共用一套规则会让显式搜索返回一堆无关文件。
+  搜索有独立预算（8000 条目 / 2000 条匹配），永远跳过 `.git`、依赖/构建目录与符号链接，
+  点开头的条目由 `hidden` 参数决定。`rankEntriesWith` 是两者共用的排序实现。
 - 文本预览只读前 `MaxPreviewBytes`（1 MiB），截断时回退完整 rune；含 NUL 或非 UTF-8
   标记 `binary`，不把内容塞进 JSON。**Office 文档一定落进 binary**：它们由前端解析，
   走的是 `blob` + `/api/fs/file` 的元数据，不要试图让 Read 认识 zip。
@@ -383,7 +388,7 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   agent id 走 `[A-Za-z0-9_-]` 白名单，会话 id 走 `validSessionID`，不能拼路径。
   `POST /api/session` 带 `resume` 时：有转录走 `manager.Resume`，没有转录走
   `manager.StartFresh`（同 id `--session-id`），不带 `resume` 才 `Create`。
-- 右侧栏路由：`GET /api/fs/tree|file|raw|download|blob`、`GET /api/git/repos|status|diff|show|log|branches`、
+- 右侧栏路由：`GET /api/fs/tree|complete|search|file|raw|download|blob`、`GET /api/git/repos|status|diff|show|log|branches`、
   `POST /api/git/stage|unstage|discard|commit|checkout|pull`、`GET /ws/terminal`。
   全部先过 `authorizedCwd`（`project.Validate` + `workspace.Allows`），再做路径围栏；
   原始字节只放行图片/PDF 并带 `CSP: sandbox`，HTML/SVG 不得同源 inline。

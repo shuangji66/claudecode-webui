@@ -18,11 +18,13 @@ import {
   IconCopy,
   IconDownload,
   IconExternal,
+  IconClose,
   IconEye,
   IconEyeOff,
   IconFolder,
   IconMore,
   IconRetry,
+  IconSearch,
   IconType,
 } from "../common/Icons";
 import { FileIcon, FolderIcon } from "../common/FileIcon";
@@ -74,13 +76,76 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
   const [actionError, setActionError] = useState("");
   const requestSeq = useRef(0);
 
+  // 文件页顶部搜索：输入防抖 300ms，新查询用 AbortController 取消上一次遍历。
+  // 结果只回相对路径；目录命中可以直接在树里定位，文件命中直接进预览。
+  const searchFiles = useSidebarStore((s) => s.searchFiles);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<FsEntry[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchTruncated, setSearchTruncated] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const searchSeq = useRef(0);
+  const searchInput = useRef<HTMLInputElement | null>(null);
+  // 搜索结果的目录命中：把它的祖先逐层展开，再滚到那一行。
+  const [reveal, setReveal] = useState<{ path: string; seq: number } | null>(null);
+  const revealSeq = useRef(0);
+
+  useEffect(() => {
+    if (searchOpen) searchInput.current?.focus();
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (!active || !cwd) return;
+    const needle = query.trim();
+    if (!needle) {
+      searchSeq.current += 1;
+      setResults(null);
+      setSearching(false);
+      setSearchTruncated(false);
+      setSearchError("");
+      return;
+    }
+    const seq = searchSeq.current + 1;
+    searchSeq.current = seq;
+    const controller = new AbortController();
+    setSearching(true);
+    setSearchError("");
+    const timer = window.setTimeout(() => {
+      void searchFiles(needle, { cwd, signal: controller.signal })
+        .then((listing) => {
+          if (searchSeq.current !== seq) return;
+          setResults(listing.entries ?? []);
+          setSearchTruncated(Boolean(listing.truncated));
+        })
+        .catch((reason: unknown) => {
+          if (controller.signal.aborted || searchSeq.current !== seq) return;
+          setResults([]);
+          setSearchError(reason instanceof Error ? reason.message : String(reason));
+        })
+        .finally(() => {
+          if (searchSeq.current === seq) setSearching(false);
+        });
+    }, 300);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [active, cwd, query, hidden, searchFiles]);
+
   useEffect(() => {
     setSelected(null);
     setFile(null);
     setFileError("");
     setActionError("");
     setRowMenu(null);
+    setQuery("");
+    setResults(null);
+    setSearchError("");
+    setSearchTruncated(false);
+    setReveal(null);
     requestSeq.current += 1;
+    searchSeq.current += 1;
   }, [cwd]);
 
   // 菜单里的失败提示几秒后自己消失，别一直挂在面板上。
@@ -275,7 +340,19 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
 
   const rootEntries = levels[""] ?? [];
   const rootLoading = Boolean(loading[""]);
-  const rootLabel = baseName(cwd);
+  const needle = query.trim();
+  const showingResults = needle !== "";
+
+  /** 搜索结果里点目录：展开祖先把它露出来；点文件：直接进预览。 */
+  const openResult = (entry: FsEntry) => {
+    if (entry.type === "dir") {
+      revealSeq.current += 1;
+      setReveal({ path: entry.path, seq: revealSeq.current });
+      setQuery("");
+      return;
+    }
+    if (entry.type === "file") void openPath(entry.path);
+  };
 
   return (
     // 底部安全区：右侧栏在移动端是全屏抽屉（`fixed inset-y-0 h-[100dvh]`），
@@ -288,10 +365,27 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
     <div className="flex h-full min-h-0 flex-col pb-[calc(env(safe-area-inset-bottom,0px)+8px)]">
       <div className="flex h-[42px] shrink-0 items-center gap-1 border-b border-line px-2">
         <FolderIcon open size={14} className="ml-1 shrink-0" />
-        <span className="min-w-0 truncate text-[12px] font-medium text-ink" title={cwd}>
-          {rootLabel}
-        </span>
-        <div className="ml-auto flex items-center gap-0.5">
+        {/* 完整工作区路径（对齐 DSH 的文件页头）：宽度不够时从**开头**省略，
+            保留末尾几段——路径越长，用户越关心的是最后那几级目录。 */}
+        <div className="path-start-ellipsis min-w-0 flex-1 text-[12px] font-medium text-ink" title={cwd} data-files-path>
+          <span>{cwd}</span>
+        </div>
+        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => {
+              setSearchOpen((open) => {
+                if (open) setQuery("");
+                return !open;
+              });
+            }}
+            className={`rounded-md p-1.5 hover:bg-black/5 ${searchOpen ? "text-brand" : "text-muted hover:text-ink"}`}
+            aria-label={searchOpen ? t("关闭搜索", "Close search") : t("搜索工作区文件", "Search workspace files")}
+            aria-pressed={searchOpen}
+            title={t("搜索工作区文件", "Search workspace files")}
+          >
+            <IconSearch size={14} />
+          </button>
           <button
             type="button"
             onClick={() => void setHidden(!hidden)}
@@ -314,7 +408,86 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
         </div>
       </div>
 
+      {searchOpen && (
+        <div className="flex h-[38px] shrink-0 items-center gap-1.5 border-b border-line px-2">
+          <IconSearch size={13} className="shrink-0 text-faint" />
+          <input
+            ref={searchInput}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setQuery("");
+                setSearchOpen(false);
+              } else if (event.key === "Enter" && results && results.length > 0) {
+                openResult(results[0]!);
+              }
+            }}
+            placeholder={t("搜索文件名称或路径", "Search file names or paths")}
+            aria-label={t("搜索工作区文件", "Search workspace files")}
+            className="min-w-0 flex-1 bg-transparent text-[12px] text-ink outline-none placeholder:text-faint"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="shrink-0 rounded p-0.5 text-faint hover:bg-black/5 hover:text-ink"
+              aria-label={t("清空搜索", "Clear search")}
+              title={t("清空", "Clear")}
+            >
+              <IconClose size={12} />
+            </button>
+          )}
+        </div>
+      )}
+
       <div className={selected ? "hidden" : "flex min-h-0 flex-1 flex-col"}>
+        {showingResults ? (
+          <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto px-1 py-1" data-fs-search-results>
+            {searchError && (
+              <div className="mx-1 mb-1 rounded-lg border border-danger/25 bg-danger/[0.06] px-2 py-1.5 text-[11px] leading-relaxed text-danger">
+                {searchError}
+              </div>
+            )}
+            {!searchError && results === null && (
+              <p className="px-2 py-3 text-[11.5px] text-faint">{t("正在搜索…", "Searching…")}</p>
+            )}
+            {!searchError && results !== null && results.length === 0 && !searching && (
+              <p className="px-2 py-3 text-[11.5px] text-faint">{t("没有匹配的文件。", "No matching files.")}</p>
+            )}
+            {results?.map((entry) => {
+              const dir = dirName(entry.path);
+              return (
+                <button
+                  key={entry.path}
+                  type="button"
+                  onClick={() => openResult(entry)}
+                  title={entry.path}
+                  className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-[3px] pl-2 pr-1.5 text-left transition hover:bg-black/[0.045]"
+                >
+                  {entry.type === "dir" ? (
+                    <FolderIcon size={14} className="shrink-0" />
+                  ) : (
+                    <FileIcon name={entry.name} size={14} className="shrink-0" />
+                  )}
+                  <span className="max-w-[70%] shrink-0 truncate text-[12px] text-ink-2">{entry.name}</span>
+                  {dir && <span className="min-w-0 flex-1 truncate text-[10.5px] text-faint">{dir}</span>}
+                  {entry.type === "file" && entry.size ? (
+                    <span className="ml-auto shrink-0 text-[10px] text-faint">{formatBytes(entry.size)}</span>
+                  ) : null}
+                </button>
+              );
+            })}
+            {searchTruncated && (
+              <p className="px-2 py-2 text-[10.5px] text-warn">
+                {t(
+                  `结果过多，仅显示前 ${results?.length ?? 0} 条。`,
+                  `Too many results; showing the first ${results?.length ?? 0}.`,
+                )}
+              </p>
+            )}
+          </div>
+        ) : (
         <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto px-1 py-1">
           {errors[""] && (
             <div className="mx-1 mb-1 rounded-lg border border-danger/25 bg-danger/[0.06] px-2 py-1.5 text-[11px] leading-relaxed text-danger">
@@ -336,6 +509,7 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
               levels={levels}
               errors={errors}
               loadDir={loadDir}
+              reveal={reveal}
               onOpenFile={openFile}
               onMenu={(e, entry) => setRowMenu({ anchor: e.currentTarget, entry })}
             />
@@ -344,6 +518,7 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
             <p className="px-2 py-2 text-[10.5px] text-warn">{t("目录项过多，仅显示前一部分。", "Directory truncated.")}</p>
           )}
         </div>
+        )}
       </div>
 
       <Menu
@@ -383,28 +558,44 @@ interface TreeNodeProps {
   loading: Record<string, boolean>;
   errors: Record<string, string>;
   loadDir: (path: string, force?: boolean) => Promise<void>;
+  /** 搜索结果里点中的目录：把它的祖先逐层展开，并滚到那一行。 */
+  reveal: { path: string; seq: number } | null;
   onOpenFile: (entry: FsEntry) => void;
   onMenu: (event: MouseEvent<HTMLButtonElement>, entry: FsEntry) => void;
 }
 
-function TreeNode({ entry, depth, levels, loading, errors, loadDir, onOpenFile, onMenu }: TreeNodeProps) {
+function TreeNode({ entry, depth, levels, loading, errors, loadDir, reveal, onOpenFile, onMenu }: TreeNodeProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const children = levels[entry.path];
   const isLoading = Boolean(loading[entry.path]);
   const error = errors[entry.path];
+  const rowRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
     if (children === undefined && !isLoading && !error) void loadDir(entry.path);
   }, [open, children, isLoading, error, entry.path, loadDir]);
 
+  // 搜索命中的目录：它自己与它的每一层祖先都要展开，否则定位到一个看不见的节点。
+  useEffect(() => {
+    if (!reveal) return;
+    if (reveal.path === entry.path || reveal.path.startsWith(entry.path + "/")) setOpen(true);
+  }, [reveal, entry.path]);
+
+  // 目标行可能在祖先的目录加载完之后才挂载：挂载时滚一次，别让用户自己翻。
+  useEffect(() => {
+    if (!reveal || reveal.path !== entry.path) return;
+    const timer = window.setTimeout(() => rowRef.current?.scrollIntoView({ block: "center" }), 16);
+    return () => window.clearTimeout(timer);
+  }, [reveal, entry.path, children]);
+
   const isDir = entry.type === "dir";
   const disabled = entry.type === "other";
 
   return (
     <>
-      <div className="group/entry flex items-center">
+      <div className="group/entry flex items-center" ref={rowRef}>
       <button
         type="button"
         onClick={() => {
@@ -455,6 +646,7 @@ function TreeNode({ entry, depth, levels, loading, errors, loadDir, onOpenFile, 
               loading={loading}
               errors={errors}
               loadDir={loadDir}
+              reveal={reveal}
               onOpenFile={onOpenFile}
               onMenu={onMenu}
             />

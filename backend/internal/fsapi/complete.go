@@ -200,6 +200,14 @@ scan:
 // needle 在这里只小写一次再往下传：早先每个候选各 `strings.ToLower(query)` 一次，
 // 一次按键就能按「候选数 × 查询长度」放大分配（8000 条 × 长查询是 GB 级）。
 func rankEntries(entries []Entry, query string, limit int) []Entry {
+	return rankEntriesWith(entries, query, limit, scoreEntry)
+}
+
+// rankEntriesWith 是 rankEntries 的通用形态：score 决定「算不算候选」与分数。
+//
+// 文件页搜索用 searchScore（只认子串），`@` 补全用 scoreEntry（允许子序列）——
+// 两者共用这里的分数与排序，免得同一份候选在两个入口里顺序不同。
+func rankEntriesWith(entries []Entry, query string, limit int, score func(path, kind, needle string) (int, bool)) []Entry {
 	type scored struct {
 		entry Entry
 		score int
@@ -207,8 +215,8 @@ func rankEntries(entries []Entry, query string, limit int) []Entry {
 	needle := strings.ToLower(query)
 	ranked := make([]scored, 0, len(entries))
 	for _, entry := range entries {
-		if score, ok := scoreEntry(entry.Path, entry.Type, needle); ok {
-			ranked = append(ranked, scored{entry: entry, score: score})
+		if value, ok := score(entry.Path, entry.Type, needle); ok {
+			ranked = append(ranked, scored{entry: entry, score: value})
 		}
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {

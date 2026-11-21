@@ -15,6 +15,78 @@ import (
 	"testing"
 )
 
+func TestFsSearchRequiresAuthAndWorkspace(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	root := srv.d.ProjectsRoot
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "node_modules", "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"src/main.go":              "package main",
+		"src/other.ts":             "export {}",
+		"node_modules/pkg/main.js": "module.exports = {}",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/fs/search?cwd="+root+"&q=main", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("无 token 应 401，实际 %d", rec.Code)
+	}
+
+	outside := t.TempDir()
+	req := httptest.NewRequest(http.MethodGet, "/api/fs/search?cwd="+url.QueryEscape(outside)+"&q=main", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("未授权目录应 403，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/fs/search?cwd="+url.QueryEscape(root)+"&q=main", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
+	}
+	var listing struct {
+		Entries []struct {
+			Name string `json:"name"`
+			Path string `json:"path"`
+			Type string `json:"type"`
+		} `json:"entries"`
+		Truncated bool `json:"truncated"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listing); err != nil {
+		t.Fatal(err)
+	}
+	if len(listing.Entries) != 1 || listing.Entries[0].Path != "src/main.go" || listing.Entries[0].Type != "file" {
+		t.Fatalf("listing = %+v（node_modules 不该出现）", listing)
+	}
+
+	// 空查询回空数组，不报错：搜索框清空时前端也可能发一次。
+	req = httptest.NewRequest(http.MethodGet, "/api/fs/search?cwd="+url.QueryEscape(root)+"&q=", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("空查询 code = %d: %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listing); err != nil {
+		t.Fatal(err)
+	}
+	if len(listing.Entries) != 0 || listing.Entries == nil {
+		t.Fatalf("空查询应回 []: %+v", listing.Entries)
+	}
+}
+
 func TestFsTreeRequiresAuthAndWorkspace(t *testing.T) {
 	srv, _ := newTestServer(t, "secret")
 	root := srv.d.ProjectsRoot

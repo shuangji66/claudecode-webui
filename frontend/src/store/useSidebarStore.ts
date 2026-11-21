@@ -54,6 +54,16 @@ interface SidebarState {
   reloadTree: () => Promise<void>;
   readFile: (path: string) => Promise<FsFile>;
   /**
+   * 文件页顶部的搜索：按名字 / 相对路径子串在整个工作区里找。
+   *
+   * `cwd` 由面板显式给（与 `readBytes` 同一条理由：切工作区的一瞬间 store 与
+   * 面板可能不是同一个目录）；`signal` 让防抖后的新查询能取消上一次遍历。
+   */
+  searchFiles: (
+    query: string,
+    opts?: { signal?: AbortSignal; cwd?: string; hidden?: boolean; limit?: number },
+  ) => Promise<FsListing>;
+  /**
    * 读 Office 文件的原始字节（docx / xlsx / pptx 由前端解析）。
    *
    * 与 readFile 是两条路：那条回的是文本 JSON（二进制文件只给元数据），
@@ -274,6 +284,14 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     if (!cwd) throw new Error("未选择工作区");
     const query = new URLSearchParams({ cwd, path });
     return apiFetch<FsFile>(`/api/fs/file?${query.toString()}`);
+  },
+
+  searchFiles: async (query, opts) => {
+    const cwd = opts?.cwd ?? get().cwd;
+    if (!cwd) throw new Error("未选择工作区");
+    const params = new URLSearchParams({ cwd, q: query, hidden: (opts?.hidden ?? get().hidden) ? "1" : "0" });
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    return apiFetch<FsListing>(`/api/fs/search?${params.toString()}`, { signal: opts?.signal });
   },
 
   readBytes: async (path, opts) => {

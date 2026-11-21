@@ -337,6 +337,22 @@ pre {
     bottom: -1px;
   }
 
+  /* 路径从**开头**省略：右对齐的 RTL 容器把溢出的左侧剪掉，`text-overflow`
+     的省略号就落在开头；内层 span 固定 LTR，免得斜杠与中文在 bidi 里被重排
+     （纯 RTL 容器下 `…/a/b` 会渲染成 `b/a/…` 甚至让末尾探出一截）。 */
+  .path-start-ellipsis {
+    direction: rtl;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .path-start-ellipsis > span {
+    direction: ltr;
+    unicode-bidi: embed;
+  }
+
   /* 有轮次刻度时把原生滚动条藏起来，避免和刻度叠在一起。 */
   .dsh-scroll-none {
     scrollbar-width: none;

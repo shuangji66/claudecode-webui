@@ -8,6 +8,19 @@ import { useAppStore } from "../../store/useAppStore";
 const { apiFetch } = vi.hoisted(() => ({
   apiFetch: vi.fn(async (path: string): Promise<unknown> => {
     const url = new URL(path, "http://localhost");
+    if (url.pathname.endsWith("/api/fs/search")) {
+      const q = url.searchParams.get("q") ?? "";
+      if (q === "read") {
+        return {
+          entries: [
+            { name: "src", path: "src", type: "dir" },
+            { name: "README.md", path: "README.md", type: "file", size: 120 },
+          ],
+          truncated: false,
+        };
+      }
+      return { entries: [], truncated: false };
+    }
     if (url.pathname.endsWith("/api/fs/tree")) {
       const dir = url.searchParams.get("path") ?? "";
       if (dir === "") return { entries: [{ name: "frontend", path: "frontend", type: "dir" }] };
@@ -312,5 +325,60 @@ describe("可渲染文件的视图切换", () => {
 
     expect(await screen.findByText("package main")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /查看源码|查看渲染效果/ })).toBeNull();
+  });
+});
+
+describe("文件页顶部路径与搜索", () => {
+  it("顶部显示完整工作区路径，宽度不够时由 CSS 从开头省略", () => {
+    render(<FilesPanel cwd={CWD} active />);
+    const path = screen.getByTitle(CWD);
+    expect(path).toHaveTextContent(CWD);
+    expect(path.className).toContain("path-start-ellipsis");
+  });
+
+  it("搜索按名字找文件，结果行给出相对目录", async () => {
+    render(<FilesPanel cwd={CWD} active />);
+    fireEvent.click(screen.getByLabelText("搜索工作区文件"));
+    const input = screen.getByRole("textbox", { name: "搜索工作区文件" });
+    fireEvent.change(input, { target: { value: "read" } });
+
+    // 防抖 300ms 之后才发请求；树在有关键词时让位给结果列表。
+    const hit = await screen.findByTitle("README.md");
+    expect(hit).toHaveTextContent("README.md");
+    expect(screen.queryByText("目录为空")).toBeNull();
+    const urls = apiFetch.mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("/api/fs/search") && u.includes("q=read"))).toBe(true);
+  });
+
+  it("没有匹配时给一句空状态", async () => {
+    render(<FilesPanel cwd={CWD} active />);
+    fireEvent.click(screen.getByLabelText("搜索工作区文件"));
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索工作区文件" }), { target: { value: "zzz" } });
+    expect(await screen.findByText("没有匹配的文件。")).toBeInTheDocument();
+  });
+
+  it("点目录结果回到树里并展开它", async () => {
+    render(<FilesPanel cwd={CWD} active />);
+    fireEvent.click(screen.getByLabelText("搜索工作区文件"));
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索工作区文件" }), { target: { value: "read" } });
+    fireEvent.click(await screen.findByTitle("src"));
+
+    // 查询被清空、结果列表让位给树；命中的目录开始加载自己的子项。
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "搜索工作区文件" })).toHaveValue(""));
+    await waitFor(() => {
+      const urls = apiFetch.mock.calls.map((c) => String(c[0]));
+      expect(urls.some((u) => u.includes("/api/fs/tree") && u.includes("path=src"))).toBe(true);
+    });
+    expect(screen.getByText("README.md")).toBeInTheDocument();
+  });
+
+  it("Escape 清空并收起搜索", () => {
+    render(<FilesPanel cwd={CWD} active />);
+    fireEvent.click(screen.getByLabelText("搜索工作区文件"));
+    const input = screen.getByRole("textbox", { name: "搜索工作区文件" });
+    fireEvent.change(input, { target: { value: "read" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "搜索工作区文件" })).toBeNull();
+    expect(screen.getByLabelText("搜索工作区文件")).toBeInTheDocument();
   });
 });

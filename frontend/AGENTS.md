@@ -556,6 +556,19 @@ src/
   上方 `WorkspacePicker` 选中工作区走既有的 `startConversationIn`（切当前工作区 +
   在该目录新建对话）：只切不建会让首条消息落到 `ensureSession` 的「恢复最近对话」上，
   用户明明选了工作区却进了旧对话。
+- **右侧栏桌面全屏与分栏**：`RightSidebar` 的 `fullscreen` 只存浏览器
+  （`ccweb-right-fullscreen`），只在停靠（`docked`）时生效；全屏用 `fixed inset-0 w-full`
+  盖住对话区，对话区只 hidden 不卸载。分栏状态是 `tabs[].pane` + `activeA/activeB`，
+  两栏各自一排标签、各自开始页；**标签内容层是平的**，按 `--split` 定位与显隐，
+  跨栏移动/并栏只改 class → 终端不会重挂（否则 PTY 被杀）。`SPLIT_MIN_WIDTH=560`：
+  点分栏先把面板撑到 560，视口放不下就不显示入口；宽度掉到 560 以下或离开停靠自动并栏。
+  文件/Git 仍是单例：在另一栏点同一入口是**移动**标签，不是开第二份。
+  全屏/收起侧栏的按钮在**最右那一栏**标签条末尾（整块面板的操作），分栏按钮在左栏。
+  `useWheelScrollX(ref, enabled)` 的 `enabled` 给第二栏标签条用（它晚于首次渲染出现）。
+- **文件页顶部路径与搜索**：路径是完整 `cwd`，`.path-start-ellipsis`（RTL 容器 + 内层
+  LTR span）在宽度不够时从开头省略；搜索按钮展开输入行，300ms 防抖 +
+  `AbortController` 取消上一次 `/api/fs/search`（store 的 `searchFiles`）。结果行点文件
+  进预览、点目录清空查询并经 `TreeNode.reveal` 逐层展开祖先并滚动到那一行。
 - **Git 多仓库 / 嵌套仓库**：`loadRepos()` 拉 `/api/git/repos`（后端从**授权工作区**扫，
   含仓库内部的嵌套仓库），`pickRepo()`（纯函数，`lib/workspace.ts`）决定默认选中：
   保持当前 > **cwd 所在的那个仓库**（会话常开在仓库的子目录里，不选它就会落到列表里的

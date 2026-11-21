@@ -420,6 +420,52 @@ export function IconSidebarRight(props: Props) {
   );
 }
 
+/** 右侧栏全屏：四角向外的角标。 */
+export function IconFullscreen(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M9 4H4v5" />
+      <path d="M15 4h5v5" />
+      <path d="M15 20h5v-5" />
+      <path d="M9 20H4v-5" />
+    </Svg>
+  );
+}
+
+/** 从全屏恢复：四角向内收。 */
+export function IconExitFullscreen(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M4 9h5V4" />
+      <path d="M20 9h-5V4" />
+      <path d="M20 15h-5v5" />
+      <path d="M4 15h5v5" />
+    </Svg>
+  );
+}
+
+/** 右侧栏分栏：一块面板从中间分开，箭头指向新的一栏。 */
+export function IconSplit(props: Props) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <path d="M11 4v16" />
+      <path d="M14.5 9.5 17 12l-2.5 2.5" />
+    </Svg>
+  );
+}
+
+/** 关掉分栏：两栏并回一栏（箭头指向左栏）。 */
+export function IconUnsplit(props: Props) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="4" width="18" height="16" rx="3" />
+      <path d="M13 4v16" />
+      <path d="M18.5 9.5 16 12l2.5 2.5" />
+    </Svg>
+  );
+}
+
 export function IconChevronLeft(props: Props) {
   return (
     <Svg {...props}>

@@ -4,7 +4,19 @@ import { useWheelScrollX } from "../../lib/wheelScroll";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { FilesPanel } from "./FilesPanel";
 import { GitPanel } from "./GitPanel";
-import { IconClose, IconFolder, IconGitBranch, IconPanel, IconPlus, IconSpark, IconTerminal } from "../common/Icons";
+import {
+  IconClose,
+  IconExitFullscreen,
+  IconFolder,
+  IconFullscreen,
+  IconGitBranch,
+  IconPanel,
+  IconPlus,
+  IconSpark,
+  IconSplit,
+  IconTerminal,
+  IconUnsplit,
+} from "../common/Icons";
 import { SubagentPanel } from "./SubagentPanel";
 import { useAppStore } from "../../store/useAppStore";
 
@@ -13,10 +25,15 @@ const TerminalView = lazy(() => import("./TerminalView"));
 /** 一个标签页；终端每个会话各占一个，子代理对话按 agentId 各占一个。 */
 type TabKind = "files" | "git" | "terminal" | "subagent";
 
+/** 分栏后的两栏；不分栏时所有标签都算在 `a` 栏。 */
+type PaneId = "a" | "b";
+
 interface Tab {
   id: string;
   kind: TabKind;
   label: string;
+  /** 这个标签当前停在哪一栏（分栏关闭时忽略，统一按 `a` 渲染）。 */
+  pane: PaneId;
   /** 子代理标签：打开时的会话 id 与 agent id（切换对话后仍指向原来那个子代理）。 */
   sessionId?: string;
   agentId?: string;
@@ -36,6 +53,14 @@ interface Props {
 }
 
 const WIDTH_KEY = "ccweb-right-width";
+const FULLSCREEN_KEY = "ccweb-right-fullscreen";
+/** 分栏时每一边最少占的宽度比例：再窄连一个标签标题都放不下。 */
+const SPLIT_MIN = 0.25;
+const SPLIT_MAX = 0.75;
+const SPLIT_DEFAULT = 0.5;
+/** 分两栏所需的最小面板宽度（两栏各 280px）。不够时先试着把面板撑宽，
+ *  视口也放不下就不给分栏入口——两栏各一百多像素连标签都排不下。 */
+const SPLIT_MIN_WIDTH = 560;
 export const RIGHT_MIN_WIDTH = 300;
 const RIGHT_MAX_WIDTH = 680;
 const RIGHT_DEFAULT_WIDTH = 380;
@@ -56,6 +81,15 @@ function readWidth(): number {
     /* 隐私模式 */
   }
   return RIGHT_DEFAULT_WIDTH;
+}
+
+/** 全屏偏好只存浏览器：每台设备的屏幕尺寸不同，不该跟着 settings.json 走。 */
+function readFullscreen(): boolean {
+  try {
+    return localStorage.getItem(FULLSCREEN_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 /** 宽度同时受三件事约束：用户拖动值、视口比例、以及「给对话区留够地方」。 */
@@ -121,8 +155,14 @@ export function RightSidebarDock({ open, covered, cwd, onClose }: DockProps) {
 /**
  * 右侧栏：顶部一排标签页（文件 / Git / 每个终端各一个），桌面停靠、移动端全屏抽屉。
  *
- * 参照 DSH：没有「启动页 + 返回」那种切换，标签本身就是入口与关闭按钮，`+` 打开新标签。
+ * 参照 DSH：没有「启动页 + 返回」那种切换，标签本身就是入口与关闭按钮，`+` 回到开始页。
  * **标签切走不卸载**：终端里挂着 PTY，卸载等于杀 shell；关掉标签才结束进程。
+ *
+ * 桌面还有两件事（同样对齐 DSH）：
+ *   - **全屏**：整块侧栏铺满视口（对话区留在下面不卸载），再点一次恢复停靠宽度；
+ *   - **分栏**：左右两栏各自一排标签，可以同时看「文件 + Git」或「文件 + 终端」。
+ *     所有标签面板始终挂在同一层里、只改定位与可见性，所以把标签在栏之间移动
+ *     **不会重挂组件**——否则终端会连同 PTY 一起被杀掉（关掉标签才该结束 shell）。
  */
 export function RightSidebar({ cwd, onClose, visible = true }: Props) {
   const t = useT();
@@ -135,20 +175,67 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
   const viewport = useViewportWidth();
   const docked = viewport >= DOCK_MIN;
   const width = clampWidth(preferredWidth, viewport);
+
+  const [fullscreen, setFullscreen] = useState(readFullscreen);
+  const fullActive = fullscreen && docked;
+
+  // 分栏：只有停靠、且面板放得下两栏时 `splitActive` 才成立。宽度或视口不够时
+  // 下面的 effect 会把两栏合回一栏（`split=false`），不留一个看不见的 B 栏。
+  const [split, setSplit] = useState(false);
+  const canSplit = docked && clampWidth(SPLIT_MIN_WIDTH, viewport) >= SPLIT_MIN_WIDTH;
+  const splitActive = split && canSplit && width >= SPLIT_MIN_WIDTH && Boolean(cwd);
+  const [ratio, setRatio] = useState(SPLIT_DEFAULT);
+  const [focused, setFocused] = useState<PaneId>("a");
+
   // 初始停在开始页：不自动开「文件」标签，由用户点卡片决定。
   //
-  // `active === ""` 就是「开始页」这个视图：顶部 `+` 是回到它的入口，标签行不卸载，
-  // 否则终端里的 PTY 会被 SIGHUP（见下面的渲染分支）。
+  // `active` 为空串就是「这一栏在开始页」这个视图：顶部 `+` 是回到它的入口，
+  // 标签行不卸载，否则终端里的 PTY 会被 SIGHUP（见下面的渲染分支）。
   const [tabs, setTabs] = useState<Tab[]>([]);
-  const [active, setActive] = useState("");
+  const [activeA, setActiveA] = useState("");
+  const [activeB, setActiveB] = useState("");
   const termSeq = useRef(0);
   const drag = useRef<{ startX: number; startWidth: number } | null>(null);
+  const splitDrag = useRef<{ startX: number; startRatio: number; width: number } | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   // 标签一多就横向溢出：滚动条藏在 `dsh-scroll-none` 后面，靠滚轮/触控板横向滑。
-  const tabStrip = useRef<HTMLDivElement | null>(null);
-  useWheelScrollX(tabStrip);
+  const tabStripA = useRef<HTMLDivElement | null>(null);
+  const tabStripB = useRef<HTMLDivElement | null>(null);
+  useWheelScrollX(tabStripA);
+  useWheelScrollX(tabStripB, splitActive);
   const subagentView = useAppStore((s) => s.subagentView);
   const activeSession = useAppStore((s) => s.activeId);
   const handledSubagent = useRef(0);
+
+  /** 标签实际落在哪一栏：不分栏时所有标签都按 `a` 渲染。 */
+  const paneOf = (tab: Tab): PaneId => (splitActive ? tab.pane : "a");
+
+  /** 某一栏当前激活的标签；引用的标签不在这一栏时按「开始页」处理。 */
+  const activeOf = (pane: PaneId): string => {
+    const id = pane === "a" ? activeA : activeB;
+    if (!id) return "";
+    return tabs.some((tab) => tab.id === id && paneOf(tab) === pane) ? id : "";
+  };
+
+  const setActiveFor = (pane: PaneId, id: string) => {
+    if (pane === "a") setActiveA(id);
+    else setActiveB(id);
+    setFocused(pane);
+  };
+
+  // 窗口缩到不再停靠、或者拖到放不下两栏时合回一栏：移动端是全屏抽屉，
+  // 300px 的面板里两栏各只剩一百多像素。
+  // 这里是**用户意图复位**（split=false），不是每次渲染临时折叠——留着一个看不见的
+  // B 栏只会让标签列表与当前激活项对不上。
+  useEffect(() => {
+    if (!split) return;
+    if (docked && width >= SPLIT_MIN_WIDTH) return;
+    setSplit(false);
+    setTabs((prev) => prev.map((tab) => (tab.pane === "b" ? { ...tab, pane: "a" } : tab)));
+    setActiveA((prev) => prev || activeB);
+    setActiveB("");
+    setFocused("a");
+  }, [docked, split, width, activeB]);
 
   // 聊天里的「查看对话」只放一个请求到 store，标签的打开/切换留在这里做。
   //
@@ -192,11 +279,17 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
       termSeq.current = 0;
       let fallback = "";
       setTabs((prev) => {
-        const kept = prev.filter((tab) => tab.kind === "files" || tab.kind === "git");
+        // 保留下来的文件/Git 标签统一回到 A 栏：换工作区连分栏一起收，
+        // 否则 B 栏可能停着一个已经指向旧目录的标签。
+        const kept = prev
+          .filter((tab) => tab.kind === "files" || tab.kind === "git")
+          .map((tab) => ({ ...tab, pane: "a" as PaneId }));
         fallback = kept[0]?.id ?? "";
         return kept;
       });
-      setActive((prev) => (prev && (prev.startsWith("files") || prev.startsWith("git")) ? prev : fallback));
+      setActiveA(fallback);
+      setActiveB("");
+      setFocused("a");
     }
     // 看不见的时候只收拾标签，不发请求：收着侧栏（或功能区盖着）时切工作区，
     // 数据留给「重新可见」那一次，别让没人看的界面向 NAS 拉目录树和 git status。
@@ -211,6 +304,18 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     } catch {
       /* 隐私模式 */
     }
+  };
+
+  const toggleFullscreen = () => {
+    setFullscreen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(FULLSCREEN_KEY, next ? "1" : "0");
+      } catch {
+        /* 隐私模式 */
+      }
+      return next;
+    });
   };
 
   const onResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -247,17 +352,62 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     }
   };
 
-  /** 打开标签：文件/Git 是单例（已开就切过去），终端每次都新建一个。 */
-  const openTab = (kind: TabKind) => {
+  const onSplitStart = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const el = bodyRef.current;
+    if (!splitActive || !el) return;
+    event.preventDefault();
+    splitDrag.current = { startX: event.clientX, startRatio: ratio, width: el.getBoundingClientRect().width };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const onSplitMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const current = splitDrag.current;
+    if (!current || current.width <= 0) return;
+    const next = current.startRatio + (event.clientX - current.startX) / current.width;
+    setRatio(Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, next)));
+  };
+  const onSplitEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
+    splitDrag.current = null;
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      /* 指针已释放 */
+    }
+  };
+  const onSplitKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 0.08 : 0.02;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setRatio((value) => Math.max(SPLIT_MIN, value - step));
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setRatio((value) => Math.min(SPLIT_MAX, value + step));
+    }
+  };
+
+  /**
+   * 打开标签：文件/Git 是单例（已开就切过去），终端每次都新建一个。
+   *
+   * 分栏时目标栏默认是**当前聚焦的那一栏**：点哪一栏的标签就在哪一栏打开。
+   * 单例标签在另一栏里开着时**移过来**而不是开第二份——两栏看同一份文件/Git
+   * 没有意义，而「移过来」不会重挂面板（见函数头注释）。
+   */
+  const openTab = (kind: TabKind, pane?: PaneId) => {
+    const target: PaneId = splitActive ? (pane ?? focused) : "a";
     if (kind !== "terminal") {
       const existing = tabs.find((tab) => tab.kind === kind);
       if (existing) {
-        setActive(existing.id);
+        if (splitActive && existing.pane !== target) {
+          const from = existing.pane;
+          setTabs((prev) => prev.map((tab) => (tab.id === existing.id ? { ...tab, pane: target } : tab)));
+          if (from === "a") setActiveA((cur) => (cur === existing.id ? "" : cur));
+          else setActiveB((cur) => (cur === existing.id ? "" : cur));
+        }
+        setActiveFor(target, existing.id);
         return;
       }
       const label = kind === "files" ? t("文件", "Files") : t("Git", "Git");
-      setTabs((prev) => [...prev, { id: kind, kind, label }]);
-      setActive(kind);
+      setTabs((prev) => [...prev, { id: kind, kind, label, pane: target }]);
+      setActiveFor(target, kind);
       return;
     }
     if (tabs.filter((tab) => tab.kind === "terminal").length >= MAX_TERMINALS) return;
@@ -265,8 +415,8 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     const n = termSeq.current;
     const id = `term-${n}`;
     // 第一个叫 bash，之后编号；序号单调递增，关掉中间那个也不会重排。
-    setTabs((prev) => [...prev, { id, kind: "terminal", label: n === 1 ? "bash" : `bash ${n}` }]);
-    setActive(id);
+    setTabs((prev) => [...prev, { id, kind: "terminal", label: n === 1 ? "bash" : `bash ${n}`, pane: target }]);
+    setActiveFor(target, id);
   };
 
   const handledOpenFile = useRef(0);
@@ -295,12 +445,18 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
   /** 打开某个子代理的对话：同一个 agent 只占一个标签。 */
   const openSubagentTab = (sessionId: string, agentId: string, label: string) => {
     const id = `sub-${sessionId}-${agentId}`;
-    setTabs((prev) =>
-      prev.some((tab) => tab.id === id)
-        ? prev
-        : [...prev, { id, kind: "subagent", label: label || t("子代理", "Subagent"), sessionId, agentId }],
-    );
-    setActive(id);
+    const target: PaneId = splitActive ? focused : "a";
+    setTabs((prev) => {
+      const found = prev.find((tab) => tab.id === id);
+      if (found) {
+        return found.pane === target ? prev : prev.map((tab) => (tab.id === id ? { ...tab, pane: target } : tab));
+      }
+      return [
+        ...prev,
+        { id, kind: "subagent", label: label || t("子代理", "Subagent"), sessionId, agentId, pane: target },
+      ];
+    });
+    setActiveFor(target, id);
   };
 
   const closeTab = (id: string) => {
@@ -309,10 +465,37 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     if (id === "files") setPendingOpen(null);
     setTabs((prev) => {
       const index = prev.findIndex((tab) => tab.id === id);
+      if (index < 0) return prev;
+      const pane = paneOf(prev[index]!);
+      const siblings = prev.filter((tab) => paneOf(tab) === pane);
+      const at = siblings.findIndex((tab) => tab.id === id);
       const next = prev.filter((tab) => tab.id !== id);
-      setActive((cur) => (cur === id ? (next[index]?.id ?? next[index - 1]?.id ?? "") : cur));
+      const remaining = next.filter((tab) => paneOf(tab) === pane);
+      const fallback = remaining[Math.min(Math.max(at, 0), remaining.length - 1)]?.id ?? "";
+      if (pane === "a") setActiveA((cur) => (cur === id ? fallback : cur));
+      else setActiveB((cur) => (cur === id ? fallback : cur));
       return next;
     });
+  };
+
+  /** 把当前栏分成两栏：A 栏保持原样，B 栏从开始页起步，焦点交给 B。
+   *  面板不够宽（默认 380px）时先把面板撑到能放下两栏再分——用户点的是「分栏」，
+   *  不是「分栏然后每栏一百多像素」。视口也放不下时按钮本身就不出现（`canSplit`）。 */
+  const splitOff = () => {
+    if (!canSplit || split) return;
+    applyWidth(Math.max(width, SPLIT_MIN_WIDTH));
+    setSplit(true);
+    setFocused("b");
+    setActiveB("");
+  };
+
+  /** 关掉 B 栏：它的标签并回 A 栏，不卸载、不重排。 */
+  const mergePanes = () => {
+    setSplit(false);
+    setTabs((prev) => prev.map((tab) => (tab.pane === "b" ? { ...tab, pane: "a" } : tab)));
+    setActiveA((prev) => prev || activeB);
+    setActiveB("");
+    setFocused("a");
   };
 
   const startCards: { kind: TabKind; title: string; desc: string; icon: typeof IconFolder; tone: string }[] = [
@@ -339,7 +522,163 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     },
   ];
 
-  const style = { "--right-w": `${width}px` } as CSSProperties;
+  const style = { "--right-w": `${width}px`, "--split": `${Math.round(ratio * 10000) / 100}%` } as CSSProperties;
+
+  /** 一栏的标签条：标签、回到开始页的 `+`、以及这一栏自己的操作按钮。 */
+  const renderStrip = (pane: PaneId) => {
+    const list = tabs.filter((tab) => paneOf(tab) === pane);
+    const current = activeOf(pane);
+    const last = pane === "a" ? !splitActive : true;
+    return (
+      <div
+        onPointerDown={() => setFocused(pane)}
+        className={`flex min-w-0 items-center gap-0.5 ${pane === "a" && splitActive ? "" : "flex-1"}`}
+        style={pane === "a" && splitActive ? { width: "var(--split)" } : undefined}
+      >
+        <div
+          ref={pane === "a" ? tabStripA : tabStripB}
+          className="dsh-scroll-none flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overscroll-x-contain px-1.5"
+        >
+          {current === "" && <span className="shrink-0 px-1.5 text-[12.5px] font-medium text-ink">{t("开始", "Start")}</span>}
+          {list.map((tab) => {
+            const Icon = KIND_ICON[tab.kind];
+            const on = tab.id === current;
+            return (
+              <span
+                key={tab.id}
+                className={`flex shrink-0 items-center rounded-lg text-[12px] ${
+                  on ? "bg-panel-strong font-medium text-ink" : "text-muted hover:bg-black/[0.03] hover:text-ink"
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => setActiveFor(pane, tab.id)}
+                  aria-pressed={on}
+                  className="flex max-w-[9rem] items-center gap-1.5 py-1.5 pl-2 pr-1"
+                  title={tab.label}
+                >
+                  <Icon size={14} className={on ? "shrink-0 text-brand" : "shrink-0"} />
+                  <span className="truncate">{tab.label}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => closeTab(tab.id)}
+                  className="mr-1 rounded p-0.5 text-faint hover:bg-black/5 hover:text-danger"
+                  aria-label={t(`关闭 ${tab.label}`, `Close ${tab.label}`)}
+                  title={t("关闭该标签", "Close this tab")}
+                >
+                  <IconClose size={11} />
+                </button>
+              </span>
+            );
+          })}
+          {/* `+` = 回到开始页，不是下拉菜单：三个入口（文件 / Git / 终端）已经在那三张卡片上，
+              再摆一份菜单等于同一件事两个入口。这一栏已经在开始页时不显示它。 */}
+          {current !== "" && (
+            <button
+              type="button"
+              onClick={() => setActiveFor(pane, "")}
+              className="ml-0.5 shrink-0 rounded-md p-1 text-muted hover:bg-black/5 hover:text-ink"
+              aria-label={t("回到开始页", "Back to start")}
+              title={t("回到开始页", "Back to start")}
+            >
+              <IconPlus size={15} />
+            </button>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5 pr-1">
+          {pane === "a" && canSplit && !splitActive && (
+            <button
+              type="button"
+              onClick={splitOff}
+              className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+              aria-label={t("分栏", "Split panes")}
+              title={t("分成两栏", "Split into two panes")}
+            >
+              <IconSplit size={15} />
+            </button>
+          )}
+          {pane === "b" && (
+            <button
+              type="button"
+              onClick={mergePanes}
+              className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+              aria-label={t("关闭这一栏", "Close pane")}
+              title={t("并回左栏", "Merge into the left pane")}
+            >
+              <IconUnsplit size={15} />
+            </button>
+          )}
+          {/* 全屏与收起侧栏是**整块面板**的操作，永远放在最右那一栏的末尾
+              （对齐 DSH 的 panel chrome）：分栏时放在左栏中间会让人以为只作用于那一栏。 */}
+          {last && docked && (
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+              aria-label={fullActive ? t("退出全屏", "Exit fullscreen") : t("全屏", "Fullscreen")}
+              aria-pressed={fullActive}
+              title={fullActive ? t("退出全屏", "Exit fullscreen") : t("全屏显示", "Fullscreen")}
+            >
+              {fullActive ? <IconExitFullscreen size={15} /> : <IconFullscreen size={15} />}
+            </button>
+          )}
+          {last && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+              aria-label={t("关闭右侧栏", "Close right sidebar")}
+              title={t("关闭", "Close")}
+            >
+              <IconClose size={16} />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  /** 一栏的开始页：三张功能卡片，点哪张就在这一栏开哪个标签。 */
+  const renderStartPage = (pane: PaneId) => {
+    if (activeOf(pane) !== "") return null;
+    const box = splitActive ? (pane === "a" ? "absolute inset-y-0 left-0" : "absolute inset-y-0 right-0") : "absolute inset-0";
+    const boxStyle: CSSProperties | undefined = splitActive
+      ? pane === "a"
+        ? { width: "var(--split)" }
+        : { left: "var(--split)" }
+      : undefined;
+    return (
+      <div
+        key={`start-${pane}`}
+        onPointerDown={() => setFocused(pane)}
+        className={`@container dsh-scroll z-10 flex flex-col justify-center overflow-y-auto bg-canvas px-3 py-6 ${box}`}
+        style={boxStyle}
+      >
+        <div className="grid grid-cols-1 gap-2 @min-[21rem]:grid-cols-2">
+          {startCards.map((card) => {
+            const Icon = card.icon;
+            return (
+              <button
+                key={card.kind}
+                type="button"
+                onClick={() => openTab(card.kind, pane)}
+                className="flex h-full min-w-0 items-start gap-2.5 rounded-2xl border border-line bg-canvas px-3 py-3 text-left transition hover:border-line-strong hover:bg-panel/60"
+              >
+                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-panel-strong">
+                  <Icon size={15} className={card.tone} />
+                </span>
+                <span className="min-w-0">
+                  <span className="block truncate text-[12.5px] font-medium text-ink">{card.title}</span>
+                  <span className="mt-0.5 block text-[10.5px] leading-relaxed text-muted">{card.desc}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <>
@@ -353,9 +692,11 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
       )}
       <aside
         className={`safe-top flex flex-col border-l border-line bg-canvas ${
-          docked
-            ? "relative z-auto h-full w-[var(--right-w)]"
-            : "fixed inset-y-0 right-0 z-50 h-[100dvh] w-full max-w-[460px] shadow-2xl"
+          fullActive
+            ? "fixed inset-0 z-50 h-[100dvh] w-full"
+            : docked
+              ? "relative z-auto h-full w-[var(--right-w)]"
+              : "fixed inset-y-0 right-0 z-50 h-[100dvh] w-full max-w-[460px] shadow-2xl"
         }`}
         style={style}
         aria-label={t("工作区侧栏", "Workspace sidebar")}
@@ -375,75 +716,14 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
           // 不加层级时侧栏里的面板（Git 的列表/提交框、终端的 xterm）会先于它命中指针，
           // 于是拖到侧栏内部那半截时既没有 col-resize、hover 高亮也被面板背景盖掉一半，
           // 看起来就是「拖动条断在面板边缘」。层级只要盖过面板即可（Git 的 sticky 头是 z-10）。
-          className={`absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize hover:bg-brand/30 ${docked ? "" : "hidden"}`}
+          className={`absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize hover:bg-brand/30 ${docked && !fullActive ? "" : "hidden"}`}
           title={t("拖动调整宽度，双击复位", "Drag to resize, double-click to reset")}
         />
 
-        <div className="flex h-14 shrink-0 items-center gap-1 border-b border-line px-1.5">
-          {/* 标签行。滚动条不画（`dsh-scroll-none`）：8px 的细条压在标签下沿，既挡标题
-              又会被误认成这一行的边框，而侧栏顶部宽高只有 56px，没地方给它。
-              `overscroll-x-contain`：滚动条看不见之后，触控板滑到两端时别把「横向越界」
-              传给浏览器（Chrome 会当成前进/后退手势，直接把应用页面换掉）。 */}
-          <div
-            ref={tabStrip}
-            className="dsh-scroll-none flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overscroll-x-contain"
-          >
-            {active === "" && <span className="shrink-0 px-1.5 text-[12.5px] font-medium text-ink">{t("开始", "Start")}</span>}
-            {tabs.map((tab) => {
-              const Icon = KIND_ICON[tab.kind];
-              const on = tab.id === active;
-              return (
-                <span
-                  key={tab.id}
-                  className={`flex shrink-0 items-center rounded-lg text-[12px] ${
-                    on ? "bg-panel-strong font-medium text-ink" : "text-muted hover:bg-black/[0.03] hover:text-ink"
-                  }`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setActive(tab.id)}
-                    aria-pressed={on}
-                    className="flex max-w-[9rem] items-center gap-1.5 py-1.5 pl-2 pr-1"
-                    title={tab.label}
-                  >
-                    <Icon size={14} className={on ? "shrink-0 text-brand" : "shrink-0"} />
-                    <span className="truncate">{tab.label}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => closeTab(tab.id)}
-                    className="mr-1 rounded p-0.5 text-faint hover:bg-black/5 hover:text-danger"
-                    aria-label={t(`关闭 ${tab.label}`, `Close ${tab.label}`)}
-                    title={t("关闭该标签", "Close this tab")}
-                  >
-                    <IconClose size={11} />
-                  </button>
-                </span>
-              );
-            })}
-            {/* `+` = 回到开始页，不是下拉菜单：三个入口（文件 / Git / 终端）已经在那三张卡片上，
-                再摆一份菜单等于同一件事两个入口。开始页本身不显示它，否则点了不会有任何变化。 */}
-            {active !== "" && (
-              <button
-                type="button"
-                onClick={() => setActive("")}
-                className="ml-0.5 shrink-0 rounded-md p-1 text-muted hover:bg-black/5 hover:text-ink"
-                aria-label={t("回到开始页", "Back to start")}
-                title={t("回到开始页", "Back to start")}
-              >
-                <IconPlus size={15} />
-              </button>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="shrink-0 rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
-            aria-label={t("关闭右侧栏", "Close right sidebar")}
-            title={t("关闭", "Close")}
-          >
-            <IconClose size={16} />
-          </button>
+        <div className="flex h-14 shrink-0 items-stretch border-b border-line">
+          {renderStrip("a")}
+          {splitActive && <div className="w-px shrink-0 bg-line" />}
+          {splitActive && renderStrip("b")}
         </div>
 
         {!cwd ? (
@@ -457,18 +737,50 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
             </p>
           </div>
         ) : (
-          // 开始页与标签页是**同一层**里的两块：`active === ""` 就是开始页。
+          // 开始页与标签页是**同一层**里的两块：某一栏的 active 为空串就是它的开始页。
           //
           // 标签面板不能因为回开始页就卸载：终端里挂着 PTY，卸载等于杀 shell
           // （与「标签切走只隐藏」同一条理由）。所以这里只把开始页盖在上面。
-          <div className="relative min-h-0 flex-1">
+          <div ref={bodyRef} className="relative min-h-0 flex-1" style={style}>
+            {splitActive && (
+              <>
+                <div className="pointer-events-none absolute inset-y-0 z-20 w-px bg-line" style={{ left: "var(--split)" }} />
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label={t("调整两栏宽度", "Resize panes")}
+                  tabIndex={0}
+                  onPointerDown={onSplitStart}
+                  onPointerMove={onSplitMove}
+                  onPointerUp={onSplitEnd}
+                  onPointerCancel={onSplitEnd}
+                  onKeyDown={onSplitKey}
+                  className="absolute inset-y-0 z-30 w-2 -translate-x-1/2 cursor-col-resize hover:bg-brand/30"
+                  style={{ left: "var(--split)" }}
+                  title={t("拖动调整两栏宽度", "Drag to resize the panes")}
+                />
+              </>
+            )}
             {/* 标签切走、甚至整条侧栏收起都只隐藏：终端里挂着 PTY，卸载等于杀 shell。
                 「激活」再与侧栏可见性相与——重新打开时要让它补一次 fit，收着的时候也别
-                让面板以为自己正被看着（Git 的订阅就是这个口径）。 */}
+                让面板以为自己正被看着（Git 的订阅就是这个口径）。
+                位置按栏算（`--split`），**元素本身不搬家**：跨栏移动标签不会重挂终端。 */}
             {tabs.map((tab) => {
-              const on = tab.id === active && visible;
+              const pane = paneOf(tab);
+              const on = visible && activeOf(pane) === tab.id;
+              const position = splitActive ? (pane === "a" ? "absolute inset-y-0 left-0" : "absolute inset-y-0 right-0") : "absolute inset-0";
+              const region: CSSProperties | undefined = splitActive
+                ? pane === "a"
+                  ? { width: "var(--split)" }
+                  : { left: "var(--split)" }
+                : undefined;
               return (
-                <div key={tab.id} className={tab.id === active ? "absolute inset-0" : "hidden"}>
+                <div
+                  key={tab.id}
+                  style={region}
+                  onPointerDownCapture={() => setFocused(pane)}
+                  className={`${position} ${on ? "" : "hidden"}`}
+                >
                   {tab.kind === "files" && <FilesPanel cwd={cwd} active={on} pending={pendingOpen} />}
                   {tab.kind === "git" && <GitPanel cwd={cwd} active={on} />}
                   {tab.kind === "subagent" && tab.agentId && (
@@ -488,36 +800,8 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
                 </div>
               );
             })}
-            {active === "" && (
-              // 开始页：三张功能卡片，点哪张就开哪个标签。
-              //
-              // 列数按**容器宽度**切（`@container`），不是视口：右侧栏宽度由拖动与停靠规则决定，
-              // 跟 viewport 无关。窄的时候排成一列（对齐 DSH）——两列塞不下时描述会被折成
-              // 「浏览工作区文 / 件」这种断字，很难看。
-              <div className="@container dsh-scroll absolute inset-0 flex flex-col justify-center overflow-y-auto bg-canvas px-3 py-6">
-                <div className="grid grid-cols-1 gap-2 @min-[21rem]:grid-cols-2">
-                  {startCards.map((card) => {
-                    const Icon = card.icon;
-                    return (
-                      <button
-                        key={card.kind}
-                        type="button"
-                        onClick={() => openTab(card.kind)}
-                        className="flex h-full min-w-0 items-start gap-2.5 rounded-2xl border border-line bg-canvas px-3 py-3 text-left transition hover:border-line-strong hover:bg-panel/60"
-                      >
-                        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-panel-strong">
-                          <Icon size={15} className={card.tone} />
-                        </span>
-                        <span className="min-w-0">
-                          <span className="block truncate text-[12.5px] font-medium text-ink">{card.title}</span>
-                          <span className="mt-0.5 block text-[10.5px] leading-relaxed text-muted">{card.desc}</span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
+            {renderStartPage("a")}
+            {splitActive && renderStartPage("b")}
           </div>
         )}
       </aside>

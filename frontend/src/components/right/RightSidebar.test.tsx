@@ -71,7 +71,7 @@ describe("RightSidebar 收起侧栏", () => {
     expect(shell().className).toBe("contents");
     // Git 仍是选中的那个标签，没有被重置回「文件」或开始页。
     expect(screen.getByText("GIT")).toBeInTheDocument();
-    expect(screen.getByText("FILES").closest("div[class='hidden']")).not.toBeNull();
+    expect(screen.getByText("FILES").closest("div.hidden")).not.toBeNull();
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -131,7 +131,7 @@ describe("RightSidebar 标签页", () => {
     expect(screen.queryByRole("menu")).toBeNull();
     expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
     // 文件面板仍在 DOM 里（开始页只是盖在上面），标签按钮也还在。
-    expect(screen.getByText("FILES").closest("div[class='hidden']")).not.toBeNull();
+    expect(screen.getByText("FILES").closest("div.hidden")).not.toBeNull();
     expect(screen.getByRole("button", { name: /^文件$/ })).toBeInTheDocument();
   });
 
@@ -158,7 +158,7 @@ describe("RightSidebar 标签页", () => {
     expect(screen.queryByText("GIT")).toBeNull();
     // 只剩文件标签，且它是可见的那个
     const files = screen.getByText("FILES");
-    expect(files.closest("div[class='hidden']")).toBeNull();
+    expect(files.closest("div.hidden")).toBeNull();
   });
 
   it("关掉所有标签后回到开始页", () => {
@@ -299,5 +299,70 @@ describe("RightSidebar 的一次性请求", () => {
     render(<RightSidebar cwd="/w" onClose={() => {}} />);
     expect(screen.queryByText("SUB")).toBeNull();
     expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
+  });
+});
+
+describe("RightSidebar 桌面全屏与分栏", () => {
+  function setViewport(width: number) {
+    Object.defineProperty(window, "innerWidth", { value: width, configurable: true, writable: true });
+  }
+
+  beforeEach(() => {
+    setViewport(1400);
+  });
+
+  it("全屏铺满视口，再点一次恢复停靠宽度", () => {
+    const onClose = vi.fn();
+    render(<RightSidebar cwd="/w" onClose={onClose} />);
+    const aside = () => screen.getByLabelText("工作区侧栏");
+
+    fireEvent.click(screen.getByRole("button", { name: "全屏" }));
+    expect(aside().className).toContain("fixed inset-0");
+    expect(aside().className).toContain("w-full");
+    // 全屏时不再有宽度拖动条（宽度不再由用户值决定）。
+    expect(screen.getByLabelText("调整侧栏宽度")).toHaveClass("hidden");
+    // 偏好落在浏览器本地：重开侧栏仍是全屏。
+    expect(localStorage.getItem("ccweb-right-fullscreen")).toBe("1");
+
+    fireEvent.click(screen.getByRole("button", { name: "退出全屏" }));
+    expect(aside().className).toContain("w-[var(--right-w)]");
+    expect(screen.getByLabelText("调整侧栏宽度")).not.toHaveClass("hidden");
+  });
+
+  it("分栏后两栏各看一个标签，标签在栏之间移动不重挂面板", () => {
+    setup();
+    openFiles();
+    openStart();
+    openGit(); // A 栏显示 Git，文件被隐藏
+    const filesNode = screen.getByText("FILES");
+    expect(filesNode.closest("div.hidden")).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "分栏" }));
+    // B 栏从开始页起步；两栏各有一条分隔线（标签行 + 面板区各一条）。
+    expect(screen.getByRole("separator", { name: "调整两栏宽度" })).toBeInTheDocument();
+
+    // 在 B 栏点「工作区文件」：文件标签从 A 栏**移过来**，不是开第二份。
+    fireEvent.click(screen.getByRole("button", { name: /工作区文件/ }));
+
+    expect(screen.getAllByText("FILES")).toHaveLength(1);
+    // 同一个 DOM 节点 = 组件没有卸载重挂（终端 PTY 就靠这一点活着）。
+    expect(screen.getByText("FILES")).toBe(filesNode);
+    expect(screen.getByText("FILES").closest("div.hidden")).toBeNull();
+    // 两栏可以同时看到不同的面板。
+    expect(screen.getByText("GIT").closest("div.hidden")).toBeNull();
+
+    // 关掉 B 栏：它的标签并回 A 栏，分栏消失，焦点回到 A 栏当前的标签。
+    fireEvent.click(screen.getByRole("button", { name: "关闭这一栏" }));
+    expect(screen.queryByRole("separator", { name: "调整两栏宽度" })).toBeNull();
+    expect(screen.getByText("GIT").closest("div.hidden")).toBeNull();
+    expect(screen.getByText("FILES")).toBe(filesNode);
+    expect(screen.getByText("FILES").closest("div.hidden")).not.toBeNull();
+  });
+
+  it("窄屏（浮层）下不出现全屏/分栏入口", () => {
+    setViewport(900);
+    setup();
+    expect(screen.queryByRole("button", { name: "分栏" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "全屏" })).toBeNull();
   });
 });
