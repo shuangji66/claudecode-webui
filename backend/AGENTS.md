@@ -361,12 +361,13 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `error`——不能让它落到 nil 会话上（那是 panic）。
   定时策略不在 gateway：`cmd/ccweb` 的 `startClaudeUpdateWatch` 负责查，gateway 的
   `BroadcastClaudeUpdate()` 只负责推。
-- **Git 状态是推送不是前端轮询**：`git.watch {cwd}` 让这条连接开始盯那个仓库
-  （`gitctl.Watch` 每 `gitWatchInterval` 读一次完整快照，变了推 `git.changed {cwd}`），
-  `cwd` 与 `/api/git/*` 走同一条 `authorizedCwd`。订阅**按连接**记在 `wsClient` 上，
-  `git.watch` 会替换旧订阅、`git.unwatch` 或连接关闭（handler 的 defer）取消它——
-  漏了这步观察者会在 NAS 上一直空跑 git。观察者的 goroutine 只能通过 `SendJSON`
-  （只入队）回话，不能阻塞读循环。
+- **Git 状态是推送不是前端轮询**：`git.watch {cwd}` 把仓库加进这条连接的订阅**集合**
+  （`gitctl.WatchSet` 用一个监督协程每 `gitWatchInterval` 顺序读每个仓库的完整快照，
+  变了推 `git.changed {cwd}`）；带 cwd 的 `git.unwatch` 只退那一个，不带 cwd 退全部，
+  连接关闭时 handler 的 defer `clearWatches()` 收尾——漏了这步观察者会在 NAS 上一直
+  空跑 git。分栏后一条连接可能盯多个仓库（两栏各一个 Git 面板），别退回「每个仓库一个
+  协程」：并发 git status 会互相拖慢，退订也容易串。观察者的 goroutine 只能通过
+  `SendJSON`（只入队）回话，不能阻塞读循环。
 - **读循环里不能有「等 CLI 回包」的命令**。每条连接只有一个读循环线程，阻塞它等于让这条
   连接上的后续帧全部读不到——最要命的是审批回包：`set_permission_mode` 要等 CLI 应答
   （最长 `ModeTimeout`），而 CLI 很可能正挂在 `can_use_tool` 上等审批，于是「切模式等审批、

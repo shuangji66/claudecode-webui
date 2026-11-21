@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { GitPanel, commitBody } from "./GitPanel";
 import { useSidebarStore } from "../../store/useSidebarStore";
 
@@ -47,6 +47,7 @@ const { apiFetch } = vi.hoisted(() => {
       if (url.pathname.endsWith("/api/git/status")) {
         return { is_repo: true, branch: "master", entries };
       }
+      if (url.pathname.endsWith("/api/git/branches")) return { current: "master", names: ["master"] };
       if (url.pathname.endsWith("/api/git/diff")) return { diff };
       if (url.pathname.endsWith("/api/git/file")) return { content: "const a = 2;\n" };
       if (url.pathname.endsWith("/api/git/log")) {
@@ -91,23 +92,9 @@ vi.mock("../../lib/runtime", async (importOriginal) => {
 const CWD = "/vol1/1000/demo";
 
 function seed() {
-  useSidebarStore.setState({
-    cwd: CWD,
-    repo: "",
-    repos: [],
-    git: {
-      is_repo: true,
-      branch: "master",
-      entries: [{ path: "src/a.ts", xy: " M" }],
-    },
-    gitLoading: false,
-    gitError: "",
-    branches: { current: "master", names: ["master"] },
-    log: [],
-    logLoaded: false,
-    logError: "",
-    actionError: "",
-  });
+  // Git 状态现在由每个面板自己的 useGitRepo 拉（分栏后两栏可以各看一个仓库），
+  // 这里只放共享的工作区与仓库列表。
+  useSidebarStore.setState({ cwd: CWD, repos: [], cwdRepo: "" });
 }
 
 beforeEach(() => {
@@ -253,7 +240,6 @@ describe("GitPanel 空仓库的历史", () => {
       }
       return {};
     });
-    useSidebarStore.setState({ log: [], logLoaded: false, logError: "" });
 
     render(<GitPanel cwd={CWD} active />);
     fireEvent.click(await screen.findByRole("button", { name: /历史/ }));
@@ -285,11 +271,6 @@ describe("GitPanel 拉取不影响提交按钮的文案", () => {
       }
       return {};
     });
-    useSidebarStore.setState({
-      git: { is_repo: true, branch: "master", upstream: "origin/master", entries: [] },
-      branches: { current: "master", names: ["master"] },
-    });
-
     render(<GitPanel cwd={CWD} active />);
     const commitButton = await screen.findByRole("button", { name: "提交" });
     fireEvent.click(screen.getByLabelText("拉取"));
@@ -315,13 +296,13 @@ describe("GitPanel 多仓库 chip", () => {
       return {};
     });
     useSidebarStore.setState({
-      repo: "/w",
       repos: [
         { path: "", name: "work", root: "/w" },
         { path: "a/service", name: "service", root: "/w/a/service", nested: true },
         { path: "b/service", name: "service", root: "/w/b/service", nested: true },
         { path: "beta", name: "beta", root: "/w/beta" },
       ],
+      cwdRepo: "",
     });
 
     render(<GitPanel cwd={CWD} active />);
@@ -338,5 +319,51 @@ describe("GitPanel 多仓库 chip", () => {
       const paths = apiFetch.mock.calls.map((c) => String(c[0]));
       expect(paths.some((p) => p.includes("/api/git/status") && p.includes(encodeURIComponent("/w/a/service")))).toBe(true);
     });
+  });
+});
+
+describe("GitPanel 分栏后各看各的仓库", () => {
+  it("两个面板选中不同仓库，互不跟随", async () => {
+    apiFetch.mockImplementation(async (path: string): Promise<unknown> => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname.endsWith("/api/git/status")) return { is_repo: true, branch: "master", entries: [] };
+      if (url.pathname.endsWith("/api/git/branches")) return { current: "master", names: ["master"] };
+      if (url.pathname.endsWith("/api/git/log")) return { entries: [] };
+      return {};
+    });
+    useSidebarStore.setState({
+      cwd: "/w",
+      cwdRepo: "",
+      repos: [
+        { path: "", name: "work", root: "/w" },
+        { path: "a", name: "a", root: "/w/a" },
+        { path: "b", name: "b", root: "/w/b" },
+      ],
+    });
+
+    const { container } = render(
+      <>
+        <GitPanel cwd="/w" active />
+        <GitPanel cwd="/w" active />
+      </>,
+    );
+    const roots = Array.from(container.querySelectorAll("div.flex.h-full.min-h-0.flex-col")) as HTMLElement[];
+    expect(roots).toHaveLength(2);
+    const left = within(roots[0]!);
+    const right = within(roots[1]!);
+
+    // 两个面板初始都落在工作区根仓库上。
+    await waitFor(() => expect(left.getByTitle("工作区根")).toHaveAttribute("aria-pressed", "true"));
+    await waitFor(() => expect(right.getByTitle("工作区根")).toHaveAttribute("aria-pressed", "true"));
+
+    // 只在左边切到 a：左边请求 /w/a，右边仍然是工作区根。
+    fireEvent.click(left.getByTitle("a"));
+    await waitFor(() => {
+      const paths = apiFetch.mock.calls.map(([path]) => String(path));
+      expect(paths.some((p) => p.includes("/api/git/status") && p.includes(encodeURIComponent("/w/a")))).toBe(true);
+    });
+    expect(left.getByTitle("a")).toHaveAttribute("aria-pressed", "true");
+    expect(right.getByTitle("工作区根")).toHaveAttribute("aria-pressed", "true");
+    expect(right.getByTitle("a")).toHaveAttribute("aria-pressed", "false");
   });
 });

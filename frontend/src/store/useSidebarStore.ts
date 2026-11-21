@@ -5,17 +5,7 @@
 
 import { create } from "zustand";
 import { apiFetch, apiFetchBytes } from "../lib/runtime";
-import { pickRepo } from "../lib/workspace";
-import type {
-  FsEntry,
-  FsFile,
-  FsListing,
-  GitBranches,
-  GitCommit,
-  GitLogEntry,
-  GitRepo,
-  GitStatus,
-} from "../transport/types";
+import type { FsEntry, FsFile, FsListing, GitRepo } from "../transport/types";
 
 interface SidebarState {
   cwd: string;
@@ -27,26 +17,12 @@ interface SidebarState {
   errors: Record<string, string>;
   hidden: boolean;
 
-  /** 工作区里扫到的 Git 仓库（含工作区根本身）。 */
+  /** 工作区里扫到的 Git 仓库（含工作区根本身）。共享只读列表，选中哪一个由各
+   *  Git 面板自己记（`useGitRepo`）——分栏后两栏要能各看一个仓库。 */
   repos: GitRepo[];
-  /** 当前选中的仓库绝对路径；空串表示还没选定（面板显示「不是 Git 仓库」）。 */
-  repo: string;
-  git: GitStatus | null;
-  gitLoading: boolean;
-  gitError: string;
-  branches: GitBranches | null;
-  log: GitLogEntry[];
-  logLoading: boolean;
-  logError: string;
-  /**
-   * 当前仓库的 log 是否已经取过（空仓库也算取过）。
-   *
-   * **不能用「`log.length === 0`」当「还没加载」**：空仓库（没有任何提交）请求回来
-   * 也是空数组，于是「还没加载 → 请求 → 还是空 → 还没加载」无限循环，面板在空仓库上
-   * 会一直重复打 `/api/git/log`。切仓库时要复位。
-   */
-  logLoaded: boolean;
-  actionError: string;
+  /** `/api/git/repos` 算出的「cwd 所在仓库」；可能不在 `repos` 里（工作区只授权了
+   *  仓库下面一层时），面板据此避免乱选另一个仓库。 */
+  cwdRepo: string;
 
   setCwd: (cwd: string) => Promise<void>;
   setHidden: (hidden: boolean) => Promise<void>;
@@ -93,51 +69,14 @@ interface SidebarState {
   consumeOpenFile: () => void;
 
   loadRepos: () => Promise<void>;
-  selectRepo: (root: string) => Promise<void>;
-  refreshGit: () => Promise<void>;
-  /**
-   * 后端推来的「仓库变了」（系统通道的 `git.changed`）。
-   *
-   * 传事件里的 cwd：刚换过仓库时旧仓库的推送可能还在路上，拿它刷新只会把
-   * 新仓库的面板刷成旧仓库的数据。
-   */
-  gitChanged: (cwd: string) => Promise<void>;
-  loadBranches: () => Promise<void>;
-  loadLog: () => Promise<void>;
-  loadDiff: (path: string, staged: boolean) => Promise<string>;
-  /** 一次提交的详情（元数据 + 补丁）；差异页按文件切段渲染。 */
-  showCommit: (hash: string) => Promise<GitCommit>;
-  stage: (path?: string) => Promise<boolean>;
-  unstage: (path?: string) => Promise<boolean>;
-  discard: (path: string) => Promise<boolean>;
-  commit: (message: string) => Promise<boolean>;
-  checkout: (branch: string) => Promise<boolean>;
-  pull: () => Promise<boolean>;
-  clearActionError: () => void;
 }
 
 /** 切 cwd 时递增；迟到的响应发现 epoch 变了就直接丢弃。 */
 let epoch = 0;
 /** 刷新/隐藏开关时递增；只用于丢弃过期的目录树响应。 */
 let treeEpoch = 0;
-/** Git 状态轮询单飞，避免定时器与手动刷新叠在一起。
- *  必须带上 cwd+epoch：切目录时旧请求仍可能在路上，不能拿它挡住新目录的刷新。 */
-let gitInFlight: { key: string; promise: Promise<void> } | null = null;
-/** git log 也单飞：一次推送要同时刷状态/分支/历史，用户点「拉取」时还会再来一遍，
- *  不合并就是同一条 git log 并发跑两三次（每次都要遍历整棵提交图）。 */
-let logInFlight: { key: string; promise: Promise<void> } | null = null;
-
 function errorText(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
-}
-
-async function postGit(path: string, body: Record<string, unknown>): Promise<void> {
-  await apiFetch(path, { method: "POST", body: JSON.stringify(body) });
-}
-
-/** Git 请求的 cwd：选中的仓库优先，没有仓库时退回工作区根。 */
-function gitCwd(state: SidebarState): string {
-  return state.repo || state.cwd;
 }
 
 export const useSidebarStore = create<SidebarState>((set, get) => ({
@@ -149,57 +88,28 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   hidden: false,
 
   repos: [],
-  repo: "",
-  git: null,
-  gitLoading: false,
-  gitError: "",
-  branches: null,
-  log: [],
-  logLoading: false,
-  logError: "",
-  logLoaded: false,
-  actionError: "",
+  cwdRepo: "",
   openRequest: null,
 
   setCwd: async (cwd) => {
     if (!cwd) {
       epoch += 1;
       treeEpoch += 1;
-      set({ cwd: "", levels: {}, loading: {}, truncated: {}, errors: {}, repos: [], repo: "", git: null, branches: null, log: [], openRequest: null });
+      set({ cwd: "", levels: {}, loading: {}, truncated: {}, errors: {}, repos: [], cwdRepo: "", openRequest: null });
       return;
     }
     if (cwd === get().cwd) {
       // 重新打开侧栏时刷新，而不是把上次的旧树一直挂在那里。
       await get().reloadTree();
       await get().loadRepos();
-      await get().refreshGit();
       return;
     }
     epoch += 1;
     treeEpoch += 1;
-    set({
-      cwd,
-      levels: {},
-      loading: {},
-      truncated: {},
-      errors: {},
-      repos: [],
-      repo: "",
-      git: null,
-      gitLoading: true,
-      gitError: "",
-      branches: null,
-      log: [],
-      logLoading: false,
-      logError: "",
-      logLoaded: false,
-      actionError: "",
-      openRequest: null,
-    });
-    // 先扫仓库再拉状态：状态要打在选中的那个仓库上，顺序反了会先请求工作区根。
+    set({ cwd, levels: {}, loading: {}, truncated: {}, errors: {}, repos: [], cwdRepo: "", openRequest: null });
+    // 先扫仓库：Git 面板要按「cwd 属于哪个仓库」初始化选中项。
     await get().loadDir("");
     await get().loadRepos();
-    await Promise.all([get().refreshGit(), get().loadBranches()]);
   },
 
   loadRepos: async () => {
@@ -212,20 +122,12 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
         `/api/git/repos?${query.toString()}`,
       );
       if (at !== epoch || get().cwd !== cwd) return;
-      const repos = payload.repos ?? [];
-      set({ repos, repo: pickRepo(repos, get().repo, cwd, payload.cwd_repo ?? "") });
-    } catch (reason) {
+      set({ repos: payload.repos ?? [], cwdRepo: payload.cwd_repo ?? "" });
+    } catch {
       if (at !== epoch || get().cwd !== cwd) return;
-      // 扫仓库失败不该让整块面板报错：退回「工作区根」视角，状态接口会给出真实原因。
-      set({ repos: [], repo: "", gitError: errorText(reason) });
+      // 扫仓库失败不该让整块面板报错：状态接口会给出真实原因，面板按 cwd 兜底。
+      set({ repos: [], cwdRepo: "" });
     }
-  },
-
-  selectRepo: async (root) => {
-    if (root === get().repo) return;
-    set({ repo: root, git: null, branches: null, log: [], logLoaded: false, logError: "", gitError: "", actionError: "" });
-    await Promise.all([get().refreshGit(), get().loadBranches()]);
-    if (get().log.length === 0) await get().loadLog();
   },
 
   setHidden: async (hidden) => {
@@ -312,196 +214,4 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     set({ openRequest: null });
   },
 
-  refreshGit: async () => {
-    const cwd = gitCwd(get());
-    if (!cwd) return;
-    const at = epoch;
-    const key = `${at}:${cwd}`;
-    if (gitInFlight?.key === key) return gitInFlight.promise;
-    set({ gitLoading: true, gitError: "" });
-    const slot: { key: string; promise: Promise<void> } = { key, promise: Promise.resolve() };
-    const promise = (async () => {
-      try {
-        const query = new URLSearchParams({ cwd });
-        const status = await apiFetch<GitStatus>(`/api/git/status?${query.toString()}`);
-        if (at !== epoch || gitCwd(get()) !== cwd) return;
-        set({ git: status, gitLoading: false });
-      } catch (reason) {
-        if (at !== epoch || gitCwd(get()) !== cwd) return;
-        set({ gitLoading: false, gitError: errorText(reason) });
-      } finally {
-        if (gitInFlight === slot) gitInFlight = null;
-      }
-    })();
-    slot.promise = promise;
-    gitInFlight = slot;
-    return promise;
-  },
-
-  gitChanged: async (cwd) => {
-    const current = gitCwd(get());
-    if (!current || (cwd && cwd !== current)) return;
-    await get().refreshGit();
-    // 已经不是仓库了（被删掉 .git）：别再往下拉分支与历史，那两条只会各报一次错。
-    if (!get().git?.is_repo) return;
-    // 分支/上游会随 pull、终端里的 checkout 变化，历史也会多出新的提交：
-    // 原来只刷新状态，拉取成功后「历史」页签停在旧列表上。
-    await Promise.all([get().loadBranches(), get().loadLog()]);
-  },
-
-  loadBranches: async () => {
-    const cwd = gitCwd(get());
-    if (!cwd) return;
-    const at = epoch;
-    try {
-      const query = new URLSearchParams({ cwd });
-      const branches = await apiFetch<GitBranches>(`/api/git/branches?${query.toString()}`);
-      if (at !== epoch || gitCwd(get()) !== cwd) return;
-      set({ branches });
-    } catch {
-      // 分支下拉是辅助信息；失败时不覆盖 Git 面板的主错误。
-    }
-  },
-
-  loadLog: async () => {
-    const cwd = gitCwd(get());
-    if (!cwd) return;
-    const at = epoch;
-    const key = `${at}:${cwd}`;
-    if (logInFlight?.key === key) return logInFlight.promise;
-    set({ logLoading: true, logError: "" });
-    const slot: { key: string; promise: Promise<void> } = { key, promise: Promise.resolve() };
-    const promise = (async () => {
-      try {
-        const query = new URLSearchParams({ cwd, count: "30" });
-        const payload = await apiFetch<{ entries: GitLogEntry[] }>(`/api/git/log?${query.toString()}`);
-        if (at !== epoch || gitCwd(get()) !== cwd) return;
-        set({ log: payload.entries ?? [], logLoading: false, logError: "", logLoaded: true });
-      } catch (reason) {
-        if (at !== epoch || gitCwd(get()) !== cwd) return;
-        const message = errorText(reason);
-        set({ logLoading: false, logError: message, logLoaded: true, actionError: message });
-      } finally {
-        if (logInFlight === slot) logInFlight = null;
-      }
-    })();
-    slot.promise = promise;
-    logInFlight = slot;
-    return promise;
-  },
-
-  loadDiff: async (path, staged) => {
-    const cwd = gitCwd(get());
-    if (!cwd) throw new Error("未选择工作区");
-    const at = epoch;
-    const query = new URLSearchParams({ cwd, path, staged: staged ? "1" : "0" });
-    const payload = await apiFetch<{ diff: string }>(`/api/git/diff?${query.toString()}`);
-    if (at !== epoch || gitCwd(get()) !== cwd) throw new Error("工作区已切换");
-    return payload.diff ?? "";
-  },
-
-  showCommit: async (hash) => {
-    const cwd = gitCwd(get());
-    if (!cwd) throw new Error("未选择工作区");
-    const at = epoch;
-    const query = new URLSearchParams({ cwd, hash });
-    const payload = await apiFetch<GitCommit>(`/api/git/show?${query.toString()}`);
-    if (at !== epoch || gitCwd(get()) !== cwd) throw new Error("工作区已切换");
-    return { ...payload, diff: payload.diff ?? "", parents: payload.parents ?? [] };
-  },
-
-  stage: async (path) => {
-    const cwd = gitCwd(get());
-    if (!cwd) return false;
-    try {
-      await postGit("/api/git/stage", { cwd, ...(path !== undefined ? { path } : {}) });
-      set({ actionError: "" });
-      await get().refreshGit();
-      return true;
-    } catch (reason) {
-      set({ actionError: errorText(reason) });
-      return false;
-    }
-  },
-
-  unstage: async (path) => {
-    const cwd = gitCwd(get());
-    if (!cwd) return false;
-    try {
-      await postGit("/api/git/unstage", { cwd, ...(path !== undefined ? { path } : {}) });
-      set({ actionError: "" });
-      await get().refreshGit();
-      return true;
-    } catch (reason) {
-      set({ actionError: errorText(reason) });
-      return false;
-    }
-  },
-
-  discard: async (path) => {
-    const cwd = gitCwd(get());
-    if (!cwd) return false;
-    try {
-      await postGit("/api/git/discard", { cwd, path });
-      set({ actionError: "" });
-      await get().refreshGit();
-      return true;
-    } catch (reason) {
-      set({ actionError: errorText(reason) });
-      return false;
-    }
-  },
-
-  commit: async (message) => {
-    const cwd = gitCwd(get());
-    if (!cwd) return false;
-    try {
-      await postGit("/api/git/commit", { cwd, message });
-      set({ actionError: "" });
-      await get().refreshGit();
-      await get().loadLog();
-      return true;
-    } catch (reason) {
-      set({ actionError: errorText(reason) });
-      return false;
-    }
-  },
-
-  checkout: async (branch) => {
-    const cwd = gitCwd(get());
-    if (!cwd) return false;
-    try {
-      await postGit("/api/git/checkout", { cwd, branch });
-      set({ actionError: "" });
-      await get().refreshGit();
-      await get().loadBranches();
-      return true;
-    } catch (reason) {
-      set({ actionError: errorText(reason) });
-      return false;
-    }
-  },
-
-  pull: async () => {
-    const cwd = gitCwd(get());
-    if (!cwd) return false;
-    try {
-      await postGit("/api/git/pull", { cwd });
-      set({ actionError: "" });
-      await get().refreshGit();
-      await get().loadBranches();
-      // 拉下来的提交必须立刻出现在「历史」里：只刷新状态的话，用户得手动点刷新
-      // 才知道这次到底拉到了什么（而且 push 事件也会被指纹判成「变过」再刷一遍，
-      // 这里主动刷新是为了不依赖轮询时机）。
-      await get().loadLog();
-      return true;
-    } catch (reason) {
-      set({ actionError: errorText(reason) });
-      // 冲突/分叉时 git 会停下；刷新一次让面板反映真实状态（不在这里制造 merge）。
-      await get().refreshGit();
-      return false;
-    }
-  },
-
-  clearActionError: () => set({ actionError: "" }),
 }));

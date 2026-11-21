@@ -15,16 +15,21 @@ import (
 // 比原来前端每 15 秒拉一遍完整快照还轻。变量而不是常量：测试要把它调小。
 var gitWatchInterval = 3 * time.Second
 
-// startGitWatch 让这条连接开始盯一个仓库；之前盯的那个先停掉。
+// startGitWatch 让这条连接开始盯一个仓库；同一个仓库重复订阅只替换观察者，
+// **其它仓库的观察者不受影响**（分栏后两栏可以各看一个仓库）。
 //
-// 为什么按连接订阅而不是全局按仓库共享：同一时刻只有一个 Git 面板在看一个仓库，
-// 多标签页/多设备各自订阅自己的路径，服务端多花一两次 git status 就能省掉
-// 「谁在看什么」的引用计数与清理——连接一关 ctx 就取消，不会漏掉观察者。
+// 为什么按连接订阅而不是全局按仓库共享：多标签页/多设备各自订阅自己的路径，
+// 服务端多花一两次 git status 就能省掉「谁在看什么」的引用计数与清理——
+// 连接一关 ctx 就取消，不会漏掉观察者。
 func (s *Server) startGitWatch(c *wsClient, cwd string) {
+	// 已经有监督协程时只把仓库加进集合，下一轮就会读到它（第一轮建立基线）。
+	if !c.addWatch(cwd) {
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c.setWatch(cancel)
-	go gitctl.Watch(ctx, cwd, gitWatchInterval, func() {
-		data, err := json.Marshal(map[string]string{"cwd": cwd})
+	c.setWatchCancel(cancel)
+	go gitctl.WatchSet(ctx, c.watchRepos, gitWatchInterval, func(changed string) {
+		data, err := json.Marshal(map[string]string{"cwd": changed})
 		if err != nil {
 			return
 		}

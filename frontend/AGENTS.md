@@ -572,14 +572,17 @@ src/
   LTR span）在宽度不够时从开头省略；搜索按钮展开输入行，300ms 防抖 +
   `AbortController` 取消上一次 `/api/fs/search`（store 的 `searchFiles`）。结果行点文件
   进预览、点目录清空查询并经 `TreeNode.reveal` 逐层展开祖先并滚动到那一行。
-- **Git 多仓库 / 嵌套仓库**：`loadRepos()` 拉 `/api/git/repos`（后端从**授权工作区**扫，
-  含仓库内部的嵌套仓库），`pickRepo()`（纯函数，`lib/workspace.ts`）决定默认选中：
-  保持当前 > **cwd 所在的那个仓库**（会话常开在仓库的子目录里，不选它就会落到列表里的
-  另一个仓库）> 工作区根 > 第一个。响应里的 `cwd_repo` 是后端算出的「cwd 所在仓库」，
-  它在列表外时 `pickRepo` 返回空串，让面板照旧按 cwd 读状态，别乱选别的仓库。
-  之后所有 git 请求的 cwd 都用 `repo || cwd`（`gitCwd()`），文件树仍用工作区 `cwd`。
+- **Git 多仓库 / 嵌套仓库 / 分栏各看各的**：`loadRepos()` 拉 `/api/git/repos`（后端从
+  **授权工作区**扫，含仓库内部的嵌套仓库），把 `repos` 与 `cwd_repo` 放进 store（共享
+  只读列表）。**仓库选择与状态数据在 `store/useGitRepo.ts`（每个面板一个实例）**：
+  两栏各一个 Git 面板时互不跟随，各自看各自的仓库。`pickRepo()` 决定各面板的默认选中：
+  保持当前 > **cwd 所在的那个仓库** > 工作区根 > 第一个；`cwd_repo` 在列表外时返回
+  空串，让面板照旧按 cwd 读状态，别乱选别的仓库。
+  所有 git 请求的 cwd 都用实例的 `repo || cwd`，文件树仍用工作区 `cwd`。
   chip 文案走 `repoLabels()`：重名仓库显示相对路径（`a/service` / `b/service`），
   嵌套仓库前面带 `└`，`title` 给完整相对路径。
+  `git.changed` 由 `subscribeGitChanged` 分发给每个面板，面板只处理自己那个 cwd；
+  `acquireGitWatch` 按 cwd 计数，订阅集合按连接下发（`git.watch` / 带 cwd 的 `git.unwatch`）。
 - **悬浮概览（工作区与会话共用外壳 `HoverPreview`）**：鼠标在行上停 220ms 弹出，
   离开/滚动/点击即收；触屏没有 hover 不显示；`pointer-events-none`，不挡点击。
   **定位从侧栏右沿（`aside`）算起**：卡片整个落在对话区域里、纵向跟着悬停的那一行；

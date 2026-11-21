@@ -24,6 +24,63 @@ func snapshotKey(s Snapshot) string {
 	return hex.EncodeToString(sum[:16])
 }
 
+// WatchSet 盯住一组仓库：任一仓库的快照发生变化时调用 notify(cwd)，直到 ctx 结束。
+//
+// `set` 每轮调用一次，返回**当前**要盯的仓库（可以随面板开关变化）。同一个连接上
+// 两个 Git 面板各看一个仓库时，用**一个**监督协程顺序读取，而不是每个仓库一个协程：
+// 后者在 NAS 上会同时起多条 git status（彼此抢 IO），而且退订一个仓库时容易把
+// 另一个的协程状态搅乱。
+//
+// 每个仓库第一轮只建立基线、不推送（调用方刚拉过一遍状态）；退订的仓库从基线表里
+// 清掉，重新订阅时重新建立基线。
+func WatchSet(ctx context.Context, set func() []string, interval time.Duration, notify func(cwd string)) {
+	if interval <= 0 {
+		interval = 3 * time.Second
+	}
+	last := make(map[string]string)
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		repos := set()
+		keep := make(map[string]struct{}, len(repos))
+		for _, cwd := range repos {
+			if cwd == "" {
+				continue
+			}
+			if _, dup := keep[cwd]; dup {
+				continue
+			}
+			keep[cwd] = struct{}{}
+			snap, err := ReadStatus(ctx, cwd)
+			if err != nil {
+				// 读失败（git 缺失、超时、权限）时不推送：面板有自己的错误展示，
+				// 这里推送也只会让前端再失败一次。下一轮恢复后照常比对。
+				delete(last, cwd)
+				continue
+			}
+			key := snapshotKey(snap)
+			prev, seen := last[cwd]
+			if seen && prev != key {
+				notify(cwd)
+			}
+			last[cwd] = key
+		}
+		for cwd := range last {
+			if _, held := keep[cwd]; !held {
+				delete(last, cwd)
+			}
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
 // Watch 盯住一个仓库：快照发生变化时调用 notify，直到 ctx 结束。
 //
 // 面板自己不再定时拉状态（原来前端每 15 秒拉一遍完整快照），轮询搬到这里：

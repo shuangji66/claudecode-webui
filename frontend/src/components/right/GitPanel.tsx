@@ -16,6 +16,7 @@ import {
   type DiffLine,
   type GitTone,
 } from "../../lib/workspace";
+import { useGitRepo } from "../../store/useGitRepo";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { acquireGitWatch } from "../../store/useAppStore";
 import { Select } from "../common/Select";
@@ -86,31 +87,34 @@ function LineCounts({ counts }: { counts: GitLineCounts | undefined }) {
 /** 右侧栏 Git 面板：变更分组 + diff 预览 + 提交框 + 最近提交 + 分支底栏。 */
 export function GitPanel({ cwd, active }: Props) {
   const t = useT();
-  const repos = useSidebarStore((s) => s.repos);
-  const repoRoot = useSidebarStore((s) => s.repo);
+  // 每个 GitPanel 实例自己的仓库状态：分栏后两栏可以各看一个仓库，互不跟随。
+  const {
+    repos,
+    repo: repoRoot,
+    git,
+    gitLoading,
+    gitError,
+    branches,
+    log,
+    logLoading,
+    logError,
+    logLoaded,
+    actionError,
+    selectRepo,
+    refreshGit,
+    loadLog,
+    loadDiff,
+    showCommit,
+    stage,
+    unstage,
+    discard,
+    commit,
+    checkout,
+    pull,
+    clearActionError,
+  } = useGitRepo(cwd, active);
   const repoLabel = useMemo(() => repoLabels(repos), [repos]);
-  const selectRepo = useSidebarStore((s) => s.selectRepo);
-  const git = useSidebarStore((s) => s.git);
-  const gitLoading = useSidebarStore((s) => s.gitLoading);
-  const gitError = useSidebarStore((s) => s.gitError);
-  const branches = useSidebarStore((s) => s.branches);
-  const log = useSidebarStore((s) => s.log);
-  const logLoading = useSidebarStore((s) => s.logLoading);
-  const logError = useSidebarStore((s) => s.logError);
-  const logLoaded = useSidebarStore((s) => s.logLoaded);
-  const actionError = useSidebarStore((s) => s.actionError);
-  const refreshGit = useSidebarStore((s) => s.refreshGit);
-  const loadLog = useSidebarStore((s) => s.loadLog);
-  const loadDiff = useSidebarStore((s) => s.loadDiff);
-  const showCommit = useSidebarStore((s) => s.showCommit);
   const readFile = useSidebarStore((s) => s.readFile);
-  const stage = useSidebarStore((s) => s.stage);
-  const unstage = useSidebarStore((s) => s.unstage);
-  const discard = useSidebarStore((s) => s.discard);
-  const commit = useSidebarStore((s) => s.commit);
-  const checkout = useSidebarStore((s) => s.checkout);
-  const pull = useSidebarStore((s) => s.pull);
-  const clearActionError = useSidebarStore((s) => s.clearActionError);
 
   const [mode, setMode] = useState<Mode>("changes");
   const [message, setMessage] = useState("");

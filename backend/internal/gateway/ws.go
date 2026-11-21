@@ -54,31 +54,79 @@ type wsClient struct {
 	closed    atomic.Bool
 	closeOnce sync.Once
 
-	// watchMu 保护 watchCancel：系统通道上的 Git 订阅（git.watch）。
-	// 一个连接同时只盯一个仓库——Git 面板是单例，换仓库就是换订阅。
+	// watchMu 保护 watchSet / watchCancel：系统通道上的 Git 订阅（git.watch）。
+	// 一个连接**可以同时盯多个仓库**（分栏后两栏各一个 Git 面板，可能看着不同仓库），
+	// 但只用一个监督协程顺序读取：每个仓库一个协程会在 NAS 上并发跑多条 git status，
+	// 退订其中一个时也容易把另一个的状态搅乱。
 	watchMu     sync.Mutex
+	watchSet    map[string]bool
 	watchCancel context.CancelFunc
 }
 
-// setWatch 替换这条连接上的仓库观察者；nil 表示取消订阅。
-func (c *wsClient) setWatch(cancel context.CancelFunc) {
+// addWatch 记录一个要盯的仓库；返回 true 表示这条连接还没有监督协程，需要启动。
+func (c *wsClient) addWatch(cwd string) bool {
 	c.watchMu.Lock()
-	prev := c.watchCancel
+	defer c.watchMu.Unlock()
+	c.watchSet[cwd] = true
+	return c.watchCancel == nil
+}
+
+// setWatchCancel 记下监督协程的取消函数（由启动方在 addWatch 返回 true 后调用）。
+func (c *wsClient) setWatchCancel(cancel context.CancelFunc) {
+	c.watchMu.Lock()
 	c.watchCancel = cancel
 	c.watchMu.Unlock()
-	if prev != nil {
-		prev()
+}
+
+// removeWatch 取消一个仓库；全部退订时顺带停掉监督协程。
+func (c *wsClient) removeWatch(cwd string) {
+	c.watchMu.Lock()
+	delete(c.watchSet, cwd)
+	cancel := c.watchCancel
+	if len(c.watchSet) > 0 {
+		cancel = nil
+	}
+	if cancel != nil {
+		c.watchCancel = nil
+	}
+	c.watchMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// watchRepos 返回当前要盯的仓库快照；监督协程每轮读一次。
+func (c *wsClient) watchRepos() []string {
+	c.watchMu.Lock()
+	out := make([]string, 0, len(c.watchSet))
+	for cwd := range c.watchSet {
+		out = append(out, cwd)
+	}
+	c.watchMu.Unlock()
+	return out
+}
+
+// clearWatches 停掉全部观察者（连接断开 / 全局退订）。
+func (c *wsClient) clearWatches() {
+	c.watchMu.Lock()
+	cancel := c.watchCancel
+	c.watchCancel = nil
+	c.watchSet = make(map[string]bool)
+	c.watchMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
 // newWSClient 建一条连接并启动写循环。
 func newWSClient(conn net.Conn, r *bufio.Reader, topic string) *wsClient {
 	c := &wsClient{
-		conn:  conn,
-		r:     r,
-		topic: topic,
-		out:   make(chan []byte, sendQueueLen),
-		done:  make(chan struct{}),
+		conn:     conn,
+		r:        r,
+		topic:    topic,
+		out:      make(chan []byte, sendQueueLen),
+		done:     make(chan struct{}),
+		watchSet: make(map[string]bool),
 	}
 	go c.writeLoop()
 	return c
@@ -279,7 +327,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		// 拿握手时那个旧 topic 去退订等于什么都没退，新 topic 里那条永远留着。
 		s.d.Hub.Unsubscribe(c.currentTopic(), c)
 		// 连接断了就没人看图了：不停掉观察者，它会一直每几秒 spawn 一次 git。
-		c.setWatch(nil)
+		c.clearWatches()
 		c.close()
 	}()
 
@@ -412,7 +460,13 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 			s.startGitWatch(c, cwd)
 			return
 		case "git.unwatch":
-			c.setWatch(nil)
+			// 带 cwd 只停那一个仓库：分栏后另一栏可能还在看别的仓库。
+			// 不带 cwd（旧客户端 / 全局退订）停掉这条连接上的全部观察者。
+			if strings.TrimSpace(cmd.Cwd) == "" {
+				c.clearWatches()
+			} else {
+				c.removeWatch(strings.TrimSpace(cmd.Cwd))
+			}
 			return
 		}
 		s.sendError(c, fmt.Sprintf("系统通道不接受命令 %q", cmd.Kind))

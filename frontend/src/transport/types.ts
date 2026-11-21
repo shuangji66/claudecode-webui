@@ -366,8 +366,10 @@ export type ClientCommand =
       message?: string;
     }
   // 系统通道专用：让后端盯住一个仓库（Git 面板可见时），有变化就推 git.changed。
+  // 分栏后两栏可能各看一个仓库，所以订阅是一个集合：unwatch 带 cwd 只退一个，
+  // 不带表示「退掉全部」（旧客户端 / 全局清理）。
   | { kind: "git.watch"; cwd: string }
-  | { kind: "git.unwatch" }
+  | { kind: "git.unwatch"; cwd?: string }
   /**
    * 补齐断线期间漏掉的会话事件。
    *

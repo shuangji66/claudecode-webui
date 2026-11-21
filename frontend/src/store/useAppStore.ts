@@ -70,7 +70,6 @@ import {
   type QueuedPrompt,
 } from "../lib/queue";
 import { clearAskProgress } from "../lib/askDrafts";
-import { useSidebarStore } from "./useSidebarStore";
 
 export type { SessionInfo } from "../transport/types";
 
@@ -384,7 +383,6 @@ let systemClient: ClaudeClient | null = null;
  *  放在模块级而不是 store state：它只描述「系统通道该订阅什么」，没有任何组件
  *  会因为它的变化重渲染。断线重连后要照这个值重新订阅（服务端订阅跟着连接走，
  *  连接一断就取消了）。 */
-let gitWatchCwd = "";
 /**
  * 每个会话已处理到的事件序号水位（`WireEvent.seq`）。
  *
@@ -632,41 +630,41 @@ function token(): string {
   }
 }
 
-/**
- * 让后端盯住 Git 面板正在看的仓库（null / 空串 = 取消订阅）。
+/** 正在盯 Git 的面板（按仓库 cwd 计数）。
  *
- * 只有面板可见时才订阅：后端会按固定间隔轮询这个仓库，没人看的时候不该跑。
- * 订阅挂在系统通道上（与会话无关、常驻），所以换对话、关对话都不会丢；
- * 连接断了服务端的订阅就没了，重连后由 onStatus 按同一个值补发。
- */
-export function watchGitRepo(cwd: string | null): void {
-  const next = (cwd ?? "").trim();
-  if (next === gitWatchCwd) return;
-  gitWatchCwd = next;
-  sendGitWatch();
-}
-
-/** 正在盯 Git 的面板（按 cwd 计数）。
- *
- *  分栏之后两栏可以各开一个 Git 面板，它们共用一个系统通道订阅：没有引用计数时，
- *  左栏切走（cleanup 退订）会把右栏还在看的仓库一起取消，右栏从此收不到
- *  `git.changed`。计数归零才真的退订。 */
+ *  分栏之后两栏可以各开一个 Git 面板、各看一个仓库：订阅是一个**集合**，
+ *  一个面板切走只退掉它自己那个仓库，不能把另一栏还在看的仓库一起取消。 */
 const gitWatchHolders = new Map<string, number>();
 
-function syncGitWatch(): void {
-  // 多个面板通常盯同一个仓库（repo 选择在共享 store 里）；真出现两个不同仓库时
-  // 以最后加入、仍然被持有的那个为准，退订后回落到前一个。
-  const held = [...gitWatchHolders.keys()].pop() ?? "";
-  watchGitRepo(held || null);
+/** 这批连接已经发给服务端的订阅集合（重连后要整份补发）。 */
+let sentGitWatch = new Set<string>();
+
+/** 把「当前想要的订阅集合」同步给服务端：新增的发 watch，消失的发 unwatch。
+ *
+ *  页面在后台（手机锁屏、切到别的 App）时**不订阅**：后端是每 3 秒 spawn 一次 git，
+ *  没人看的屏幕上不该让 NAS 一直跑。恢复可见时由 handleVisibility 重新订阅并补刷一次。 */
+function sendGitWatch(force = false): void {
+  if (!systemClient) {
+    sentGitWatch = new Set();
+    return;
+  }
+  const want = document.hidden ? new Set<string>() : new Set(gitWatchHolders.keys());
+  for (const cwd of want) {
+    if (force || !sentGitWatch.has(cwd)) systemClient.send({ kind: "git.watch", cwd });
+  }
+  for (const cwd of sentGitWatch) {
+    if (!want.has(cwd)) systemClient.send({ kind: "git.unwatch", cwd });
+  }
+  sentGitWatch = want;
 }
 
 /** 申请盯一个仓库，返回释放函数（必须成对调用：面板卸载 / 切走时释放）。
- *  与 `watchGitRepo` 的区别是**可重入**：多个面板看同一个仓库只订阅一次。 */
+ *  可重入：多个面板看同一个仓库只订阅一次。 */
 export function acquireGitWatch(cwd: string | null): () => void {
   const key = (cwd ?? "").trim();
   if (!key) return () => {};
   gitWatchHolders.set(key, (gitWatchHolders.get(key) ?? 0) + 1);
-  syncGitWatch();
+  sendGitWatch();
   let released = false;
   return () => {
     if (released) return;
@@ -674,34 +672,32 @@ export function acquireGitWatch(cwd: string | null): () => void {
     const left = (gitWatchHolders.get(key) ?? 1) - 1;
     if (left > 0) gitWatchHolders.set(key, left);
     else gitWatchHolders.delete(key);
-    syncGitWatch();
+    sendGitWatch();
   };
 }
 
-/** 已经发给服务端的订阅值；null 表示这条连接上还没同步过（新建/重连后）。 */
-let sentGitWatch: string | null = null;
+/** `git.changed` 的订阅者：每个 Git 面板只处理自己那个仓库的推送。 */
+const gitChangedListeners = new Set<(cwd: string) => void>();
 
-/** 把当前订阅值同步给服务端；连接不在时什么都不做，连上后会补发。
- *
- *  页面在后台（手机锁屏、切到别的 App）时**不订阅**：后端是每 3 秒 spawn 一次 git，
- *  没人看的屏幕上不该让 NAS 一直跑。恢复可见时由 handleVisibility 重新订阅并补刷一次。 */
-function sendGitWatch(force = false): void {
-  if (!systemClient) {
-    sentGitWatch = null;
-    return;
-  }
-  const want = document.hidden ? "" : gitWatchCwd;
-  if (!force && want === sentGitWatch) return;
-  sentGitWatch = want;
-  systemClient.send(want ? { kind: "git.watch", cwd: want } : { kind: "git.unwatch" });
+export function subscribeGitChanged(listener: (cwd: string) => void): () => void {
+  gitChangedListeners.add(listener);
+  return () => {
+    gitChangedListeners.delete(listener);
+  };
+}
+
+/** 转达一次「仓库变了」。空 cwd 表示「不知道是哪个」（旧后端 / 重连补刷），
+ *  每个面板都刷新一次自己的仓库。 */
+export function notifyGitChanged(cwd: string): void {
+  for (const listener of gitChangedListeners) listener(cwd);
 }
 
 /** 切回前台时补订阅 + 补刷：后台期间的变化不会补推，订阅也是跟着可见性断开的。 */
 function handleVisibility(): void {
-  if (!gitWatchCwd) return;
-  const before = sentGitWatch;
+  if (gitWatchHolders.size === 0) return;
   sendGitWatch();
-  if (!document.hidden && before === "") void useSidebarStore.getState().gitChanged(gitWatchCwd);
+  if (document.hidden) return;
+  for (const cwd of gitWatchHolders.keys()) notifyGitChanged(cwd);
 }
 
 /** 打开系统通道（幂等）。系统通道只收应用级事件（claude 更新、对话列表变化），事件交给 applyEvent 统一处理。 */
@@ -729,8 +725,8 @@ function openSystemChannel(): void {
       }
       void useAppStore.getState().loadClaudeStatus();
       void useAppStore.getState().refreshConversations();
-      // 断线期间的仓库变化不会有推送补上，重新连上时主动刷一次。
-      if (gitWatchCwd) void useSidebarStore.getState().gitChanged(gitWatchCwd);
+      // 断线期间的仓库变化不会有推送补上，重新连上时主动把每个订阅的仓库刷一次。
+      for (const cwd of gitWatchHolders.keys()) notifyGitChanged(cwd);
     },
   });
   systemClient = client;
@@ -2267,7 +2263,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // 后端盯着的仓库变了（agent 改了源码、终端里 commit/pull 都在内）。
         // 状态/分支/历史由右侧栏 store 自己刷新，这里只转达 cwd 供它比对。
         const data = ev.data as { cwd?: string } | undefined;
-        void useSidebarStore.getState().gitChanged(data?.cwd ?? "");
+        notifyGitChanged(data?.cwd ?? "");
         return;
       }
       case "session.snapshot": {

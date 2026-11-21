@@ -473,8 +473,13 @@ hub ── manager ── session ── process ── claude (NDJSON)
     搬走会让那一栏突然空掉，用户看到的就是「分栏后还是只能同时看一个面板」。
     并栏时 B 栏的同类副本丢掉（一栏只留一份），其余改回 `-a`；终端 id 不变、只改归属，
     元素不搬家，PTY 不会被 SIGHUP。
-  - 两个 Git 面板共用一个系统通道订阅：`acquireGitWatch` 按 cwd 引用计数，
-    一边切走不会把另一边还在看的仓库退订掉（`watchGitRepo` 是无计数的低层 setter）。
+  - **Git 面板的状态按实例隔离**（`useGitRepo`）：仓库选择、状态、分支、历史都在
+    面板自己手里，两栏可以各看一个仓库、互不跟随；`useSidebarStore` 只留
+    「工作区里扫到哪些仓库」这份共享只读列表（`repos` / `cwdRepo`）。早先这些放在
+    共享 store 里，两栏永远同步显示同一个仓库。
+  - 每个可见面板各自 `acquireGitWatch(repo || cwd)`：订阅是一个**集合**（按 cwd 引用
+    计数），两栏看两个仓库时后端同时盯两个，退掉一个不影响另一个（`git.unwatch`
+    带 cwd 只退那一个，不带才是全局清理）。
   - 全屏与「收起侧栏」放在最右那一栏标签条的末尾（整块面板的操作），分栏按钮在
     左栏；关掉右栏用「并回左栏」图标，不再用第二个 ×。
   - `useWheelScrollX(ref, enabled)` 的 `enabled` 是给第二栏标签条用的：它晚于首次
@@ -494,13 +499,16 @@ hub ── manager ── session ── process ── claude (NDJSON)
   拉取**没有二次确认**：它就是那颗同步图标的本意，成功安静刷新（状态 / 分支 / 历史
   一起刷），失败由面板顶部的错误条给原因。别把确认框加回来。
 - **Git 状态靠推送，不靠前端轮询**：面板可见时前端在系统通道（`/ws`，不带 id）上发
-  `git.watch {cwd}`，后端用 `gitctl.Watch` 每 3 秒读一次完整快照（`ReadStatus` 的输出，
-  含两侧 numstat——只看 porcelain 的话「已标 M 的文件再改一次」不会变），变了就推
-  `git.changed {cwd}`；面板切走 / 连接断开即取消订阅（`git.unwatch` 或 defer 里的
-  `setWatch(nil)`，不取消的话 NAS 上会一直空跑 git）。**不要退回前端 setInterval 轮询**：
-  那是「拉取成功后历史不刷新、源码变了面板半天不动」的来源。
-  `cwd` 与 `/api/git/*` 走同一条 `authorizedCwd` 围栏；订阅是**按连接**的（多标签页各自
-  订阅各自路径），不做全局引用计数。
+  `git.watch {cwd}`，后端用 `gitctl.WatchSet` 每 3 秒顺序读一次每个被盯仓库的完整快照
+  （`ReadStatus` 的输出，含两侧 numstat），变了就推 `git.changed {cwd}`；面板切走 /
+  连接断开即取消订阅（带 cwd 的 `git.unwatch` / defer 里的 `clearWatches`，不取消的话
+  NAS 上会一直空跑 git）。**不要退回前端 setInterval 轮询**：那是「拉取成功后历史不刷新、
+  源码变了面板半天不动」的来源。
+  `cwd` 与 `/api/git/*` 走同一条 `authorizedCwd` 围栏；订阅是**按连接**的，但一条连接
+  可以同时盯多个仓库（分栏后两栏各一个 Git 面板），所以 `wsClient` 存的是仓库集合、
+  只跑一个监督协程——每个仓库一个协程会并发跑多条 git status、退订时也容易互相干扰。
+  **快照键只看路径 + XY + numstat**：同一文件改成「行数相同」的另一段内容不会推送，
+  这是既定取舍（要抓内容变化得付出整树 diff 的代价）。
   **看得见才订阅**：页面在后台（`document.hidden`，手机锁屏 / 切走 App）不订阅，切回前台
   补订阅并补刷一次；功能区整页视图盖住右侧栏时（`App` 的 `view`，侧栏只是 `display:none`）
   也按不可见处理（`RightSidebar` 的 `visible` → `GitPanel.active`）。否则没人看的屏幕上
