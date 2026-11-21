@@ -213,3 +213,74 @@ func TestSystemChannelGitWatchMultipleRepos(t *testing.T) {
 		t.Fatal("全部退订后不该再有推送")
 	}
 }
+
+// 工作区是软链接时，git.watch 与 git.unwatch 必须用同一个键：
+// 订阅存的是 realpath，退订却拿原始字符串去删的话永远删不掉，监督协程会一直在
+// 「没人看」的时候每 3 秒跑一次 git；推送里的 cwd 也得是客户端认得的写法，
+// 否则面板按自己那份路径比对不上，状态永远不自动刷新。
+func TestGitWatchSymlinkedPath(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("没有 git")
+	}
+	srv, _ := newTestServer(t, "secret")
+	prev := gitWatchInterval
+	gitWatchInterval = 20 * time.Millisecond
+	t.Cleanup(func() { gitWatchInterval = prev })
+
+	repo := filepath.Join(srv.d.ProjectsRoot, "real-repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatalf("建目录: %v", err)
+	}
+	gitCmd(t, repo, "init", "-q")
+	gitCmd(t, repo, "config", "user.email", "t@example.com")
+	gitCmd(t, repo, "config", "user.name", "T")
+	file := filepath.Join(repo, "a.txt")
+	if err := os.WriteFile(file, []byte("one\n"), 0o600); err != nil {
+		t.Fatalf("写文件: %v", err)
+	}
+	gitCmd(t, repo, "add", ".")
+	gitCmd(t, repo, "commit", "-qm", "init")
+
+	link := filepath.Join(srv.d.ProjectsRoot, "repo-link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Skipf("创建符号链接失败: %v", err)
+	}
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	conn, r := dialWS(t, ts.Listener.Addr().String(), "/ws?token=secret")
+	defer conn.Close()
+	waitSubscribers(t, srv, systemTopic, 1)
+
+	// 用软链路径订阅：围栏认它（真实路径在授权目录内），推送要回软链写法。
+	writeCmd(t, conn, map[string]string{"kind": "git.watch", "cwd": link})
+	time.Sleep(200 * time.Millisecond)
+	if err := os.WriteFile(file, []byte("two\n"), 0o600); err != nil {
+		t.Fatalf("改文件: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	ev := readEvent(t, r)
+	if ev.Kind != "git.changed" {
+		t.Fatalf("改动后事件 kind = %q, want git.changed", ev.Kind)
+	}
+	var data struct {
+		Cwd string `json:"cwd"`
+	}
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		t.Fatalf("解析 data: %v", err)
+	}
+	if data.Cwd != link {
+		t.Fatalf("推送的 cwd = %q，want 订阅时的写法 %q", data.Cwd, link)
+	}
+
+	// 同一个路径退订：之后不能再有任何推送。
+	writeCmd(t, conn, map[string]string{"kind": "git.unwatch", "cwd": link})
+	time.Sleep(100 * time.Millisecond)
+	if err := os.WriteFile(file, []byte("three\n"), 0o600); err != nil {
+		t.Fatalf("改文件: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
+	if _, payload, err := wsframe.ReadMessage(r, wsframe.DefaultMaxMessageBytes); err == nil {
+		t.Fatalf("退订后不该再有推送，收到 %s", payload)
+	}
+}

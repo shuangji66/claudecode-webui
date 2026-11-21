@@ -376,6 +376,14 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `error`——不能让它落到 nil 会话上（那是 panic）。
   定时策略不在 gateway：`cmd/ccweb` 的 `startClaudeUpdateWatch` 负责查，gateway 的
   `BroadcastClaudeUpdate()` 只负责推。
+- **Git 订阅键两侧必须同一套规范化**：`git.watch` 存的是 `authorizedCwd` 给的 realpath，
+  所以 `git.unwatch` 也要过 `watchKey`（`project.Validate` + `EvalSymlinks`，不重做授权检查
+  ——目录可能刚被撤销，那时更要能退掉）。只 `TrimSpace` 就 delete 的话，工作区本身是软链时
+  永远删不掉，监督协程会在没人看的时候一直每 3 秒跑 git。推送里的 `cwd` 回**客户端订阅时
+  的写法**（`wsClient.watchAlias` 翻译 realpath），否则前端按自己那份路径比对不上，
+  状态永远不自动刷新。`gitctl.Watch`（单仓库版）已删除，只剩 `WatchSet`：两套
+  「读快照→比键→notify」并存迟早漂移。读失败时基线保留并标脏，恢复后无条件补推一次
+  ——失败瞬间发生的改动否则永远推不出去。
 - **Git 状态是推送不是前端轮询**：`git.watch {cwd}` 把仓库加进这条连接的订阅**集合**
   （`gitctl.WatchSet` 用一个监督协程每 `gitWatchInterval` 顺序读每个仓库的完整快照，
   变了推 `git.changed {cwd}`）；带 cwd 的 `git.unwatch` 只退那一个，不带 cwd 退全部，

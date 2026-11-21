@@ -295,8 +295,8 @@ func TestGitEnvProxy(t *testing.T) {
 	SetProxySource(nil)
 }
 
-// Watch 是「面板不再轮询」的替代：文件一改就要推一次，基线那一轮不推。
-func TestWatchNotifiesOnChange(t *testing.T) {
+// WatchSet 是「面板不再轮询」的替代：文件一改就要推一次，基线那一轮不推。
+func TestWatchSetNotifiesOnChange(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("没有 git")
 	}
@@ -313,18 +313,18 @@ func TestWatchNotifiesOnChange(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	changed := make(chan struct{}, 4)
-	go Watch(ctx, dir, 20*time.Millisecond, func() {
+	changed := make(chan string, 4)
+	go WatchSet(ctx, func() []string { return []string{dir} }, 20*time.Millisecond, func(cwd string) {
 		select {
-		case changed <- struct{}{}:
+		case changed <- cwd:
 		default:
 		}
 	})
 
 	// 未被修改时不该推送（基线那一轮与后续相同）。
 	select {
-	case <-changed:
-		t.Fatal("仓库没变却收到了推送")
+	case cwd := <-changed:
+		t.Fatalf("仓库没变却收到了推送: %q", cwd)
 	case <-time.After(150 * time.Millisecond):
 	}
 
@@ -332,10 +332,11 @@ func TestWatchNotifiesOnChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	select {
-	case <-changed:
+	case cwd := <-changed:
+		if cwd != dir {
+			t.Fatalf("推送的仓库 = %q，want %q", cwd, dir)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("文件改动后没有收到推送")
 	}
-
-	cancel()
 }

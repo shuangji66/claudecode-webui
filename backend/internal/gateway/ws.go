@@ -58,17 +58,36 @@ type wsClient struct {
 	// 一个连接**可以同时盯多个仓库**（分栏后两栏各一个 Git 面板，可能看着不同仓库），
 	// 但只用一个监督协程顺序读取：每个仓库一个协程会在 NAS 上并发跑多条 git status，
 	// 退订其中一个时也容易把另一个的状态搅乱。
-	watchMu     sync.Mutex
-	watchSet    map[string]bool
+	watchMu  sync.Mutex
+	watchSet map[string]bool
+	// watchAlias 记住「真实路径 → 客户端发来的写法」：订阅键是 EvalSymlinks 之后的
+	// realpath（与 /api/git/* 同一条围栏），而前端是按它自己那份路径比对 git.changed 的。
+	// 工作区本身是软链时（`/data/ws -> /vol1/ws`）两者字面不同，不翻译的话面板收不到
+	// 推送——看起来就是「改完文件，Git 面板一直不动」。
+	watchAlias  map[string]string
 	watchCancel context.CancelFunc
 }
 
 // addWatch 记录一个要盯的仓库；返回 true 表示这条连接还没有监督协程，需要启动。
-func (c *wsClient) addWatch(cwd string) bool {
+// alias 是客户端发来的原始写法（推送时原样回给它）。
+func (c *wsClient) addWatch(cwd, alias string) bool {
 	c.watchMu.Lock()
 	defer c.watchMu.Unlock()
 	c.watchSet[cwd] = true
+	if alias != "" {
+		c.watchAlias[cwd] = alias
+	}
 	return c.watchCancel == nil
+}
+
+// watchLabel 把监听到的仓库路径翻回客户端认得的写法。
+func (c *wsClient) watchLabel(cwd string) string {
+	c.watchMu.Lock()
+	defer c.watchMu.Unlock()
+	if alias, ok := c.watchAlias[cwd]; ok {
+		return alias
+	}
+	return cwd
 }
 
 // setWatchCancel 记下监督协程的取消函数（由启动方在 addWatch 返回 true 后调用）。
@@ -82,6 +101,7 @@ func (c *wsClient) setWatchCancel(cancel context.CancelFunc) {
 func (c *wsClient) removeWatch(cwd string) {
 	c.watchMu.Lock()
 	delete(c.watchSet, cwd)
+	delete(c.watchAlias, cwd)
 	cancel := c.watchCancel
 	if len(c.watchSet) > 0 {
 		cancel = nil
@@ -112,6 +132,7 @@ func (c *wsClient) clearWatches() {
 	cancel := c.watchCancel
 	c.watchCancel = nil
 	c.watchSet = make(map[string]bool)
+	c.watchAlias = make(map[string]string)
 	c.watchMu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -121,12 +142,13 @@ func (c *wsClient) clearWatches() {
 // newWSClient 建一条连接并启动写循环。
 func newWSClient(conn net.Conn, r *bufio.Reader, topic string) *wsClient {
 	c := &wsClient{
-		conn:     conn,
-		r:        r,
-		topic:    topic,
-		out:      make(chan []byte, sendQueueLen),
-		done:     make(chan struct{}),
-		watchSet: make(map[string]bool),
+		conn:       conn,
+		r:          r,
+		topic:      topic,
+		out:        make(chan []byte, sendQueueLen),
+		done:       make(chan struct{}),
+		watchSet:   make(map[string]bool),
+		watchAlias: make(map[string]string),
 	}
 	go c.writeLoop()
 	return c
@@ -457,7 +479,7 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 				s.sendError(c, cwdErr.Error())
 				return
 			}
-			s.startGitWatch(c, cwd)
+			s.startGitWatch(c, cwd, strings.TrimSpace(cmd.Cwd))
 			return
 		case "git.unwatch":
 			// 带 cwd 只停那一个仓库：分栏后另一栏可能还在看别的仓库。
@@ -465,7 +487,11 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 			if strings.TrimSpace(cmd.Cwd) == "" {
 				c.clearWatches()
 			} else {
-				c.removeWatch(strings.TrimSpace(cmd.Cwd))
+				// 必须用与 git.watch **同一套**规范化：订阅键是 realpath，拿原始字符串
+				// 去删是删不掉的——工作区本身是软链时，退订永远失败，监督协程会一直在
+				// 没人看的时候每 3 秒跑一次 git（正是 AGENTS 禁止的那类空跑）。
+				// 这里不再做授权检查：目录可能刚被撤销，那时更要能退掉。
+				c.removeWatch(watchKey(cmd.Cwd))
 			}
 			return
 		}

@@ -38,6 +38,9 @@ func WatchSet(ctx context.Context, set func() []string, interval time.Duration, 
 		interval = 3 * time.Second
 	}
 	last := make(map[string]string)
+	// dirty 记「这个仓库上一轮读失败了」：恢复后即使快照与失败前一致也要推一次——
+	// 失败期间发生的改动我们没测到，静默丢掉等于「改完文件面板不动」。
+	dirty := make(map[string]bool)
 	for {
 		if ctx.Err() != nil {
 			return
@@ -54,59 +57,27 @@ func WatchSet(ctx context.Context, set func() []string, interval time.Duration, 
 			keep[cwd] = struct{}{}
 			snap, err := ReadStatus(ctx, cwd)
 			if err != nil {
-				// 读失败（git 缺失、超时、权限）时不推送：面板有自己的错误展示，
-				// 这里推送也只会让前端再失败一次。下一轮恢复后照常比对。
-				delete(last, cwd)
+				// 读失败（git 缺失、超时、索引锁、权限抖动）时不推送：面板有自己的
+				// 错误展示，这里推只会让前端再失败一次。基线**保留**并标记 dirty，
+				// 恢复那一轮无条件推一次（见上）。
+				dirty[cwd] = true
 				continue
 			}
 			key := snapshotKey(snap)
 			prev, seen := last[cwd]
-			if seen && prev != key {
+			// 正常变化才推；另外「上一轮读失败过」无论如何补推一次（哪怕还没有基线：
+			// 那段失败期里发生的变化我们没测到）。
+			if dirty[cwd] || (seen && prev != key) {
 				notify(cwd)
 			}
 			last[cwd] = key
+			delete(dirty, cwd)
 		}
 		for cwd := range last {
 			if _, held := keep[cwd]; !held {
 				delete(last, cwd)
+				delete(dirty, cwd)
 			}
-		}
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-	}
-}
-
-// Watch 盯住一个仓库：快照发生变化时调用 notify，直到 ctx 结束。
-//
-// 面板自己不再定时拉状态（原来前端每 15 秒拉一遍完整快照），轮询搬到这里：
-// 每个标签页只花一次 push，而判断「变了没有」用的就是 ReadStatus 的完整输出，
-// 与界面拿到的是同一份数据，不会出现「后端认为没变、界面却有差异」。
-//
-// 节奏是「读完一轮再等一个间隔」，不是固定 ticker：大仓库上 status 本身可能要
-// 几百毫秒，ticker 会让请求叠加，串行循环天然限流。
-func Watch(ctx context.Context, cwd string, interval time.Duration, notify func()) {
-	if interval <= 0 {
-		interval = 3 * time.Second
-	}
-	last := ""
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-		// 读失败（git 缺失、超时、权限）时不推送：面板有自己的错误展示，
-		// 这里推送也只会让前端再失败一次。下一轮恢复后照常比对。
-		if snap, err := ReadStatus(ctx, cwd); err == nil {
-			key := snapshotKey(snap)
-			// 第一轮只建立基线：调用方刚拉过一遍状态，不用立刻再推一次。
-			if last != "" && key != last {
-				notify()
-			}
-			last = key
 		}
 		timer := time.NewTimer(interval)
 		select {
