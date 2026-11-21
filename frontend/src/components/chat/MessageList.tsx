@@ -284,10 +284,19 @@ const TurnRows = memo(function TurnRows({
               let row: ReactNode = null;
               if (entry.type === "process") {
                 row = (
-                  <div key={entry.key} className={dense ? "mt-1" : undefined}>
+                  <div
+                    key={entry.key}
+                    className={dense ? "mt-1" : undefined}
+                    // 组根也带一份 id 清单：组收起时子行根本没有 DOM，轨迹里点那一步
+                    // 至少要落在这个组头上（「这一步在这里面」），而不是退到轮头——
+                    // 那看起来像点错了。展开时子行各自的 `data-item-id` 会先命中。
+                    data-item-ids={entry.items.map((item) => item.id).join(" ")}
+                  >
                     <ProcessGroup items={entry.items}>
                       {entry.items.map((item) => (
-                        <MessageRow key={item.id} item={item} dense={dense} offscreen={false} />
+                        <div key={item.id} data-item-id={item.id}>
+                          <MessageRow item={item} dense={dense} offscreen={false} />
+                        </div>
                       ))}
                     </ProcessGroup>
                   </div>
@@ -296,7 +305,7 @@ const TurnRows = memo(function TurnRows({
                 // 连续的思考块合成一行：**只要其中任意一块还在流，整行就算在流**
                 // （CLI 一次思考常被拆成好几块，流式期间最后一块在长）。
                 row = (
-                  <div key={entry.key} className={dense ? "mt-1" : undefined}>
+                  <div key={entry.key} className={dense ? "mt-1" : undefined} data-item-ids={entry.items.map((it) => it.id).join(" ")}>
                     <ThinkingBlock
                       text={entry.items.map((it) => it.text).join("\n\n")}
                       dense={dense}
@@ -405,7 +414,11 @@ export function MessageList({
 
   const scrollToItem = (id: string): boolean => {
     const sc = scroller.current;
-    const el = sc?.querySelector<HTMLElement>(`[data-item-id="${id}"]`);
+    // `data-item-id` 是单条；`data-item-ids` 是「几块合成一行」的容器（连续的思考块合并
+    // 成一块渲染），轨迹里点某一步时两处都要找得到。
+    const el =
+      sc?.querySelector<HTMLElement>(`[data-item-id="${id}"]`) ??
+      sc?.querySelector<HTMLElement>(`[data-item-ids~="${id}"]`);
     if (!sc || !el) return false;
     const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 8;
     const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;

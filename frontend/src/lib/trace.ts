@@ -23,14 +23,24 @@ import { toolSummary } from "./tools";
 /** 泳道：用户输入 / 模型请求 / 工具调用 / 子代理 / 事件。 */
 export type TraceLane = "input" | "model" | "tool" | "subagent" | "event";
 
+/** 固定文案的键（真正的文字在 `TracePanel` 里按界面语言给）。 */
+export type TraceLabelKey = "model" | "system" | "error" | "interruptUser" | "interruptAgent" | "interruptSession" | "event";
+
 export interface TraceSpan {
   id: string;
   lane: TraceLane;
   /** 绝对时刻（ms）。零时长的段（事件标记）start === end。 */
   start: number;
   end: number;
-  /** 主文案：模型名 / 工具名 / 子代理描述 / 事件摘要。 */
-  label: string;
+  /**
+   * 主文案：工具名 / 子代理描述 / 事件摘要（都是数据自带的名字）。
+   *
+   * 固定文案（「模型请求」「系统事件」…）不放这里，走 `labelKey` —— 它们是界面文案，
+   * 必须跟着界面语言走；`label` 里塞中文会让英文界面混进中文（轨迹面板直接渲染它）。
+   */
+  label?: string;
+  /** 固定文案的键；`label` 为空时由面板 `t()` 出文案。 */
+  labelKey?: TraceLabelKey;
   /** 副文案：工具入参摘要、子代理类型、事件原因。 */
   detail?: string;
   /** 点这一行时滚到对话里的哪一条（对应 MessageList 的 `data-item-id`）。 */
@@ -73,14 +83,25 @@ function clip(s: string, max: number): string {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
-/** 事件标记的文案。中断没有正文（只有 CLI 的标记原文），单独给一句人话。 */
-function eventLabel(item: Item): string {
-  if (item.kind === "system") return clip(item.text, LABEL_MAX) || item.subtype || "系统事件";
-  if (item.kind === "error") return clip(item.text, LABEL_MAX) || "错误";
-  if (item.kind === "interrupt") {
-    return item.reason === "user" ? "用户中断" : item.reason === "agent" ? "子代理中断" : "会话中断";
+/**
+ * 事件标记的文案：有正文就用正文（CLI 自己写的人话），没有就退回一句固定文案。
+ *
+ * 退回的那句走 `labelKey`：中断与空系统事件的文案是界面文案，不该写死中文。
+ */
+function eventLabel(item: Item): { label: string; labelKey: TraceLabelKey } {
+  if (item.kind === "system") {
+    const text = clip(item.text, LABEL_MAX);
+    return text ? { label: text, labelKey: "system" } : { label: item.subtype || "", labelKey: "system" };
   }
-  return "事件";
+  if (item.kind === "error") {
+    return { label: clip(item.text, LABEL_MAX), labelKey: "error" };
+  }
+  if (item.kind === "interrupt") {
+    const labelKey: TraceLabelKey =
+      item.reason === "user" ? "interruptUser" : item.reason === "agent" ? "interruptAgent" : "interruptSession";
+    return { label: "", labelKey };
+  }
+  return { label: "", labelKey: "event" };
 }
 
 function eventDetail(item: Item): string | undefined {
@@ -190,7 +211,7 @@ export function traceTurns(items: Item[], running = true, now = Date.now()): Tra
             end: ts,
             // 主文案说「这一步是什么」，模型名放副文案：一轮里几十条请求都叫某个模型名，
             // 步骤表会变成一列重复的型号，看不出哪几段是请求。
-            label: "模型请求",
+            labelKey: "model",
             detail: name || model || undefined,
             itemId: request.find((it) => it.kind !== "tool")?.id ?? request[0].id,
           });
@@ -239,12 +260,14 @@ export function traceTurns(items: Item[], running = true, now = Date.now()): Tra
       }
 
       for (const ev of events) {
+        const evLabel = eventLabel(ev);
         outSpans.push({
           id: `event-${ev.id}`,
           lane: "event",
           start: ts,
           end: ts,
-          label: eventLabel(ev),
+          label: evLabel.label || undefined,
+          labelKey: evLabel.labelKey,
           detail: eventDetail(ev),
           itemId: ev.id,
           error: ev.kind === "error",
@@ -262,7 +285,7 @@ export function traceTurns(items: Item[], running = true, now = Date.now()): Tra
         lane: "model",
         start: cursor,
         end: turnEnd,
-        label: "模型请求",
+        labelKey: "model",
         detail: model || undefined,
         running: true,
       });

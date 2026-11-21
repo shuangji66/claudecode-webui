@@ -5,6 +5,7 @@ import {
   layoutLane,
   spanGeometry,
   traceTurns,
+  type TraceLabelKey,
   type TraceLane,
   type TraceSpan,
   type TraceTurn,
@@ -32,6 +33,21 @@ const LANES: { key: TraceLane; zh: string; en: string }[] = [
 ];
 
 const EMPTY: Item[] = [];
+
+/**
+ * 固定文案：`lib/trace` 只给键，文字在这里按界面语言出。
+ *
+ * 轨迹面板直接渲染这些文案，所以不能在 trace.ts 里写死中文（英文界面会混进中文）。
+ */
+const LABELS: Record<TraceLabelKey, { zh: string; en: string }> = {
+  model: { zh: "模型请求", en: "Model request" },
+  system: { zh: "系统事件", en: "System event" },
+  error: { zh: "错误", en: "Error" },
+  interruptUser: { zh: "用户中断", en: "Interrupted by user" },
+  interruptAgent: { zh: "子代理中断", en: "Subagent interrupted" },
+  interruptSession: { zh: "会话中断", en: "Session interrupted" },
+  event: { zh: "事件", en: "Event" },
+};
 
 /** 工具分类 → 条形颜色：读/搜是绿、写/改是黄、命令是强调色，其余用中性色。 */
 function barTone(span: TraceSpan): string {
@@ -87,16 +103,27 @@ function useNow(active: boolean): number {
   return now;
 }
 
-function spanTitle(span: TraceSpan, lane: string): string {
+/** 一段步骤的主文案：数据自带的名字优先，固定文案按界面语言给。 */
+function spanText(span: TraceSpan, t: (zh: string, en?: string) => string): string {
+  if (span.label) return span.label;
+  const label = span.labelKey ? LABELS[span.labelKey] : undefined;
+  return label ? t(label.zh, label.en) : "";
+}
+
+function spanTitle(span: TraceSpan, lane: string, t: (zh: string, en?: string) => string): string {
   const dur = span.end > span.start ? formatSpanMs(span.end - span.start) : "";
-  return [lane, span.label, span.detail, dur].filter(Boolean).join(" · ");
+  return [lane, spanText(span, t), span.detail, dur].filter(Boolean).join(" · ");
 }
 
 export function TracePanel({ active = true }: { active?: boolean }) {
   const t = useT();
   const sid = useAppStore((s) => s.activeId);
-  const items = useAppStore((s) => (sid ? s.items[sid] ?? EMPTY : EMPTY));
+  // **看不见时不要跟着每一条流式帧重算**：标签只是 hidden 不卸载（终端里挂着 PTY），
+  // 而 `items[sid]` 每个 token 帧都是新数组——`traceTurns` 会把整轮重新切一遍。
+  // 选择器返回同一个 EMPTY 引用时 zustand 不会触发重渲染，这样才真的省下来。
+  const items = useAppStore((s) => (active && sid ? s.items[sid] ?? EMPTY : EMPTY));
   const running = useAppStore((s) => {
+    if (!active) return false;
     const st = s.states[sid ?? ""];
     return st === "busy" || st === "starting";
   });
@@ -230,8 +257,8 @@ export function TracePanel({ active = true }: { active?: boolean }) {
                             key={span.id}
                             type="button"
                             onClick={() => jump(span)}
-                            title={spanTitle(span, t(lane.zh, lane.en))}
-                            aria-label={spanTitle(span, t(lane.zh, lane.en))}
+                            title={spanTitle(span, t(lane.zh, lane.en), t)}
+                            aria-label={spanTitle(span, t(lane.zh, lane.en), t)}
                             style={{
                               left: `${left * 100}%`,
                               width: point ? 6 : `${Math.max(width * 100, 0.4)}%`,
@@ -250,7 +277,7 @@ export function TracePanel({ active = true }: { active?: boolean }) {
                         <button
                           key={`chat-${span.id}`}
                           type="button"
-                          onClick={() => showSubagent(span.agentId!, span.label)}
+                          onClick={() => showSubagent(span.agentId!, spanText(span, t) || span.id)}
                           className="shrink-0 rounded px-1 text-[9.5px] text-muted hover:bg-black/5 hover:text-ink"
                           title={t("查看这个子代理的对话", "Open this subagent's conversation")}
                         >
@@ -292,7 +319,7 @@ export function TracePanel({ active = true }: { active?: boolean }) {
                   <span className={`mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full ${barTone(span)}`} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[11.5px] text-ink">
-                      {span.label || (lane ? t(lane.zh, lane.en) : "")}
+                      {spanText(span, t) || (lane ? t(lane.zh, lane.en) : "")}
                       {span.running && <span className="ml-1 text-[9.5px] text-brand">{t("进行中", "running")}</span>}
                     </span>
                     {span.detail && <span className="block truncate text-[10px] text-muted">{span.detail}</span>}

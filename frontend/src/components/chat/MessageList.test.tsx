@@ -983,3 +983,33 @@ describe("轨迹面板的跳转请求", () => {
     expect(await screen.findByText("消息 0")).toBeInTheDocument();
   });
 });
+
+// 轨迹里点一个**工具步骤**：在简洁档里它折在过程组里，组收起时子行没有 DOM。
+// 以前只有非过程行带 `data-item-id`，于是跳转永远找不到目标、两次重试后退到轮头
+// （用户消息）——看起来像点错了。组根现在带一份 id 清单作为兜底锚点。
+describe("轨迹跳转落在过程组上", () => {
+  it("过程组收起时也能定位到它，不退到轮头", async () => {
+    setProcessView("concise");
+    const items: Item[] = [
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "跑一下" },
+      { id: "t1", seq: 1, ts: 0, kind: "tool", toolUseId: "tu1", name: "Bash", input: { command: "ls" }, result: "a" } as Item,
+      { id: "t2", seq: 2, ts: 0, kind: "tool", toolUseId: "tu2", name: "Bash", input: { command: "pwd" }, result: "/w" } as Item,
+      { id: "a1", seq: 3, ts: 0, kind: "assistant", text: "好了", streaming: false },
+    ];
+    useAppStore.setState({ scrollRequest: null });
+    const { container } = render(<MessageList items={items} resetKey="jump-process" />);
+    sizedScroller();
+
+    act(() => {
+      useAppStore.getState().requestScrollToItem("t1");
+    });
+    // 展开这一轮之后组还在（简洁档默认收起）：子行没有 DOM，但组根带 id 清单。
+    await act(async () => {});
+    expect(container.querySelector('[data-item-id="t1"]')).toBeNull();
+    expect(container.querySelector('[data-item-ids~="t1"]')).not.toBeNull();
+
+    const scroller = screen.getByTestId("message-scroller") as HTMLElement;
+    const spy = scroller.scrollTo as unknown as ReturnType<typeof vi.fn>;
+    expect(spy).toHaveBeenCalled();
+  });
+});

@@ -1208,6 +1208,22 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
 - 改 `normalize` 时先写一个会失败的用例，再改实现。
 - 不要写依赖 `Date.now()` 精确值的断言。
 
+### 27.1 轨迹跳转的锚点：过程行也要能定位
+
+- `MessageList` 的 `data-item-id` 以前只给「非过程行」，而轨迹面板绝大多数步骤
+  （工具、思考）都在过程里：点一行永远找不到目标，两次重试后按 `pendingJump.fallback`
+  退到**轮头**，用户看到的就是「点了跳到这一轮开头」。
+- 现在三处都有锚点：过程组里的**每一行**带 `data-item-id`；过程组的**组根**带
+  `data-item-ids="a b c"`（组收起时子行没有 DOM，至少落在组头上——「这一步在这里面」，
+  比退到轮头诚实）；连续的思考块合并渲染，也带 `data-item-ids`。
+  `scrollToItem` 两种属性都查（`[data-item-ids~="id"]` 按空白分词）。
+- 固定文案（「模型请求」「系统事件」「用户中断」…）由 `lib/trace` 只给 `labelKey`，
+  文字在 `TracePanel` 里 `t()` 出：`label` 是数据自带的名字（工具名 / 模型名 / CLI 写的
+  人话），不能把界面文案塞进去，否则英文界面里混进中文。
+- `TracePanel` 只在 `active` 时订阅 `items[sid]`（否则返回同一个 `EMPTY` 引用）：
+  标签只是 `hidden` 不卸载，不这么做的话没在看的轨迹也会对**每一条流式帧**把整轮
+  `traceTurns` 重算一遍。
+
 ### 28. `starting` 与 `openSeq`：意图序号，不是布尔标记
 
 - **`starting` 由计数派生**（`startingCount`，store 模块级）：新建与打开可能同时进行，
