@@ -15,6 +15,11 @@ const CONCURRENT_MAX = 50;
 /** 递归深度 1–5：1 = 关闭嵌套，5 是 CLI 2.1.172–2.1.216 时期的原生默认。 */
 const DEPTH_OPTIONS = [1, 2, 3, 4, 5];
 
+/** 常驻会话数的范围与步进（个），与后端 settings.Min/Max/StepMaxSessions 对齐。 */
+const SESSIONS_MIN = 6;
+const SESSIONS_MAX = 12;
+const SESSIONS_STEP = 2;
+
 /** 把配置里的实际值并进候选档位，避免手改出来的值在下拉里显示成空。 */
 function withCurrent(options: number[], current: number): number[] {
   if (options.includes(current)) return options;
@@ -22,11 +27,13 @@ function withCurrent(options: number[], current: number): number[] {
 }
 
 /**
- * 「设置 → CLI」：直接映射成 claude 子进程环境变量的几项。
+ * 「设置 → CLI」：与 claude 会话进程直接相关的几项。
  *
- * 这一页的值都在**进程启动时**读取（`settings.Env()` → `process.CleanEnv` 后追加），
- * 没有控制请求、也没有命令行参数，所以改完只对新建会话生效——已跑着的会话保持
- * 启动时的那份。界面上的说明必须讲清楚这一点，否则「改了没反应」会被当成 bug。
+ * 子代理那两项映射成 claude 子进程环境变量，在**进程启动时**读取
+ * （`settings.Env()` → `process.CleanEnv` 后追加），没有控制请求、也没有命令行参数，
+ * 所以改完只对新建会话生效——已跑着的会话保持启动时的那份。
+ * 常驻会话数与空闲回收由**宿主自己**执行（manager 现读设置），改完立刻生效。
+ * 界面上的说明必须讲清楚这个差别，否则「改了没反应」会被当成 bug。
  */
 export function CliSettings() {
   const t = useT();
@@ -70,6 +77,19 @@ export function CliSettings() {
     });
   };
 
+  // 常驻会话数：6–12，步进 2（6/8/10/12 四档）。与空闲回收同一套算法——
+  // 先把手改出来的非档位值归到最近的档位，再挪一档，而不是「当前值 ± 2」。
+  const maxSessions = settings?.max_sessions || 8;
+  const [pendingSessions, setPendingSessions] = useState<number | null>(null);
+  const shownSessions = pendingSessions ?? maxSessions;
+  const bumpSessions = (delta: number) => {
+    const index = Math.round(shownSessions / SESSIONS_STEP) + delta;
+    const next = Math.min(SESSIONS_MAX, Math.max(SESSIONS_MIN, index * SESSIONS_STEP));
+    if (next === shownSessions) return;
+    setPendingSessions(next);
+    void save({ max_sessions: next }).then(() => setPendingSessions(null));
+  };
+
   // 空闲回收同样按本地递进值算，连点两次不会都从同一个旧值起步。
   // 步进 5 分钟（5–60 共 12 档）：一分钟一档要点十几次才从默认值挪到半小时，
   // 而这个值本来就是粗粒度的时间尺度，不需要那个精度。
@@ -100,8 +120,8 @@ export function CliSettings() {
       </div>
       <p className="mt-1 text-[11px] leading-relaxed text-muted">
         {t(
-          "这些值以环境变量的形式交给 claude 子进程，只在会话启动时读取：改完对新建的会话生效，已经在跑的会话保持原样。",
-          "These are passed to the claude subprocess as environment variables, read only at session start: changes apply to new sessions.",
+          "子代理的两项以环境变量的形式交给 claude 子进程，只在会话启动时读取：改完对新建的会话生效，已经在跑的会话保持原样。常驻会话数与空闲回收由本应用自己执行：前者对下一次新建会话生效，后者在下一分钟扫描时生效。",
+          "The subagent limits are passed to the claude subprocess as environment variables and read only at session start: changes apply to new sessions. The resident-session cap and idle recycle are enforced by the app itself: the cap applies to the next new session, recycle at the next minute scan.",
         )}
       </p>
 
@@ -147,6 +167,39 @@ export function CliSettings() {
             }))}
             menuWidth={168}
           />
+        </SettingRow>
+
+        <SettingRow
+          title={t("常驻会话数", "Resident sessions")}
+          desc={t(
+            `同一时刻最多保留几个会话进程（${SESSIONS_MIN}–${SESSIONS_MAX}）。到上限后新建对话会提示「常驻会话数已达上限」；调低不会结束已经在跑的会话。`,
+            `How many session processes may stay alive at once (${SESSIONS_MIN}–${SESSIONS_MAX}). Past the cap, new conversations are refused; lowering it does not end running sessions.`,
+          )}
+        >
+          <div className="flex items-center gap-1.5">
+            <div className="inline-flex items-center rounded-lg bg-panel dark:bg-panel-strong">
+              <button
+                type="button"
+                onClick={() => bumpSessions(-1)}
+                disabled={shownSessions <= SESSIONS_MIN}
+                className="h-8 w-8 rounded-l-lg text-[13px] text-muted hover:bg-panel-strong hover:text-ink disabled:opacity-30 dark:hover:bg-line disabled:hover:bg-transparent"
+                aria-label={t("减少常驻会话数", "Decrease resident sessions")}
+              >
+                −
+              </button>
+              <span className="w-8 text-center font-mono text-[12.5px] text-ink tabular-nums">{shownSessions}</span>
+              <button
+                type="button"
+                onClick={() => bumpSessions(1)}
+                disabled={shownSessions >= SESSIONS_MAX}
+                className="h-8 w-8 rounded-r-lg text-[13px] text-muted hover:bg-panel-strong hover:text-ink disabled:opacity-30 dark:hover:bg-line disabled:hover:bg-transparent"
+                aria-label={t("增加常驻会话数", "Increase resident sessions")}
+              >
+                +
+              </button>
+            </div>
+            <span className="text-[11.5px] text-muted">{t("个", "sessions")}</span>
+          </div>
         </SettingRow>
 
         <SettingRow

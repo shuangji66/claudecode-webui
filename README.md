@@ -78,11 +78,12 @@ location /app/ccweb/ {
 | `CCWEB_CLAUDE_VERSIONS` | `$DATA_DIR/claude/versions` | 托管 claude 的版本目录（每个版本一个子目录；部署页可删除未生效版本） |
 | `CCWEB_PROJECTS_ROOT` | `$HOME` | 首次启动时自动授权的默认目录 |
 | `CCWEB_AUTO_START` | `1` | 启动后恢复当前工作区最近一条对话（`0/false` 关闭；没有对话则不新建） |
-| `CCWEB_MAX_SESSIONS` | `8` | 常驻会话上限（单会话约 176 MB 内存） |
 | `CCWEB_PERMISSION_MODE` | 空 | 新会话默认权限模式 |
 | `CCWEB_MODEL` | 空 | 新会话默认模型 |
 | `CCWEB_TERMINAL_SHELL` | 空 | 右侧栏内置终端使用的 shell；空则依次尝试 `$SHELL` / `bash` / `sh` |
 
+常驻会话上限不在环境变量里：它和空闲回收、TCP 端口一样是**设置项**，在「设置 → CLI」
+里调（默认 8，范围 6–12；单会话约 176 MB 内存）。
 
 ## 工作区与授权目录
 

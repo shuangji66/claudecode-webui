@@ -8,7 +8,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -52,8 +51,6 @@ type Config struct {
 	// AutoStart 为 true 时，进程启动后恢复当前工作区最近的一条对话（CCWEB_AUTO_START）；
 	// 没有历史对话时不新建，由前端创建第一条。
 	AutoStart bool
-	// MaxSessions 是最多同时常驻的 claude 子进程数（CCWEB_MAX_SESSIONS）。
-	MaxSessions int
 	// PermissionMode 是新建会话的默认权限模式（CCWEB_PERMISSION_MODE）。
 	PermissionMode string
 	// Model 是新建会话的默认模型（CCWEB_MODEL），空表示用 CLI 默认。
@@ -121,13 +118,6 @@ func Load(version string) Config {
 	// 兼容旧变量 CCWEB_HOME：显式给了就优先，否则统一落到数据目录下的 claude/。
 	claudeHome := EnvOr("CLAUDE_HOME", EnvOr("HOME", filepath.Join(dataDir, "claude")))
 
-	maxSessions := 8
-	if v := EnvOr("MAX_SESSIONS", ""); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			maxSessions = n
-		}
-	}
-
 	baseURL := EnvOr("BASEURL", "")
 	if baseURL != "" && !strings.HasPrefix(baseURL, "/") {
 		baseURL = "/" + baseURL
@@ -149,7 +139,6 @@ func Load(version string) Config {
 		SchedulesFile:     EnvOr("SCHEDULES_FILE", filepath.Join(dataDir, "schedules.json")),
 		BrowserDir:        EnvOr("BROWSER_DIR", filepath.Join(dataDir, "browser")),
 		AutoStart:         envBool("AUTO_START", true),
-		MaxSessions:       maxSessions,
 		PermissionMode:    EnvOr("PERMISSION_MODE", ""),
 		Model:             EnvOr("MODEL", ""),
 		TerminalShell:     EnvOr("TERMINAL_SHELL", ""),

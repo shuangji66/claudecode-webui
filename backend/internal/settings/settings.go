@@ -93,6 +93,26 @@ const (
 // ValidIdleMinutes 判断空闲回收阈值是否在可设范围内。
 func ValidIdleMinutes(m int) bool { return m >= MinIdleMinutes && m <= MaxIdleMinutes }
 
+// 常驻会话数的默认值与边界。
+//
+// 它决定同一时刻最多有几个 claude 子进程活着（manager 创建会话时的上限判定）。
+// 与子代理那两项不同：**不是**交给 CLI 的环境变量，而是宿主自己执行的约束，
+// 所以改完下一次新建会话就用新值；已经在跑的会话不会被踢掉（降到上限以下只是
+// 新建会拿到「已达上限」）。
+//
+// 单会话约 176 MB：低于 6 时多开几个对话就会撞上限，高于 12 在 NAS 上就是几 GB
+// 内存，所以夹在 6–12、按 2 递增。步进只约束界面，手改配置文件写 7 仍然有效。
+const (
+	DefaultMaxSessions = 8
+	MinMaxSessions     = 6
+	MaxMaxSessions     = 12
+	// StepMaxSessions 是界面上 ± 按钮的步进，不做后端校验。
+	StepMaxSessions = 2
+)
+
+// ValidMaxSessions 判断常驻会话数是否在可设范围内。
+func ValidMaxSessions(n int) bool { return n >= MinMaxSessions && n <= MaxMaxSessions }
+
 // 子代理规模的默认值与边界。
 //
 // 两项都只能通过**环境变量**交给 CLI（CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS /
@@ -249,6 +269,10 @@ type Settings struct {
 	// 由 manager 的回收循环现读，改完立刻对下一次扫描生效。
 	IdleMinutes int `json:"idle_minutes"`
 
+	// MaxSessions 是最多同时常驻的 claude 子进程数，0 表示用默认值。
+	// 由 manager 的创建路径现读：改完对下一次新建会话生效，降下限不会踢掉在跑的会话。
+	MaxSessions int `json:"max_sessions"`
+
 	// 子代理规模（注入 CLI 的环境变量，只在会话启动时生效）。
 	// 0 表示老配置里没这两项，Open 时补默认值。
 	SubagentMaxConcurrent int `json:"subagent_max_concurrent"`
@@ -296,6 +320,9 @@ type Public struct {
 
 	// IdleMinutes 是空闲会话的回收阈值（分钟）。
 	IdleMinutes int `json:"idle_minutes"`
+
+	// MaxSessions 是常驻会话数上限（宿主自己执行，不是 CLI 环境变量）。
+	MaxSessions int `json:"max_sessions"`
 
 	// 子代理的并发上限与递归深度（CLI 环境变量，新会话生效）。
 	SubagentMaxConcurrent int `json:"subagent_max_concurrent"`
@@ -362,6 +389,7 @@ type Patch struct {
 	FontSize                  *int             `json:"font_size"`
 	ProxyURL                  *string          `json:"proxy_url"`
 	IdleMinutes               *int             `json:"idle_minutes"`
+	MaxSessions               *int             `json:"max_sessions"`
 	SubagentMaxConcurrent     *int             `json:"subagent_max_concurrent"`
 	SubagentSpawnDepth        *int             `json:"subagent_spawn_depth"`
 
@@ -422,6 +450,14 @@ func normalizePreferences(v *Settings) {
 	}
 	if !ValidIdleMinutes(v.IdleMinutes) {
 		v.IdleMinutes = DefaultIdleMinutes
+	}
+	// 常驻会话数：同样是「0 = 老配置没这个字段」。越界值（手改配置文件写 0 或 99）
+	// 回落默认值——0 会让一个会话都起不来，那是最难排查的静默故障。
+	if v.MaxSessions == 0 {
+		v.MaxSessions = DefaultMaxSessions
+	}
+	if !ValidMaxSessions(v.MaxSessions) {
+		v.MaxSessions = DefaultMaxSessions
 	}
 	// 子代理规模：同样是「0 = 老配置没这个字段」。越界值（手改配置文件写 999）
 	// 回落默认值——注入 0 会让 CLI 一个子代理都派不出来，那是另一种静默故障。
@@ -606,6 +642,20 @@ func (s *Store) IdleMinutes() int {
 	s.mu.RUnlock()
 	if !ValidIdleMinutes(n) {
 		return DefaultIdleMinutes
+	}
+	return n
+}
+
+// MaxSessions 返回当前允许的常驻会话数，永远落在合法区间内。
+//
+// 与 IdleMinutes 同理不做深拷贝：manager 每次新建会话都要读一次。
+// Open/Apply 已经挡过，这里再夹一次是为了防手改的配置文件。
+func (s *Store) MaxSessions() int {
+	s.mu.RLock()
+	n := s.cur.MaxSessions
+	s.mu.RUnlock()
+	if !ValidMaxSessions(n) {
+		return DefaultMaxSessions
 	}
 	return n
 }
@@ -810,6 +860,7 @@ func (s *Store) Public() Public {
 		FontSize:                  cur.FontSize,
 		ProxyURL:                  cur.ProxyURL,
 		IdleMinutes:               cur.IdleMinutes,
+		MaxSessions:               cur.MaxSessions,
 		SubagentMaxConcurrent:     cur.SubagentMaxConcurrent,
 		SubagentSpawnDepth:        cur.SubagentSpawnDepth,
 		TCPEnabled:                cur.TCPEnabled,
@@ -915,6 +966,13 @@ func (s *Store) Apply(p Patch) (Public, error) {
 			return Public{}, fmt.Errorf("settings: 空闲回收时间必须在 %d–%d 分钟之间", MinIdleMinutes, MaxIdleMinutes)
 		}
 		next.IdleMinutes = *p.IdleMinutes
+	}
+	if p.MaxSessions != nil {
+		if !ValidMaxSessions(*p.MaxSessions) {
+			s.mu.Unlock()
+			return Public{}, fmt.Errorf("settings: 常驻会话数必须在 %d–%d 之间", MinMaxSessions, MaxMaxSessions)
+		}
+		next.MaxSessions = *p.MaxSessions
 	}
 	if p.SubagentMaxConcurrent != nil {
 		if !ValidSubagentMaxConcurrent(*p.SubagentMaxConcurrent) {

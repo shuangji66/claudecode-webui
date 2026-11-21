@@ -440,6 +440,8 @@ export interface PublicSettings {
   proxy_url?: string;
   /** 空闲会话回收阈值（分钟，默认 10，范围 5–60）。 */
   idle_minutes?: number;
+  /** 常驻会话数上限（默认 8，范围 6–12，界面步进 2）；宿主自己执行，不是 CLI 环境变量。 */
+  max_sessions?: number;
   /** 并发子代理上限（默认 10，范围 1–50）；只在会话启动时生效。 */
   subagent_max_concurrent?: number;
   /** 子代理递归深度（默认 1 = 关闭嵌套，范围 1–5）；只在会话启动时生效。 */

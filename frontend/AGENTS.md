@@ -77,7 +77,7 @@ src/
                        / SchedulePage（自动化任务）/ HistoryPage（历史记录）
                        / WorkspaceDialog / ModelsSettings / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / BrowserSettings / DeploySettings
                        / ClaudeInstallPrompt
-  components/layout/settings/  设置页分区：GeneralSettings / CliSettings（子代理限制与空闲回收）/ DirsSettings（飞牛已授权目录）/ ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题 + SettingRow/SettingRows 行式设置项）
+  components/layout/settings/  设置页分区：GeneralSettings / CliSettings（子代理限制、常驻会话数与空闲回收）/ DirsSettings（飞牛已授权目录）/ ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题 + SettingRow/SettingRows 行式设置项）
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
                        / MentionMenu（@ 候选菜单）/ useMention（候选拉取、防抖与键盘仲裁）
                        / ImageLightbox（正文图片放大）

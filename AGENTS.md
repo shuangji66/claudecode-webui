@@ -46,7 +46,8 @@
   复位；搜索时全露）。折叠的是**排好序之后的尾部**，所以「最近更新」在收起状态下也成立；
 - 设置页分「通用 / CLI / 目录 / 代理 / 部署 / 访问 / 关于」：通用放默认权限（置顶）、主题、
   语言、字号与过程展示；CLI 页（第二页）放映射成 claude 环境变量的两项子代理限制
-  （并发上限，默认 10；递归深度，默认 1 = 关闭嵌套）与空闲回收（分钟），
+  （并发上限，默认 10；递归深度，默认 1 = 关闭嵌套）、常驻会话数
+  （默认 8，范围 6–12，步进 2，`manager` 新建时现读）与空闲回收（分钟），
   `settings.Env()` 注入 `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` /
   `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`，只在会话启动时生效；
   其余是代理、claude 版本的下载源/安装/切换，
@@ -1420,7 +1421,21 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 装配层的 `Server.BroadcastConversationsChanged` 是**唯一**出口（`broadcastXxx` 那份
   重复实现已合并），`Hub` 为 nil 时静默返回（单测/无面板部署）。
 
-### 4.19 空闲会话回收（设置 → CLI 的「空闲回收」）
+### 4.19 常驻会话数（设置 → CLI 的「常驻会话数」）
+
+- **这是设置项，不是环境变量**（`settings.MaxSessions`，默认 8，范围 **6–12**，
+  界面步进 **2**）：原来的 `CCWEB_MAX_SESSIONS` 已删除。与「TCP 端口 = 设置项」、
+  空闲回收同一条规矩——两处都能配只会让人猜哪个先生效。
+- **它在 `manager.createWith` 里现读**（`settings.Store.MaxSessions()` → `manager.maxSessions()`），
+  不是启动快照：改完对下一次新建会话生效。`store` 为 nil（单测装配）时才回落到
+  `settings.DefaultMaxSessions`。
+- **降上限不踢会话**：已经在跑的不动，只是新建会拿到 `ErrTooMany`（网关回 409，
+  文案带「当前上限 N」）。要立刻腾出位置得靠空闲回收或用户主动关会话。
+- **步进只约束界面**：`settings.StepMaxSessions` 只用于 ± 按钮，手改配置文件写 7 仍然有效；
+  前端 `bumpSessions` 与 `bumpIdle` 同一套算法——先把当前值归到最近档位，再挪一档。
+- 单会话约 176 MB：这是把范围夹在 6–12 的唯一理由，不要再放宽成输入框。
+
+### 4.19.1 空闲会话回收（设置 → CLI 的「空闲回收」）
 
 - **这是设置项，不是环境变量**（`settings.IdleMinutes`，默认 10，范围 **5–60** 分钟，
   界面步进 **5** 分钟）：与「TCP 端口 = 设置项」同一条规矩，**不要**再加

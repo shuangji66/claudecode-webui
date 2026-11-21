@@ -230,6 +230,35 @@ func TestIdleTimeoutReadsSettingsLive(t *testing.T) {
 	}
 }
 
+// 常驻会话数的唯一来源也是设置项：每次新建现读，没有 store 时回落到默认值。
+//
+// 挡的是「设置页改成 6、实际仍按启动快照拦」：上限必须在 createWith 里现读。
+func TestMaxSessionsReadsSettingsLive(t *testing.T) {
+	store, err := settings.Open(filepath.Join(t.TempDir(), "settings.json"))
+	if err != nil {
+		t.Fatalf("settings.Open: %v", err)
+	}
+	m := &Manager{store: store}
+
+	if got := m.maxSessions(); got != settings.DefaultMaxSessions {
+		t.Fatalf("默认应取设置项 %d，实际 %d", settings.DefaultMaxSessions, got)
+	}
+
+	want := 12
+	if _, err := store.Apply(settings.Patch{MaxSessions: &want}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := m.maxSessions(); got != 12 {
+		t.Fatalf("改完设置应立刻生效，实际 %d", got)
+	}
+
+	// 没接 store（单测装配）时回落到默认值，不能是 0——那会让所有新建都被挡住。
+	bare := &Manager{}
+	if got := bare.maxSessions(); got != settings.DefaultMaxSessions {
+		t.Fatalf("没有 store 时应回落到默认值，实际 %d", got)
+	}
+}
+
 // `/clear` 之后 manager 的键要换到新 id，而且**不能顺手改会话对象的 ID 字段**：
 // 那个字段是外部按 id 找会话的键（sessions/procs/metas 三张表都用它），改了会让
 // 表与对象对不上；真正的「当前 id」由 Session.CurrentID 持锁维护。

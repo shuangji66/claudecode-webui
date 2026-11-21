@@ -82,7 +82,7 @@ func newSchedServer(t *testing.T) *schedFixture {
 	}
 
 	deps := Deps{
-		Cfg:           config.Config{Version: "test-1", MaxSessions: 4},
+		Cfg:           config.Config{Version: "test-1"},
 		Guard:         authz.New(""),
 		Hub:           hub.New(),
 		Manager:       mgr,

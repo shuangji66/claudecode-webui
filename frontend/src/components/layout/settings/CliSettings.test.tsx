@@ -3,8 +3,8 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { CliSettings } from "./CliSettings";
 import { useAppStore } from "../../../store/useAppStore";
 
-// 「设置 → CLI」放的都是直接映射成 claude 子进程环境变量（或回收循环阈值）的值：
-// 子代理的并发 / 嵌套深度走后端设置补丁，空闲回收从「通用」页搬过来后仍按 5 分钟步进。
+// 「设置 → CLI」放的都是与会话进程直接相关的值：子代理的并发 / 嵌套深度映射成
+// claude 子进程环境变量（新会话生效），空闲回收与常驻会话数由宿主自己执行。
 describe("设置 → CLI", () => {
   const saveSettings = vi.fn(async () => true);
 
@@ -14,6 +14,7 @@ describe("设置 → CLI", () => {
     useAppStore.setState({
       settings: {
         idle_minutes: 10,
+        max_sessions: 8,
         subagent_max_concurrent: 10,
         subagent_spawn_depth: 1,
       } as never,
@@ -23,9 +24,9 @@ describe("设置 → CLI", () => {
     });
   });
 
-  it("三项都在：并发子代理、递归深度、空闲回收", () => {
+  it("四项都在：并发子代理、递归深度、常驻会话数、空闲回收", () => {
     render(<CliSettings />);
-    for (const title of ["并发子代理", "子代理递归深度", "空闲回收"]) {
+    for (const title of ["并发子代理", "子代理递归深度", "常驻会话数", "空闲回收"]) {
       expect(screen.getByText(title)).toBeInTheDocument();
     }
   });
@@ -99,6 +100,45 @@ describe("设置 → CLI", () => {
     });
     expect(failing).toHaveBeenCalledWith({ subagent_max_concurrent: 25 });
     expect(input).toHaveValue("10");
+  });
+
+  it("常驻会话数按 2 个步进，落的是 max_sessions 补丁", async () => {
+    useAppStore.setState({ settings: { max_sessions: 8 } as never });
+    render(<CliSettings />);
+    await act(async () => {
+      screen.getByRole("button", { name: "增加常驻会话数" }).click();
+    });
+    expect(saveSettings).toHaveBeenCalledWith({ max_sessions: 10 });
+  });
+
+  it("常驻会话数向下也按 2 个步进", async () => {
+    useAppStore.setState({ settings: { max_sessions: 10 } as never });
+    render(<CliSettings />);
+    await act(async () => {
+      screen.getByRole("button", { name: "减少常驻会话数" }).click();
+    });
+    expect(saveSettings).toHaveBeenCalledWith({ max_sessions: 8 });
+  });
+
+  // 手改成 7 之后按一次要落到最近档位（10），而不是 7+2=9。
+  it("常驻会话数把非档位值归到最近档位再步进", async () => {
+    useAppStore.setState({ settings: { max_sessions: 7 } as never });
+    render(<CliSettings />);
+    await act(async () => {
+      screen.getByRole("button", { name: "增加常驻会话数" }).click();
+    });
+    expect(saveSettings).toHaveBeenCalledWith({ max_sessions: 10 });
+  });
+
+  it("常驻会话数到达 6/12 时按钮禁用", () => {
+    useAppStore.setState({ settings: { max_sessions: 6 } as never });
+    const { unmount } = render(<CliSettings />);
+    expect(screen.getByRole("button", { name: "减少常驻会话数" })).toBeDisabled();
+    unmount();
+
+    useAppStore.setState({ settings: { max_sessions: 12 } as never });
+    render(<CliSettings />);
+    expect(screen.getByRole("button", { name: "增加常驻会话数" })).toBeDisabled();
   });
 
   it("空闲回收按 5 分钟步进，落的是 idle_minutes 补丁", async () => {

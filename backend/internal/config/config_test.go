@@ -10,7 +10,7 @@ func TestLoadDefaults(t *testing.T) {
 	// 清掉所有可能干扰的环境变量
 	for _, k := range []string{
 		"ADMIN_SOCK", "BASEURL", "AUTH_TOKEN", "PROJECTS_ROOT",
-		"DATA_DIR", "HOME", "MAX_SESSIONS", "PERMISSION_MODE", "MODEL",
+		"DATA_DIR", "HOME", "PERMISSION_MODE", "MODEL",
 		"WORKSPACES_FILE", "AUTO_START",
 	} {
 		t.Setenv(EnvPrefix+k, "")
@@ -20,9 +20,6 @@ func TestLoadDefaults(t *testing.T) {
 	cfg := Load("v1")
 	if cfg.Version != "v1" {
 		t.Fatalf("Version = %q", cfg.Version)
-	}
-	if cfg.MaxSessions != 8 {
-		t.Fatalf("MaxSessions = %d", cfg.MaxSessions)
 	}
 	if cfg.ProjectsRoot != "/tmp/home" {
 		t.Fatalf("ProjectsRoot = %q", cfg.ProjectsRoot)
@@ -56,7 +53,6 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv(EnvPrefix+"ADMIN_SOCK", "/run/ccweb/app.sock")
 	t.Setenv(EnvPrefix+"BASEURL", "app/ccweb/")
 	t.Setenv(EnvPrefix+"AUTH_TOKEN", "tok")
-	t.Setenv(EnvPrefix+"MAX_SESSIONS", "3")
 	t.Setenv(EnvPrefix+"PERMISSION_MODE", "acceptEdits")
 	t.Setenv(EnvPrefix+"MODEL", "sonnet")
 	t.Setenv(EnvPrefix+"DATA_DIR", "/var/lib/ccweb")
@@ -70,7 +66,7 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.BaseURL != "/app/ccweb" {
 		t.Fatalf("BaseURL = %q, want /app/ccweb", cfg.BaseURL)
 	}
-	if cfg.AuthToken != "tok" || cfg.MaxSessions != 3 {
+	if cfg.AuthToken != "tok" {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 	if cfg.PermissionMode != "acceptEdits" || cfg.Model != "sonnet" {
@@ -92,9 +88,14 @@ func TestLoadOverrides(t *testing.T) {
 }
 
 func TestLoadIgnoresBadNumbers(t *testing.T) {
-	t.Setenv(EnvPrefix+"MAX_SESSIONS", "abc")
+	// 环境变量里的非法数字不能把路径类配置打回空值。
+	t.Setenv(EnvPrefix+"DATA_DIR", "/var/lib/ccweb")
+	t.Setenv(EnvPrefix+"AUTO_START", "not-a-bool")
 	cfg := Load("v")
-	if cfg.MaxSessions != 8 {
-		t.Fatalf("非法数字应回退默认值，实际 %d", cfg.MaxSessions)
+	if cfg.DataDir != "/var/lib/ccweb" {
+		t.Fatalf("DataDir = %q", cfg.DataDir)
+	}
+	if !cfg.AutoStart {
+		t.Fatal("无法识别的布尔值应回退默认值")
 	}
 }

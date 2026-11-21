@@ -137,6 +137,7 @@ export function normalizeSettings(s: PublicSettings | null): PublicSettings | nu
     font_size: s.font_size || 15,
     proxy_url: s.proxy_url || "",
     idle_minutes: s.idle_minutes || 10,
+    max_sessions: s.max_sessions || 8,
     subagent_max_concurrent: s.subagent_max_concurrent || 10,
     subagent_spawn_depth: s.subagent_spawn_depth || 1,
     providers: providers.map((p) => {

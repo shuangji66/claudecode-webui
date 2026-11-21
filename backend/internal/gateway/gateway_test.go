@@ -170,10 +170,9 @@ func newTestServer(t *testing.T, token string) (*Server, *fakeMgr) {
 	}
 	deps := Deps{
 		Cfg: config.Config{
-			BaseURL:     "",
-			AdminSock:   "/tmp/cc.sock",
-			Version:     "test-1",
-			MaxSessions: 4,
+			BaseURL:   "",
+			AdminSock: "/tmp/cc.sock",
+			Version:   "test-1",
 		},
 		Guard:         authz.New(token),
 		Hub:           hub.New(),

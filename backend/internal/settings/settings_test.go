@@ -748,6 +748,54 @@ func TestIdleMinutesDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+// 常驻会话数：默认 8、范围 6–12、改完落盘、越界拒绝、坏配置文件回落默认值。
+//
+// 它决定 manager 最多同时养几个 claude 子进程，所以「读回来的值」必须永远落在
+// 合法区间内——手改 settings.json 写个 0 会让所有新建会话都被 ErrTooMany 挡住。
+func TestMaxSessionsDefaultsAndValidation(t *testing.T) {
+	s, path := openTemp(t)
+	if got := s.MaxSessions(); got != DefaultMaxSessions {
+		t.Fatalf("默认常驻会话数 = %d, want %d", got, DefaultMaxSessions)
+	}
+	if got := s.Public().MaxSessions; got != DefaultMaxSessions {
+		t.Fatalf("Public 里的默认值 = %d", got)
+	}
+
+	want := 12
+	if _, err := s.Apply(Patch{MaxSessions: &want}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.MaxSessions(); got != want {
+		t.Fatalf("重开后 = %d, want %d", got, want)
+	}
+
+	for _, bad := range []int{0, 5, 13, -2} {
+		v := bad
+		if _, err := s.Apply(Patch{MaxSessions: &v}); err == nil {
+			t.Fatalf("%d 个常驻会话应被拒绝", bad)
+		}
+	}
+}
+
+// 手改配置文件写出的越界值不能让「一个会话都起不来」：Open 时回落默认值。
+func TestMaxSessionsBadConfigFallsBack(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"max_sessions": 0}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.MaxSessions(); got != DefaultMaxSessions {
+		t.Fatalf("越界配置应回落默认值，实际 %d", got)
+	}
+}
+
 // 子代理规模：默认值刻意比 CLI 原生的小（10 并发 / 1 层），改完落盘，
 // 越界拒绝，坏配置文件回落默认值；两个值都必须无条件注入环境变量。
 func TestSubagentLimitsDefaultsAndEnv(t *testing.T) {

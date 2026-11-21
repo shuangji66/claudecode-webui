@@ -133,6 +133,7 @@ export interface SettingsPatch {
   font_size?: number;
   proxy_url?: string;
   idle_minutes?: number;
+  max_sessions?: number;
   subagent_max_concurrent?: number;
   subagent_spawn_depth?: number;
   tcp_enabled?: boolean;

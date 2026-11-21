@@ -9,6 +9,7 @@ import (
 	"ccweb/backend/internal/agent/manager"
 	"ccweb/backend/internal/history"
 	"ccweb/backend/internal/project"
+	"ccweb/backend/internal/settings"
 	"ccweb/backend/internal/webui"
 )
 
@@ -60,7 +61,14 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"tcp_listening": tcpListening,
 		"tcp_error":     tcpErr,
 		"frontend":      webui.HasIndex(),
-		"max_sessions":  s.d.Cfg.MaxSessions,
+		"max_sessions": func() int {
+			// 上限是设置项（manager 与设置页共用同一个值）：这里不能回 config 的
+			// 启动快照，否则界面上写着 6、实际按 8 拦。
+			if s.d.Settings == nil {
+				return settings.DefaultMaxSessions
+			}
+			return s.d.Settings.MaxSessions()
+		}(),
 		// claude 用户级 settings 的提问超时（never / 60s / 5m / 10m）：提问卡片据此提示
 		// 「不回答的话 CLI 到点会自己收尾」。没配就是空串。
 		"ask_question_timeout": askQuestionTimeout(s.d.Cfg.ClaudeHome),

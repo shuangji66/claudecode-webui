@@ -437,10 +437,13 @@ func (m *Manager) createWith(abs, sessionID, resumeID, model, permissionMode str
 
 	// 并发创建各自 spawn，上限必须把「正在 spawn、还没登记进 sessions」的算进来，
 	// 否则两个请求可以同时通过检查、各起一个进程。
+	//
+	// 上限在锁外先读：settings.Store 有自己的锁，别在 m.mu 里嵌一层。
+	limit := m.maxSessions()
 	m.mu.Lock()
-	if len(m.sessions)+m.spawning >= m.cfg.MaxSessions {
+	if len(m.sessions)+m.spawning >= limit {
 		m.mu.Unlock()
-		return Info{}, ErrTooMany
+		return Info{}, fmt.Errorf("%w（当前上限 %d）", ErrTooMany, limit)
 	}
 	m.spawning++
 	m.mu.Unlock()
@@ -719,6 +722,19 @@ func (m *Manager) reapLoop() {
 			m.reapIdle()
 		}
 	}
+}
+
+// maxSessions 返回当前允许的常驻会话数。
+//
+// 唯一来源是设置项（设置 → CLI 的「常驻会话数」），每次新建会话现读：改完下一次创建就
+// 生效，降下限不会踢掉已经在跑的会话，只是新建会拿到 ErrTooMany。
+// `store` 为 nil 只会出现在单测装配里，那时才回落到默认值——**不要**再加环境变量：
+// 「端口 = 设置项，不是环境变量」是同一条规矩，两处都配只会让人猜哪个先生效。
+func (m *Manager) maxSessions() int {
+	if m.store == nil {
+		return settings.DefaultMaxSessions
+	}
+	return m.store.MaxSessions()
 }
 
 // idleTimeout 返回当前的回收阈值。
