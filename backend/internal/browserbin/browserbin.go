@@ -36,6 +36,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"ccweb/backend/internal/envpath"
 	"ccweb/backend/internal/netproxy"
@@ -127,6 +128,9 @@ var (
 	ErrNoNode = errors.New("browserbin: 找不到 node 运行时")
 	// ErrBadSource 表示不认识的 npm 源。
 	ErrBadSource = errors.New("browserbin: 未知的下载源")
+	// ErrUnsigned 表示源没有提供包的完整性摘要。与 claudebin 同一条口径：
+	// 拿不到 dist.integrity 就不装——npm 包解出来要被 node 直接执行。
+	ErrUnsigned = errors.New("browserbin: npm 源没有提供 dist.integrity，拒绝安装未校验的包")
 )
 
 // KernelStatus 是单个内核的安装状态。
@@ -184,6 +188,13 @@ type Manager struct {
 	checks map[string]kernelCheck
 	// testing 保证同一时刻只跑一次自检（GET 状态时按需触发）。
 	testing atomic.Bool
+	// selfTested 记「本进程已经试过一次自检」：结论写不进盘（目录不可写、selftest.json
+	// 被删）时 Status 不能再每轮询都去真启动一次浏览器。
+	selfTested atomic.Bool
+	// nodeOnce/nodeVersion 缓存 `node -v`：状态接口被前端 1.5s 轮询一次，
+	// 每次 spawn 一个 node 只为读版本号不值得。
+	nodeOnce    sync.Once
+	nodeVersion string
 }
 
 // kernelCheck 是一个内核的自检结论。
@@ -222,11 +233,17 @@ func Open(dir string) (*Manager, error) {
 	}
 	m.loadChecks()
 	// 代理回调每次现读设置：用户可能在安装过程中改代理。
+	//
+	// 各项超时都要有上限：整条安装链路虽然有 installTimeout（40 分钟）兜着，但那是
+	// 「下载慢」的预算，不是「对端接了连接却不吐字节」的预算——后者靠 ResponseHeaderTimeout。
 	m.client = &http.Client{
 		Transport: &http.Transport{
 			Proxy: func(req *http.Request) (*url.URL, error) {
 				return netproxy.Func(proxySource())(req)
 			},
+			ResponseHeaderTimeout: 30 * time.Second,
+			TLSHandshakeTimeout:   15 * time.Second,
+			IdleConnTimeout:       60 * time.Second,
 		},
 	}
 	return m, nil
@@ -278,16 +295,21 @@ func (m *Manager) NodePath() (string, error) {
 }
 
 // NodeVersion 返回 `node -v` 的输出（解析失败时为空）。
+//
+// 结果缓存一次：Status 是前端 1.5s 轮询一次的接口，而 node 二进制在一次运行里不会换。
 func (m *Manager) NodeVersion() string {
-	node, err := m.NodePath()
-	if err != nil {
-		return ""
-	}
-	out, err := exec.Command(node, "-v").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	m.nodeOnce.Do(func() {
+		node, err := m.NodePath()
+		if err != nil {
+			return
+		}
+		out, err := exec.Command(node, "-v").Output()
+		if err != nil {
+			return
+		}
+		m.nodeVersion = strings.TrimSpace(string(out))
+	})
+	return m.nodeVersion
 }
 
 // KernelInstalled 报告某个内核的目录是否已经就位。
@@ -401,11 +423,12 @@ func (m *Manager) Status() Status {
 	st.Source = m.source
 	m.mu.Unlock()
 
-	if st.Installed && len(checks) == 0 && m.testing.CompareAndSwap(false, true) {
+	if st.Installed && len(checks) == 0 && !m.selfTested.Load() && m.testing.CompareAndSwap(false, true) {
 		// 装好但还没有自检结论（安装刚结束、或结论文件被删）：后台补一次。
 		// 不在这里同步跑——状态接口要保持毫秒级。
 		go func() {
 			defer m.testing.Store(false)
+			defer m.selfTested.Store(true)
 			m.selfTest(context.Background())
 		}()
 	}

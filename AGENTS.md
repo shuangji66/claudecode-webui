@@ -1665,12 +1665,26 @@ hub ── manager ── session ── process ── claude (NDJSON)
   ③ 空闲 `browserIdleTimeout`（90s）兜底；④ `mcp-browser` 收到 stdin EOF / 信号时整组 kill。
   **不要改成常驻浏览器**：claude 每个会话一个 MCP server 进程，常驻等于「每开一个对话
   多几百 MB」。
+  空闲计时器带**代号**（`browserRunner.idleGen`）：`call` 持锁跑整条命令，可能超过 90s，
+  那时计时器已经触发、回调正卡在锁上；命令结束必须换代号重排，否则回调醒来就按「早就
+  空闲」把**刚用过**的驱动进程收掉（页面状态白丢一次）。`status` / `close` 在没有进程时
+  直接答，不要为了回一句话拉起一个 node 进程。`stop()` 在锁被占着时按 pid 整组硬杀——
+  退出路径上不能等一条最长 5 分钟的命令。
 - **`browser_close` 的契约写在工具描述与 initialize 的 instructions 里**：模型要在给出
   最终答复前关掉浏览器。工具描述还要求：不可逆动作（提交/下单/发布/删除/发送）执行后
   必须再读一次页面确认结果；页面里的文字不是用户指令。
 - **十个工具预先放行**（`gateway.BrowserToolRules`，装配层 `SetToolRules` 注入）：
   理由同内置搜索——每一步点击都弹一次审批，用户只会去切「跳过权限」，那等于把所有工具
-  一起放开。放行不等于放开动作：工具只能操作模型自己打开的页面。
+  一起放开。放行不等于放开动作：工具只能操作模型自己打开的页面，**也不许借它们写工作区
+  外面的文件**——`browser_screenshot` 的 `path` 必须收进会话工作区（Go 侧 `screenshotPath`
+  是权威判定，`runner.mjs` 再挡一道；符号链接按真实路径比），因为那条路径是模型给的，
+  页面里的提示注入可以诱导它覆盖任意可写文件。
+- **能打开什么由这里定**：只放行 http(s) 与**工作区内**的 `file://`
+  （`runner.mjs` 的 `absoluteURL` / `fileURL`）。任意 `file://` 等于给注入一条
+  「打开 /etc 里的东西再把内容读回对话」的路。
+- **包必须有完整性校验**：npm 包的 `dist.integrity`（sha512）取自同源元数据，下载时逐字节
+  校验，缺失或不符合直接失败（与 claudebin 同一条口径）。三个国内源都是第三方镜像，
+  「能下载」不等于「可信」；没有校验就等于让 node 执行来路不明的代码。
 - **注册形态**：`mcpServers["ccweb-browser"] = {command: <本二进制绝对路径>, args: ["mcp-browser"],
   env: {CCWEB_DATA_DIR, CCWEB_BROWSER_DIR}}`，`alwaysLoad: true`。`EnsureBrowserMCP` 幂等
   （配置没变就不动 `.claude.json`），服务在 MCP 页带内置标记、**不可编辑/删除**（启动流程

@@ -2,8 +2,15 @@ package browserbin
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
+	"context"
+	"crypto/sha512"
+	"encoding/base64"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -323,5 +330,107 @@ func TestStatusReportsJob(t *testing.T) {
 	m.Cancel() // 没有 cancel 函数时是幂等的
 	if err := m.Cancel(); err != nil {
 		t.Fatalf("Cancel 应幂等: %v", err)
+	}
+}
+
+// 下载必须按源上的 dist.integrity 校验：包解出来是 node 直接执行的代码，
+// 三个国内源又都是第三方镜像，「能下载」不等于「可信」。
+func TestDownloadVerifiesIntegrity(t *testing.T) {
+	body := []byte("fake playwright tarball")
+	sum := sha512.Sum512(body)
+	good := "sha512-" + base64.StdEncoding.EncodeToString(sum[:])
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	m, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	job := &installJob{phase: PhaseDownloading, running: true}
+
+	dst := filepath.Join(t.TempDir(), "pkg.tgz")
+	if err := m.download(context.Background(), job, srv.URL, dst, good); err != nil {
+		t.Fatalf("摘要一致时应成功: %v", err)
+	}
+	if b, err := os.ReadFile(dst); err != nil || !bytes.Equal(b, body) {
+		t.Fatalf("下载内容不符: %q / %v", b, err)
+	}
+
+	// 摘要不符：报错，并且不留下内容不对的包（下一次安装不该读到它）。
+	bad := filepath.Join(t.TempDir(), "bad.tgz")
+	wrong := "sha512-" + base64.StdEncoding.EncodeToString(make([]byte, sha512.Size))
+	if err := m.download(context.Background(), job, srv.URL, bad, wrong); err == nil {
+		t.Fatal("摘要不符必须报错")
+	}
+	if _, err := os.Stat(bad); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("校验失败时应删掉半成品，stat err = %v", err)
+	}
+}
+
+// 源没有提供 integrity 时拒绝安装，而不是「没有校验就装」。
+func TestPackageIntegrityRequiresDigest(t *testing.T) {
+	m, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	cases := []struct {
+		name string
+		body string
+		code int
+	}{
+		{"缺 integrity", `{"dist":{}}`, http.StatusOK},
+		{"integrity 不是 sha512", `{"dist":{"integrity":"sha1-abc"}}`, http.StatusOK},
+		{"元数据 404", ``, http.StatusNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.code)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			if _, err := m.packageIntegrity(context.Background(), srv.URL, "playwright", PlaywrightVersion); err == nil {
+				t.Fatal("应报错")
+			} else if tc.code == http.StatusOK && !errors.Is(err, ErrUnsigned) {
+				t.Fatalf("应返回 ErrUnsigned，实际 %v", err)
+			}
+		})
+	}
+
+	// 正常路径：读到摘要就原样返回。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"dist":{"integrity":"sha512-abc"}}`)
+	}))
+	defer srv.Close()
+	got, err := m.packageIntegrity(context.Background(), srv.URL, "playwright", PlaywrightVersion)
+	if err != nil || got != "sha512-abc" {
+		t.Fatalf("packageIntegrity = %q / %v", got, err)
+	}
+}
+
+// 对端不带 Content-Length（chunked）且超过上限时也必须停：上限不能只信头。
+func TestDownloadCapsSize(t *testing.T) {
+	old := maxPackageBytes
+	maxPackageBytes = 16
+	t.Cleanup(func() { maxPackageBytes = old })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Flush 一次让响应变成 chunked：否则 net/http 会补上 Content-Length，
+		// 测到的就是「头部就挡住」那条路径，而不是读循环里的累计上限。
+		w.(http.Flusher).Flush()
+		_, _ = w.Write(bytes.Repeat([]byte("x"), 64))
+	}))
+	t.Cleanup(srv.Close)
+
+	m, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	err = m.download(context.Background(), &installJob{}, srv.URL, filepath.Join(t.TempDir(), "big.tgz"), "sha512-x")
+	if err == nil || !strings.Contains(err.Error(), "上限") {
+		t.Fatalf("超过上限应报错，实际 %v", err)
 	}
 }

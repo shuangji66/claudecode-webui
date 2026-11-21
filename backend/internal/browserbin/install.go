@@ -5,7 +5,9 @@ import (
 	"bufio"
 	"compress/gzip"
 	"context"
+	"crypto/sha512"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,7 +33,9 @@ var runnerSource []byte
 
 // 下载上限：playwright 包两个加起来约 6MB，给 64MB 足够；内核由 playwright 自己的
 // CLI 下载，不经过这里。
-const maxPackageBytes = 64 << 20
+//
+// 是变量而不是常量：测试要把它调小来钉住「超过上限就停」，否则得先造 64MB 的响应体。
+var maxPackageBytes int64 = 64 << 20
 
 // installTimeout 是整条安装链路的上限（下载包 + 两个内核）。
 //
@@ -100,6 +104,10 @@ func (m *Manager) Remove() error {
 }
 
 func (m *Manager) runInstall(ctx context.Context, job *installJob, source string) {
+	// 成功路径也要收掉 40 分钟的超时定时器（否则它会一直挂到点）。
+	if job.cancel != nil {
+		defer job.cancel()
+	}
 	err := m.install(ctx, job, source)
 
 	m.mu.Lock()
@@ -144,8 +152,14 @@ func (m *Manager) install(ctx context.Context, job *installJob, source string) e
 	for _, name := range []string{"playwright", "playwright-core"} {
 		url := fmt.Sprintf("%s/%s/-/%s-%s.tgz", reg, name, name, PlaywrightVersion)
 		tgz := filepath.Join(tmp, name+".tgz")
+		// 先取源上的 dist.integrity 再下载：包解出来是 node 直接 require 的代码，
+		// 「能下载」不等于「可信」（三个国内源都是第三方镜像）。
+		integrity, err := m.packageIntegrity(ctx, reg, name, PlaywrightVersion)
+		if err != nil {
+			return err
+		}
 		m.setPhase(job, PhaseDownloading, "正在下载 "+name+" "+PlaywrightVersion)
-		if err := m.download(ctx, job, url, tgz); err != nil {
+		if err := m.download(ctx, job, url, tgz, integrity); err != nil {
 			return err
 		}
 		m.setPhase(job, PhaseExtracting, "正在解包 "+name)
@@ -283,8 +297,44 @@ func killGroup(cmd *exec.Cmd) {
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
 }
 
-// download 把 url 拉成文件，进度写进 job。
-func (m *Manager) download(ctx context.Context, job *installJob, url, dst string) error {
+// packageIntegrity 取 npm 包某个版本的 dist.integrity（`sha512-<base64>`）。
+//
+// 与 claudebin 同一条口径（见 claudebin/install.go）：**拿不到摘要就拒绝安装**。
+// 浏览器运行时不一样的地方是源头更多——除了官方 registry，还有三个国内镜像，
+// 它们都是第三方；解出来的包由 node 直接执行，没有校验就等于装上来路不明的代码。
+func (m *Manager) packageIntegrity(ctx context.Context, registry, pkg, version string) (string, error) {
+	metaURL := fmt.Sprintf("%s/%s/%s", strings.TrimRight(registry, "/"), pkg, version)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metaURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("browserbin: 构造元数据请求: %w", err)
+	}
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("browserbin: 读取 %s 元数据: %w", pkg, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("browserbin: 读取 %s 元数据返回 HTTP %d", pkg, resp.StatusCode)
+	}
+	var meta struct {
+		Dist struct {
+			Integrity string `json:"integrity"`
+		} `json:"dist"`
+	}
+	// 元数据只有几 KB，但不要相信对端给的长度：上限 1 MiB 足够。
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&meta); err != nil {
+		return "", fmt.Errorf("browserbin: 解析 %s 元数据: %w", pkg, err)
+	}
+	if !strings.HasPrefix(meta.Dist.Integrity, "sha512-") {
+		return "", fmt.Errorf("%w（%s %s）", ErrUnsigned, pkg, version)
+	}
+	return meta.Dist.Integrity, nil
+}
+
+// download 把 url 拉成文件，进度写进 job，并按 integrity 校验 sha512。
+//
+// 校验失败时删掉文件：留一份内容不对的 tgz 只会让下一次安装看起来更奇怪。
+func (m *Manager) download(ctx context.Context, job *installJob, url, dst, integrity string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("browserbin: 构造下载请求: %w", err)
@@ -297,6 +347,10 @@ func (m *Manager) download(ctx context.Context, job *installJob, url, dst string
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("browserbin: 下载 %s 返回 HTTP %d", url, resp.StatusCode)
 	}
+	// 长度已知时先挡一次：别等到写完 4 GiB 才发现对端给的不是包。
+	if resp.ContentLength > maxPackageBytes {
+		return fmt.Errorf("browserbin: 包体积异常（%d 字节）: %s", resp.ContentLength, url)
+	}
 
 	f, err := os.Create(dst)
 	if err != nil {
@@ -304,25 +358,40 @@ func (m *Manager) download(ctx context.Context, job *installJob, url, dst string
 	}
 	defer f.Close()
 
-	if resp.ContentLength > 0 && resp.ContentLength < maxPackageBytes {
+	if resp.ContentLength > 0 {
 		m.setTotal(job, resp.ContentLength)
 	}
 
+	// Content-Length 可以是假的（chunked 时也没有），所以读的时候再挡一次。
+	hash := sha512.New()
+	body := io.LimitReader(resp.Body, maxPackageBytes+1)
 	buf := make([]byte, 64<<10)
+	var written int64
 	for {
-		n, err := resp.Body.Read(buf)
+		n, rerr := body.Read(buf)
 		if n > 0 {
+			written += int64(n)
+			if written > maxPackageBytes {
+				return fmt.Errorf("browserbin: 下载超过上限（%d MB）: %s", maxPackageBytes>>20, url)
+			}
 			if _, werr := f.Write(buf[:n]); werr != nil {
 				return fmt.Errorf("browserbin: 写入文件: %w", werr)
 			}
+			_, _ = hash.Write(buf[:n]) // hash.Hash 的 Write 不会失败
 			m.addProgress(job, int64(n))
 		}
-		if errors.Is(err, io.EOF) {
+		if errors.Is(rerr, io.EOF) {
 			break
 		}
-		if err != nil {
-			return fmt.Errorf("browserbin: 读取响应: %w", err)
+		if rerr != nil {
+			return fmt.Errorf("browserbin: 读取响应: %w", rerr)
 		}
+	}
+
+	got := "sha512-" + base64.StdEncoding.EncodeToString(hash.Sum(nil))
+	if got != integrity {
+		_ = os.Remove(dst)
+		return fmt.Errorf("browserbin: 完整性校验失败（期望 %s，实际 %s）；%s 的内容与源上的摘要不一致，可能是镜像被换包", integrity, got, url)
 	}
 	return nil
 }

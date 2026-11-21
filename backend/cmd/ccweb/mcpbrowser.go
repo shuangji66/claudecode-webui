@@ -26,8 +26,10 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -107,13 +109,23 @@ func (t *tailBuffer) String() string {
 type browserRunner struct {
 	mgr *browserbin.Manager
 
-	mu   sync.Mutex
-	cmd  *exec.Cmd
-	in   io.WriteCloser
-	out  *bufio.Reader
-	errs *tailBuffer
-	id   int
-	idle *time.Timer
+	mu  sync.Mutex
+	cmd *exec.Cmd
+	in  io.WriteCloser
+	// outClose 是 stdout 的读端。回收驱动进程时**必须**自己关掉它：这里用的是
+	// cmd.Process.Wait()（不是 cmd.Wait()），os/exec 不会替我们关 pipe，
+	// 反复重建驱动进程会一路泄漏 fd。
+	outClose io.Closer
+	out      *bufio.Reader
+	errs     *tailBuffer
+	id       int
+	// idleGen 是空闲计时器的代号：已触发但还没拿到锁的旧回调看到代号不符就直接退出
+	// （见 closeIdle）。
+	idleGen uint64
+	idle    *time.Timer
+	// pid 是驱动进程的进程号（整组的一个代表）。stop() 在锁被占着时按它硬杀：
+	// 退出路径上不能等一条最长 5 分钟的命令跑完。
+	pid atomic.Int64
 }
 
 // ensure 在需要时启动驱动进程。
@@ -146,9 +158,24 @@ func (r *browserRunner) ensure() error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("ccweb mcp-browser: 启动浏览器驱动: %w", err)
 	}
-	r.cmd, r.in, r.out, r.errs = cmd, stdin, bufio.NewReaderSize(stdout, 1<<20), errs
-	r.idle = time.AfterFunc(browserIdleTimeout, func() { r.closeIdle() })
+	r.cmd, r.in, r.outClose, r.out, r.errs = cmd, stdin, stdout, bufio.NewReaderSize(stdout, 1<<20), errs
+	r.pid.Store(int64(cmd.Process.Pid))
 	return nil
+}
+
+// armIdleLocked 从「现在」开始重排空闲计时器。
+//
+// 每次重排都换一个代号：计时器可能已经触发、回调正卡在 r.mu 上（一条命令正要跑满
+// 90 秒时就是这样）。那样的回调醒来后不该再按旧的「空闲」判断去杀进程——代号不符
+// 就直接退出，由最近一次重排负责下一次判断。
+// 调用方必须已持有 r.mu。
+func (r *browserRunner) armIdleLocked() {
+	if r.idle != nil {
+		r.idle.Stop()
+	}
+	r.idleGen++
+	gen := r.idleGen
+	r.idle = time.AfterFunc(browserIdleTimeout, func() { r.closeIdle(gen) })
 }
 
 // closeIdle 是空闲兜底：模型忘了 browser_close 时把浏览器收掉。
@@ -157,40 +184,54 @@ func (r *browserRunner) ensure() error {
 // 下一次调用还以为进程活着（ensure 直接返回），写进去才发现管道已断——报的是
 // 「驱动进程不可用」，而不是默默重启一个。现在先摘状态再延时收尸：新调用会重建进程，
 // 旧进程要么自己退（close 正常路径），要么 1.5 秒后被整组杀掉。
-func (r *browserRunner) closeIdle() {
+func (r *browserRunner) closeIdle(gen uint64) {
 	r.mu.Lock()
-	if r.cmd == nil {
+	if gen != r.idleGen || r.cmd == nil {
+		// 过期回调（期间有命令跑过、或已经被别人摘干净）：什么都不做。
 		r.mu.Unlock()
 		return
 	}
-	cmd, in := r.detachLocked()
+	proc := r.detachLocked()
 	r.mu.Unlock()
 
 	// 先请驱动自己关浏览器（会走 browser.close()，比硬杀干净），到点再收尸。
-	if in != nil {
-		_, _ = in.Write([]byte("{\"id\":0,\"cmd\":\"close\"}\n"))
+	if proc.in != nil {
+		_, _ = proc.in.Write([]byte("{\"id\":0,\"cmd\":\"close\"}\n"))
 	}
 	time.Sleep(1500 * time.Millisecond)
-	r.killProcess(cmd)
-	if in != nil {
-		_ = in.Close()
+	r.killProcess(proc)
+	if proc.in != nil {
+		_ = proc.in.Close()
 	}
+	if proc.out != nil {
+		_ = proc.out.Close()
+	}
+}
+
+// runnerProc 是被摘下来的驱动进程及其管道。
+type runnerProc struct {
+	cmd *exec.Cmd
+	in  io.WriteCloser
+	out io.Closer
 }
 
 // detachLocked 摘掉当前驱动进程的状态并返回它，供调用方在锁外收尾。
 // 调用方必须已持有 r.mu。
-func (r *browserRunner) detachLocked() (*exec.Cmd, io.WriteCloser) {
-	cmd, in := r.cmd, r.in
-	r.cmd, r.in, r.out = nil, nil, nil
+func (r *browserRunner) detachLocked() runnerProc {
+	proc := runnerProc{cmd: r.cmd, in: r.in, out: r.outClose}
+	r.cmd, r.in, r.outClose, r.out = nil, nil, nil, nil
+	r.pid.Store(0)
 	if r.idle != nil {
 		r.idle.Stop()
 		r.idle = nil
 	}
-	return cmd, in
+	r.idleGen++ // 让已经触发的回调失效
+	return proc
 }
 
 // killProcess 杀掉驱动进程及其进程组。
-func (r *browserRunner) killProcess(cmd *exec.Cmd) {
+func (r *browserRunner) killProcess(proc runnerProc) {
+	cmd := proc.cmd
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
@@ -204,17 +245,88 @@ func (r *browserRunner) killProcess(cmd *exec.Cmd) {
 
 // stop 关闭驱动进程（幂等）。
 func (r *browserRunner) stop() {
-	r.mu.Lock()
-	cmd, in := r.detachLocked()
-	r.mu.Unlock()
-	if cmd == nil {
+	if !r.mu.TryLock() {
+		// 有命令正在跑（call 持锁做完整条 I/O）：退出路径上不能等它——最长 5 分钟。
+		// 直接按 pid 整组硬杀；那条 call 自己会在读管道失败时收尾。
+		if pid := int(r.pid.Load()); pid > 0 {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+		}
 		return
 	}
-	if in != nil {
-		_ = in.Close() // 关 stdin 让驱动自己收尾（它会关浏览器）
+	proc := r.detachLocked()
+	r.mu.Unlock()
+	if proc.cmd == nil {
+		return
+	}
+	if proc.in != nil {
+		_ = proc.in.Close() // 关 stdin 让驱动自己收尾（它会关浏览器）
 		time.Sleep(300 * time.Millisecond)
 	}
-	r.killProcess(cmd)
+	r.killProcess(proc)
+	if proc.out != nil {
+		_ = proc.out.Close()
+	}
+}
+
+// running 报告驱动进程是否还活着（不会顺带启动一个新的）。
+func (r *browserRunner) running() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cmd != nil
+}
+
+// workRoot 是本会话的工作区：claude 用会话 cwd 启动本进程（MCP 注册里只带 CCWEB_* 环境变量）。
+//
+// 截图落点的围栏要用它，所以取不到 cwd 时必须报错而不是放行。
+func workRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("无法确定工作区目录（截图必须落在工作区里）: %w", err)
+	}
+	return dir, nil
+}
+
+// screenshotPath 把模型给的截图落点收进工作区。
+//
+// 空串表示「用驱动进程的默认值」（`.ccweb-browser/shot-*.png`，本来就在工作区里）。
+// 相对路径按工作区解析；绝对路径必须在工作区里面，符号链接也要按真实路径判。
+func screenshotPath(root, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	abs := raw
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(root, abs)
+	}
+	abs = filepath.Clean(abs)
+	if !withinDir(root, abs) {
+		return "", fmt.Errorf("截图只能存到工作区里：%s（当前工作区 %s）；改用相对路径或先说明为什么要写到外面", raw, root)
+	}
+	return abs, nil
+}
+
+// withinDir 判断 target 是否落在 root 里面（两边都按真实路径比）。
+//
+// 不能只做 `strings.HasPrefix(target, root)`：工作区里一条指向 /etc 的符号链接
+// 就能让「工作区里的路径」实际写到外面去。
+func withinDir(root, target string) bool {
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		root = real
+	}
+	probe, rest := filepath.Dir(target), filepath.Base(target)
+	for {
+		if real, err := filepath.EvalSymlinks(probe); err == nil {
+			full := filepath.Join(real, rest)
+			return full == root || strings.HasPrefix(full, root+string(os.PathSeparator))
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return false
+		}
+		rest = filepath.Join(filepath.Base(probe), rest)
+		probe = parent
+	}
 }
 
 // call 发一条命令并等回包。
@@ -224,9 +336,9 @@ func (r *browserRunner) call(name string, args map[string]any, timeout time.Dura
 	if err := r.ensure(); err != nil {
 		return nil, err
 	}
-	if r.idle != nil {
-		r.idle.Reset(browserIdleTimeout)
-	}
+	// 空闲从「这条命令结束」重新算：命令本身可能跑满 90 秒甚至 5 分钟，
+	// 按开始时刻算的话它一返回就会被刚醒来的计时器收掉（浏览器状态白丢一次）。
+	defer r.armIdleLocked()
 	r.id++
 	id := r.id
 	payload, _ := json.Marshal(map[string]any{"id": id, "cmd": name, "args": args})
@@ -276,11 +388,14 @@ func (r *browserRunner) call(name string, args map[string]any, timeout time.Dura
 
 // stopLocked 在已持锁的情况下收掉进程（call 的失败路径用）。
 func (r *browserRunner) stopLocked() {
-	cmd, in := r.detachLocked()
-	if in != nil {
-		_ = in.Close()
+	proc := r.detachLocked()
+	if proc.in != nil {
+		_ = proc.in.Close()
 	}
-	r.killProcess(cmd)
+	r.killProcess(proc)
+	if proc.out != nil {
+		_ = proc.out.Close()
+	}
 }
 
 // readLine 读一行，带超时（bufio 没有 deadline）。
@@ -404,12 +519,12 @@ func browserToolDefs() []map[string]any {
 		},
 		{
 			"name": toolBrowserScreenshot,
-			"description": "把当前页面截成图片存到文件，返回路径（默认 .ccweb-browser/shot-*.png）。" +
+			"description": "把当前页面截成图片存到工作区里的文件，返回路径（默认 .ccweb-browser/shot-*.png）。" +
 				"要看布局、颜色、图表、验证码时用它，再用 Read 工具打开那张图；不要用截图代替文字阅读。",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"path":      map[string]any{"type": "string", "description": "保存路径（相对工作区或绝对路径）"},
+					"path":      map[string]any{"type": "string", "description": "保存路径（相对工作区，绝对路径也必须在工作区里）"},
 					"full_page": map[string]any{"type": "boolean", "description": "整页长截图（默认只截视口）"},
 				},
 				"additionalProperties": false,
@@ -727,9 +842,35 @@ func callBrowserTool(r *browserRunner, name string, rawArgs json.RawMessage) too
 		}
 	}
 
+	// status / close 只是「问一句状态」「收个尾」：没有进程时直接答，不要再为它
+	// 拉起一个 node 驱动进程（几十 MB + 90 秒空闲计时器，模型常常在每轮末尾例行 close）。
+	if cmd == "status" && !r.running() {
+		return okResult("浏览器未启动。需要时直接 browser_open，会自动启动。")
+	}
+	if cmd == "close" && !r.running() {
+		return okResult("浏览器已关闭，进程已退出。")
+	}
+
 	args, err := browserArgs(name, rawArgs)
 	if err != nil {
 		return errResult(err.Error())
+	}
+
+	// 截图会真的写文件，落点必须先收进工作区：这十个工具是预放行的，path 又是
+	// 模型给的——不挡的话，页面里的提示注入可以诱导它覆盖工作区外任意可写文件。
+	if cmd == "screenshot" {
+		root, rootErr := workRoot()
+		if rootErr != nil {
+			return errResult(rootErr.Error())
+		}
+		raw, _ := args["path"].(string)
+		out, pathErr := screenshotPath(root, raw)
+		if pathErr != nil {
+			return errResult(pathErr.Error())
+		}
+		if out != "" {
+			args["path"] = out
+		}
 	}
 
 	// 内核在这台机器上起不来（自检结论）时直接给结论：

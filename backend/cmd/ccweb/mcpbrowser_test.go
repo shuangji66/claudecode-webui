@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -165,5 +167,47 @@ func TestBrowserTimeoutFollowsToolArgument(t *testing.T) {
 	// 再大也封顶，别让一次调用挂到 MCP 的 tools/call 超时。
 	if got := browserTimeout("open", map[string]any{"timeoutMs": 3600000}); got != browserMaxTimeout {
 		t.Fatalf("上限 = %v，want %v", got, browserMaxTimeout)
+	}
+}
+
+// 截图落点必须收进工作区：这些工具是预放行的，path 又是模型给的，
+// 任意落点等于把「截图」变成「覆盖工作区外任意可写文件」。
+func TestScreenshotPathStaysInWorkspace(t *testing.T) {
+	root := t.TempDir()
+	// 工作区里一条指向外面的符号链接：按字面判断会放行，按真实路径必须拒绝。
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Skipf("创建符号链接失败: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		raw  string
+		ok   bool
+	}{
+		{"空值用默认落点", "", true},
+		{"相对路径", "shots/a.png", true},
+		{"工作区里的绝对路径", filepath.Join(root, "a.png"), true},
+		{"父目录穿越", "../escape.png", false},
+		{"绝对路径在外面", filepath.Join(outside, "a.png"), false},
+		{"经符号链接逃出去", filepath.Join(root, "link", "a.png"), false},
+		{"系统目录", "/etc/cron.d/x", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := screenshotPath(root, tc.raw)
+			if tc.ok {
+				if err != nil {
+					t.Fatalf("应放行，实际 %v", err)
+				}
+				if tc.raw != "" && !filepath.IsAbs(got) {
+					t.Fatalf("应返回绝对路径，实际 %q", got)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("应拒绝，实际放行到 %q", got)
+			}
+		})
 	}
 }

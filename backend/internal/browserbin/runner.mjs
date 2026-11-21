@@ -79,21 +79,83 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+/** target 是否在 root 里面（都按真实路径比，符号链接不能把路径带出去）。 */
+function withinRoot(root, target) {
+  let realRoot = root;
+  try {
+    realRoot = fs.realpathSync(root);
+  } catch {
+    /* root 不存在：按传入值比 */
+  }
+  let probe = target;
+  let rest = '';
+  // 逐级向上找第一个存在的祖先再拼回剩下的段：截图/本地文件的父目录可能还不存在。
+  for (;;) {
+    try {
+      const real = fs.realpathSync(probe);
+      const full = rest ? path.join(real, rest) : real;
+      return full === realRoot || full.startsWith(realRoot + path.sep);
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) return false;
+      rest = rest ? path.join(path.basename(probe), rest) : path.basename(probe);
+      probe = parent;
+    }
+  }
+}
+
+/**
+ * 把入口收进允许的范围：http(s) 与**工作区内**的 file://。
+ *
+ * 为什么不能放行任意 file://：这十个工具是预放行的（不弹审批），而 url 是模型给的——
+ * 页面里的提示注入可以诱导模型 `browser_open file:///etc/...` 再把内容读回对话。
+ * 本地文件只在工作区里才有正当用途（看一份自己生成的 HTML）。
+ */
+function fileURL(raw, root) {
+  const abs = path.resolve(root, raw);
+  if (!withinRoot(root, abs)) {
+    throw new Error(`本地文件只能打开工作区里的：${raw}（当前工作区 ${root}）`);
+  }
+  return 'file://' + abs;
+}
+
 /** 裸域名补 https；相对路径 / 本地文件转 file://（与 skill 的 pw.mjs 同一口径）。 */
-function absoluteURL(raw) {
+function absoluteURL(raw, root = process.cwd()) {
   const s = String(raw || '').trim();
   if (!s) throw new Error('url 不能为空');
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(s)) return s;
-  if (s.startsWith('//')) return 'https:' + s;
-  if (s.startsWith('/') || s.startsWith('./') || s.startsWith('../')) {
-    return 'file://' + path.resolve(s);
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(s)) {
+    let protocol = '';
+    try {
+      protocol = new URL(s).protocol;
+    } catch {
+      throw new Error(`url 不合法：${s}`);
+    }
+    if (protocol === 'file:') {
+      const abs = fileURL(fileURLToPath(s), root);
+      return abs;
+    }
+    if (protocol !== 'http:' && protocol !== 'https:') {
+      throw new Error(`不支持的协议 ${protocol}：只能打开 http(s) 或工作区里的本地文件`);
+    }
+    return s;
   }
+  if (s.startsWith('//')) return 'https:' + s;
+  if (s.startsWith('/') || s.startsWith('./') || s.startsWith('../')) return fileURL(s, root);
   if (/^[\w.-]+\.[a-zA-Z]{2,}(:\d+)?(\/|$)/.test(s)) return 'https://' + s;
-  return 'file://' + path.resolve(s);
+  return fileURL(s, root);
 }
 
 async function ensureLaunched(args) {
-  if (browser) return;
+  if (browser) {
+    // isConnected() 为 false 说明 Chromium 已经没了（NAS 上内存压力会杀掉它）。
+    // 不清掉重建的话，之后每个工具都只会回 playwright 的
+    // "Target page, context or browser has been closed"，模型只能靠猜。
+    if (typeof browser.isConnected !== 'function' || browser.isConnected()) return;
+    await browser.close().catch(() => {});
+    browser = null;
+    context = null;
+    page = null;
+  }
   const lib = loadPlaywright();
   const timeout = Number((args && args.timeoutMs) || DEFAULT_TIMEOUT);
   // 运行时只装 headless shell（见 browserbin 的 Kernels）：有头启动会去找完整 Chromium，
@@ -148,7 +210,6 @@ async function ensureLaunched(args) {
   }
   page.setDefaultTimeout(timeout);
   page.setDefaultNavigationTimeout(timeout);
-  log(`已启动 chromium ${browser.version()} headless`);
 }
 
 async function currentPage() {
@@ -322,6 +383,11 @@ const commands = {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const target = String((args && args.path) || path.join('.ccweb-browser', `shot-${stamp}.png`));
     const out = path.isAbsolute(target) ? target : path.resolve(process.cwd(), target);
+    // 截图落点必须在工作区里（Go 侧也挡一次，这里是第二道）：这十个工具是预放行的，
+    // path 又是模型给的，任意落点等于给它一个「覆盖工作区外任意可写文件」的口子。
+    if (!withinRoot(process.cwd(), out)) {
+      throw new Error(`截图只能存到工作区里：${out}（当前工作区 ${process.cwd()}）`);
+    }
     fs.mkdirSync(path.dirname(out), { recursive: true });
     await p.screenshot({
       path: out,
@@ -383,7 +449,9 @@ async function shutdown(reason) {
     browser = null;
     context = null;
     page = null;
-    log(`已关闭浏览器（${reason}）`);
+    // 正常收尾（模型调 close / stdin 关闭 / 收到信号）不打日志：本项目的约定是
+    // 只在异常时输出（关不掉的那种失败上面已经 log 过了）。`reason` 仍保留在
+    // 调用方，方便以后需要时把结论带进错误消息。
   }
 }
 
