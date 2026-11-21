@@ -561,6 +561,13 @@ src/
 - **对话列表**存 `conversations`（后端合并转录+元数据+live），`openConversation(id)` 负责
   `--resume`、切换工作区、回放 transcript、连接 WS；组件不要自己调 `/api/session`。
 - 新建对话用 `createSession`；空对话等首条 prompt 才由后端落元数据，前端不要提前 touch。
+  **`createSession` 先摆「新对话页」再等 id**：`POST /api/session` 要 spawn 子进程再等
+  `initialize` 握手，这几秒里如果还停在旧对话上，用户会以为点了没反应。所以进函数就
+  `setActive(null)`——那正是「还没开始的新对话」（`lib/newChat.isNewChat(null, 0)`）：
+  居中布局与工作区选择器都在，与 id 到手之后的空对话**完全一样**，id 到达时不重排、不闪。
+  草稿跟着换桶（`draftKeyFor(null, 目录)`），拿到 id 后由 `moveDraft` 迁过去。
+  建不起来时 `catch` 里把 `activeId` 放回原来那条（且只在没人抢先切走时），
+  否则用户会被留在一个空的新对话页上、原来那段对话被藏起来。
 - **工作区行本身就是展开/收起开关**，不要再放单独的箭头按钮；点击**只展开/收起**，
   不切当前工作区、更不替用户打开那个目录的最近一条对话（点一下想看列表却进了旧对话）。
   换工作区只有两条路：点具体对话（`openConversation` 自己会切）或点行尾「+」新建。

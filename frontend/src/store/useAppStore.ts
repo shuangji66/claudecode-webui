@@ -1655,6 +1655,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
       if (empty && cwd === dir && (previous || live)) return;
     }
     set({ starting: true, error: null });
+    // **先把「新对话页」摆出来**：`POST /api/session` 要 spawn 子进程再等
+    // `initialize` 握手（冷启动几秒），这期间如果还停在旧对话上，用户会以为点击
+    // 没生效——而旧对话的内容并不是他要的。对话 id 由后端生成，这里先让 activeId
+    // 为空：那正是「还没开始的新对话」这个状态，居中布局 + 工作区选择器与 id 到手
+    // 之后的空对话完全一样，所以 id 到达时不会有任何重排/闪动。
+    // 草稿、`@` 补全的根都跟着变（`draftKeyFor(null, dir)` → 拿到 id 之后由
+    // 下面的 `moveDraft` 迁过去），不会把旧对话的草稿串到新对话里。
+    if (previousId) get().setActive(null);
     const task = (async (): Promise<SessionInfo | null> => {
       try {
         const info = await apiFetch<SessionInfo>("/api/session", {
@@ -1681,6 +1689,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
         }
         return info;
       } catch (e) {
+        // 起不来就回到点「新对话」之前那条：上面已经先把新对话页摆出来了，
+        // 留在那儿等于把原来那段对话藏起来（错误条能看见，但对话不见了）。
+        // 用户中途自己切走（activeId 已经不是空）时不抢回来。
+        if (previousId && get().activeId === null) get().setActive(previousId);
         set({ error: errText(e) });
         return null;
       } finally {
