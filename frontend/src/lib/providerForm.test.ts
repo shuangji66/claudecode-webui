@@ -23,7 +23,7 @@ const sample: PublicSettings = {
       base_url: "https://gw.example",
       api_key_set: true,
       api_key_masked: "sk-•••1234",
-      auth_token_set: false,
+      auth: "bearer",
       models_path: "",
       models: ["cn:deepseek", "cn:qwen"],
     },
@@ -41,7 +41,7 @@ describe("formsFromSettings", () => {
     expect(f.baseUrl).toBe("https://gw.example");
     expect(f.models).toEqual(["cn:deepseek", "cn:qwen"]);
     expect(f.apiKey).toBe("");
-    expect(f.authToken).toBe("");
+    expect(f.auth).toBe("bearer");
   });
 
   it("null 返回空数组", () => {
@@ -68,12 +68,21 @@ describe("buildProviderPatches", () => {
   it("空密钥不提交，避免抹掉已存值", () => {
     const [p] = buildProviderPatches([{ ...formsFromSettings(sample)[0], apiKey: "" }]);
     expect(p).not.toHaveProperty("api_key");
-    expect(p).not.toHaveProperty("auth_token");
   });
 
   it("填了密钥才提交", () => {
     const f = { ...formsFromSettings(sample)[0], apiKey: "  sk-new  " };
     expect(buildProviderPatches([f])[0].api_key).toBe("sk-new");
+  });
+
+  // 自定义中转默认走 x-api-key：官方端点的行为，也是旧版对话注入的优先级。
+  it("新建提供商默认 x-api-key 认证", () => {
+    expect(blankProvider([]).auth).toBe("x-api-key");
+  });
+
+  it("认证方式随表单一起提交", () => {
+    const f = { ...formsFromSettings(sample)[0], auth: "x-api-key" as const };
+    expect(buildProviderPatches([f])[0].auth).toBe("x-api-key");
   });
 
   it("clearKey 走 clear_key", () => {

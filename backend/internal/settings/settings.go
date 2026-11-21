@@ -102,6 +102,26 @@ var (
 	SupportedEfforts = []string{"low", "medium", "high", "xhigh", "max"}
 )
 
+const (
+	// AuthXAPIKey 是默认认证方式：密钥进 `x-api-key` 头。claude CLI 通过
+	// ANTHROPIC_API_KEY 得到它。
+	AuthXAPIKey = "x-api-key"
+	// AuthBearer 是 Bearer 认证：密钥进 `Authorization: Bearer` 头。claude CLI
+	// 通过 ANTHROPIC_AUTH_TOKEN 得到它。
+	AuthBearer = "bearer"
+)
+
+// NormalizeAuth 把认证方式收敛到两个合法值。
+//
+// 认不出的一律按 x-api-key：旧配置没有这个字段、手改配置写出别的东西，都落在
+// 默认那一侧——那是「官方端点」的行为，也是旧版对话注入的优先级。
+func NormalizeAuth(v string) string {
+	if strings.EqualFold(strings.TrimSpace(v), AuthBearer) {
+		return AuthBearer
+	}
+	return AuthXAPIKey
+}
+
 // ModelSpec 是某个模型的展示与能力元数据，按模型 ID 存在 Provider.ModelMeta 里。
 // 模型 ID 列表仍是 Provider.Models，保持与旧配置 / 网关列表兼容。
 type ModelSpec struct {
@@ -134,10 +154,16 @@ type Provider struct {
 	Name string `json:"name"`
 	// BaseURL 是该提供商的基础地址，列表与对话都用它。
 	BaseURL string `json:"base_url"`
-	// APIKey 对应 x-api-key；对话时注入 ANTHROPIC_API_KEY。
+	// APIKey 是端点签发的那把密钥。它放进哪个请求头由 Auth 决定——两个密钥
+	// 字段（x-api-key 一份、Bearer 一份）在界面上只是同一把密钥的两种放法，
+	// 分开填只会让人填错一边。
 	APIKey string `json:"api_key"`
-	// AuthToken 是可选 Bearer 令牌；没有 APIKey 时注入 ANTHROPIC_AUTH_TOKEN。
-	AuthToken string `json:"auth_token"`
+	// Auth 是这把密钥的发送方式，取 AuthXAPIKey（默认）或 AuthBearer。
+	// 空值按 AuthXAPIKey 处理，旧配置因此不需要写迁移开关。
+	Auth string `json:"auth,omitempty"`
+	// LegacyAuthToken 只用于读旧配置：旧版把 Bearer 令牌单独存一份，加载时
+	// 由 migrateProviders 合并进 APIKey/Auth，再写盘就不再有这个键。
+	LegacyAuthToken string `json:"auth_token,omitempty"`
 	// ModelsPath 覆盖模型列表路径，留空用默认的 `{root}/v1/models`。
 	ModelsPath string `json:"models_path"`
 	// Models 是从该提供商处选中并添加的模型 ID。
@@ -246,15 +272,16 @@ type Public struct {
 
 // PublicProvider 是提供商的脱敏视图。
 type PublicProvider struct {
-	ID           string               `json:"id"`
-	Name         string               `json:"name"`
-	BaseURL      string               `json:"base_url"`
-	APIKeySet    bool                 `json:"api_key_set"`
-	APIKeyMasked string               `json:"api_key_masked"`
-	AuthTokenSet bool                 `json:"auth_token_set"`
-	ModelsPath   string               `json:"models_path"`
-	Models       []string             `json:"models"`
-	ModelMeta    map[string]ModelSpec `json:"model_meta"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	BaseURL      string `json:"base_url"`
+	APIKeySet    bool   `json:"api_key_set"`
+	APIKeyMasked string `json:"api_key_masked"`
+	// Auth 是这把密钥的发法（AuthXAPIKey / AuthBearer）。
+	Auth       string               `json:"auth"`
+	ModelsPath string               `json:"models_path"`
+	Models     []string             `json:"models"`
+	ModelMeta  map[string]ModelSpec `json:"model_meta"`
 }
 
 // ProviderPatch 是提交上来的提供商（密钥留空表示沿用已保存的）。
@@ -263,7 +290,7 @@ type ProviderPatch struct {
 	Name       string               `json:"name"`
 	BaseURL    string               `json:"base_url"`
 	APIKey     string               `json:"api_key"`
-	AuthToken  string               `json:"auth_token"`
+	Auth       string               `json:"auth"`
 	ClearKey   bool                 `json:"clear_key"`
 	ModelsPath string               `json:"models_path"`
 	Models     []string             `json:"models"`
@@ -314,6 +341,7 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("settings: 解析 %s: %w", path, err)
 		}
 		migrateLegacy(&s.cur)
+		migrateProviders(&s.cur)
 	case errors.Is(err, os.ErrNotExist):
 		// 首次启动，保持空 provider；界面偏好仍要给默认值
 	default:
@@ -417,18 +445,38 @@ func migrateLegacy(s *Settings) {
 		}
 	}
 	s.Providers = []Provider{{
-		ID:         "default",
-		Name:       "默认",
-		BaseURL:    s.LegacyBaseURL,
-		APIKey:     s.LegacyAPIKey,
-		AuthToken:  s.LegacyAuthToken,
-		ModelsPath: s.LegacyPath,
-		Models:     models,
+		ID:              "default",
+		Name:            "默认",
+		BaseURL:         s.LegacyBaseURL,
+		APIKey:          s.LegacyAPIKey,
+		LegacyAuthToken: s.LegacyAuthToken,
+		ModelsPath:      s.LegacyPath,
+		Models:          models,
 	}}
 	if s.Selected.Model == "" && len(models) > 0 {
 		s.Selected = Selection{Provider: "default", Model: models[0]}
 	}
 	clearLegacy(s)
+}
+
+// migrateProviders 把旧版分存的两份凭据合并成「一把密钥 + 一种发送方式」。
+//
+// 旧行为的事实是：两个字段都填时对话只注入 ANTHROPIC_API_KEY（Bearer 那份不
+// 生效），只填 Bearer 时才注入 ANTHROPIC_AUTH_TOKEN。合并就照这个事实走——
+// 有 APIKey 就以它为密钥、认证方式按存的（旧配置没有这个字段，即 x-api-key）；
+// 只有 Bearer 令牌则把它挪到 APIKey 并记成 bearer。合并后旧键清空。
+func migrateProviders(s *Settings) {
+	for i := range s.Providers {
+		p := &s.Providers[i]
+		if p.LegacyAuthToken != "" {
+			if p.APIKey == "" {
+				p.APIKey = p.LegacyAuthToken
+				p.Auth = AuthBearer
+			}
+			p.LegacyAuthToken = ""
+		}
+		p.Auth = NormalizeAuth(p.Auth)
+	}
 }
 
 func clearLegacy(s *Settings) {
@@ -544,11 +592,14 @@ func (v Settings) Env() []string {
 		if base := p.ChatBaseURL(); base != "" {
 			out = append(out, "ANTHROPIC_BASE_URL="+base)
 		}
-		// 对话始终走 Anthropic Messages：有 APIKey 就用 x-api-key，否则用 Bearer。
+		// 对话始终走 Anthropic Messages，密钥放进哪个环境变量由认证方式决定：
+		// CLI 只认这两个变量，各自绑一个请求头（x-api-key / Authorization）。
 		if p.APIKey != "" {
-			out = append(out, "ANTHROPIC_API_KEY="+p.APIKey)
-		} else if p.AuthToken != "" {
-			out = append(out, "ANTHROPIC_AUTH_TOKEN="+p.AuthToken)
+			if NormalizeAuth(p.Auth) == AuthBearer {
+				out = append(out, "ANTHROPIC_AUTH_TOKEN="+p.APIKey)
+			} else {
+				out = append(out, "ANTHROPIC_API_KEY="+p.APIKey)
+			}
 		}
 		out = append(out, "ANTHROPIC_MODEL="+model)
 		// 关掉 CLI 内置的模型别名解析，避免它把网关模型名当成内置别名处理。
@@ -670,7 +721,7 @@ func (s *Store) Public() Public {
 			BaseURL:      p.BaseURL,
 			APIKeySet:    p.APIKey != "",
 			APIKeyMasked: Mask(p.APIKey),
-			AuthTokenSet: p.AuthToken != "",
+			Auth:         NormalizeAuth(p.Auth),
 			ModelsPath:   p.ModelsPath,
 			Models:       models,
 			ModelMeta:    meta,
@@ -849,10 +900,18 @@ func mergeProviders(old []Provider, in []ProviderPatch) ([]Provider, error) {
 		prev, existed := oldByID[id]
 
 		models := dedupe(patch.Models)
+		// 认证方式与密钥同一条语义：空串=沿用旧值。旧前端（浏览器缓存里的
+		// 旧包）不会带这个字段，按「没改」处理才不会把 bearer 悄悄改回
+		// x-api-key——那等于让一次「只改模型列表」把对话打成 401。
+		auth := NormalizeAuth(prev.Auth)
+		if strings.TrimSpace(patch.Auth) != "" {
+			auth = NormalizeAuth(patch.Auth)
+		}
 		p := Provider{
 			ID:         id,
 			Name:       strings.TrimSpace(patch.Name),
 			BaseURL:    strings.TrimRight(strings.TrimSpace(patch.BaseURL), "/"),
+			Auth:       auth,
 			ModelsPath: strings.TrimSpace(patch.ModelsPath),
 			Models:     models,
 			ModelMeta:  normalizeModelMeta(models, patch.ModelMeta),
@@ -865,16 +924,12 @@ func mergeProviders(old []Provider, in []ProviderPatch) ([]Provider, error) {
 		// 同时提交了新密钥与 clear_key 时以新密钥为准：界面上先点「清除」再输入新值
 		// 是很自然的操作，按 clear_key 优先会把刚输入的密钥和已存的密钥一起抹掉。
 		switch {
-		case patch.ClearKey && strings.TrimSpace(patch.APIKey) == "" && strings.TrimSpace(patch.AuthToken) == "":
-			p.APIKey, p.AuthToken = "", ""
+		case patch.ClearKey && strings.TrimSpace(patch.APIKey) == "":
+			p.APIKey = ""
 		default:
 			p.APIKey = prev.APIKey
-			p.AuthToken = prev.AuthToken
 			if strings.TrimSpace(patch.APIKey) != "" {
 				p.APIKey = strings.TrimSpace(patch.APIKey)
-			}
-			if strings.TrimSpace(patch.AuthToken) != "" {
-				p.AuthToken = strings.TrimSpace(patch.AuthToken)
 			}
 		}
 		_ = existed

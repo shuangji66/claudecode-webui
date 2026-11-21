@@ -391,6 +391,15 @@ export interface ModelSpec {
   max_output_tokens?: number;
 }
 
+/**
+ * 密钥的发送方式。
+ *
+ * claude CLI 的两个环境变量各绑一个请求头：ANTHROPIC_API_KEY → `x-api-key`，
+ * ANTHROPIC_AUTH_TOKEN → `Authorization: Bearer`。同一个密钥只能走其中一个，
+ * 因为对话请求由 CLI 发出、ccweb 无法在 401 之后换头重试。
+ */
+export type AuthMethod = "x-api-key" | "bearer";
+
 /** 一个第三方模型提供商的脱敏视图（对话协议恒为 Anthropic Messages）。 */
 export interface PublicProvider {
   id: string;
@@ -398,7 +407,8 @@ export interface PublicProvider {
   base_url: string;
   api_key_set: boolean;
   api_key_masked: string;
-  auth_token_set: boolean;
+  /** 密钥的发送方式：x-api-key（默认）或 bearer。老后端不返回时按 x-api-key 处理。 */
+  auth?: AuthMethod;
   models_path: string;
   models: string[];
   /** 按模型 ID 的元数据；老后端可能不返回。 */
@@ -443,6 +453,8 @@ export interface ProbeResult {
   status: number;
   latency_ms: number;
   detail: string;
+  /** 按配置的认证方式被拒、换成它才成功；保存时应当写回提供商。 */
+  auth_switched_to?: AuthMethod;
 }
 
 /** 网关模型列表条目。 */
@@ -468,6 +480,8 @@ export interface ModelsResult {
   tried?: string[];
   /** 每个候选路径的探测结果。 */
   attempts?: { path: string; status: number; note: string }[];
+  /** 本次实际使用的认证方式，以及「换头后才成功」时的那一个。 */
+  auth?: { header: AuthMethod; switched_to?: AuthMethod };
 }
 
 /** 一条已授权目录（工作区）。 */

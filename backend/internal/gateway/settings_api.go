@@ -120,7 +120,8 @@ type providerRef struct {
 	ProviderID string `json:"provider_id"`
 	BaseURL    string `json:"base_url"`
 	APIKey     string `json:"api_key"`
-	AuthToken  string `json:"auth_token"`
+	// Auth 是密钥的发送方式（x-api-key / bearer）；空值按 x-api-key 处理。
+	Auth       string `json:"auth"`
 	ModelsPath string `json:"models_path"`
 }
 
@@ -135,8 +136,8 @@ func (s *Server) resolve(ref providerRef) (settings.Provider, bool) {
 			if ref.APIKey != "" {
 				p.APIKey = ref.APIKey
 			}
-			if ref.AuthToken != "" {
-				p.AuthToken = ref.AuthToken
+			if ref.Auth != "" {
+				p.Auth = settings.NormalizeAuth(ref.Auth)
 			}
 			if ref.ModelsPath != "" {
 				p.ModelsPath = ref.ModelsPath
@@ -150,7 +151,7 @@ func (s *Server) resolve(ref providerRef) (settings.Provider, bool) {
 		Name:       "draft",
 		BaseURL:    ref.BaseURL,
 		APIKey:     ref.APIKey,
-		AuthToken:  ref.AuthToken,
+		Auth:       settings.NormalizeAuth(ref.Auth),
 		ModelsPath: ref.ModelsPath,
 	}, true
 }

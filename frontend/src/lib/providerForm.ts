@@ -6,7 +6,7 @@
 // 模型能力元数据（显示名 / 推理强度 / 图片）跟 `models` 分开存：
 // 模型 ID 列表来自网关，元数据由用户补充，用 model_meta 按 ID 索引。
 
-import type { ModelSpec, PublicProvider, PublicSettings } from "../transport/types";
+import type { AuthMethod, ModelSpec, PublicProvider, PublicSettings } from "../transport/types";
 
 /**
  * CLI `--effort` 接受的档位（见 claude --help）。
@@ -30,7 +30,8 @@ export interface ProviderForm {
   baseUrl: string;
   /** 空串表示「不修改已保存的密钥」。 */
   apiKey: string;
-  authToken: string;
+  /** 这把密钥放进哪个请求头（x-api-key / bearer）。 */
+  auth: AuthMethod;
   clearKey: boolean;
   modelsPath: string;
   models: string[];
@@ -45,7 +46,7 @@ export interface ProviderPatch {
   name: string;
   base_url: string;
   api_key?: string;
-  auth_token?: string;
+  auth: AuthMethod;
   clear_key?: boolean;
   models_path: string;
   models: string[];
@@ -109,7 +110,7 @@ function fromPublic(p: PublicProvider): ProviderForm {
     name: p.name || "",
     baseUrl: p.base_url ?? "",
     apiKey: "",
-    authToken: "",
+    auth: p.auth ?? "x-api-key",
     clearKey: false,
     modelsPath: p.models_path ?? "",
     models: [...(p.models ?? [])],
@@ -163,7 +164,8 @@ export function blankProvider(existing: ProviderForm[]): ProviderForm {
     name: "",
     baseUrl: "",
     apiKey: "",
-    authToken: "",
+    // 自定义中转默认 x-api-key（官方端点的行为）；预置会按各家端点覆盖。
+    auth: "x-api-key",
     clearKey: false,
     modelsPath: "",
     models: [],
@@ -182,14 +184,13 @@ export function buildProviderPatches(forms: ProviderForm[]): ProviderPatch[] {
       id: f.id.trim(),
       name: f.name.trim() || f.id.trim(),
       base_url: f.baseUrl.trim(),
+      auth: f.auth === "bearer" ? "bearer" : "x-api-key",
       models_path: f.modelsPath.trim(),
       models,
       model_meta,
     };
     const key = f.apiKey.trim();
     if (key) patch.api_key = key;
-    const token = f.authToken.trim();
-    if (token) patch.auth_token = token;
     if (f.clearKey) patch.clear_key = true;
     return patch;
   });

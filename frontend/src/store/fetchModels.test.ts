@@ -1,7 +1,7 @@
 // 「获取可用模型」的并发：目录是全局单份（modelsFor + gatewayModels），
 // 两张提供商卡片先后点「获取」时，先发的那次晚回来会顶掉后一次的目录——
 // 弹窗里摆着 A 的模型，确认后却写进 B，用户看到的是「加了几个不存在的模型」。
-// 与「测试连接」的 probeSeq 同一条规矩。
+// 与单模型验证的 verifySeq 同一条规矩。
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 interface Defer {
@@ -34,7 +34,7 @@ function form(uid: string) {
     name: uid,
     baseUrl: "",
     apiKey: "",
-    authToken: "",
+    auth: "x-api-key",
     clearKey: false,
     modelsPath: "",
     models: [],

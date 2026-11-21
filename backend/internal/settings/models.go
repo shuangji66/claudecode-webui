@@ -20,11 +20,13 @@ type Model struct {
 	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
 }
 
-// AuthInfo 描述一次请求携带的鉴权方式（只报类型，不含值）。
+// AuthInfo 描述一次请求实际使用的认证方式（只报类型，不含值）。
 type AuthInfo struct {
-	APIKeySent     bool `json:"api_key_sent"`
-	AuthTokenSent  bool `json:"auth_token_sent"`
-	BearerFallback bool `json:"bearer_fallback"`
+	// Header 是按配置使用的头：x-api-key 或 bearer。
+	Header string `json:"header"`
+	// SwitchedTo 非空表示按配置的头被拒（401/403）、换成它才成功。界面上
+	// 「认证方式」应该改成这个值——对话没有重试的机会。
+	SwitchedTo string `json:"switched_to,omitempty"`
 }
 
 // Attempt 是一次探测的记录。
@@ -78,7 +80,7 @@ const rawPreviewBytes = 600
 func FetchModels(ctx context.Context, p Provider) ModelsResult {
 	res := ModelsResult{
 		Endpoint: p.Root(),
-		Auth:     AuthInfo{APIKeySent: p.APIKey != "", AuthTokenSent: p.AuthToken != ""},
+		Auth:     AuthInfo{Header: NormalizeAuth(p.Auth)},
 	}
 	if !strings.HasPrefix(res.Endpoint, "http://") && !strings.HasPrefix(res.Endpoint, "https://") {
 		res.Detail = "地址必须以 http:// 或 https:// 开头"
@@ -121,17 +123,18 @@ func FetchModels(ctx context.Context, p Provider) ModelsResult {
 			return res
 		}
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		// 同一把密钥换成 Bearer 再试一次：不少中转只认 Bearer（见 bearerFallback）。
-		if alt, ok := p.bearerFallback(); ok {
-			if s2, b2, _, e2 := doAuth(ctx, client, http.MethodGet, url, alt, nil); e2 == nil {
-				res.Auth.BearerFallback = true
+		// 同一把密钥换成另一种认证再试一次：密钥常常是真的，只是头放错了
+		// （见 switchAuth）。成功就把结论带回去，让界面改「认证方式」。
+		if alt, header, ok := p.switchAuth(); ok {
+			if s2, b2, _, e2 := doAuth(ctx, client, http.MethodGet, url, alt, nil); e2 == nil && s2 >= 200 && s2 < 300 {
 				if models, perr := parseModels(b2); perr == nil && len(models) > 0 {
+					res.Auth.SwitchedTo = header
 					attempt.Status = s2
-					attempt.Note = fmt.Sprintf("200，%d 个模型（Bearer 鉴权）", len(models))
+					attempt.Note = fmt.Sprintf("200，%d 个模型（%s 认证）", len(models), authLabel(header))
 					res.Models = models
 					res.Status = s2
 					res.Attempts = []Attempt{attempt}
-					res.Detail = fmt.Sprintf("共 %d 个模型（%s，Bearer 鉴权）", len(models), display)
+					res.Detail = fmt.Sprintf("共 %d 个模型（%s，%s 认证）", len(models), display, authLabel(header))
 					return res
 				}
 			}
@@ -158,7 +161,7 @@ func hintFor(raw string) string {
 	case strings.HasPrefix(low, "<!doctype") || strings.HasPrefix(low, "<html"):
 		return "。返回的是 HTML 页面（多半是该网关没有这个接口，被前端路由兜底了），请手动填写模型名。"
 	case strings.Contains(low, "\"error\""):
-		return "。网关返回了错误对象，请检查地址、凭据与鉴权方式（密钥 / Bearer 令牌）。"
+		return "。网关返回了错误对象，请检查地址、密钥与「认证方式」（x-api-key / Bearer）。"
 	default:
 		return "。可直接手动填写模型名，效果相同。"
 	}

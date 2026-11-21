@@ -86,7 +86,7 @@ func TestFilePermissions(t *testing.T) {
 func TestPublicMasksKeys(t *testing.T) {
 	s, _ := openTemp(t)
 	if _, err := s.Apply(Patch{Providers: &[]ProviderPatch{{
-		ID: "gw", APIKey: "sk-ant-api03-abcdefghijklmn", AuthToken: "tok",
+		ID: "gw", APIKey: "sk-ant-api03-abcdefghijklmn", Auth: AuthBearer,
 	}}}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -95,14 +95,17 @@ func TestPublicMasksKeys(t *testing.T) {
 		t.Fatalf("providers = %+v", pub.Providers)
 	}
 	p := pub.Providers[0]
-	if !p.APIKeySet || !p.AuthTokenSet {
+	if !p.APIKeySet {
 		t.Fatal("应标记为已设置")
+	}
+	if p.Auth != AuthBearer {
+		t.Fatalf("认证方式应回传，实际 %q", p.Auth)
 	}
 	if strings.Contains(p.APIKeyMasked, "abcdefghij") {
 		t.Fatalf("脱敏后不应包含明文: %q", p.APIKeyMasked)
 	}
 	b, _ := json.Marshal(pub)
-	if strings.Contains(string(b), "abcdefghijklmn") || strings.Contains(string(b), `"tok"`) {
+	if strings.Contains(string(b), "abcdefghijklmn") {
 		t.Fatalf("Public 序列化泄露明文: %s", b)
 	}
 }
@@ -130,15 +133,40 @@ func TestEmptyKeyKeepsExisting(t *testing.T) {
 
 func TestClearKeyExplicit(t *testing.T) {
 	s, _ := openTemp(t)
-	if _, err := s.Apply(Patch{Providers: &[]ProviderPatch{{ID: "gw", APIKey: "k1", AuthToken: "t1"}}}); err != nil {
+	if _, err := s.Apply(Patch{Providers: &[]ProviderPatch{{ID: "gw", APIKey: "k1"}}}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if _, err := s.Apply(Patch{Providers: &[]ProviderPatch{{ID: "gw", ClearKey: true}}}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	p, _ := s.Get().Provider("gw")
-	if p.APIKey != "" || p.AuthToken != "" {
+	if p.APIKey != "" {
 		t.Fatalf("清除失败: %+v", p)
+	}
+}
+
+// 读盘路径同样要迁移：旧 settings.json 里 provider 的 auth_token 是独立字段，
+// 不合并的话升级后那把密钥就从配置里消失了（对话直接 401）。
+func TestOpenMigratesProviderAuthToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	raw := `{"providers":[{"id":"only-token","api_key":"","auth_token":"t1"},{"id":"both","api_key":"k1","auth_token":"t2"}]}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	onlyToken, ok := s.Get().Provider("only-token")
+	if !ok {
+		t.Fatal("provider 应存在")
+	}
+	if onlyToken.APIKey != "t1" || onlyToken.Auth != AuthBearer {
+		t.Fatalf("只有 Bearer 令牌时应挪成 bearer: %+v", onlyToken)
+	}
+	both, _ := s.Get().Provider("both")
+	if both.APIKey != "k1" || both.Auth != AuthXAPIKey {
+		t.Fatalf("两份都有时应以 APIKey 为准: %+v", both)
 	}
 }
 
@@ -227,9 +255,9 @@ func TestActiveFallsBackToSelectedEvenIfRemovedFromList(t *testing.T) {
 	}
 }
 
-func TestEnvUsesBearerWhenNoAPIKey(t *testing.T) {
+func TestEnvUsesBearerWhenAuthIsBearer(t *testing.T) {
 	v := Settings{
-		Providers: []Provider{{ID: "g", BaseURL: "https://x", AuthToken: "t1", Models: []string{"m"}}},
+		Providers: []Provider{{ID: "g", BaseURL: "https://x", APIKey: "t1", Auth: AuthBearer, Models: []string{"m"}}},
 		Selected:  Selection{Provider: "g", Model: "m"},
 	}
 	env := strings.Join(v.Env(), ",")
@@ -239,6 +267,50 @@ func TestEnvUsesBearerWhenNoAPIKey(t *testing.T) {
 	if strings.Contains(env, "ANTHROPIC_API_KEY") {
 		t.Fatalf("不应同时设置 API_KEY: %v", env)
 	}
+}
+
+// 默认认证方式（字段为空）是 x-api-key：旧配置与自定义中转都落在这里，
+// 也是旧版对话注入的优先级。
+func TestEnvDefaultsToXAPIKey(t *testing.T) {
+	v := Settings{
+		Providers: []Provider{{ID: "g", BaseURL: "https://x", APIKey: "sk-1", Models: []string{"m"}}},
+		Selected:  Selection{Provider: "g", Model: "m"},
+	}
+	env := strings.Join(v.Env(), ",")
+	if !strings.Contains(env, "ANTHROPIC_API_KEY=sk-1") {
+		t.Fatalf("默认应使用 x-api-key: %v", env)
+	}
+	if strings.Contains(env, "ANTHROPIC_AUTH_TOKEN") {
+		t.Fatalf("不应同时设置 AUTH_TOKEN: %v", env)
+	}
+}
+
+// 旧配置把 Bearer 令牌单独存一份：加载时挪到唯一那把密钥上，并记成 bearer。
+// 两份都有时以 APIKey 为准（旧版对话就是只注入 ANTHROPIC_API_KEY，Bearer 那份
+// 其实没生效），不能反过来把 Bearer 令牌当成密钥。
+func TestMigrateLegacyAuthToken(t *testing.T) {
+	t.Run("只有 Bearer 令牌", func(t *testing.T) {
+		v := Settings{Providers: []Provider{{ID: "g", LegacyAuthToken: "t1"}}}
+		migrateProviders(&v)
+		p := v.Providers[0]
+		if p.APIKey != "t1" || p.Auth != AuthBearer {
+			t.Fatalf("应合并成 bearer: %+v", p)
+		}
+		if p.LegacyAuthToken != "" {
+			t.Fatal("迁移后旧键应清空")
+		}
+	})
+	t.Run("两份都有", func(t *testing.T) {
+		v := Settings{Providers: []Provider{{ID: "g", APIKey: "k1", LegacyAuthToken: "t1"}}}
+		migrateProviders(&v)
+		p := v.Providers[0]
+		if p.APIKey != "k1" || p.Auth != AuthXAPIKey {
+			t.Fatalf("应以 APIKey 为准: %+v", p)
+		}
+		if p.LegacyAuthToken != "" {
+			t.Fatal("迁移后旧键应清空")
+		}
+	})
 }
 
 // 提供商没有模型时，JSON 必须是 []，不能是 null —— 否则前端 map 会抛错白屏。

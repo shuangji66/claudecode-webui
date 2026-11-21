@@ -35,6 +35,7 @@ import { userBubblePayload } from "../lib/attachments";
 import type { Item } from "../lib/model";
 import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
 import type {
+  AuthMethod,
   ClaudeCheck,
   ClaudeStatus,
   ConversationInfo,
@@ -226,13 +227,18 @@ interface AppState {
   modelsError: string | null;
   modelsRaw: string;
   modelsAttempts: { path: string; status: number; note: string }[];
-  verify: { key: string; result: ProbeResult } | null;
   /**
-   * 「测试连接」的最近一次探测。`pending` 是**在飞**标记：只靠 `key` 判断的话，
-   * 响应回来之后 key 仍然匹配，按钮会永远停在「测试中…」（踩过）。
-   * key 用表单 uid（未保存的草稿没有 id，用 id 会让所有草稿共用同一个 key）。
+   * 拉目录时「按配置的认证方式被拒、换成它才成功」的那一种（x-api-key / bearer）。
+   * 非空且与表单当前值不同时，卡片会把它写回「认证方式」并提示保存——
+   * 对话没有重试的机会，这里不改就等于下一次对话照旧 401。
    */
-  probe: { key: string; pending: boolean; result: ProbeResult | null } | null;
+  modelsAuthSwitchedTo: AuthMethod | "";
+  /**
+   * 单模型验证的最近一次结果。key 是 `uid/model`——同一张卡片里的不同模型
+   * 各自有自己的结论，`pending` 单独标出来（只靠 detail 里那句「验证中…」判断
+   * 会把「后端真的这么说了」也当成在跑）。
+   */
+  verify: { key: string; pending: boolean; result: ProbeResult | null } | null;
 
   loading: boolean;
   error: string | null;
@@ -247,7 +253,6 @@ interface AppState {
   selectModel: (provider: string, model: string, effort?: string) => Promise<void>;
   fetchModelsFor: (form: ProviderForm) => Promise<void>;
   verifyModelFor: (form: ProviderForm, model: string) => Promise<void>;
-  probeProvider: (form: ProviderForm) => Promise<void>;
   applyProxy: (url: string) => Promise<{ ok: boolean; warning?: string }>;
 
   loadClaudeStatus: () => Promise<void>;
@@ -754,7 +759,7 @@ function providerRef(form: ProviderForm) {
     provider_id: form.isNew ? "" : form.id,
     base_url: form.baseUrl,
     api_key: form.apiKey,
-    auth_token: form.authToken,
+    auth: form.auth,
     models_path: form.modelsPath,
   };
 }
@@ -920,11 +925,11 @@ let mentionRequestSeq = 0;
  */
 let conversationsSeq = 0;
 
-/** 「测试连接」的序号：只认最后一次探测的结果（先点 A 再点 B 时 A 的迟到响应作废）。 */
-let probeSeq = 0;
+/** 单模型验证的序号：只认最后一次发出去的结果（先点 A 再点 B 时 A 的迟到响应作废）。 */
+let verifySeq = 0;
 
 /**
- * 「获取可用模型」的序号：与 `probeSeq` 同一条规矩。
+ * 「获取可用模型」的序号：与 `verifySeq` 同一条规矩。
  *
  * 目录是全局单份（`modelsFor` + `gatewayModels`），两张卡片先后点「获取」时，
  * 先发的那次晚回来就会顶掉后一次的目录——弹窗里摆着 A 的模型，确认后却写进 B，
@@ -965,8 +970,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   modelsError: null,
   modelsRaw: "",
   modelsAttempts: [],
+  modelsAuthSwitchedTo: "",
   verify: null,
-  probe: null,
   loading: false,
   error: null,
 
@@ -1112,7 +1117,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // 用 id 时上一家的目录会看起来像这一家的。
     const key = form.uid || form.id;
     const seq = ++modelsSeq;
-    set({ modelsFor: key, modelsLoading: true, gatewayModels: [], modelsError: null, modelsRaw: "", modelsAttempts: [], error: null });
+    set({ modelsFor: key, modelsLoading: true, gatewayModels: [], modelsError: null, modelsRaw: "", modelsAttempts: [], modelsAuthSwitchedTo: "", error: null });
     try {
       const r = await apiFetch<ModelsResult>("/api/settings/models", {
         method: "POST",
@@ -1122,7 +1127,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // 目录（连同它自己的 `modelsFor`）顶掉。
       if (seq !== modelsSeq) return;
       if (r.models && r.models.length > 0) {
-        set({ modelsLoading: false, gatewayModels: r.models, modelsAttempts: r.attempts ?? [] });
+        set({
+          modelsLoading: false,
+          gatewayModels: r.models,
+          modelsAttempts: r.attempts ?? [],
+          modelsAuthSwitchedTo: r.auth?.switched_to ?? "",
+        });
       } else {
         set({
           modelsLoading: false,
@@ -1140,18 +1150,23 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   verifyModelFor: async (form, model) => {
     if (!model.trim()) return;
-    const key = `${form.id}/${model}`;
-    set({ verify: { key, result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: "验证中…" } } });
+    // key 用 uid：草稿的 id 是空串，两张草稿的同名模型会共用一个 key。
+    const key = `${form.uid || form.id}/${model}`;
+    const seq = ++verifySeq;
+    set({ verify: { key, pending: true, result: null } });
     try {
       const r = await apiFetch<ProbeResult>("/api/settings/verify", {
         method: "POST",
         body: JSON.stringify({ ...providerRef(form), model }),
       });
-      set({ verify: { key, result: r } });
+      if (seq !== verifySeq) return;
+      set({ verify: { key, pending: false, result: r } });
     } catch (e) {
+      if (seq !== verifySeq) return;
       set({
         verify: {
           key,
+          pending: false,
           result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: errText(e) },
         },
       });
@@ -1321,33 +1336,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
     } catch (e) {
       set({ claudeError: errText(e) });
       return false;
-    }
-  },
-
-  probeProvider: async (form) => {
-    // 未保存的草稿没有 id，用表单 uid 做 key：否则两个草稿会共用 `""`，
-    // 其中一个的探测结果会显示在另一个卡片上。
-    const key = form.uid || form.id;
-    const seq = ++probeSeq;
-    set({ probe: { key, pending: true, result: null } });
-    try {
-      const r = await apiFetch<ProbeResult>("/api/settings/test", {
-        method: "POST",
-        body: JSON.stringify(providerRef(form)),
-      });
-      // 只认最后一次发出去的探测：先点 A 再点 B 时，A 的迟到响应不能把 B 的
-      // 进行中状态收掉（反之亦然）。
-      if (seq !== probeSeq) return;
-      set({ probe: { key, pending: false, result: r } });
-    } catch (e) {
-      if (seq !== probeSeq) return;
-      set({
-        probe: {
-          key,
-          pending: false,
-          result: { ok: false, endpoint: "", method: "", status: 0, latency_ms: 0, detail: errText(e) },
-        },
-      });
     }
   },
 

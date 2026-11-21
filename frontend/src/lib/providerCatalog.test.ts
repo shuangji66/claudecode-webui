@@ -29,15 +29,26 @@ describe("provider catalog", () => {
     }
   });
 
-  it("DeepSeek 预置填 Anthropic 端点与默认模型", () => {
+  // 预置只填身份与端点。模型留到「获取可用模型」时在弹窗里逐条挑（对齐 DSH）：
+  // 一选中就灌进去的几十条里，有这家端点未必开通的，也有用户根本不用的。
+  it("DeepSeek 预置只填 Anthropic 端点，不预填模型", () => {
     const preset = findProviderPreset("deepseek");
     expect(preset).toBeTruthy();
     const fields = presetFormFields(preset!, []);
     expect(fields.id).toBe("deepseek");
     expect(fields.baseUrl).toBe("https://api.deepseek.com/anthropic");
-    expect(fields.models).toContain("deepseek-flash");
-    expect(fields.modelMeta["deepseek-flash"].context_window).toBe(1_000_000);
-    expect(fields.modelMeta["deepseek-flash"].supports_image).toBe(true);
+    expect(Object.keys(fields).sort()).toEqual(["auth", "baseUrl", "id", "name"]);
+    // 预置带出这家端点的认证方式：DeepSeek 的 /anthropic 认 Bearer。
+    expect(fields.auth).toBe("bearer");
+  });
+
+  // 预置目录仍是「没填密钥 / 地址时」的模型来源，清单本身不能空。
+  it("预置目录保留可挑选的模型清单与能力字段", () => {
+    const preset = findProviderPreset("deepseek")!;
+    const { models, modelMeta } = presetModels(preset);
+    expect(models).toContain("deepseek-flash");
+    expect(modelMeta["deepseek-flash"].context_window).toBe(1_000_000);
+    expect(modelMeta["deepseek-flash"].supports_image).toBe(true);
   });
 
   it("预置 ID 冲突时追加序号", () => {

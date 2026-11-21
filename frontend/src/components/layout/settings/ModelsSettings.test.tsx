@@ -16,7 +16,7 @@ describe("模型页凭证输入框的自动填充", () => {
             id: "gw",
             name: "网关",
             protocol: "anthropic-messages",
-            base_url: "",
+            base_url: "https://gw.example",
             models: [],
             model_meta: {},
           },
@@ -105,42 +105,6 @@ describe("模型页凭证输入框的自动填充", () => {
     expect(screen.getByRole("checkbox", { name: /支持图片输入/ })).toBeChecked();
   });
 
-  // 曾经只看「最近一次探测的 key 是不是本提供商」，响应回来之后 key 仍然相等，
-  // 于是按钮永远停在「测试中…」（截图复现过：结果那行已经绿了，按钮还在转）。
-  it("测试连接返回后按钮恢复可点，并显示结果", async () => {
-    let resolve: (r: Response) => void = () => {};
-    const pending = new Promise<Response>((r) => {
-      resolve = r;
-    });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input).includes("/api/settings/test")) return pending;
-        return new Response("{}", { status: 200 });
-      }),
-    );
-    await act(async () => {
-      render(<ModelsSettings />);
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
-    });
-    expect(screen.getByRole("button", { name: "测试中…" })).toBeDisabled();
-
-    await act(async () => {
-      resolve(
-        new Response(JSON.stringify({ ok: true, endpoint: "http://127.0.0.1:7863", method: "GET", status: 200, latency_ms: 3, detail: "端点可用，返回 9 个模型" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-      );
-      // 让 probeProvider 的 await 链跑完
-      await pending;
-    });
-    expect(await screen.findByText(/端点可用，返回 9 个模型/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "测试连接" })).not.toBeDisabled();
-  });
-
   // 「获取可用模型」从内联小面板改成弹窗（选择区要拿到整块高度，几十条目录在
   // 卡片里那条 max-h-52 里根本看不清），并用全选/取消全选。
   describe("获取可用模型的弹窗", () => {
@@ -216,7 +180,7 @@ describe("模型页凭证输入框的自动填充", () => {
     it("已添加的模型在弹窗里默认勾选", async () => {
       useAppStore.setState({
         settings: {
-          providers: [{ id: "gw", name: "网关", base_url: "", models: ["cn:hy4std"], model_meta: {} }],
+          providers: [{ id: "gw", name: "网关", base_url: "https://gw.example", models: ["cn:hy4std"], model_meta: {} }],
           selected: { provider: "gw", model: "", effort: "" },
           permission_mode: "default",
           locale: "zh",
@@ -236,5 +200,216 @@ describe("模型页凭证输入框的自动填充", () => {
       expect(await screen.findByRole("dialog", { name: "选择模型" })).toBeInTheDocument();
       expect(screen.getByText("已选 1 个")).toBeInTheDocument();
     });
+  });
+
+  // 选预置只该填「这家是谁、端点在哪」：模型留到获取时逐条挑（对齐 DSH）。
+  // 以前一选预置就把整份目录灌进表单，几十条里有一堆未必开通、也没人用的模型。
+  it("选预置只填端点，不预填模型", async () => {
+    await act(async () => {
+      render(<ModelsSettings />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加提供商" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "预置提供商" }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("option", { name: "Xiaomi" }));
+    });
+
+    expect(screen.getByDisplayValue("https://api.xiaomimimo.com/anthropic")).toBeInTheDocument();
+    // 模型一条都不该被预填：没有模型行，计数是 0
+    expect(screen.queryByText("mimo-v2.6-pro")).toBeNull();
+    // 两张卡片（原有的 gw + 新建的 Xiaomi）都是 0 个模型
+    expect(screen.getAllByText("0 个模型")).toHaveLength(2);
+  });
+
+  // 没填密钥或地址时端点是问不出东西的（只会回 401 / 地址不合法），
+  // 这时「获取可用模型」直接用本地预置目录，且不向后端发请求。
+  it("缺密钥时从本地预置目录取候选，不请求端点", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await act(async () => {
+      render(<ModelsSettings />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加提供商" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "预置提供商" }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("option", { name: "Xiaomi" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /获取可用模型/ }));
+    });
+
+    expect(await screen.findByRole("dialog", { name: "选择模型" })).toBeInTheDocument();
+    expect(screen.getByText(/本地预置目录/)).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("/api/settings/models"))).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "全选" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加所选" }));
+    });
+    for (const id of ["mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed"]) {
+      expect(screen.getByText(id)).toBeInTheDocument();
+    }
+  });
+
+  // 认证方式跟着预置走：同一把密钥放进哪个头由端点决定，选预置就该预选对。
+  it("选预置后认证方式跟着切换", async () => {
+    await act(async () => {
+      render(<ModelsSettings />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加提供商" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "预置提供商" }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("option", { name: "Xiaomi" }));
+    });
+    // Bearer 预置会自动展开高级设置；没收起时才需要点一下。
+    const advanced = screen.queryByRole("button", { name: "高级设置（认证方式）" });
+    if (advanced) {
+      await act(async () => {
+        fireEvent.click(advanced);
+      });
+    }
+    const trigger = screen.getByRole("button", { name: "认证方式" });
+    expect(trigger.textContent).toContain("Bearer");
+  });
+
+  // 对话请求由 CLI 发出、没有换头重试的机会：验证发现「换个头才成功」必须
+  // 写回配置，否则界面上写着条绿字，下一次对话照旧 401。
+  it("验证模型提示要换认证方式时，自动改配置并提示保存", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/api/settings/verify")) {
+          return new Response(
+            JSON.stringify({
+              ok: true,
+              endpoint: "https://relay.example",
+              method: "POST /v1/messages",
+              status: 200,
+              latency_ms: 5,
+              detail: "模型 deepseek-flash 可用（Bearer 认证）",
+              auth_switched_to: "bearer",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response("{}", { status: 200 });
+      }),
+    );
+    await act(async () => {
+      render(<ModelsSettings />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加提供商" }));
+    });
+    // 手填一个模型，再点它的验证按钮（对话级验证只认具体模型）。
+    const manual = screen.getByPlaceholderText("手动添加模型 ID");
+    await act(async () => {
+      fireEvent.change(manual, { target: { value: "deepseek-flash" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(manual, { key: "Enter" });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "验证模型" }));
+    });
+    expect(await screen.findByText(/认证方式已改成 Bearer/)).toBeTruthy();
+    const advanced = screen.queryByRole("button", { name: "高级设置（认证方式）" });
+    if (advanced) {
+      await act(async () => {
+        fireEvent.click(advanced);
+      });
+    }
+    expect(screen.getByRole("button", { name: "认证方式" }).textContent).toContain("Bearer");
+  });
+
+  // 自定义中转没有地址就没有可问的端点：获取按钮该禁用。密钥不拦——
+  // 本机匿名中转是合法的。
+  it("自定义提供商没填地址时禁用获取与测试", async () => {
+    await act(async () => {
+      render(<ModelsSettings />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加提供商" }));
+    });
+    expect(screen.getByRole("button", { name: /获取可用模型/ })).toBeDisabled();
+
+    // 只填地址、不填密钥：恢复（匿名中转合法）
+    const url = screen.getByPlaceholderText("https://api.deepseek.com/anthropic");
+    await act(async () => {
+      fireEvent.change(url, { target: { value: "https://relay.example" } });
+    });
+    expect(screen.getByRole("button", { name: /获取可用模型/ })).not.toBeDisabled();
+  });
+
+  // 预置端点缺密钥时仍能挑模型：获取走本地预置目录，不需要端点做任何事。
+  it("预置缺密钥时获取仍走本地目录", async () => {
+    await act(async () => {
+      render(<ModelsSettings />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加提供商" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "预置提供商" }));
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("option", { name: "Xiaomi" }));
+    });
+    expect(screen.getByRole("button", { name: /获取可用模型/ })).not.toBeDisabled();
+  });
+
+  // 验证是唯一会真的发对话请求的地方：失败原因必须留在那一行，而不是弹个 toast
+  // 就消失——用户要照它去改地址/密钥/认证方式。
+  it("验证模型失败时在行内说明原因", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/api/settings/verify")) {
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              endpoint: "https://relay.example",
+              method: "POST /v1/messages",
+              status: 401,
+              latency_ms: 12,
+              detail: "模型 v-model 不可用：{\"error\":\"invalid api key\"}",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response("{}", { status: 200 });
+      }),
+    );
+    await act(async () => {
+      render(<ModelsSettings />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "添加提供商" }));
+    });
+    const manual = screen.getByPlaceholderText("手动添加模型 ID");
+    await act(async () => {
+      fireEvent.change(manual, { target: { value: "v-model" } });
+    });
+    await act(async () => {
+      fireEvent.keyDown(manual, { key: "Enter" });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "验证模型" }));
+    });
+    expect(await screen.findByText(/模型 v-model 不可用/)).toBeTruthy();
   });
 });

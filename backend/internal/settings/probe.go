@@ -32,6 +32,9 @@ type ProbeResult struct {
 	Status    int    `json:"status"`
 	LatencyMs int64  `json:"latency_ms"`
 	Detail    string `json:"detail"`
+	// AuthSwitchedTo 非空表示按配置的认证方式被拒（401/403）、换成它才成功。
+	// 对话没有重试的机会，界面应当把「认证方式」改成这个值再保存。
+	AuthSwitchedTo string `json:"auth_switched_to,omitempty"`
 }
 
 // stripVersionSuffix 去掉尾部的 `/v1`。
@@ -68,21 +71,32 @@ func (p Provider) ListBaseURL() string {
 	return stripVersionSuffix(p.Root())
 }
 
-// bearerFallback 返回「同一把密钥改成 Bearer 再试一次」的版本。
+// switchAuth 返回「同一把密钥换成另一种发送方式」的副本，以及换成了哪种。
 //
-// 不少中转只认 `Authorization: Bearer`，用户把密钥填在「API 密钥」里就会一路
-// 401。FetchModels 与 Probe 都要这条兜底——只有一处有的时候，界面会出现
-// 「获取列表成功、测试连接鉴权失败」这种自相矛盾的结论。
+// 认证方式选错是最常见的一类 401：密钥是真有效的，只是被放进了另一个请求头。
+// 探测路径换一次能直接告诉用户「该用 Bearer」；对话没有这个重试机会——CLI
+// 注错环境变量就是整场 401，所以这个结论必须让用户看到并保存下来。
 //
-// 已经填了 Bearer 令牌、或根本没填密钥时返回 false：换一个方向重试没有意义。
-func (p Provider) bearerFallback() (Provider, bool) {
-	if p.APIKey == "" || p.AuthToken != "" {
-		return Provider{}, false
+// 没填密钥时返回 false：没有东西可以换。
+func (p Provider) switchAuth() (Provider, string, bool) {
+	if p.APIKey == "" {
+		return Provider{}, "", false
 	}
 	alt := p
-	alt.AuthToken = p.APIKey
-	alt.APIKey = ""
-	return alt, true
+	if NormalizeAuth(p.Auth) == AuthBearer {
+		alt.Auth = AuthXAPIKey
+	} else {
+		alt.Auth = AuthBearer
+	}
+	return alt, alt.Auth, true
+}
+
+// authLabel 是认证方式的界面用词。
+func authLabel(auth string) string {
+	if NormalizeAuth(auth) == AuthBearer {
+		return "Bearer"
+	}
+	return "x-api-key"
 }
 
 // Root 返回去掉尾斜杠的地址。
@@ -124,18 +138,17 @@ func Probe(ctx context.Context, p Provider) ProbeResult {
 			return res
 		}
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		// 与 FetchModels 同一条兜底：不少中转只认 Bearer，「用密钥换 Bearer 再试
-		// 一次」在那里能过、在这里却直接报鉴权失败，用户会看到「获取列表成功、
-		// 测试连接失败」这种自相矛盾的结论。
-		if alt, ok := p.bearerFallback(); ok {
-			if s2, b2, _, e2 := doAuth(ctx, client, http.MethodGet, url, alt, nil); e2 == nil {
-				if s2 >= 200 && s2 < 300 {
-					if models, perr := parseModels(b2); perr == nil && len(models) > 0 {
-						res.OK = true
-						res.Status = s2
-						res.Detail = fmt.Sprintf("端点可用，返回 %d 个模型（Bearer 鉴权）", len(models))
-						return res
-					}
+		// 与 FetchModels 同一条诊断：换成另一种认证再试一次，成功就把
+		// 「该用哪种」带回去——列表与连接两处都要做，否则会出现「列表拉得到、
+		// 探测却报鉴权失败」这种自相矛盾的结论。
+		if alt, header, ok := p.switchAuth(); ok {
+			if s2, b2, _, e2 := doAuth(ctx, client, http.MethodGet, url, alt, nil); e2 == nil && s2 >= 200 && s2 < 300 {
+				if models, perr := parseModels(b2); perr == nil && len(models) > 0 {
+					res.OK = true
+					res.Status = s2
+					res.AuthSwitchedTo = header
+					res.Detail = fmt.Sprintf("端点可用，返回 %d 个模型（%s 认证）", len(models), authLabel(header))
+					return res
 				}
 			}
 		}
@@ -200,6 +213,19 @@ func VerifyModel(ctx context.Context, p Provider, model string) ProbeResult {
 	case status >= 200 && status < 300:
 		res.OK = true
 		res.Detail = "模型 " + model + " 可用"
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		// 与 Probe / FetchModels 同一条诊断：认证方式选错时换个头再试一次，
+		// 结论带回给界面，避免「测试连接说要用 Bearer、这里却说密钥无效」。
+		if alt, header, ok := p.switchAuth(); ok {
+			if s2, _, _, e2 := doAuth(ctx, client, http.MethodPost, p.ChatBaseURL()+"/v1/messages", alt, payload); e2 == nil && s2 >= 200 && s2 < 300 {
+				res.OK = true
+				res.Status = s2
+				res.AuthSwitchedTo = header
+				res.Detail = fmt.Sprintf("模型 %s 可用（%s 认证）", model, authLabel(header))
+				return res
+			}
+		}
+		res.Detail = fmt.Sprintf("模型 %s 不可用：%s", model, snippet(body))
 	default:
 		res.Detail = fmt.Sprintf("模型 %s 不可用：%s", model, snippet(body))
 	}
@@ -242,21 +268,22 @@ func sendRequest(c *http.Client, req *http.Request, limit int64) (int, []byte, b
 	return resp.StatusCode, b, false, nil
 }
 
-// doAuth 按 Anthropic Messages 的规则发请求（列表与对话测试共用）。
+// doAuth 按 Anthropic Messages 的规则发请求（列表、测试连接与模型验证共用）。
 //
-// 两种凭据并存不是二选一：APIKey 走 x-api-key，AuthToken 走 Bearer，
-// 同时设置就都发（claude CLI 自己也是这么做的）。不少中转只认 Bearer，
-// 那种情况下用户把密钥填到「Bearer 令牌」即可——不再需要按协议切换鉴权方式。
+// 只发配置的那一种头：同一把密钥同时塞进 x-api-key 与 Authorization 会让
+// 「认证方式」这个选择失去意义，也与对话路径不一致——对话按 Auth 只注入一个
+// 环境变量，CLI 只发一个头。
 func doAuth(ctx context.Context, c *http.Client, method, url string, p Provider, body []byte) (int, []byte, bool, error) {
 	req, err := newRequest(ctx, method, url, body)
 	if err != nil {
 		return 0, nil, false, err
 	}
 	if p.APIKey != "" {
-		req.Header.Set("x-api-key", p.APIKey)
-	}
-	if p.AuthToken != "" {
-		req.Header.Set("authorization", "Bearer "+p.AuthToken)
+		if NormalizeAuth(p.Auth) == AuthBearer {
+			req.Header.Set("authorization", "Bearer "+p.APIKey)
+		} else {
+			req.Header.Set("x-api-key", p.APIKey)
+		}
 	}
 	return sendRequest(c, req, readLimitModels)
 }

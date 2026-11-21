@@ -191,7 +191,7 @@ id 会复用进程，重复调用不会多起 claude。没有历史对话时后�
   代理同时写入 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `SOCKS_PROXY`（大小写都有），
   `localhost` 与 `127.0.0.1` 自动走 `NO_PROXY`。
 - **模型**（左侧栏功能区第一项）：管理提供商。新建提供商时可以先从**预置提供商**里选（Anthropic、DeepSeek、
-  Z.AI、Kimi、Qwen、MiniMax、小米、OpenRouter 等 20+ 家），自动填 Base URL 和默认模型；
+  Z.AI、Kimi、Qwen、MiniMax、小米、OpenRouter 等 20+ 家），自动填 ID 与 Base URL；
   也可以选「自定义」手动填写 ID。预置只收录 **Anthropic 兼容端点**——原生 API 是
   OpenAI / Gemini / Bedrock 的服务这里注定跑不通，因此不在目录里。提供商列表在只有一个时默认展开、多个时默认折叠。每个模型可配置显示名（留空跟随模型 ID）、
   **推理强度档位**（`low` / `medium` / `high` / `xhigh` / `max`）和**图片输入支持**，
@@ -259,11 +259,11 @@ claude 干活时（回合进行中）你照样可以接着说话：
 
 | 字段 | 说明 |
 |---|---|
-| 预置提供商 | 可选，填好 id / 地址 / 默认模型；只收录 Anthropic 兼容端点 |
+| 预置提供商 | 可选，填好 id / 地址（**不含模型**）；只收录 Anthropic 兼容端点 |
 | API 地址 | 该提供商的**Anthropic 兼容**基础地址，列表与对话都用它 |
-| API 密钥 | 对话时注入 `ANTHROPIC_API_KEY`（`x-api-key`）；留空表示不修改，清除要点「清除」再保存 |
-| Bearer 令牌 | 只认 `Authorization: Bearer` 的端点把密钥填这里 |
-| 模型 | 勾选添加后出现，可单独移除或点 ✓ 验证 |
+| API 密钥 | 提供商签发的那把密钥，只填这一处；留空表示不修改，清除要点「清除」再保存 |
+| 认证方式（高级） | 密钥放进哪个请求头：`x-api-key`（默认，注入 `ANTHROPIC_API_KEY`）或 `Authorization: Bearer`（注入 `ANTHROPIC_AUTH_TOKEN`）；选预置会按端点自动选好 |
+| 模型 | 点「获取可用模型」在弹窗里勾选（只读端点自报的清单，免费）；没填地址或密钥时用预置目录的清单。每行的 ✓ 会发一次极小请求，验证这个模型真的能对话（选填，会计少量费用） |
 
 **没有「协议」选项，对话恒为 Anthropic Messages**：claude CLI 只会发
 `POST {base}/v1/messages`，请求体、路径、鉴权都没有开关可换。所以原生 API 是
@@ -277,7 +277,7 @@ Qwen / MiniMax / 小米等的 `/anthropic` 路径），或者你自己架一层�
 | 项 | 值 |
 |---|---|
 | 列表地址 | `{root}/v1/models?limit=1000`，root 先剥掉尾部 `/v1` |
-| 鉴权 | `x-api-key` + `anthropic-version: 2023-06-01`；填了 Bearer 令牌则改发 `Authorization: Bearer` |
+| 鉴权 | `anthropic-version: 2023-06-01` + 按「认证方式」发 `x-api-key` 或 `Authorization: Bearer`；401 时会用另一种头重试一次并把结论带回来 |
 
 **对话地址与列表地址同源**：CLI 自己在 base 后面拼 `/v1/messages`，所以尾部 `/v1`
 一律剥掉，填不填都落到同一个地址，不会拼成 `/v1/v1/messages`。

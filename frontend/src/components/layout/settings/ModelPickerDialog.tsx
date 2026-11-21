@@ -18,6 +18,7 @@ export function ModelPickerDialog({
   open,
   onClose,
   providerName,
+  source = "gateway",
   models,
   selected,
   loading,
@@ -30,6 +31,13 @@ export function ModelPickerDialog({
   onClose: () => void;
   /** 标题里显示的提供商名（可能为空，回落到 ID）。 */
   providerName: string;
+  /**
+   * 候选从哪来：网关端点，还是本地预置目录。
+   *
+   * 没填 API 地址或密钥时端点是问不出东西的（只会回 401），那时改用目录里的
+   * 清单；用户需要知道这一屏不是端点回答的，否则会以为这家真的只有这些模型。
+   */
+  source?: "gateway" | "local";
   /** 网关返回的完整目录（未过滤）。 */
   models: GatewayModel[];
   /** 提供商当前已有的模型：打开时默认勾上（再加一次不会重复）。 */
@@ -83,10 +91,15 @@ export function ModelPickerDialog({
       label={t("选择模型", "Choose models")}
       title={t("选择模型", "Choose models")}
       description={
-        providerName
-          ? // 「已在列表里的默认勾选」要说出来，否则用户会以为那些是被网关标出来的。
-            t(`从「${providerName}」的网关目录里挑选；已经添加过的默认勾选。`, `Pick from the gateway catalog of "${providerName}"; already-added models start checked.`)
-          : t("从网关目录里挑选；已经添加过的默认勾选。", "Pick from the gateway catalog; already-added models start checked.")
+        source === "local"
+          ? t(
+            "本地预置目录：这个提供商还没填 API 地址或密钥。条目来自 DSH 的模型目录，未必都已开通——加进来后可以用模型行的 ✓ 逐条验证。填好凭据再获取，就会改为读端点自己的列表。",
+            "Local preset catalog: this provider has no API base URL or key yet. Entries come from the DSH model catalog and may not all be enabled — verify them one by one with the ✓ on each model row. Fill in the credentials and fetch again to read the endpoint's own list.",
+          )
+          : providerName
+            ? // 「已在列表里的默认勾选」要说出来，否则用户会以为那些是被网关标出来的。
+              t(`从「${providerName}」的网关目录里挑选；已经添加过的默认勾选。`, `Pick from the gateway catalog of "${providerName}"; already-added models start checked.`)
+            : t("从网关目录里挑选；已经添加过的默认勾选。", "Pick from the gateway catalog; already-added models start checked.")
       }
       size="lg"
       bodyScroll={false}
@@ -128,7 +141,11 @@ export function ModelPickerDialog({
           {loading && <p className="px-2 py-6 text-center text-[11px] text-muted">{t("正在获取模型列表…", "Fetching models…")}</p>}
           {!loading && filtered.length === 0 && (
             <p className="px-2 py-6 text-center text-[11px] text-muted">
-              {models.length === 0 ? t("网关没有返回任何模型。", "The gateway returned no models.") : t("没有匹配的模型。", "No matching models.")}
+              {models.length === 0
+                ? source === "local"
+                  ? t("本地预置目录里没有这个提供商的模型。", "The local preset catalog has no models for this provider.")
+                  : t("网关没有返回任何模型。", "The gateway returned no models.")
+                : t("没有匹配的模型。", "No matching models.")}
             </p>
           )}
           {!loading &&

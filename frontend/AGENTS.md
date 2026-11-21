@@ -990,10 +990,28 @@ src/
   （连密钥尾巴都会在截图/录屏里流出去）：已设置只体现在 placeholder「已设置（留空不修改）」
   与「清除密钥 / 清除」按钮上。模型页的 API 密钥同理。
 - 模型页提供商只有一个时默认展开，多个时默认折叠；新建提供商可以选预置（自动填
-  ID / 协议 / Base URL / 默认模型）或选「自定义」手填 ID；显示名留空跟随 ID。
-  预置里标「需兼容端点」的只适合拉模型列表，claude 对话需要 Anthropic 兼容端点。
-  每个模型可填上下文窗口 / 最大输出（`128K` / `1M` 写法），从网关拉取时用
-  `context_length` / `max_output_tokens` 预填。
+  ID / Base URL，**不填模型**）或选「自定义」手填 ID；显示名留空跟随 ID。
+  模型走「获取可用模型」弹窗逐条勾选（对齐 DSH）：**缺 API 地址或密钥时**改为读
+  `lib/providerCatalog.ts` 的本地预置清单（端点在那种状态下只会回 401 / 地址不合法），
+  弹窗要说明这一屏不是端点回答的。
+  **密钥只有一个输入框**，放哪个请求头由「高级设置 → 认证方式」决定（`x-api-key` →
+  `ANTHROPIC_API_KEY`，`bearer` → `ANTHROPIC_AUTH_TOKEN`）：对话请求由 CLI 发出、
+  无法在 401 之后换头重试，所以这是个必须在起进程前定下来的配置，不是两个密钥。
+  预置按端点带默认值（`ProviderPreset.auth`，没标的 x-api-key），自定义中转默认
+  x-api-key；探测（`ProbeResult.auth_switched_to` / `ModelsResult.auth.switched_to`）
+  发现换个头才成功时，卡片把它写回表单并提示保存。
+  **「获取可用模型」有前置条件**（`canFetch`，禁用时用 `title` 说原因）：自定义中转
+  没填地址就没有可问的端点，按钮禁用，但**密钥不拦**（本机匿名中转合法）；预置端点缺
+  密钥时仍可用——它那时读的是本地预置目录。
+  **没有「测试连接」按钮**：它与「获取可用模型」发的是同一个 `GET /v1/models`，
+  正常路径上结论完全一样（都过 `doAuth` 与换头重试）。对话层的验证下沉到**模型行**的
+  ✓ 按钮（`verifyModelFor` → `POST /api/settings/verify` → `settings.VerifyModel`）：
+  只发一次 `max_tokens: 1` 的对话请求，模型名就是那一行的 id——能发现「列表里有但没
+  开通 / 名字已下线 / 该端点不支持 messages」这类列表看不出来的问题。失败原因直接写在
+  行内，成功只标绿勾。每点一次是一次真实请求（计少量费用），不要做成自动全量验证。
+  预置里 `needsBaseUrl` 的（Cloudflare AI Gateway / OpenCode 这类）没有固定地址，
+  要用户填自己的完整 Base URL；每个模型可填上下文窗口 / 最大输出（`128K` / `1M` 写法），
+  从网关拉取时用 `context_length` / `max_output_tokens` 预填。
 - 聊天页的模型与推理等级是 `components/chat/ModelMenu.tsx` 的两级菜单（参照 DSH）：
   一级「模型 / 推理等级」，模型页按提供商分组；菜单里不展示图片能力标记。
   档位列表由 `providerForm.effortChoices` 给出：**默认（`""`，不声明推理等级）** +
@@ -1010,7 +1028,7 @@ src/
 - **全局禁用浏览器自动填充**：`lib/autofill.ts` 在 `App` 挂载时给所有
   `input/textarea` 补 `autocomplete=off`（密码框用 `new-password`）与主流密码管理器的
   ignore 标记；新增普通输入框不用再逐个手写。
-  **凭证类输入框（API 地址 / 密钥 / Bearer 令牌 / 访问令牌）必须静态写 `{...NO_AUTOFILL}`**：
+  **凭证类输入框（API 地址 / 密钥 / 访问令牌）必须静态写 `{...NO_AUTOFILL}`**：
   密码管理器在元素插入时就扫描，MutationObserver 的回调是微任务，晚一步 1Password
   就会弹「填充密码」浮层（截图里出现在 API 地址框上）。
 - **不许用浏览器原生控件承载 UI**：

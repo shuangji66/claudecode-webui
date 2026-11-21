@@ -209,8 +209,8 @@ func TestFetchModelsAnthropicUsesKeyHeader(t *testing.T) {
 	if gotVersion != "2023-06-01" {
 		t.Fatalf("应带 anthropic-version，实际 %q", gotVersion)
 	}
-	if !res.Auth.APIKeySent {
-		t.Fatal("Auth.APIKeySent 应为 true")
+	if res.Auth.Header != AuthXAPIKey {
+		t.Fatalf("Auth.Header 应为 %s，实际 %q", AuthXAPIKey, res.Auth.Header)
 	}
 }
 
@@ -227,19 +227,19 @@ func TestFetchModelsBearerToken(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, AuthToken: "b2"})
+	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, APIKey: "b2", Auth: AuthBearer})
 	if len(res.Models) != 1 {
 		t.Fatalf("应拿到模型: %+v", res)
 	}
 	if gotAuth != "Bearer b2" {
-		t.Fatalf("填了 Bearer 令牌就应该发 Bearer，实际 %q", gotAuth)
+		t.Fatalf("认证方式选 Bearer 就应该发 Bearer，实际 %q", gotAuth)
 	}
-	if !res.Auth.AuthTokenSent {
-		t.Fatal("Auth.AuthTokenSent 应为 true")
+	if res.Auth.Header != AuthBearer {
+		t.Fatalf("Auth.Header 应为 %s，实际 %q", AuthBearer, res.Auth.Header)
 	}
 }
 
-// 凭据填在 APIKey 上、但网关只认 Bearer 时，用同一把密钥换 Bearer 重试一次。
+// 认证方式选了 x-api-key、但网关只认 Bearer 时，用同一把密钥换 Bearer 重试一次。
 func TestFetchModelsBearerFallback(t *testing.T) {
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -258,8 +258,8 @@ func TestFetchModelsBearerFallback(t *testing.T) {
 	if len(res.Models) != 1 {
 		t.Fatalf("应拿到模型: %+v", res)
 	}
-	if !res.Auth.BearerFallback {
-		t.Fatal("BearerFallback 应为 true")
+	if res.Auth.SwitchedTo != AuthBearer {
+		t.Fatalf("SwitchedTo 应为 %s，实际 %q", AuthBearer, res.Auth.SwitchedTo)
 	}
 	if calls != 2 {
 		t.Fatalf("应请求两次（x-api-key 失败后换 Bearer），实际 %d", calls)
@@ -283,7 +283,7 @@ func TestFetchModelsRetriesWithBearer(t *testing.T) {
 	if len(res.Models) != 1 {
 		t.Fatalf("Bearer 重试应成功: %+v", res)
 	}
-	if !res.Auth.BearerFallback || !strings.Contains(res.Detail, "Bearer") {
+	if res.Auth.SwitchedTo != AuthBearer || !strings.Contains(res.Detail, "Bearer") {
 		t.Fatalf("应说明用了 Bearer 鉴权: %+v", res)
 	}
 }
@@ -308,6 +308,9 @@ func TestProbeRetriesWithBearer(t *testing.T) {
 	}
 	if !strings.Contains(res.Detail, "Bearer") {
 		t.Fatalf("应说明用了 Bearer 鉴权: %q", res.Detail)
+	}
+	if res.AuthSwitchedTo != AuthBearer {
+		t.Fatalf("AuthSwitchedTo 应为 %s，实际 %q", AuthBearer, res.AuthSwitchedTo)
 	}
 }
 

@@ -198,9 +198,12 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   抬到 5 分钟下限（实测 2.1.329），并且设了它之后会跳过 firstParty 的 180s 默认分支，
   设成 60s 等于**越设越慢**。前者直接生效（设 20000 时 20s 即报
   `stream idle: no bytes for 20000ms`）。改这个值前先按这条实测，别再被名字误导。
-- `Env()` 只注入选中提供商的值：`ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY`（或无 key 时
-  `ANTHROPIC_AUTH_TOKEN`）/ `ANTHROPIC_MODEL`，并把三个别名变量也指向同一模型，
-  使 CLI「固定使用默认模型」。
+- `Env()` 只注入选中提供商的值：`ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL`，密钥按
+  `Provider.Auth` 二选一注入——`x-api-key` → `ANTHROPIC_API_KEY`，`bearer` →
+  `ANTHROPIC_AUTH_TOKEN`（空值按 x-api-key，旧配置因此不用改写）。**不要两个都注入**：
+  官方 CLI 的优先级是 AUTH_TOKEN 压过 API_KEY，官方端点会因此连不上；而且对话由 CLI
+  发请求，我们没法在 401 之后换头重试，所以「用哪个头」必须在起进程前定下来。
+  三个别名变量也指向同一模型，使 CLI「固定使用默认模型」。
 - **读响应体上限要按用途区分**：错误体 4KB 够用，模型列表要 4MB（真实中转条目带
   description / modalities，一份列表常超 4KB）。被截断时要明说「被截断」，
   不要伪装成解析失败。
@@ -314,6 +317,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   dsh 的 README/AGENTS 也记了同一条边界。**排查时别把 `{"repos":[]}\n`（同样 13 字节）当成它。**
 - 设置路由：`GET/PUT /api/settings`、`POST /api/settings/test|models|verify|proxy`——
   全部敏感（有密钥），务必保持鉴权。`GET /api/health` 不带鉴权（只报存活，不回信息）。
+  **`/test` 目前没有界面入口**：它与 `/models` 发的是同一个 `GET /v1/models`，
+  正常路径上结论完全一样（都过 `doAuth` 与换头重试），留着只会让人再摆一颗重复的按钮。
+  界面上的对话级验证走 `/verify`（指定单个模型发一次 `max_tokens: 1`，见模型页的 ✓）。
 - 技能路由：`GET /api/skills`、`GET/PUT/DELETE /api/skills/doc`（写入见根 AGENTS.md 4.10）。
 - MCP 路由：`GET /api/mcp`、`POST /api/mcp`、`DELETE /api/mcp`、`POST /api/mcp/enabled`、
   `POST /api/mcp/probe`。项目级操作先过 `authorizedCwd`；探测只接受已保存的服务名
