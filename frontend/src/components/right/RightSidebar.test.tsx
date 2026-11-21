@@ -9,6 +9,7 @@ vi.mock("./FilesPanel", () => ({ FilesPanel: () => <div>FILES</div> }));
 vi.mock("./GitPanel", () => ({ GitPanel: () => <div>GIT</div> }));
 vi.mock("./TerminalView", () => ({ default: () => <div>TERM</div> }));
 vi.mock("./SubagentPanel", () => ({ SubagentPanel: () => <div>SUB</div> }));
+vi.mock("./TracePanel", () => ({ TracePanel: () => <div>TRACE</div> }));
 
 beforeEach(() => {
   localStorage.clear();
@@ -24,6 +25,7 @@ const openStart = () => fireEvent.click(screen.getByRole("button", { name: "回�
 const openFiles = () => fireEvent.click(screen.getByRole("button", { name: /工作区文件/ }));
 const openGit = () => fireEvent.click(screen.getByRole("button", { name: /^Git/ }));
 const openTerminal = () => fireEvent.click(screen.getByRole("button", { name: /新建终端/ }));
+const openTrace = () => fireEvent.click(screen.getByRole("button", { name: /执行轨迹/ }));
 
 describe("RightSidebar 开始页栅格", () => {
   // 列数按容器宽度切，不看视口：右侧栏是拖出来的，宽度和 viewport 没关系。
@@ -104,10 +106,11 @@ describe("RightSidebar 收起侧栏", () => {
 });
 
 describe("RightSidebar 标签页", () => {
-  it("默认停在开始页：三张功能卡片，不自动打开「文件」，也不显示 +", () => {
+  it("默认停在开始页：四张功能卡片，不自动打开「文件」，也不显示 +", () => {
     setup();
     expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Git/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /执行轨迹/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /新建终端/ })).toBeInTheDocument();
     expect(screen.queryByText("FILES")).toBeNull();
     expect(screen.queryByText("GIT")).toBeNull();
@@ -133,6 +136,15 @@ describe("RightSidebar 标签页", () => {
     // 文件面板仍在 DOM 里（开始页只是盖在上面），标签按钮也还在。
     expect(screen.getByText("FILES").closest("div.hidden")).not.toBeNull();
     expect(screen.getByRole("button", { name: /^文件$/ })).toBeInTheDocument();
+  });
+
+  it("轨迹标签是单例：再点一次卡片只切回去，不会开第二份", () => {
+    setup();
+    openTrace();
+    expect(screen.getByText("TRACE")).toBeInTheDocument();
+    openStart();
+    openTrace();
+    expect(screen.getAllByRole("button", { name: /^轨迹/ })).toHaveLength(1);
   });
 
   it("从开始页可以开第二个终端，每个终端各自一个标签", async () => {

@@ -303,6 +303,17 @@ interface AppState {
   /** 请 Composer 把某个工作区路径以 `@…` 的形式插进输入框（绝对路径，由 Composer 折算）。 */
   requestMention: (path: string, kind: "file" | "dir") => void;
   consumeMentionRequest: () => void;
+  /**
+   * 「把对话滚到这一条」的请求（右侧栏轨迹面板 → 对话区，带单调递增 seq）。
+   *
+   * 只由 `requestScrollToItem` 写入，不消费、不清空：消费方是 `MessageList`，
+   * 它按 seq 去重。清空反而会出事——子代理标签里那份 `MessageList` 也是同一个
+   * store 的消费者，谁先挂载谁清掉，主对话就永远收不到这次跳转（「在右侧栏打开」
+   * 那次踩过同一个坑，见 AGENTS 里 `openRequest` 的说明）。
+   */
+  scrollRequest: { seq: number; itemId: string } | null;
+  /** 请对话区滚到某一条消息（item id）。 */
+  requestScrollToItem: (itemId: string) => void;
   /** 打开目录下最近一条对话；createIfEmpty=false 时没有对话就保持空态，不新建。 */
   ensureSession: (cwd?: string, createIfEmpty?: boolean) => Promise<SessionInfo | null>;
   createSession: (cwd?: string) => Promise<void>;
@@ -947,6 +958,9 @@ let subagentViewSeq = 0;
  */
 let mentionRequestSeq = 0;
 
+/** 轨迹面板「跳到某一步」的序号：同一步点第二次值没变，只有 seq 能触发重放。 */
+let scrollRequestSeq = 0;
+
 /**
  * 对话列表请求的序号：`refreshConversations` 只认最后一次发出去的结果。
  *
@@ -1550,6 +1564,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   consumeMentionRequest: () => set({ mentionRequest: null }),
+
+  scrollRequest: null,
+
+  requestScrollToItem: (itemId) => {
+    if (!itemId) return;
+    scrollRequestSeq += 1;
+    set({ scrollRequest: { seq: scrollRequestSeq, itemId } });
+  },
 
   mkdirDir: async (parent, name) => {
     const r = await apiFetch<{ path: string }>("/api/fs/mkdir", {

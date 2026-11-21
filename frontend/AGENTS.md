@@ -46,6 +46,7 @@ src/
   lib/dragImage.ts     手动排序的拖影：自己造一块与行同宽的替身交给 setDragImage
   lib/subagents.ts     从消息流收集子代理（页头计数 / 审批归属，纯函数）
   lib/turns.ts         「轮」的切分与视口所在轮（对话区刻度跳转，纯函数）
+  lib/trace.ts         执行轨迹：Item → 逐轮时间线（泳道/段/子代理/事件，纯函数）
   lib/usage.ts         用量换算：上下文/缓存命中/tok/s（只从 CLI 的 usage 派生）
   lib/workspace.ts     文件路径/porcelain 分组/unified diff 解析（纯函数）
   lib/markdownMedia.ts 正文媒体地址解析：`![](路径)` 归一化成工作区相对路径（纯函数）
@@ -85,6 +86,7 @@ src/
   components/permission/ PermissionPanel（按钮由 permission_suggestions 决定）
                        / AskUserQuestionPanel（模型提问：翻页 + 单选多选 + 自定义回答 + 提交自检）
   components/right/    RightSidebar（标签页）/ FilesPanel / GitPanel / TerminalView / SubagentPanel
+                       / TracePanel（执行轨迹：轮次总览 + 泳道 + 步骤表）
 ```
 
 **分层规则**：组件不直接调 `fetch` 或 `WebSocket`；一律经 store / transport；
@@ -159,12 +161,16 @@ src/
     === "url"` 不内联（那会让界面去第三方拉图），退回一行「N 个图片/PDF」占位；认不出字节的
     image block 也必须保留这行占位，否则「只发了图」的消息回放时会整条消失。
     去重同样要认这种情况：只发图片时本地与回显的 `text` 都是空串，靠「两边都有 images」判定。
-13. **右侧栏是「开始页 + 标签页」**：没有标签时显示开始页——工作区文件 / Git / 新建终端
-    三张卡片，**不要自动打开「文件」标签**；栅格用**容器查询**（`@container` +
+13. **右侧栏是「开始页 + 标签页」**：没有标签时显示开始页——工作区文件 / Git /
+    执行轨迹 / 新建终端四张卡片，**不要自动打开「文件」标签**；栅格用**容器查询**（`@container` +
     `@min-[21rem]:grid-cols-2`）而不是视口断点：右侧栏宽度是拖出来的，与 viewport 无关，
     窄了排成一列，否则描述会被折成「浏览工作区文 / 件」这种断字。描述仍要短到一行放得下；
-    点卡片才开标签。顶部一排标签（文件 / Git / 每个终端各一个），
-    标签自带 × 关闭；文件与 Git 是单例，终端每次都新建（上限 8，标签名 `bash`、`bash 2`…）。
+    点卡片才开标签。顶部一排标签（文件 / Git / 轨迹 / 每个终端各一个），
+    标签自带 × 关闭；文件、Git 与轨迹是单例，终端每次都新建（上限 8，标签名 `bash`、`bash 2`…）。
+    **轨迹标签不新起数据源**：`TracePanel` 只消费 `items[activeId]`，经 `lib/trace.traceTurns`
+    折成「一轮一条时间线」。三条口径别改（详见根 AGENTS 4.5）：模型请求的落盘判定要把
+    `tool_use` 算进去、工具耗时认 `ToolItem.doneAt`（不是 `ts`）、段间空隙**不填**。
+    时间轴的分段用 `layoutLane` 排行：顺序的工具挤一行，只有真正并行的调用才另起一行。
     顶部 `+` **直接回到开始页、不弹菜单**（`active === ""` 就是开始页；开始页里自己不显示
     这颗按钮）。开始页是盖在标签面板上面的一层，**标签面板照旧只隐藏不卸载**：
     终端里挂着 PTY，卸载等于杀 shell；关标签才结束进程。

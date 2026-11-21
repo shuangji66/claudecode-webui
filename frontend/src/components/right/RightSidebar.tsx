@@ -4,6 +4,7 @@ import { useWheelScrollX } from "../../lib/wheelScroll";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { FilesPanel } from "./FilesPanel";
 import { GitPanel } from "./GitPanel";
+import { TracePanel } from "./TracePanel";
 import {
   IconClose,
   IconExitFullscreen,
@@ -15,6 +16,7 @@ import {
   IconSpark,
   IconSplit,
   IconTerminal,
+  IconTrace,
   IconUnsplit,
 } from "../common/Icons";
 import { SubagentPanel } from "./SubagentPanel";
@@ -23,7 +25,7 @@ import { useAppStore } from "../../store/useAppStore";
 const TerminalView = lazy(() => import("./TerminalView"));
 
 /** 一个标签页；终端每个会话各占一个，子代理对话按 agentId 各占一个。 */
-type TabKind = "files" | "git" | "terminal" | "subagent";
+type TabKind = "files" | "git" | "terminal" | "subagent" | "trace";
 
 /** 分栏后的两栏；不分栏时所有标签都算在 `a` 栏。 */
 type PaneId = "a" | "b";
@@ -116,7 +118,13 @@ export function useViewportWidth(): number {
   return viewport;
 }
 
-const KIND_ICON = { files: IconFolder, git: IconGitBranch, terminal: IconTerminal, subagent: IconSpark } as const;
+const KIND_ICON = {
+  files: IconFolder,
+  git: IconGitBranch,
+  terminal: IconTerminal,
+  subagent: IconSpark,
+  trace: IconTrace,
+} as const;
 
 interface DockProps {
   /** 用户是否打开着右侧栏。 */
@@ -401,7 +409,8 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     }
     const id = scopedId(kind, target);
     if (!tabs.some((tab) => tab.id === id)) {
-      const label = kind === "files" ? t("文件", "Files") : t("Git", "Git");
+      const label =
+        kind === "files" ? t("文件", "Files") : kind === "git" ? "Git" : t("轨迹", "Trace");
       setTabs((prev) => [...prev, { id, kind, label, pane: target }]);
     }
     setActiveFor(target, id);
@@ -512,6 +521,7 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     setActiveA(keepA || fromB || next[0]?.id || "");
   };
 
+  // 顺序沿用原来的习惯：文件、Git 排在前面，新入口接在 Git 后面。
   const startCards: { kind: TabKind; title: string; desc: string; icon: typeof IconFolder; tone: string }[] = [
     {
       kind: "files",
@@ -526,6 +536,13 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
       desc: t("变更、历史与分支", "Changes and branches"),
       icon: IconGitBranch,
       tone: "text-ok",
+    },
+    {
+      kind: "trace",
+      title: t("执行轨迹", "Trace"),
+      desc: t("每轮的时间线", "Timeline per turn"),
+      icon: IconTrace,
+      tone: "text-ink-2",
     },
     {
       kind: "terminal",
@@ -586,8 +603,8 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
               </span>
             );
           })}
-          {/* `+` = 回到开始页，不是下拉菜单：三个入口（文件 / Git / 终端）已经在那三张卡片上，
-              再摆一份菜单等于同一件事两个入口。这一栏已经在开始页时不显示它。 */}
+          {/* `+` = 回到开始页，不是下拉菜单：四个入口（轨迹 / 文件 / Git / 终端）已经在那四张
+              卡片上，再摆一份菜单等于同一件事两个入口。这一栏已经在开始页时不显示它。 */}
           {current !== "" && (
             <button
               type="button"
@@ -653,7 +670,7 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     );
   };
 
-  /** 一栏的开始页：三张功能卡片，点哪张就在这一栏开哪个标签。 */
+  /** 一栏的开始页：四张功能卡片，点哪张就在这一栏开哪个标签。 */
   const renderStartPage = (pane: PaneId) => {
     if (activeOf(pane) !== "") return null;
     const box = splitActive ? (pane === "a" ? "absolute inset-y-0 left-0" : "absolute inset-y-0 right-0") : "absolute inset-0";
@@ -803,6 +820,7 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
                     />
                   )}
                   {tab.kind === "git" && <GitPanel cwd={cwd} active={on} />}
+                  {tab.kind === "trace" && <TracePanel active={on} />}
                   {tab.kind === "subagent" && tab.agentId && (
                     <SubagentPanel sessionId={tab.sessionId ?? ""} agentId={tab.agentId} />
                   )}

@@ -81,6 +81,13 @@ export interface AssistantItem extends BaseItem {
    * 消息在 result 里不再重复原因（见 applyResult）。
    */
   apiError?: boolean;
+  /**
+   * 这次请求用的模型（CLI 的 `message.model`）。
+   *
+   * 只给**轨迹面板**用：一条消息一个模型名，同一轮里切换过模型（子代理、回退被禁后
+   * 手动换档）时泳道要按它分开画。老转录没这个字段时为空串。
+   */
+  model?: string;
 }
 
 export interface ThinkingItem extends BaseItem {
@@ -90,10 +97,12 @@ export interface ThinkingItem extends BaseItem {
    * true 表示还在流式增长（收到完整 assistant 消息后转 false）。
    *
    * `--include-partial-messages` 会先给 `thinking_delta` 逐字增量、再给完整消息。
-   * 不给标记的话，长时间思考期间界面上什么都不动（要等整条消息到齐才出现），
+   * 不给标记的话，长时间思考期间界面上什么都不动（要等整条消息才出现），
    * 用户会以为会话卡死了。
    */
   streaming?: boolean;
+  /** 这次请求用的模型（CLI 的 `message.model`）；轨迹按它标泳道。 */
+  model?: string;
 }
 
 /** 一个子代理（claude 的 Task/Agent 任务）的实时状态。 */
@@ -154,6 +163,22 @@ export interface ToolItem extends BaseItem {
    * 两者混在一起会让「运行中 12s」这种标签跟着抖。
    */
   progressNote?: string;
+  /**
+   * 这张卡是 `system/task_*` 事件先造的**占位卡**（真正的 `tool_use` 还没到）。
+   *
+   * 只给轨迹面板用：占位卡的时间戳是 task 事件的时刻，不是一次模型请求的落盘时刻，
+   * 拿它当「请求边界」会凭空多画一段模型耗时。真正的 `tool_use` 到达时这里会被置回
+   * false（见 `applyAssistant` 的合并分支）。
+   */
+  placeholder?: boolean;
+  /**
+   * 结果回填的时刻（`tool_result` 帧/转录行的到达时间）。
+   *
+   * **不要拿 `ts` 当结束时刻**：`ts` 是 `tool_use` 到达、也就是这次调用**开始**的时刻
+   * （`applyAssistant` 建卡片时写死）。轨迹面板靠 `doneAt - ts` 画工具耗时；undefined
+   * 表示结果还没回来（还在跑，或者是被中断的工具）。
+   */
+  doneAt?: number;
 }
 
 

@@ -354,23 +354,29 @@ export function MessageList({
   const rafPending = useRef<number | null>(null);
   /** 滚动停止计时器：停止后重量一次几何，兜住「上方内容高度变化」的情况。 */
   const scrollSettle = useRef<number | null>(null);
-  /** 跳转目标被窗口截掉时，先展开再滚。 */
-  const pendingJump = useRef<string | null>(null);
+  /**
+   * 待执行的跳转：目标可能被「最近 N 条」窗口截掉、或被收起的轮挡住。
+   *
+   * `fallback` 是这一轮的轮头（用户消息）：目标被「仅最终回答」藏掉时至少落在同一轮里，
+   * 不至于点了毫无反应。`tries` 防止每次流式追加都重试一次滚动。
+   */
+  const pendingJump = useRef<{ id: string; fallback?: string; tries: number } | null>(null);
 
-  const scrollToItem = (id: string) => {
+  const scrollToItem = (id: string): boolean => {
     const sc = scroller.current;
     const el = sc?.querySelector<HTMLElement>(`[data-item-id="${id}"]`);
-    if (!sc || !el) return;
+    if (!sc || !el) return false;
     const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 8;
     const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
     if (!reduce && typeof sc.scrollTo === "function") sc.scrollTo({ top, behavior: "smooth" });
     else sc.scrollTop = top;
+    return true;
   };
 
   const jumpToTurn = (turn: Turn) => {
     const need = items.length - turn.index;
     if (need > limit) {
-      pendingJump.current = turn.id;
+      pendingJump.current = { id: turn.id, tries: 0 };
       setLimit(need);
       return;
     }
@@ -435,6 +441,35 @@ export function MessageList({
     [spans, shown, hiddenReplies],
   );
   const [manual, setManual] = useState<Record<string, boolean>>({});
+  /**
+   * 右侧栏轨迹面板点某一步 → 滚到对话里的那一条。
+   *
+   * 除了「滚过去」还要做两件事，否则点击看起来毫无反应：
+   *   ① 目标所在的轮如果是收起的，先把它展开——收起的那一整段过程根本没有 DOM 节点；
+   *   ② 目标被「最近 N 条」窗口截掉时把窗口扩到够。
+   * 真正的滚动交给下面 `pendingJump` 那条 layout effect（要等这批 state 落到 DOM 上）。
+   */
+  const scrollRequest = useAppStore((s) => s.scrollRequest);
+  const handledScroll = useRef(0);
+  /** 只为「让 layout effect 再跑一次」：目标本来就在窗口里时没有别的 state 会变。 */
+  const [jumpTick, setJumpTick] = useState(0);
+  useEffect(() => {
+    const req = scrollRequest;
+    if (!req || req.seq <= handledScroll.current) return;
+    handledScroll.current = req.seq;
+    const index = items.findIndex((it) => it.id === req.itemId);
+    if (index < 0) return;
+    // 这一轮的轮头（用户消息）：没有它就没法展开被收起的轮。
+    const head = [...turns].reverse().find((tn) => tn.index <= index);
+    if (head) setManual((prev) => (prev[head.id] ? prev : { ...prev, [head.id]: true }));
+    pendingJump.current = { id: req.itemId, fallback: head?.id, tries: 0 };
+    const need = items.length - index;
+    if (need > limit) setLimit(need);
+    setJumpTick((n) => n + 1);
+    // 只认 seq：items / limit / turns 的每一次变化都要重跑的话，流式输出期间会反复跳。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollRequest]);
+
   /**
    * 手动开合某一轮的过程。
    *
@@ -617,6 +652,8 @@ export function MessageList({
   useFollowGrowth(scroller, content, () => stick.current);
 
   // 展开更早的消息后把视口钉在原来那条消息上，别让它「跳一下」。
+  // 顺手把挂起的跳转走完：目标可能在窗口外（limit 变了）、也可能在刚被展开的轮里
+  // （manual 变了）——两个依赖缺一不可，否则「点轨迹里那一步」会停在没滚动的状态。
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el && anchorFromBottom.current !== null) {
@@ -624,11 +661,20 @@ export function MessageList({
       anchorFromBottom.current = null;
     }
     const jump = pendingJump.current;
-    if (jump) {
+    if (!jump) return;
+    jump.tries += 1;
+    if (scrollToItem(jump.id)) {
       pendingJump.current = null;
-      scrollToItem(jump);
+      return;
     }
-  }, [limit]);
+    // 第一次没找到通常是因为同一批 state（展开这一轮 / 扩大窗口）还没落到 DOM 上，
+    // 给一次重试；再找不到就退到轮头，别一直重试到流式输出的每一帧。
+    if (jump.tries >= 2 && jump.fallback && jump.fallback !== jump.id && scrollToItem(jump.fallback)) {
+      pendingJump.current = null;
+      return;
+    }
+    if (jump.tries >= 3) pendingJump.current = null;
+  }, [limit, manual, items, spans, jumpTick]);
 
   // 窗口整体上移（`hidden` 变了）时还原视口，以及**用户自己发消息时强制贴底**。
   useLayoutEffect(() => {

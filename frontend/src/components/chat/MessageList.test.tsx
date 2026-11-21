@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MessageList } from "./MessageList";
 import type { Item } from "../../lib/model";
 import {
@@ -929,5 +929,25 @@ describe("最终回答前面的分隔线", () => {
     ];
     render(<MessageList items={items} />);
     expect(rowOf("a1").className).not.toContain("border-t");
+  });
+});
+
+// 右侧栏「轨迹」点某一步：请求走 store，由 MessageList 展开窗口/收起轮并滚过去。
+// 这里钉住最容易坏的那一段——目标在「最近 N 条」窗口外时必须先扩窗口，
+// 否则 querySelector 找不到元素，点击看起来毫无反应。
+describe("轨迹面板的跳转请求", () => {
+  it("目标在窗口外时先扩大窗口再滚过去", async () => {
+    const items = Array.from({ length: 200 }, (_, i) =>
+      i % 2 === 0 ? userItem(i) : assistantItem(i),
+    );
+    useAppStore.setState({ scrollRequest: null });
+    render(<MessageList items={items} resetKey="jump" />);
+    // 窗口只渲染最近 80 条：最早那条一开始不在 DOM 里。
+    expect(screen.queryByText("消息 0")).not.toBeInTheDocument();
+    act(() => {
+      useAppStore.getState().requestScrollToItem("u0");
+    });
+    // 扩窗口是异步的（状态 → render → layout effect），等它落下来。
+    expect(await screen.findByText("消息 0")).toBeInTheDocument();
   });
 });

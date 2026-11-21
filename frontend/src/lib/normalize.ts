@@ -511,6 +511,9 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
   const message = asRecord(m.message);
   const content = message?.content;
   const blocks = Array.isArray(content) ? content : [];
+  // 这条消息是哪次请求的产物：轨迹面板按它标泳道（同一轮里换过模型时两条清晰可辨）。
+  // 不走流式增量那条路——`content_block_delta` 里没有模型名，只能等完整消息。
+  const model = typeof message?.model === "string" ? message.model : "";
   // 上游报错时 CLI 用一条 assistant 消息包装错误文本（`API Error: …`）。它不是模型的
   // 回答，result 里还会再给同一段原因——带上标记，result 那边据此不重复。
   // 线上字段只见 camelCase（2.1.327），snake_case 一并认，省得版本换写法时静默失效。
@@ -573,6 +576,7 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
           text,
           streaming: false,
           ...(apiError ? { apiError } : {}),
+          ...(model ? { model } : {}),
         },
       ];
     } else if (block.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim()) {
@@ -584,7 +588,14 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
       thoughtCount += 1;
       out = [
         ...out,
-        { id: nextId(), seq: seqOf(out), ts: at, kind: "thinking", text: block.thinking },
+        {
+          id: nextId(),
+          seq: seqOf(out),
+          ts: at,
+          kind: "thinking",
+          text: block.thinking,
+          ...(model ? { model } : {}),
+        },
       ];
     } else if (block.type === "tool_use" && typeof block.name === "string") {
       prevKind = "tool";
@@ -596,7 +607,7 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
         // 任务事件可能先造了占位卡（后台子代理）：把真正的入参并进去，别丢 model/isolation。
         out = out.map((it) =>
           it.kind === "tool" && it.toolUseId === toolUseId
-            ? { ...it, name: block.name as string, input: block.input }
+            ? { ...it, name: block.name as string, input: block.input, placeholder: false }
             : it,
         );
         continue;
@@ -620,7 +631,16 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
   if (textCount === 0 && leftover) {
     out = [
       ...out.slice(0, insertAt),
-      { id: nextId(), seq: seqOf(out), ts: at, kind: "assistant", text: leftover, streaming: false, ...(apiError ? { apiError } : {}) },
+      {
+        id: nextId(),
+        seq: seqOf(out),
+        ts: at,
+        kind: "assistant",
+        text: leftover,
+        streaming: false,
+        ...(apiError ? { apiError } : {}),
+        ...(model ? { model } : {}),
+      },
       ...out.slice(insertAt),
     ];
   }
@@ -637,6 +657,7 @@ function applyAssistant(items: Item[], m: Raw, at: number): Item[] {
         kind: "thinking",
         text: thought.leftover,
         streaming: false,
+        ...(model ? { model } : {}),
       },
       ...out.slice(thoughtInsertAt),
     ];
@@ -695,6 +716,8 @@ function applyTaskEvent(items: Item[], m: Raw, at: number): Item[] | undefined {
         name: "Agent",
         input: { description, prompt, subagent_type: type },
         subagent: { taskId, status: "running" },
+        // 占位卡：真正的 tool_use 还没到，时间戳是 task 事件的时刻（不是请求落盘）。
+        placeholder: true,
       },
     ];
     index = out.length - 1;
@@ -926,6 +949,8 @@ function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): 
           ...it,
           result: text,
           isError,
+          // 结果落地时刻：轨迹面板画工具耗时就靠它（`ts` 是调用开始的时刻）。
+          doneAt: at,
           structured: structured ?? it.structured,
           ...(images.length > 0 ? { images } : {}),
           ...(subagent ? { subagent } : {}),

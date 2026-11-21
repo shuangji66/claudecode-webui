@@ -397,6 +397,21 @@ export function IconHistory(props: Props) {
   );
 }
 
+/**
+ * 轨迹：一条带拐点的折线 + 时间轴刻度。
+ *
+ * 不用「历史」那颗表盘：右侧栏的「历史记录」是另一件事（功能区整页视图），
+ * 两颗图标长得一样会让人分不清哪个才是当前对话的执行轨迹。
+ */
+export function IconTrace(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M3 17.5h4.5l3-9 3 5.5 2.5-3H21" />
+      <path d="M3 21h18" />
+    </Svg>
+  );
+}
+
 /** 品牌标记：使用项目提供的 Claude Code 像素图标（256×161）。 */
 export function BrandMark({ size = 24, className }: { size?: number; className?: string }) {
   return (
