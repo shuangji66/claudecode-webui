@@ -123,8 +123,9 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   它不改变启动模式：实测带它 + `--permission-mode default`，首轮照常 `can_use_tool`，
   切到 bypass 之后同一会话的工具调用直接放行。别用 `--dangerously-skip-permissions` ——
   那是「一上来就跳过所有审批」。
-- `CleanEnv()` 剔除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`HOME`、`PWD`，
-  再强制注入 `HOME`/`PWD`；**保留 `ANTHROPIC_*`**。
+- `CleanEnv()` 剔除 `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`CLAUDE_CODE_SUBAGENT_MODEL`、
+  `HOME`、`PWD`，再强制注入 `HOME`/`PWD`；**保留 `ANTHROPIC_*`**。子代理模型必须剔除：
+  它由设置页注入，继承值会让「不指定（跟随主对话）」被宿主环境悄悄覆盖。
 - `Spawn()` 必须持续排空 stderr（否则管道写满会卡住子进程），只保留尾部用于报错。
 - `Close()` 幂等：关 stdin → Kill → Wait。
 
@@ -151,7 +152,12 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - `Provider.Models` 仍是模型 ID 列表；能力元数据放在 `Provider.ModelMeta`（按 ID 索引）：
   `name` / `reasoning_efforts` / `supports_image` /
   `context_window` / `max_output_tokens`。`Env()` 把前者注入
-  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`、后者注入 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`；
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`、后者注入 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`。
+  `Provider.SubagentModel`（每个提供商一个，必须是它 Models 里的一项）注入
+  `CLAUDE_CODE_SUBAGENT_MODEL`——**只对定义里没写 `model` 的子代理生效**，解析优先级是
+  调用参数 > 定义里的 model > 本变量 > 主对话模型；内置 Explore / Plan 与 fork 不受影响。
+  要强制统一得再加 `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`，那会连用户的 agent 定义一起盖掉，
+  所以不做成默认。模型被从列表移除时 mergeProviders 会清空这个字段。
   `CLAUDE_CODE_AUTO_COMPACT_WINDOW` 是独立的全局设置，两者可同时存在。
   新增字段时保持老配置（只有 `models: ["id"]`）可读。
 - 推理强度没有控制请求，只在 `process.Args` 里用 `--effort` 固定；已有会话改强度

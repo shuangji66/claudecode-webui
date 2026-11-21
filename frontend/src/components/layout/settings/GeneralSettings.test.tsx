@@ -29,7 +29,7 @@ describe("设置 → 通用", () => {
 
   it("每个设置项都是一行：标题与说明并列出现", () => {
     render(<GeneralSettings />);
-    for (const title of ["默认权限", "外观", "语言", "字号", "空闲回收", "过程展示", "收起时机", "收起后的回复"]) {
+    for (const title of ["默认权限", "外观", "语言", "字号", "过程展示", "收起时机", "收起后的回复"]) {
       expect(screen.getByText(title)).toBeInTheDocument();
     }
     // 说明跟着当前值走：默认「标准」档的说明文字。
@@ -58,45 +58,6 @@ describe("设置 → 通用", () => {
       screen.getByRole("button", { name: "减小字号" }).click();
     });
     expect(saveSettings).toHaveBeenCalledWith({ font_size: 14 });
-  });
-
-  it("空闲回收按 5 分钟步进，落的是 idle_minutes 补丁", async () => {
-    useAppStore.setState({ settings: { idle_minutes: 10 } as never });
-    render(<GeneralSettings />);
-    await act(async () => {
-      screen.getByRole("button", { name: "延长空闲回收" }).click();
-    });
-    expect(saveSettings).toHaveBeenCalledWith({ idle_minutes: 15 });
-  });
-
-  it("空闲回收向下也按 5 分钟步进", async () => {
-    useAppStore.setState({ settings: { idle_minutes: 15 } as never });
-    render(<GeneralSettings />);
-    await act(async () => {
-      screen.getByRole("button", { name: "缩短空闲回收" }).click();
-    });
-    expect(saveSettings).toHaveBeenCalledWith({ idle_minutes: 10 });
-  });
-
-  // 配置文件被手改成不在档位上的值时，按一次要落到最近的档位，而不是 7+5=12。
-  it("空闲回收把非档位值归到最近档位再步进", async () => {
-    useAppStore.setState({ settings: { idle_minutes: 7 } as never });
-    render(<GeneralSettings />);
-    await act(async () => {
-      screen.getByRole("button", { name: "延长空闲回收" }).click();
-    });
-    expect(saveSettings).toHaveBeenCalledWith({ idle_minutes: 10 });
-  });
-
-  it("空闲回收到达边界时按钮禁用", () => {
-    useAppStore.setState({ settings: { idle_minutes: 5 } as never });
-    const { unmount } = render(<GeneralSettings />);
-    expect(screen.getByRole("button", { name: "缩短空闲回收" })).toBeDisabled();
-    unmount();
-
-    useAppStore.setState({ settings: { idle_minutes: 60 } as never });
-    render(<GeneralSettings />);
-    expect(screen.getByRole("button", { name: "延长空闲回收" })).toBeDisabled();
   });
 
   it("访问令牌只在环境变量令牌模式下出现", () => {

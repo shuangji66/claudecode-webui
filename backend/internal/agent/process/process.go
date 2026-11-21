@@ -135,6 +135,9 @@ var strippedEnvKeys = map[string]bool{
 	// 且按「后者生效」的规则被继承值悄悄覆盖（本地项目踩过这个坑）。
 	"HOME": true,
 	"PWD":  true,
+	// 子代理模型由设置页（模型页按提供商选）统一注入。继承值会让「不指定」的
+	// 设置被宿主环境悄悄盖掉——界面上写着跟随主对话，实际却跑在别的模型上。
+	"CLAUDE_CODE_SUBAGENT_MODEL": true,
 	// 代理由设置页统一控制：空 = 直连，不能悄悄继承宿主机代理。
 	"HTTP_PROXY":         true,
 	"HTTPS_PROXY":        true,

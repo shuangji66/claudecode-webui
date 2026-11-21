@@ -2,6 +2,7 @@ package settings
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -484,6 +485,121 @@ func TestEnvDisablesModelFallback(t *testing.T) {
 	}
 }
 
+// 子代理模型：按提供商存一个，注入 CLAUDE_CODE_SUBAGENT_MODEL；模型被移除时跟着清空。
+//
+// 它只是**默认值**：CLI 的解析顺序是 调用参数 > 定义里的 model > 本变量 > 主对话模型，
+// 所以不能把它当成「强制所有子代理用这个模型」——那需要 _FORCE，会连用户的 agent 定义一起盖掉。
+func TestSubagentModelEnvAndPrune(t *testing.T) {
+	s, path := openTemp(t)
+	// 没有选中提供商时一个字节都不注入（空值会让 CLI 的继承链断在这里）。
+	if env := strings.Join(Settings{}.Env(), ","); strings.Contains(env, "CLAUDE_CODE_SUBAGENT_MODEL") {
+		t.Fatalf("未指定子代理模型却注入了变量: %v", env)
+	}
+
+	providers := []ProviderPatch{{
+		ID:            "gw",
+		BaseURL:       "https://gw.example/anthropic",
+		APIKey:        "k",
+		Models:        []string{"m1", "m2"},
+		SubagentModel: strPtr("m2"),
+	}}
+	if _, err := s.Apply(Patch{
+		Providers: &providers,
+		Selected:  &Selection{Provider: "gw", Model: "m1"},
+	}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Get().Providers[0].SubagentModel; got != "m2" {
+		t.Fatalf("重开后 SubagentModel = %q", got)
+	}
+	if got := reopened.Public().Providers[0].SubagentModel; got != "m2" {
+		t.Fatalf("Public 里 = %q", got)
+	}
+	if env := strings.Join(reopened.Get().Env(), ","); !strings.Contains(env, "CLAUDE_CODE_SUBAGENT_MODEL=m2") {
+		t.Fatalf("缺少 CLAUDE_CODE_SUBAGENT_MODEL: %v", env)
+	}
+
+	// 旧前端包（浏览器缓存里还没这个字段）保存提供商时不能把选择抹掉：
+	// 与 Auth 的「空串=沿用旧值」同一类坑，这里用 nil 表示「没带这个字段」。
+	legacy := []ProviderPatch{{ID: "gw", BaseURL: "https://gw.example/anthropic", Models: []string{"m1", "m2"}}}
+	if _, err := s.Apply(Patch{Providers: &legacy}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := s.Get().Providers[0].SubagentModel; got != "m2" {
+		t.Fatalf("旧前端保存后 SubagentModel 应沿用 %q，实际 %q", "m2", got)
+	}
+
+	// 显式空串才是清除（新前端选「不指定」走这条路）。
+	cleared := []ProviderPatch{{ID: "gw", BaseURL: "https://gw.example/anthropic", Models: []string{"m1", "m2"}, SubagentModel: strPtr("")}}
+	if _, err := s.Apply(Patch{Providers: &cleared}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := s.Get().Providers[0].SubagentModel; got != "" {
+		t.Fatalf("显式清空后应变成空串，实际 %q", got)
+	}
+
+	// 删掉被选中的那个模型：悬空的 ID 会让 CLI 派不出子代理，必须跟着清空。
+	if _, err := s.Apply(Patch{Providers: &[]ProviderPatch{{
+		ID: "gw", BaseURL: "https://gw.example/anthropic", Models: []string{"m1", "m2"}, SubagentModel: strPtr("m2"),
+	}}}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	same := []ProviderPatch{{ID: "gw", BaseURL: "https://gw.example/anthropic", Models: []string{"m1"}, SubagentModel: strPtr("m2")}}
+	if _, err := s.Apply(Patch{Providers: &same}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got := s.Get().Providers[0].SubagentModel; got != "" {
+		t.Fatalf("模型被移除后 SubagentModel 应清空，实际 %q", got)
+	}
+	if env := strings.Join(s.Get().Env(), ","); strings.Contains(env, "CLAUDE_CODE_SUBAGENT_MODEL") {
+		t.Fatalf("清空后仍注入了变量: %v", env)
+	}
+}
+
+// 手改 settings.json 写出一个已经不在模型列表里的子代理模型：Open 时自愈，
+// 否则 Public 会把它回给前端（下拉里显示成空），Env 会把它交给 CLI（派子代理 404）。
+func TestSubagentModelDanglingHealedOnOpen(t *testing.T) {
+	s, path := openTemp(t)
+	if _, err := s.Apply(Patch{Providers: &[]ProviderPatch{{
+		ID: "gw", BaseURL: "https://gw.example/anthropic", Models: []string{"m1"}, SubagentModel: strPtr("m1"),
+	}}}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg Settings
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Providers[0].SubagentModel = "gone"
+	edited, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, edited, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Get().Providers[0].SubagentModel; got != "" {
+		t.Fatalf("悬空的 SubagentModel 应在 Open 时清空，实际 %q", got)
+	}
+	if env := strings.Join(reopened.Get().Env(), ","); strings.Contains(env, "CLAUDE_CODE_SUBAGENT_MODEL") {
+		t.Fatalf("悬空值不应注入: %v", env)
+	}
+}
+
 func TestModelMetaAndEffort(t *testing.T) {
 	s, _ := openTemp(t)
 	if _, err := s.Apply(Patch{
@@ -629,6 +745,73 @@ func TestIdleMinutesDefaultsAndValidation(t *testing.T) {
 		if _, err := s.Apply(Patch{IdleMinutes: &v}); err == nil {
 			t.Fatalf("%d 分钟应被拒绝", bad)
 		}
+	}
+}
+
+// 子代理规模：默认值刻意比 CLI 原生的小（10 并发 / 1 层），改完落盘，
+// 越界拒绝，坏配置文件回落默认值；两个值都必须无条件注入环境变量。
+func TestSubagentLimitsDefaultsAndEnv(t *testing.T) {
+	s, path := openTemp(t)
+	if got := s.Get().SubagentMaxConcurrentValue(); got != DefaultSubagentMaxConcurrent {
+		t.Fatalf("默认并发上限 = %d, want %d", got, DefaultSubagentMaxConcurrent)
+	}
+	if got := s.Get().SubagentSpawnDepthValue(); got != DefaultSubagentSpawnDepth {
+		t.Fatalf("默认递归深度 = %d, want %d", got, DefaultSubagentSpawnDepth)
+	}
+	pub := s.Public()
+	if pub.SubagentMaxConcurrent != DefaultSubagentMaxConcurrent || pub.SubagentSpawnDepth != DefaultSubagentSpawnDepth {
+		t.Fatalf("Public 里的默认值 = %d/%d", pub.SubagentMaxConcurrent, pub.SubagentSpawnDepth)
+	}
+	// 零值配置（没跑过 Open 的 Settings{}）也要注入合法值：0 会让 CLI
+	// 一个子代理都派不出来。
+	env := strings.Join(Settings{}.Env(), ",")
+	for _, want := range []string{
+		fmt.Sprintf("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=%d", DefaultSubagentMaxConcurrent),
+		fmt.Sprintf("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=%d", DefaultSubagentSpawnDepth),
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("Env 缺少 %q: %v", want, env)
+		}
+	}
+
+	concurrent, depth := 30, 4
+	if _, err := s.Apply(Patch{SubagentMaxConcurrent: &concurrent, SubagentSpawnDepth: &depth}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env = strings.Join(reopened.Get().Env(), ",")
+	for _, want := range []string{
+		"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=30",
+		"CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=4",
+	} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("重开后 Env 缺少 %q: %v", want, env)
+		}
+	}
+
+	for _, bad := range []int{0, -1, MaxSubagentMaxConcurrent + 1} {
+		v := bad
+		if _, err := s.Apply(Patch{SubagentMaxConcurrent: &v}); err == nil {
+			t.Fatalf("并发上限 %d 应被拒绝", bad)
+		}
+	}
+	for _, bad := range []int{0, -1, MaxSubagentSpawnDepth + 1} {
+		v := bad
+		if _, err := s.Apply(Patch{SubagentSpawnDepth: &v}); err == nil {
+			t.Fatalf("递归深度 %d 应被拒绝", bad)
+		}
+	}
+
+	// 手改配置写出越界值：读回来必须是默认值，不能让 0 或 999 进 CLI。
+	var raw Settings
+	raw.SubagentMaxConcurrent = 999
+	raw.SubagentSpawnDepth = -3
+	normalizePreferences(&raw)
+	if raw.SubagentMaxConcurrent != DefaultSubagentMaxConcurrent || raw.SubagentSpawnDepth != DefaultSubagentSpawnDepth {
+		t.Fatalf("越界值没回落默认: %d/%d", raw.SubagentMaxConcurrent, raw.SubagentSpawnDepth)
 	}
 }
 

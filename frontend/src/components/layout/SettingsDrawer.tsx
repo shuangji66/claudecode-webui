@@ -3,14 +3,15 @@ import { useAppStore } from "../../store/useAppStore";
 import { useT } from "../../lib/i18n";
 import { Section } from "./settings/Section";
 import { SettingsPane, SettingsSurface } from "./settings/SettingsSurface";
-import { BrandMark, IconDownload, IconFolder, IconGitHub, IconInfo, IconLock, IconSettings, IconShield } from "../common/Icons";
+import { BrandMark, IconDownload, IconFolder, IconGitHub, IconInfo, IconLock, IconSettings, IconShield, IconTerminal } from "../common/Icons";
 
 // 技能 / 模型 / 插件 / MCP 四页的入口都已移到左侧栏功能区（整页视图，见 FeaturePage），
 // 这里只留应用自身的设置。加页签照旧：类型、nav、Pane 各一行，页面自己 lazy 加载。
-type Tab = "general" | "dirs" | "proxy" | "deploy" | "access" | "about";
+type Tab = "general" | "cli" | "dirs" | "proxy" | "deploy" | "access" | "about";
 
 // 每页一个 chunk：打开设置只看得到当前这一页。
 const GeneralSettings = lazy(() => import("./settings/GeneralSettings").then((m) => ({ default: m.GeneralSettings })));
+const CliSettings = lazy(() => import("./settings/CliSettings").then((m) => ({ default: m.CliSettings })));
 const ProxySettings = lazy(() => import("./settings/ProxySettings").then((m) => ({ default: m.ProxySettings })));
 const DeploySettings = lazy(() => import("./DeploySettings").then((m) => ({ default: m.DeploySettings })));
 const AccessSettings = lazy(() => import("./settings/AccessSettings").then((m) => ({ default: m.AccessSettings })));
@@ -53,6 +54,9 @@ export function SettingsDrawer({
           <NavItem active={tab === "general"} icon={<IconSettings size={16} />} onClick={() => setTab("general")}>
             {t("通用", "General")}
           </NavItem>
+          <NavItem active={tab === "cli"} icon={<IconTerminal size={16} />} onClick={() => setTab("cli")}>
+            {t("CLI", "CLI")}
+          </NavItem>
           <NavItem active={tab === "dirs"} icon={<IconFolder size={16} />} onClick={() => setTab("dirs")}>
             {t("目录", "Folders")}
           </NavItem>
@@ -73,6 +77,9 @@ export function SettingsDrawer({
         <div className="min-h-0 flex-1">
           <SettingsPane active={tab === "general"} mount={visited.has("general")}>
             <GeneralSettings />
+          </SettingsPane>
+          <SettingsPane active={tab === "cli"} mount={visited.has("cli")}>
+            <CliSettings />
           </SettingsPane>
           <SettingsPane active={tab === "dirs"} mount={visited.has("dirs")}>
             <DirsSettings />

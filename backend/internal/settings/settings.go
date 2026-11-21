@@ -93,6 +93,37 @@ const (
 // ValidIdleMinutes 判断空闲回收阈值是否在可设范围内。
 func ValidIdleMinutes(m int) bool { return m >= MinIdleMinutes && m <= MaxIdleMinutes }
 
+// 子代理规模的默认值与边界。
+//
+// 两项都只能通过**环境变量**交给 CLI（CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS /
+// CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH）：没有控制请求，也没有命令行参数，
+// 所以只在进程启动时生效，改完对新建会话有效。
+//
+// 默认值刻意比 CLI 原生的小：CLI 是 20 并发、3 层嵌套，而三层各开五个就是 155 个
+// 子代理，一次误判就够把中转账号的并发打到天花板。深度默认 1 = 关闭嵌套，
+// 真要嵌套由用户在设置页显式打开。
+const (
+	DefaultSubagentMaxConcurrent = 10
+	MinSubagentMaxConcurrent     = 1
+	// 上限 50：每个并发子代理都是一次真实的 API 请求，再高只是排队等 429。
+	MaxSubagentMaxConcurrent = 50
+
+	DefaultSubagentSpawnDepth = 1
+	MinSubagentSpawnDepth     = 1
+	// 上限 5：CLI 在 2.1.172–2.1.216 时期的默认就是 5 层，再深只烧 token。
+	MaxSubagentSpawnDepth = 5
+)
+
+// ValidSubagentMaxConcurrent 判断并发子代理上限是否在可设范围内。
+func ValidSubagentMaxConcurrent(n int) bool {
+	return n >= MinSubagentMaxConcurrent && n <= MaxSubagentMaxConcurrent
+}
+
+// ValidSubagentSpawnDepth 判断子代理递归深度是否在可设范围内。
+func ValidSubagentSpawnDepth(n int) bool {
+	return n >= MinSubagentSpawnDepth && n <= MaxSubagentSpawnDepth
+}
+
 // ValidTCPPort 判断端口是否在可监听范围内。
 func ValidTCPPort(port int) bool { return port >= MinTCPPort && port <= MaxTCPPort }
 
@@ -170,6 +201,12 @@ type Provider struct {
 	Models []string `json:"models"`
 	// ModelMeta 按模型 ID 记录显示名、推理强度与图片能力。
 	ModelMeta map[string]ModelSpec `json:"model_meta,omitempty"`
+	// SubagentModel 是该提供商下给子代理用的模型（必须是 Models 里的一项）。
+	//
+	// 它只能来自**本提供商**：子代理与主对话共用同一个 baseURL 与密钥，跨提供商的
+	// 模型名在这里没有意义（请求会打到当前端点上）。空串 = 不注入
+	// CLAUDE_CODE_SUBAGENT_MODEL，由 CLI 自己按继承链解析。
+	SubagentModel string `json:"subagent_model,omitempty"`
 }
 
 // Clone 返回深拷贝（切片不共享底层数组）。
@@ -211,6 +248,11 @@ type Settings struct {
 	// IdleMinutes 是空闲会话的回收阈值（分钟），0 表示用默认值。
 	// 由 manager 的回收循环现读，改完立刻对下一次扫描生效。
 	IdleMinutes int `json:"idle_minutes"`
+
+	// 子代理规模（注入 CLI 的环境变量，只在会话启动时生效）。
+	// 0 表示老配置里没这两项，Open 时补默认值。
+	SubagentMaxConcurrent int `json:"subagent_max_concurrent"`
+	SubagentSpawnDepth    int `json:"subagent_spawn_depth"`
 
 	// TCP 直连访问：默认关闭，端口默认 3141。开启后必须登录（访问密码，无用户名），
 	// 密码只存 PBKDF2 摘要、绝不落明文；unix socket（前置网关）不校验这个密码。
@@ -255,6 +297,10 @@ type Public struct {
 	// IdleMinutes 是空闲会话的回收阈值（分钟）。
 	IdleMinutes int `json:"idle_minutes"`
 
+	// 子代理的并发上限与递归深度（CLI 环境变量，新会话生效）。
+	SubagentMaxConcurrent int `json:"subagent_max_concurrent"`
+	SubagentSpawnDepth    int `json:"subagent_spawn_depth"`
+
 	SearchBaseURL    string `json:"search_base_url"`
 	SearchAPIKeySet  bool   `json:"search_api_key_set"`
 	SearchAPIKeyMask string `json:"search_api_key_masked"`
@@ -282,6 +328,8 @@ type PublicProvider struct {
 	ModelsPath string               `json:"models_path"`
 	Models     []string             `json:"models"`
 	ModelMeta  map[string]ModelSpec `json:"model_meta"`
+	// SubagentModel 是该提供商给子代理用的模型；空表示不指定。
+	SubagentModel string `json:"subagent_model"`
 }
 
 // ProviderPatch 是提交上来的提供商（密钥留空表示沿用已保存的）。
@@ -295,6 +343,12 @@ type ProviderPatch struct {
 	ModelsPath string               `json:"models_path"`
 	Models     []string             `json:"models"`
 	ModelMeta  map[string]ModelSpec `json:"model_meta"`
+	// SubagentModel 必须是 Models 里的一项；不在其中时按未指定处理。
+	//
+	// 用指针是为了区分「没带这个字段」与「显式清空」：浏览器缓存里的旧前端包
+	// 保存提供商时不会带它，按值类型处理会让一次「只改模型列表」把用户选好的
+	// 子代理模型抹掉（与 Auth 空串=沿用旧值是同一类坑）。nil = 沿用，"" = 清除。
+	SubagentModel *string `json:"subagent_model"`
 }
 
 // Patch 是局部更新请求。Providers 为 nil 表示不改；非 nil 则整体替换。
@@ -308,6 +362,8 @@ type Patch struct {
 	FontSize                  *int             `json:"font_size"`
 	ProxyURL                  *string          `json:"proxy_url"`
 	IdleMinutes               *int             `json:"idle_minutes"`
+	SubagentMaxConcurrent     *int             `json:"subagent_max_concurrent"`
+	SubagentSpawnDepth        *int             `json:"subagent_spawn_depth"`
 
 	TCPEnabled  *bool   `json:"tcp_enabled"`
 	TCPPort     *int    `json:"tcp_port"`
@@ -366,6 +422,29 @@ func normalizePreferences(v *Settings) {
 	}
 	if !ValidIdleMinutes(v.IdleMinutes) {
 		v.IdleMinutes = DefaultIdleMinutes
+	}
+	// 子代理规模：同样是「0 = 老配置没这个字段」。越界值（手改配置文件写 999）
+	// 回落默认值——注入 0 会让 CLI 一个子代理都派不出来，那是另一种静默故障。
+	if v.SubagentMaxConcurrent == 0 {
+		v.SubagentMaxConcurrent = DefaultSubagentMaxConcurrent
+	}
+	if !ValidSubagentMaxConcurrent(v.SubagentMaxConcurrent) {
+		v.SubagentMaxConcurrent = DefaultSubagentMaxConcurrent
+	}
+	if v.SubagentSpawnDepth == 0 {
+		v.SubagentSpawnDepth = DefaultSubagentSpawnDepth
+	}
+	if !ValidSubagentSpawnDepth(v.SubagentSpawnDepth) {
+		v.SubagentSpawnDepth = DefaultSubagentSpawnDepth
+	}
+	// 手改配置可能留下已经不在列表里的子代理模型：Public 与 Env 都会照着用，
+	// CLI 会拿一个这个端点上不存在的模型去派子代理。Open 时清掉，界面才自洽。
+	for i := range v.Providers {
+		p := &v.Providers[i]
+		p.SubagentModel = strings.TrimSpace(p.SubagentModel)
+		if p.SubagentModel != "" && !containsString(p.Models, p.SubagentModel) {
+			p.SubagentModel = ""
+		}
 	}
 	// 搜索：老配置里没有这两个字段，补默认值而不是留空
 	// （空基地址会让「测试连接」直接报错，用户也看不出该填什么）。
@@ -531,6 +610,25 @@ func (s *Store) IdleMinutes() int {
 	return n
 }
 
+// SubagentMaxConcurrentValue 返回注入 CLI 的并发子代理上限。
+//
+// 与 IdleMinutes 同理：Open/Apply 已经挡过，这里再夹一次是为了防手改的配置文件。
+// 返回 0 不行——CLI 只接受正整数，0 会让所有子代理派生都失败。
+func (v Settings) SubagentMaxConcurrentValue() int {
+	if !ValidSubagentMaxConcurrent(v.SubagentMaxConcurrent) {
+		return DefaultSubagentMaxConcurrent
+	}
+	return v.SubagentMaxConcurrent
+}
+
+// SubagentSpawnDepthValue 返回注入 CLI 的子代理递归深度（1 = 关闭嵌套）。
+func (v Settings) SubagentSpawnDepthValue() int {
+	if !ValidSubagentSpawnDepth(v.SubagentSpawnDepth) {
+		return DefaultSubagentSpawnDepth
+	}
+	return v.SubagentSpawnDepth
+}
+
 // Provider 按 id 查找提供商。
 func (v Settings) Provider(id string) (Provider, bool) {
 	for _, p := range v.Providers {
@@ -602,6 +700,14 @@ func (v Settings) Env() []string {
 			}
 		}
 		out = append(out, "ANTHROPIC_MODEL="+model)
+		// 子代理模型：只对「没有在定义里写死 model」的子代理生效。
+		// 解析优先级（CLI v2.1.251 起）是 调用参数 > 定义里的 model > 本变量 >
+		// 主对话模型，所以它是默认值而不是强制值；要强制得再加
+		// CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1，那会连用户定义里的 model 一起盖掉。
+		// 内置 Explore / Plan 也不受它影响，fork 永远用父对话的模型。
+		if sub := strings.TrimSpace(p.SubagentModel); sub != "" {
+			out = append(out, "CLAUDE_CODE_SUBAGENT_MODEL="+sub)
+		}
 		// 关掉 CLI 内置的模型别名解析，避免它把网关模型名当成内置别名处理。
 		out = append(out, "ANTHROPIC_DEFAULT_OPUS_MODEL="+model)
 		out = append(out, "ANTHROPIC_DEFAULT_SONNET_MODEL="+model)
@@ -654,6 +760,14 @@ func (v Settings) Env() []string {
 	// 旧版本不认它，忽略即可。副作用只有一个：上下文压缩本来会换模型生成摘要，
 	// 现在压缩失败会明确报「model substitution is disabled」，而不是静默换模型。
 	out = append(out, "CLAUDE_CODE_NO_MODEL_FALLBACK=1")
+	// 子代理规模：两个变量分别管「同时跑几个」与「能嵌套几层」。
+	// 永远显式注入，不依赖 CLI 的原生默认（20 并发 / 3 层）——那个默认值随版本
+	// 漂移过（2.1.172–2.1.216 是 5 层且不可改，2.1.217–2.1.218 是 1 层），
+	// 界面上写着 10 就必须真的是 10。旧版本不认这两个变量，忽略即可。
+	out = append(out,
+		"CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS="+strconv.Itoa(v.SubagentMaxConcurrentValue()),
+		"CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH="+strconv.Itoa(v.SubagentSpawnDepthValue()),
+	)
 	if proxy := strings.TrimSpace(v.ProxyURL); proxy != "" {
 		// 大小写都写：Node / curl / 各家 CLI 读的变量名不完全一致。
 		for _, key := range []string{
@@ -696,6 +810,8 @@ func (s *Store) Public() Public {
 		FontSize:                  cur.FontSize,
 		ProxyURL:                  cur.ProxyURL,
 		IdleMinutes:               cur.IdleMinutes,
+		SubagentMaxConcurrent:     cur.SubagentMaxConcurrent,
+		SubagentSpawnDepth:        cur.SubagentSpawnDepth,
 		TCPEnabled:                cur.TCPEnabled,
 		TCPPort:                   cur.TCPPort,
 		TCPPasswordSet:            cur.TCPPasswordHash != "",
@@ -716,15 +832,16 @@ func (s *Store) Public() Public {
 			meta[k] = v.Clone()
 		}
 		pub.Providers = append(pub.Providers, PublicProvider{
-			ID:           p.ID,
-			Name:         p.Name,
-			BaseURL:      p.BaseURL,
-			APIKeySet:    p.APIKey != "",
-			APIKeyMasked: Mask(p.APIKey),
-			Auth:         NormalizeAuth(p.Auth),
-			ModelsPath:   p.ModelsPath,
-			Models:       models,
-			ModelMeta:    meta,
+			ID:            p.ID,
+			Name:          p.Name,
+			BaseURL:       p.BaseURL,
+			APIKeySet:     p.APIKey != "",
+			APIKeyMasked:  Mask(p.APIKey),
+			Auth:          NormalizeAuth(p.Auth),
+			ModelsPath:    p.ModelsPath,
+			Models:        models,
+			ModelMeta:     meta,
+			SubagentModel: p.SubagentModel,
 		})
 	}
 	return pub
@@ -798,6 +915,20 @@ func (s *Store) Apply(p Patch) (Public, error) {
 			return Public{}, fmt.Errorf("settings: 空闲回收时间必须在 %d–%d 分钟之间", MinIdleMinutes, MaxIdleMinutes)
 		}
 		next.IdleMinutes = *p.IdleMinutes
+	}
+	if p.SubagentMaxConcurrent != nil {
+		if !ValidSubagentMaxConcurrent(*p.SubagentMaxConcurrent) {
+			s.mu.Unlock()
+			return Public{}, fmt.Errorf("settings: 并发子代理上限必须在 %d–%d 之间", MinSubagentMaxConcurrent, MaxSubagentMaxConcurrent)
+		}
+		next.SubagentMaxConcurrent = *p.SubagentMaxConcurrent
+	}
+	if p.SubagentSpawnDepth != nil {
+		if !ValidSubagentSpawnDepth(*p.SubagentSpawnDepth) {
+			s.mu.Unlock()
+			return Public{}, fmt.Errorf("settings: 子代理递归深度必须在 %d–%d 之间", MinSubagentSpawnDepth, MaxSubagentSpawnDepth)
+		}
+		next.SubagentSpawnDepth = *p.SubagentSpawnDepth
 	}
 	if p.TCPEnabled != nil {
 		next.TCPEnabled = *p.TCPEnabled
@@ -907,14 +1038,26 @@ func mergeProviders(old []Provider, in []ProviderPatch) ([]Provider, error) {
 		if strings.TrimSpace(patch.Auth) != "" {
 			auth = NormalizeAuth(patch.Auth)
 		}
+		// 子代理模型与 Auth 同一语义：没带字段 = 沿用旧值（旧前端包），
+		// 带了才生效，空串就是清空——不做成「空串=沿用」的话用户无法取消选择。
+		subagentModel := prev.SubagentModel
+		if patch.SubagentModel != nil {
+			subagentModel = strings.TrimSpace(*patch.SubagentModel)
+		}
 		p := Provider{
-			ID:         id,
-			Name:       strings.TrimSpace(patch.Name),
-			BaseURL:    strings.TrimRight(strings.TrimSpace(patch.BaseURL), "/"),
-			Auth:       auth,
-			ModelsPath: strings.TrimSpace(patch.ModelsPath),
-			Models:     models,
-			ModelMeta:  normalizeModelMeta(models, patch.ModelMeta),
+			ID:            id,
+			Name:          strings.TrimSpace(patch.Name),
+			BaseURL:       strings.TrimRight(strings.TrimSpace(patch.BaseURL), "/"),
+			Auth:          auth,
+			ModelsPath:    strings.TrimSpace(patch.ModelsPath),
+			Models:        models,
+			ModelMeta:     normalizeModelMeta(models, patch.ModelMeta),
+			SubagentModel: subagentModel,
+		}
+		// 子代理模型必须还在这份列表里：用户删掉那个模型之后，留下一个派不出
+		// 子代理的悬空 ID 只会让 CLI 报错，而界面上看不出来该改哪一项。
+		if !containsString(models, p.SubagentModel) {
+			p.SubagentModel = ""
 		}
 		if p.Name == "" {
 			p.Name = id

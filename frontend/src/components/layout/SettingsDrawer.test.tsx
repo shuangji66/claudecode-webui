@@ -24,4 +24,17 @@ describe("设置页签", () => {
     expect(within(nav).getByRole("button", { name: "通用" })).toBeInTheDocument();
     expect(within(nav).getByRole("button", { name: "关于" })).toBeInTheDocument();
   });
+
+  // CLI 页紧排在「通用」后面：它放的是最常调的两项子代理限制与空闲回收。
+  it("CLI 页排在第二个", async () => {
+    await act(async () => {
+      render(<SettingsDrawer open onClose={() => {}} />);
+    });
+    const nav = screen.getByRole("navigation");
+    const names = within(nav)
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+    expect(names[0]).toBe("通用");
+    expect(names[1]).toBe("CLI");
+  });
 });

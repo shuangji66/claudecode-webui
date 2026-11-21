@@ -599,7 +599,13 @@ function ProviderCard({
                 onRemove={() => {
                   const meta = { ...provider.modelMeta };
                   delete meta[id];
-                  onChange({ models: provider.models.filter((x) => x !== id), modelMeta: meta });
+                  onChange({
+                    models: provider.models.filter((x) => x !== id),
+                    modelMeta: meta,
+                    // 删掉的正好是子代理模型时一并清空：留着悬空 ID 只会让 CLI
+                    // 派不出子代理，而界面上看不到该改哪一项。
+                    ...(provider.subagentModel === id ? { subagentModel: "" } : {}),
+                  });
                 }}
               />
             ))}
@@ -622,6 +628,32 @@ function ProviderCard({
               {t("添加", "Add")}
             </button>
           </div>
+
+          <div className="mt-2.5 border-t border-line pt-2.5">
+            <span className="block text-[10.5px] text-faint">{t("子代理模型", "Subagent model")}</span>
+            <Select
+              className="mt-0.5"
+              ariaLabel={t("子代理模型", "Subagent model")}
+              value={provider.subagentModel}
+              onChange={(v) => onChange({ subagentModel: v })}
+              disabled={provider.models.length === 0}
+              options={[
+                { value: "", label: t("不指定（跟随主对话模型）", "Unset (follow the main model)") },
+                ...provider.models.map((id) => ({
+                  value: id,
+                  label: provider.modelMeta[id]?.name ? `${provider.modelMeta[id].name} · ${id}` : id,
+                })),
+              ]}
+              menuWidth={320}
+            />
+            <p className="mt-1 text-[10px] leading-relaxed text-faint">
+              {t(
+                "只影响没有在定义里写死 model 的子代理（.claude/agents/*.md）；内置 Explore / Plan 与 fork 仍用自己的模型。",
+                "Affects only subagents whose definition sets no model (.claude/agents/*.md); the built-in Explore / Plan agents and forks keep their own.",
+              )}
+            </p>
+          </div>
+
         </div>
       </div>}
     </div>

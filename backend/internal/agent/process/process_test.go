@@ -98,6 +98,7 @@ func TestCleanEnvStripsAndForces(t *testing.T) {
 		"CLAUDE_CODE_ENTRYPOINT=cli",
 		"ANTHROPIC_BASE_URL=http://relay.local",
 		"ANTHROPIC_API_KEY=sk-x",
+		"CLAUDE_CODE_SUBAGENT_MODEL=haiku",
 		"PATH=/usr/bin",
 	}
 	out := CleanEnv(in, "/new/home", "/new/cwd")
@@ -107,6 +108,10 @@ func TestCleanEnvStripsAndForces(t *testing.T) {
 	}
 	if slices.Contains(out, "CLAUDECODE=1") || slices.Contains(out, "CLAUDE_CODE_ENTRYPOINT=cli") {
 		t.Fatalf("会话标记变量应被剔除: %v", out)
+	}
+	// 子代理模型由设置页注入，继承值会让「不指定」被宿主环境悄悄覆盖。
+	if slices.Contains(out, "CLAUDE_CODE_SUBAGENT_MODEL=haiku") {
+		t.Fatalf("继承的子代理模型应被剔除: %v", out)
 	}
 	if !slices.Contains(out, "HOME=/new/home") || !slices.Contains(out, "PWD=/new/cwd") {
 		t.Fatalf("应强制注入 HOME/PWD: %v", out)

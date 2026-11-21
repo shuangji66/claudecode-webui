@@ -413,6 +413,8 @@ export interface PublicProvider {
   models: string[];
   /** 按模型 ID 的元数据；老后端可能不返回。 */
   model_meta?: Record<string, ModelSpec>;
+  /** 该提供商给子代理用的模型；空表示不指定（CLI 自己按继承链解析）。 */
+  subagent_model?: string;
 }
 
 /** 当前选中的模型（= claude CLI 的默认模型）。 */
@@ -436,6 +438,10 @@ export interface PublicSettings {
   proxy_url?: string;
   /** 空闲会话回收阈值（分钟，默认 10，范围 5–60）。 */
   idle_minutes?: number;
+  /** 并发子代理上限（默认 10，范围 1–50）；只在会话启动时生效。 */
+  subagent_max_concurrent?: number;
+  /** 子代理递归深度（默认 1 = 关闭嵌套，范围 1–5）；只在会话启动时生效。 */
+  subagent_spawn_depth?: number;
   /** 端口访问开关（默认关闭）。 */
   tcp_enabled?: boolean;
   /** TCP 直连端口（默认 3141，可在「设置 → 访问」里改）。 */

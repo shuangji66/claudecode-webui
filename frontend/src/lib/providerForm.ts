@@ -37,6 +37,8 @@ export interface ProviderForm {
   models: string[];
   /** 按模型 ID 的能力元数据。 */
   modelMeta: Record<string, ModelSpec>;
+  /** 子代理模型（必须是 models 里的一项）；空串 = 不指定。 */
+  subagentModel: string;
   /** 本地标记：是否为尚未保存的新提供商（用于展示「未保存」）。 */
   isNew?: boolean;
 }
@@ -51,6 +53,7 @@ export interface ProviderPatch {
   models_path: string;
   models: string[];
   model_meta: Record<string, ModelSpec>;
+  subagent_model: string;
 }
 
 /** 只保留正的整数容量；0/负数/脏值按未声明处理。 */
@@ -115,6 +118,7 @@ function fromPublic(p: PublicProvider): ProviderForm {
     modelsPath: p.models_path ?? "",
     models: [...(p.models ?? [])],
     modelMeta: meta,
+    subagentModel: p.subagent_model ?? "",
   };
 }
 
@@ -133,6 +137,8 @@ export function normalizeSettings(s: PublicSettings | null): PublicSettings | nu
     font_size: s.font_size || 15,
     proxy_url: s.proxy_url || "",
     idle_minutes: s.idle_minutes || 10,
+    subagent_max_concurrent: s.subagent_max_concurrent || 10,
+    subagent_spawn_depth: s.subagent_spawn_depth || 1,
     providers: providers.map((p) => {
       const models = ((p.models as unknown as string[] | null | undefined) ?? []).filter(Boolean);
       const rawMeta = (p.model_meta as unknown as Record<string, ModelSpec> | null | undefined) ?? {};
@@ -170,6 +176,7 @@ export function blankProvider(existing: ProviderForm[]): ProviderForm {
     modelsPath: "",
     models: [],
     modelMeta: {},
+    subagentModel: "",
     isNew: true,
   };
 }
@@ -188,6 +195,9 @@ export function buildProviderPatches(forms: ProviderForm[]): ProviderPatch[] {
       models_path: f.modelsPath.trim(),
       models,
       model_meta,
+      // 被删掉的模型不可能再是子代理模型：界面已经在下拉里换过值，
+      // 这里再兜一次，免得手改表单或旧草稿送出悬空 ID（后端也会清）。
+      subagent_model: models.includes(f.subagentModel) ? f.subagentModel : "",
     };
     const key = f.apiKey.trim();
     if (key) patch.api_key = key;

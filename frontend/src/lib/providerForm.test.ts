@@ -42,6 +42,15 @@ describe("formsFromSettings", () => {
     expect(f.models).toEqual(["cn:deepseek", "cn:qwen"]);
     expect(f.apiKey).toBe("");
     expect(f.auth).toBe("bearer");
+    expect(f.subagentModel).toBe("");
+  });
+
+  it("回填已选的子代理模型", () => {
+    const withSub: PublicSettings = {
+      ...sample,
+      providers: [{ ...sample.providers[0], subagent_model: "cn:qwen" }],
+    };
+    expect(formsFromSettings(withSub)[0].subagentModel).toBe("cn:qwen");
   });
 
   it("null 返回空数组", () => {
@@ -93,6 +102,18 @@ describe("buildProviderPatches", () => {
   it("模型去空并修剪", () => {
     const f = { ...formsFromSettings(sample)[0], models: [" a ", "", "b"] };
     expect(buildProviderPatches([f])[0].models).toEqual(["a", "b"]);
+  });
+
+  // 子代理模型是「每个提供商选一个」，只能取自该提供商的模型列表：
+  // 跨提供商的 ID 在这里没有意义（请求会打到当前端点）。
+  it("子代理模型随补丁提交", () => {
+    const f = { ...formsFromSettings(sample)[0], subagentModel: "cn:qwen" };
+    expect(buildProviderPatches([f])[0].subagent_model).toBe("cn:qwen");
+  });
+
+  it("子代理模型不在模型列表里时按未指定提交", () => {
+    const f = { ...formsFromSettings(sample)[0], models: ["cn:deepseek"], subagentModel: "cn:qwen" };
+    expect(buildProviderPatches([f])[0].subagent_model).toBe("");
   });
 
   it("模型列表为空也提交（允许全部移除）", () => {

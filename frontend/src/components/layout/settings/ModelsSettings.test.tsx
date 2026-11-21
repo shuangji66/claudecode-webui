@@ -105,6 +105,47 @@ describe("模型页凭证输入框的自动填充", () => {
     expect(screen.getByRole("checkbox", { name: /支持图片输入/ })).toBeChecked();
   });
 
+  // 子代理模型是**每个提供商**各一个：子代理与主对话共用 baseURL 与密钥，
+  // 跨提供商的模型名在这里没有意义。
+  it("每个提供商可以从已添加的模型里选一个作为子代理模型", async () => {
+    const saveSettings = vi.fn(async () => true);
+    useAppStore.setState({
+      settings: {
+        providers: [
+          {
+            id: "gw",
+            name: "网关",
+            base_url: "https://gw.example",
+            models: ["m1", "m2"],
+            model_meta: {},
+          },
+        ],
+        selected: { provider: "gw", model: "m1", effort: "" },
+        permission_mode: "default",
+        locale: "zh",
+        font_size: 15,
+      } as never,
+      saveSettings: saveSettings as never,
+      settingsSaving: false,
+    });
+    await act(async () => {
+      render(<ModelsSettings />);
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "子代理模型" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("option", { name: "m2" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    });
+    expect(saveSettings).toHaveBeenCalledWith({
+      providers: [expect.objectContaining({ subagent_model: "m2" })],
+    });
+  });
+
   // 「获取可用模型」从内联小面板改成弹窗（选择区要拿到整块高度，几十条目录在
   // 卡片里那条 max-h-52 里根本看不清），并用全选/取消全选。
   describe("获取可用模型的弹窗", () => {

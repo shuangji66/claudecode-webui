@@ -134,6 +134,8 @@ export interface SettingsPatch {
   font_size?: number;
   proxy_url?: string;
   idle_minutes?: number;
+  subagent_max_concurrent?: number;
+  subagent_spawn_depth?: number;
   tcp_enabled?: boolean;
   tcp_port?: number;
   /** 留空表示沿用已保存的密码。 */
