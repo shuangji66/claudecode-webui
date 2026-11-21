@@ -1222,6 +1222,12 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
   的两块，各自只隐藏（`[data-fs-tree]` / `[data-fs-search-results]`）。同理，改查询后
   立刻按 Enter 时 `results` 还挂在**上一次查询**上（防抖 300ms + 请求往返），
   必须比对 `resultsQuery` 再打开，否则会跳到一条跟当前关键词无关的文件。
+- **`Toast` 的活区常驻**：`role="status" aria-live="polite"` 的容器必须一直在 DOM 里，
+  只替换里面的文字。读屏软件通常不朗读「和容器一起插入」的内容——原来
+  `if (!toast) return null` 会让每条提示都不播报。
+- 聊天区顶部那条「正在连接…」的 `connBarArmed` 是**跨对话共享**的 state，切对话时要用
+  `useLayoutEffect` 在绘制前重置：用 `useEffect` 的话首帧仍带着上一条对话的值（比如它
+  刚 closed），横幅闪一下、`flex-1` 的消息区被顶一顶。
 - 设置页的档位 ± 要**串行保存**（`queueSave` + 单调 seq）：连点两次会各发一个 PATCH，
   落库顺序与点击顺序无关的话，最后生效的可能是先点的那个档位；也只有最后一次点击的
   回包才能清掉本地草稿。

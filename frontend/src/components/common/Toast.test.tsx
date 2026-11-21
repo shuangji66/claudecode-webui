@@ -9,10 +9,12 @@ describe("Toast", () => {
     vi.useRealTimers();
   });
 
-  it("没有提示时不渲染任何东西", () => {
+  // 活区常驻、内容为空：读屏软件不朗读「和容器一起插入」的内容，
+  // 只朗读「已在监听的容器内容变了」。所以这里断言的是「没有可见文案」。
+  it("没有提示时活区存在但没有任何文案", () => {
     useAppStore.setState({ toast: null });
-    const { container } = render(<Toast />);
-    expect(container.firstChild).toBeNull();
+    render(<Toast />);
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
   });
 
   // 只报一句就消失：它浮在输入框上方，一直挂着会挡住点按。
@@ -32,7 +34,7 @@ describe("Toast", () => {
     act(() => {
       vi.advanceTimersByTime(200);
     });
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
   });
 
   // 连点两处：后一条覆盖前一条，并且从新的一条重新计时（旧计时器不能把它提前收掉）。

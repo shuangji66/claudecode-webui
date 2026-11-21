@@ -9,15 +9,17 @@ import { useAppStore } from "../../store/useAppStore";
  */
 export function Toast() {
   const toast = useAppStore((s) => s.toast);
-  if (!toast) return null;
+  // 活区（role=status / aria-live）必须**一直在 DOM 里**：读屏软件通常不会朗读
+  // 「和容器一起插入」的内容，只朗读「已在监听里的容器内容变了」。所以这里始终渲染
+  // 那个空容器，只替换里面的文字（没提示时容器没有可见内容，也不占位）。
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom,0px)+88px)] z-[46] flex justify-center px-3 md:bottom-6">
-      <div
-        role="status"
-        aria-live="polite"
-        className="max-w-[min(560px,100%)] animate-rise rounded-xl bg-ink px-3.5 py-2 text-[12px] leading-relaxed text-canvas shadow-xl"
-      >
-        {toast.text}
+      <div role="status" aria-live="polite" aria-atomic="true">
+        {toast && (
+          <div className="max-w-[min(560px,100%)] animate-rise rounded-xl bg-ink px-3.5 py-2 text-[12px] leading-relaxed text-canvas shadow-xl">
+            {toast.text}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -602,6 +602,15 @@ let openSeq = 0;
 let startingCount = 0;
 
 /**
+ * 每条正在打开的对话「历史已经铺好」的那个 promise。
+ *
+ * 同一个 id 被并发打开时，第二次走的是「已经在起」的分支：它以前要等**整个握手**
+ * 才回调 `onHistory`，于是历史记录页会一直转圈等子进程——而这条 commit 的目的正是
+ * 不让用户等子进程。有这张表，第二个调用方可以只等转录那一步。
+ */
+const historyPromises = new Map<string, Promise<void>>();
+
+/**
  * 把一个「按会话 id 分桶」的 map 里 from 那条搬到 to 下。
  *
  * `/clear` 之后 CLI 换了会话 id，描述「同一个进程」的那几项状态（状态机、init、
@@ -1857,11 +1866,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
     const pending = resumePromises.get(id);
     if (pending) {
-      // 同一条对话正在起：历史由那次负责回放，这里等它落定再补一次「历史已上屏」
-      // 的回调——不然这个调用方（历史记录页）会一直停在列表上等子进程。
-      const ok = await pending;
+      // 同一条对话正在起：历史由那次负责回放。这里只等**转录落定**就回调，不等
+      // 整个握手——否则历史记录页会一直停在列表上等子进程（正是 191d4df 要消除的等待）。
+      const history = historyPromises.get(id);
+      if (history) await history.catch(() => undefined);
       notifyHistory();
-      return ok;
+      return pending;
     }
     const promise = (async () => {
       startingCount += 1;
@@ -1871,6 +1881,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       // 要等 spawn + 握手，几秒钟里消息区是空的）。两边都完成才继续——WS 连接、
       // activeId 复位仍然排在后面，实时事件不会插进回放中间。
       const transcript = loadTranscript();
+      historyPromises.set(id, transcript);
       try {
         const info = await apiFetch<SessionInfo>("/api/session", {
           method: "POST",
@@ -1897,6 +1908,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         return false;
       } finally {
         resumePromises.delete(id);
+        historyPromises.delete(id);
         startingCount = Math.max(0, startingCount - 1);
         if (startingCount === 0) set({ starting: false });
       }

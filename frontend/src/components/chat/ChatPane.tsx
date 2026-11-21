@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { Composer } from "./Composer";
@@ -132,7 +132,10 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
   // （输入框提示已经写着「正在启动 Claude…」）。所以非 `open` 状态先等一个阈值，
   // 仍然没连上才显示；`closed` 是终态（进程结束 / 服务端关连接），立刻说。
   const [connBarArmed, setConnBarArmed] = useState(false);
-  useEffect(() => {
+  // **useLayoutEffect**：`connBarArmed` 是跨对话共享的 state，切对话时要在**绘制前**
+  // 就按新对话的状态重置。用 useEffect 的话首帧仍带着上一条对话的值（比如它刚
+  // closed），横幅会闪一下并把 `flex-1` 的消息区顶一顶，随后才收掉。
+  useLayoutEffect(() => {
     setConnBarArmed(conn.state === "closed");
     if (conn.state === "open" || conn.state === "idle" || conn.state === "closed") return;
     const timer = window.setTimeout(() => setConnBarArmed(true), CONN_BAR_DELAY);

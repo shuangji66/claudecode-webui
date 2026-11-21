@@ -189,3 +189,42 @@ describe("openConversation：并发与意图序号", () => {
     expect(useAppStore.getState().starting).toBe(false);
   });
 });
+
+// 同一个 id 被并发打开时，第二个调用方（历史记录页）只该等**转录落定**，
+// 不该等整个 initialize 握手——否则用户还是被扣在列表上几秒。
+describe("openConversation：并发打开时历史回调不等握手", () => {
+  beforeEach(() => {
+    h.calls.length = 0;
+    h.releaseSession = null;
+    useAppStore.setState({
+      activeId: null,
+      conversations: [conv] as never,
+      workspaces: [],
+      sessions: [],
+      items: {},
+      error: null,
+      starting: false,
+      connect: (() => undefined) as never,
+    });
+  });
+
+  it("第二个调用方的 onHistory 在 /api/session 回包之前就触发", async () => {
+    const first = useAppStore.getState().openConversation("c1");
+    let fired = false;
+    const second = useAppStore.getState().openConversation("c1", false, () => {
+      fired = true;
+    });
+
+    await vi.waitFor(() => {
+      expect((useAppStore.getState().items.c1 ?? []).length).toBe(2);
+    });
+    await vi.waitFor(() => {
+      expect(fired).toBe(true);
+    });
+    // 会话还挂在握手上：这个时刻触发，才叫「不等子进程」。
+    expect(h.releaseSession).not.toBeNull();
+
+    h.releaseSession?.();
+    await Promise.all([first, second]);
+  });
+});
