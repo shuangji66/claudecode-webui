@@ -17,6 +17,7 @@ import {
   useProcessView,
 } from "../../../lib/viewMode";
 import { isDangerousPermissionMode, permissionModeWarning } from "../../../lib/permissionModes";
+import { isValidWaitLabel, setWaitLabel, useWaitLabel, waitLabelWidth, WAIT_LABEL_MAX } from "../../../lib/waitLabel";
 import { Select } from "../../common/Select";
 import { askConfirm } from "../../common/SystemDialogs";
 import { SettingRow, SettingRows } from "./Section";
@@ -94,6 +95,20 @@ export function GeneralSettings() {
   const view = useProcessView();
   const timing = useCollapseTiming();
   const replies = useFoldedReplies();
+  // 计时行文案同样只存本设备：输入框里的草稿与「已生效」的值要分开，
+  // 不合法的中间态（打了两个字母）不能进 localStorage。
+  const waitLabel = useWaitLabel();
+  const [labelDraft, setLabelDraft] = useState(waitLabel);
+  const labelInvalid = labelDraft.trim() !== "" && !isValidWaitLabel(labelDraft);
+  const commitLabel = () => {
+    if (!isValidWaitLabel(labelDraft)) {
+      setLabelDraft(waitLabel); // 不合法：退回上次生效的值
+      return;
+    }
+    const next = labelDraft.trim();
+    setWaitLabel(next);
+    setLabelDraft(next); // 输入框跟着显示落盘后的样子（去掉首尾空白）
+  };
 
   /** 默认权限里的危险模式同样要二次确认：这里保存的是「以后新会话」的默认值。 */
   const changeDefaultMode = async (next: string) => {
@@ -301,6 +316,46 @@ export function GeneralSettings() {
             </div>
           </SettingRow>
         )}
+
+        {/* 计时行那句「少女祈祷中」的自定义文案（`lib/waitLabel`）：一行说明写清「换的是
+            哪句话 + 口径」，再凑第二条解释就是噪音。不合法时边框变红、失焦后退回上次
+            生效的值：悄悄吞掉输入等于让人以为自己没敲进去。
+            输入框右端那个小计数器是实时的口径反馈——中英混写时「宽了几个字符」光看
+            字数看不出来（四个汉字就已经 8 了）。 */}
+        <SettingRow
+          title={t("自定义", "Custom")}
+          desc={t("计时行的那句等待文案；6–12 个字符，汉字算 2 个。", "The waiting text next to the timer; 6–12 characters, CJK counts as 2.")}
+        >
+          <div className="relative">
+            <input
+              {...NO_AUTOFILL}
+              value={labelDraft}
+              onChange={(e) => setLabelDraft(e.target.value)}
+              onBlur={commitLabel}
+              onKeyDown={(e) => {
+                // Enter 只是「提交」的手势：真正落盘的那一次在 blur 里，
+                // 两条路都写会让回退逻辑分叉。
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+              aria-label={t("自定义", "Custom")}
+              aria-invalid={labelInvalid || undefined}
+              placeholder={t("少女祈祷中", "Waiting on Claude")}
+              className={`w-40 rounded-lg border bg-canvas py-1.5 pl-2.5 pr-10 text-[12px] outline-none focus:border-brand/60 ${
+                labelInvalid ? "border-warn/70" : "border-line-strong"
+              }`}
+            />
+            {labelDraft.trim() !== "" && (
+              <span
+                aria-hidden
+                className={`pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 font-mono text-[10px] tabular-nums ${
+                  labelInvalid ? "text-warn" : "text-faint"
+                }`}
+              >
+                {waitLabelWidth(labelDraft)}/{WAIT_LABEL_MAX}
+              </span>
+            )}
+          </div>
+        </SettingRow>
       </SettingRows>
     </div>
   );

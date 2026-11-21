@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { GeneralSettings } from "./GeneralSettings";
+import { resetWaitLabelCache } from "../../../lib/waitLabel";
 import { useAppStore } from "../../../store/useAppStore";
 
 // 通用设置现在是「一行一项」的清单（对齐 DSH 的 Setting-Cell）：左边标题 + 说明、
@@ -11,6 +12,7 @@ describe("设置 → 通用", () => {
 
   beforeEach(() => {
     localStorage.clear();
+    resetWaitLabelCache();
     saveSettings.mockClear();
     useAppStore.setState({
       settings: {
@@ -29,7 +31,9 @@ describe("设置 → 通用", () => {
 
   it("每个设置项都是一行：标题与说明并列出现", () => {
     render(<GeneralSettings />);
-    for (const title of ["默认权限", "外观", "语言", "字号", "过程展示", "收起时机", "收起后的回复"]) {
+    // 「自定义」那一行的简短说明：换的是哪句话 + 长度口径，一句说完。
+    expect(screen.getByText("计时行的那句等待文案；6–12 个字符，汉字算 2 个。")).toBeInTheDocument();
+    for (const title of ["默认权限", "外观", "语言", "字号", "过程展示", "收起时机", "收起后的回复", "自定义"]) {
       expect(screen.getByText(title)).toBeInTheDocument();
     }
     // 说明跟着当前值走：默认「标准」档的说明文字。
@@ -68,5 +72,66 @@ describe("设置 → 通用", () => {
     useAppStore.setState({ info: { auth_mode: "token" } as never });
     render(<GeneralSettings />);
     expect(screen.getByPlaceholderText("CCWEB_AUTH_TOKEN")).toBeInTheDocument();
+  });
+
+  // 最底部那一行换的是计时行那句「少女祈祷中」：合法就写本机偏好，
+  // 不合法（少于 3 个汉字、或者字母数字不足 3 个）不落盘、失焦后回退。
+  it("自定义等待文案：合法的写进本机偏好，不合法的不保存", async () => {
+    render(<GeneralSettings />);
+    const input = screen.getByPlaceholderText("少女祈祷中") as HTMLInputElement;
+    expect(input.value).toBe("");
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "少女祈祷" } });
+      fireEvent.blur(input);
+    });
+    expect(localStorage.getItem("ccweb-wait-label")).toBe("少女祈祷");
+    expect(input.value).toBe("少女祈祷");
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "ab" } });
+    });
+    // 打了两个字母（宽度 2 < 6）：不写盘，边框标红
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.className).toContain("border-warn/70");
+    expect(localStorage.getItem("ccweb-wait-label")).toBe("少女祈祷");
+
+    await act(async () => {
+      fireEvent.blur(input);
+    });
+    // 失焦后回退到上次生效的值
+    expect(input.value).toBe("少女祈祷");
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    // 宽度计数器跟着当前值走：四个汉字 = 8 / 12
+    expect(screen.getByText("8/12")).toBeInTheDocument();
+  });
+
+  // 中英混写要按宽度算：四个汉字 + 两个字母 = 10，合法。
+  it("自定义等待文案：中英混写按宽度算，合法的照样落盘", async () => {
+    render(<GeneralSettings />);
+    const input = screen.getByPlaceholderText("少女祈祷中") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "祈祷中ab" } });
+    });
+    expect(screen.getByText("8/12")).toBeInTheDocument();
+    expect(input.getAttribute("aria-invalid")).toBeNull();
+    await act(async () => {
+      fireEvent.blur(input);
+    });
+    expect(localStorage.getItem("ccweb-wait-label")).toBe("祈祷中ab");
+  });
+
+  it("自定义等待文案：清空等于用回内置文案", async () => {
+    localStorage.setItem("ccweb-wait-label", "少女祈祷");
+    resetWaitLabelCache();
+    render(<GeneralSettings />);
+    const input = screen.getByPlaceholderText("少女祈祷中") as HTMLInputElement;
+    expect(input.value).toBe("少女祈祷");
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "" } });
+      fireEvent.blur(input);
+    });
+    expect(localStorage.getItem("ccweb-wait-label")).toBeNull();
   });
 });

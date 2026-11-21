@@ -19,6 +19,7 @@ import { formatElapsed } from "../../lib/elapsed";
 import { hasLocalWork } from "../../lib/localWork";
 import { isSilentLongEnough, silentFor, silentSeconds } from "../../lib/silence";
 import { formatTokens } from "../../lib/usage";
+import { useWaitLabel } from "../../lib/waitLabel";
 import { lastSound, localWork } from "../../store/useAppStore";
 import { useT } from "../../lib/i18n";
 
@@ -39,6 +40,8 @@ interface Props {
 
 export function TurnTimer({ startedAt, sessionId = null, watchSilence = true, className = "" }: Props) {
   const t = useT();
+  // 文案可以在「设置 → 通用」最底部换成自己的（`lib/waitLabel`）：空串 = 内置那句。
+  const custom = useWaitLabel();
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -77,11 +80,14 @@ export function TurnTimer({ startedAt, sessionId = null, watchSilence = true, cl
       ? t(`上游 ${silentSeconds(silent)}s 没有响应`, `no response from upstream for ${silentSeconds(silent)}s`)
       : "";
   return (
-    <div className={`flex items-center gap-1.5 text-[11px] text-muted ${className}`}>
+    // 这一行整条用主题色（文案 / 秒数 / 状态提示一起）：它表达的是「这一轮还在跑」，
+    // 灰细字在深色底上几乎看不见，读起来像一条排版残渣。别把秒数和提示再退回
+    // `text-muted` / `text-faint`——同一行里三种灰度只会让人以为是三块不同的信息。
+    <div className={`flex items-center gap-1.5 text-[11px] text-brand ${className}`}>
       <StateDot state="ongoing" size={11} />
-      <span className="min-w-0 truncate">{t("少女祈祷中", "Waiting on Claude")}</span>
-      <span className="font-mono tabular-nums text-faint">{formatElapsed(now - startedAt)}</span>
-      {note && <span className="shrink-0 truncate text-faint">· {note}</span>}
+      <span className="min-w-0 truncate">{custom || t("少女祈祷中", "Waiting on Claude")}</span>
+      <span className="font-mono tabular-nums">{formatElapsed(now - startedAt)}</span>
+      {note && <span className="shrink-0 truncate">· {note}</span>}
     </div>
   );
 }

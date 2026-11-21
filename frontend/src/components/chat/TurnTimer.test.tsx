@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import { TurnTimer } from "./TurnTimer";
+import { resetWaitLabelCache } from "../../lib/waitLabel";
 import { __resetSyncState, noteFrame, useAppStore } from "../../store/useAppStore";
 
 const NOW = Date.parse("2026-01-02T00:00:00Z");
@@ -9,6 +10,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   __resetSyncState();
+  localStorage.clear();
+  resetWaitLabelCache();
 });
 
 afterEach(() => {
@@ -122,5 +125,33 @@ describe("TurnTimer 的上游沉默提示", () => {
     // 显示的是 hook 的名字（`hook_name`），不是它这次运行的 `hook_id`：
     // 一串 UUID 对用户没有意义。
     expect(screen.getByText(/hook fmt 正在跑/)).toBeInTheDocument();
+  });
+});
+
+// 文案可以换（设置 → 通用最底部那一行，「自定义」）：整行 —— 自定义文案、秒数、
+// 状态提示 —— 都用主题色，别退回灰细字。
+describe("TurnTimer 的自定义文案与配色", () => {
+  it("没有自定义时仍显示内置那句", () => {
+    render(<TurnTimer startedAt={NOW - 5_000} />);
+    expect(screen.getByText("少女祈祷中")).toBeInTheDocument();
+  });
+
+  it("设置过就用自定义文案，替掉内置那句", () => {
+    localStorage.setItem("ccweb-wait-label", "少女祈祷");
+    resetWaitLabelCache();
+    render(<TurnTimer startedAt={NOW - 5_000} />);
+    expect(screen.getByText("少女祈祷")).toBeInTheDocument();
+    expect(screen.queryByText("少女祈祷中")).toBeNull();
+  });
+
+  it("文案、秒数与沉默提示整行都是主题色", () => {
+    localStorage.setItem("ccweb-wait-label", "少女祈祷");
+    resetWaitLabelCache();
+    const { container } = render(<TurnTimer startedAt={NOW - 32_000} sessionId="s1" />);
+    const row = container.firstElementChild as HTMLElement;
+    expect(row.className).toContain("text-brand");
+    expect(screen.getByText("少女祈祷").className).not.toContain("text-muted");
+    expect(screen.getByText("32s").className).not.toContain("text-faint");
+    expect(screen.getByText(/上游 32s 没有响应/).className).not.toContain("text-faint");
   });
 });
