@@ -564,6 +564,79 @@ src/
      `@查询`（`pickFromFnos(mention)` 的那条分支）。
    `cwd` 由 `ChatPane` 传（会话 cwd，新对话时是当前工作区）；空串时菜单只剩飞牛行（若在宿主内）。
 
+35. **右侧栏的指针与持久化细节**
+- **拖动分隔线要防「pointerup 丢了」**：`pointermove` 里先看 `event.buttons === 0`
+  （没有按键还收到 move = 上一次拖动的 up 没到）就复位拖动状态，并补
+  `onLostPointerCapture`。不复位的话之后**鼠标只是划过那条 8px**就会改宽度——
+  用户根本没在拖。宽度与分栏比例两条分隔线都要。
+- 拖动中只改 state（`previewWidth`），**松手才写 localStorage**：pointermove 每秒几十次，
+  `localStorage.setItem` 是同步 IO。
+- 可聚焦的 `role="separator"` 必须有 `aria-valuenow/valuemin/valuemax`：键盘与读屏用户
+  要知道「现在多宽、能调到哪」。
+- **文件树的展开状态在组件本地**，所以「搜索 → 清空」不能让树卸载：命中列表与树是并列
+  的两块，各自只隐藏（`[data-fs-tree]` / `[data-fs-search-results]`）。同理，改查询后
+  立刻按 Enter 时 `results` 还挂在**上一次查询**上（防抖 300ms + 请求往返），
+  必须比对 `resultsQuery` 再打开，否则会跳到一条跟当前关键词无关的文件。
+- **`Toast` 的活区常驻**：`role="status" aria-live="polite"` 的容器必须一直在 DOM 里，
+  只替换里面的文字。读屏软件通常不朗读「和容器一起插入」的内容——原来
+  `if (!toast) return null` 会让每条提示都不播报。
+- 聊天区顶部那条「正在连接…」的 `connBarArmed` 是**跨对话共享**的 state，切对话时要用
+  `useLayoutEffect` 在绘制前重置：用 `useEffect` 的话首帧仍带着上一条对话的值（比如它
+  刚 closed），横幅闪一下、`flex-1` 的消息区被顶一顶。
+- 设置页的档位 ± 要**串行保存**（`queueSave` + 单调 seq）：连点两次会各发一个 PATCH，
+  落库顺序与点击顺序无关的话，最后生效的可能是先点的那个档位；也只有最后一次点击的
+  回包才能清掉本地草稿。
+- 登录有效期的界面值按 12 的档位**显示**，但后端允许任意 12–72（手改配置写 30 也有效）：
+  `dirty` 要按**原始值**判漂移，否则界面显示 36、保存永远不纠正。
+
+36. **速度计只报「此刻」的速度**
+- `throughput(snap, now)` **按 TTL（30 分钟）过滤样本**，窗口里一个新鲜样本都不剩时返回
+  `undefined`，不退回 `genMs/genTokens`（老快照没有 `speedSamples` 时才退）。
+  TTL 只在 `pushSpeedSample` 里生效是不够的：那只覆盖「一直在跑」的会话，关掉对话
+  放一晚上、隔天重开（快照从 `conversations.json` 读回来）会一直显示昨天的速度。
+  测试要用假时钟时显式传 `now`（默认 `Date.now()`）。
+- 样本合并走 `mergeSpeedSamples`（按 `at:ms:tokens` 去重、按时刻排序、只留窗口内最后几条），
+  `mergeUsage` 用它而不是「谁优先」：`session.resync` 用磁盘那份整份覆盖会把本回合刚量到
+  的样本抹掉，速度计退回上一轮。
+- 进程没有 `result` 就结束（被杀 / 崩溃）时走 `settleTurnUsage` 清掉本回合的
+  `turnGenMs/turnGenTokens`（窗口样本保留）：不清的话下一轮「本回合速度」会把上一轮那半截
+  一起算进分子分母。
+
+37. **轨迹跳转的锚点**
+- `MessageList` 的 `data-item-id` 以前只给「非过程行」，而轨迹面板绝大多数步骤
+  （工具、思考）都在过程里：点一行永远找不到目标，两次重试后按 `pendingJump.fallback`
+  退到**轮头**，用户看到的就是「点了跳到这一轮开头」。
+- 现在三处都有锚点：过程组里的**每一行**带 `data-item-id`；过程组的**组根**带
+  `data-item-ids="a b c"`（组收起时子行没有 DOM，至少落在组头上——「这一步在这里面」，
+  比退到轮头诚实）；连续的思考块合并渲染，也带 `data-item-ids`。
+  `scrollToItem` 两种属性都查（`[data-item-ids~="id"]` 按空白分词）。
+- 固定文案（「模型请求」「系统事件」「用户中断」…）由 `lib/trace` 只给 `labelKey`，
+  文字在 `TracePanel` 里 `t()` 出：`label` 是数据自带的名字（工具名 / 模型名 / CLI 写的
+  人话），不能把界面文案塞进去，否则英文界面里混进中文。
+- `TracePanel` 只在 `active` 时订阅 `items[sid]`（否则返回同一个 `EMPTY` 引用）：
+  标签只是 `hidden` 不卸载，不这么做的话没在看的轨迹也会对**每一条流式帧**把整轮
+  `traceTurns` 重算一遍。
+
+38. **`starting` 与 `openSeq`：意图序号，不是布尔标记**
+- **`starting` 由计数派生**（`startingCount`，store 模块级）：新建与打开可能同时进行，
+  布尔值会互相覆盖——一方结束就把另一方的「启动中」也关掉，或者反过来**永久卡在 true**
+  （同一条对话被并发打开时最容易复现：第二次走「已经在起」的分支，它从不写 `starting:false`，
+  而第一次的 finally 又因为序号变了跳过清理）。输入框与「新对话」按钮一起禁用，只能靠
+  再打开另一条对话自愈。
+- **改 `activeId` 的动作都要参与同一个 `openSeq`**：`openConversation`、`createSession`、
+  `archiveConversation`、`deleteConversation`。只有 open 参与的话，冷启动 `--resume`
+  期间点「新对话」或归档当前对话，迟到的回包会把用户抢回旧对话，甚至 `connect` 上一条
+  刚归档的会话（`recoverSession` 会按 `--resume` 把进程重新拉起来）。
+  `connect` 与 `set({error})` 同样要过这个序号：迟到的失败不该盖在当前对话上。
+- **「已归档不能打开」的闸门在 store**（`openConversation` 里的 `conv.archived`），
+  不只侧栏与历史记录页那两个入口：定时任务页、断线重试都能走到这条路上。
+  文案只留一份（`lib/conversations.ARCHIVED_NOTICE_*`），两个页面留早退只是为了
+  别先做一堆准备工作（目录授权、刷新列表）再被拦下。
+- **乐观更新要作废在途的列表刷新**（`conversationsSeq += 1`）：归档请求发出之前发出、
+  之后才回来的那份列表会把 `archived:false` 写回来，「隐藏已归档」下那一行重新冒出来。
+  归档还要顺手把 `live` 改掉（后端会结束进程），否则那一行会按 `conversationStatus`
+  继续画「进行中」绿点，直到后台刷新回来。
+
 ## 3. 状态管理（zustand）
 
 - 每个会话的消息独立存 `items[sid]`，切换会话不重新拉取；
@@ -1207,83 +1280,6 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
 - **组件用 Testing Library**，断言用户可见的结果（文本、按钮），不要断言内部 state。
 - 改 `normalize` 时先写一个会失败的用例，再改实现。
 - 不要写依赖 `Date.now()` 精确值的断言。
-
-### 25.1 右侧栏的指针与持久化细节
-
-- **拖动分隔线要防「pointerup 丢了」**：`pointermove` 里先看 `event.buttons === 0`
-  （没有按键还收到 move = 上一次拖动的 up 没到）就复位拖动状态，并补
-  `onLostPointerCapture`。不复位的话之后**鼠标只是划过那条 8px**就会改宽度——
-  用户根本没在拖。宽度与分栏比例两条分隔线都要。
-- 拖动中只改 state（`previewWidth`），**松手才写 localStorage**：pointermove 每秒几十次，
-  `localStorage.setItem` 是同步 IO。
-- 可聚焦的 `role="separator"` 必须有 `aria-valuenow/valuemin/valuemax`：键盘与读屏用户
-  要知道「现在多宽、能调到哪」。
-- **文件树的展开状态在组件本地**，所以「搜索 → 清空」不能让树卸载：命中列表与树是并列
-  的两块，各自只隐藏（`[data-fs-tree]` / `[data-fs-search-results]`）。同理，改查询后
-  立刻按 Enter 时 `results` 还挂在**上一次查询**上（防抖 300ms + 请求往返），
-  必须比对 `resultsQuery` 再打开，否则会跳到一条跟当前关键词无关的文件。
-- **`Toast` 的活区常驻**：`role="status" aria-live="polite"` 的容器必须一直在 DOM 里，
-  只替换里面的文字。读屏软件通常不朗读「和容器一起插入」的内容——原来
-  `if (!toast) return null` 会让每条提示都不播报。
-- 聊天区顶部那条「正在连接…」的 `connBarArmed` 是**跨对话共享**的 state，切对话时要用
-  `useLayoutEffect` 在绘制前重置：用 `useEffect` 的话首帧仍带着上一条对话的值（比如它
-  刚 closed），横幅闪一下、`flex-1` 的消息区被顶一顶。
-- 设置页的档位 ± 要**串行保存**（`queueSave` + 单调 seq）：连点两次会各发一个 PATCH，
-  落库顺序与点击顺序无关的话，最后生效的可能是先点的那个档位；也只有最后一次点击的
-  回包才能清掉本地草稿。
-- 登录有效期的界面值按 12 的档位**显示**，但后端允许任意 12–72（手改配置写 30 也有效）：
-  `dirty` 要按**原始值**判漂移，否则界面显示 36、保存永远不纠正。
-
-### 26.1 速度计：只报「此刻」的速度
-
-- `throughput(snap, now)` **按 TTL（30 分钟）过滤样本**，窗口里一个新鲜样本都不剩时返回
-  `undefined`，不退回 `genMs/genTokens`（老快照没有 `speedSamples` 时才退）。
-  TTL 只在 `pushSpeedSample` 里生效是不够的：那只覆盖「一直在跑」的会话，关掉对话
-  放一晚上、隔天重开（快照从 `conversations.json` 读回来）会一直显示昨天的速度。
-  测试要用假时钟时显式传 `now`（默认 `Date.now()`）。
-- 样本合并走 `mergeSpeedSamples`（按 `at:ms:tokens` 去重、按时刻排序、只留窗口内最后几条），
-  `mergeUsage` 用它而不是「谁优先」：`session.resync` 用磁盘那份整份覆盖会把本回合刚量到
-  的样本抹掉，速度计退回上一轮。
-- 进程没有 `result` 就结束（被杀 / 崩溃）时走 `settleTurnUsage` 清掉本回合的
-  `turnGenMs/turnGenTokens`（窗口样本保留）：不清的话下一轮「本回合速度」会把上一轮那半截
-  一起算进分子分母。
-
-### 27.1 轨迹跳转的锚点：过程行也要能定位
-
-- `MessageList` 的 `data-item-id` 以前只给「非过程行」，而轨迹面板绝大多数步骤
-  （工具、思考）都在过程里：点一行永远找不到目标，两次重试后按 `pendingJump.fallback`
-  退到**轮头**，用户看到的就是「点了跳到这一轮开头」。
-- 现在三处都有锚点：过程组里的**每一行**带 `data-item-id`；过程组的**组根**带
-  `data-item-ids="a b c"`（组收起时子行没有 DOM，至少落在组头上——「这一步在这里面」，
-  比退到轮头诚实）；连续的思考块合并渲染，也带 `data-item-ids`。
-  `scrollToItem` 两种属性都查（`[data-item-ids~="id"]` 按空白分词）。
-- 固定文案（「模型请求」「系统事件」「用户中断」…）由 `lib/trace` 只给 `labelKey`，
-  文字在 `TracePanel` 里 `t()` 出：`label` 是数据自带的名字（工具名 / 模型名 / CLI 写的
-  人话），不能把界面文案塞进去，否则英文界面里混进中文。
-- `TracePanel` 只在 `active` 时订阅 `items[sid]`（否则返回同一个 `EMPTY` 引用）：
-  标签只是 `hidden` 不卸载，不这么做的话没在看的轨迹也会对**每一条流式帧**把整轮
-  `traceTurns` 重算一遍。
-
-### 28. `starting` 与 `openSeq`：意图序号，不是布尔标记
-
-- **`starting` 由计数派生**（`startingCount`，store 模块级）：新建与打开可能同时进行，
-  布尔值会互相覆盖——一方结束就把另一方的「启动中」也关掉，或者反过来**永久卡在 true**
-  （同一条对话被并发打开时最容易复现：第二次走「已经在起」的分支，它从不写 `starting:false`，
-  而第一次的 finally 又因为序号变了跳过清理）。输入框与「新对话」按钮一起禁用，只能靠
-  再打开另一条对话自愈。
-- **改 `activeId` 的动作都要参与同一个 `openSeq`**：`openConversation`、`createSession`、
-  `archiveConversation`、`deleteConversation`。只有 open 参与的话，冷启动 `--resume`
-  期间点「新对话」或归档当前对话，迟到的回包会把用户抢回旧对话，甚至 `connect` 上一条
-  刚归档的会话（`recoverSession` 会按 `--resume` 把进程重新拉起来）。
-  `connect` 与 `set({error})` 同样要过这个序号：迟到的失败不该盖在当前对话上。
-- **「已归档不能打开」的闸门在 store**（`openConversation` 里的 `conv.archived`），
-  不只侧栏与历史记录页那两个入口：定时任务页、断线重试都能走到这条路上。
-  文案只留一份（`lib/conversations.ARCHIVED_NOTICE_*`），两个页面留早退只是为了
-  别先做一堆准备工作（目录授权、刷新列表）再被拦下。
-- **乐观更新要作废在途的列表刷新**（`conversationsSeq += 1`）：归档请求发出之前发出、
-  之后才回来的那份列表会把 `archived:false` 写回来，「隐藏已归档」下那一行重新冒出来。
-  归档还要顺手把 `live` 改掉（后端会结束进程），否则那一行会按 `conversationStatus`
-  继续画「进行中」绿点，直到后台刷新回来。
 
 ## 8. 常见错误对照
 
