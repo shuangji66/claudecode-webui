@@ -177,6 +177,19 @@ describe("工具卡片的复制入口", () => {
     expect(await screen.findByRole("button", { name: "已复制" })).toBeInTheDocument();
   });
 
+  // 命令是横向可滚的：按钮浮在上面的话会一直压着文字，只有拖到最右侧才看得见那几个
+  // 字（截图复现过）。`pr-*` 也救不了——滚动时内边距跟着文字一起走。
+  it("复制按钮不在可滚动的命令块上面", () => {
+    const { container } = render(<ToolCardHost item={tool({ input: { command: `ls ${"x".repeat(200)}` } })} />);
+    const pre = container.querySelector("pre") as HTMLElement;
+    const button = screen.getByRole("button", { name: "复制命令" });
+    expect(pre.contains(button)).toBe(false);
+    // 兄弟节点：滚动的是命令，按钮在它右边（深色底由外层那一行给）。
+    expect(pre.nextElementSibling).toBe(button);
+    expect(pre.className).toContain("min-w-0");
+    expect(pre.className).toContain("overflow-x-auto");
+  });
+
   // 输出默认是收起的：复制入口得在折叠块标题行上，不用先展开再选中。
   it("输出不用展开就能复制", async () => {
     render(<ToolCardHost item={tool({ result: "line1\nline2" })} />);

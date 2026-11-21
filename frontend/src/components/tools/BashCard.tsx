@@ -24,20 +24,21 @@ export function BashBody({ item }: Props) {
 
   return (
     <>
-      {/* `relative` + 右上角绝对定位的复制按钮：命令经常要拿去改一改再跑，
-          手机上长按选中一条多行命令基本没法操作。`pr-11` 是给按钮让出的位置，
-          否则长命令的第一行会钻到按钮下面。 */}
-      <div className="relative">
-        <pre className="overflow-x-auto bg-[#0f1115] py-2.5 pl-3 pr-11 text-[12px] leading-relaxed text-[#d9e0e8]">
+      {/* 命令经常要拿去改一改再跑，手机上长按选中一条多行命令基本没法操作，所以给一颗
+          复制按钮。
+          **按钮不能浮在命令块上面**：命令是横向可滚的，浮层会一直压在文字上——只有拖到
+          最右侧才看得到「被盖住的那几个字」（截图复现过），`pr-*` 也救不了（滚动时
+          内边距跟着文字一起走）。所以按钮是这一行里的**兄弟节点**：深色底由外层给，
+          里面 `flex` 出「可滚的命令 + 固定的按钮」，文字滚到头也只会停在按钮左边。 */}
+      <div className="flex items-start gap-1 bg-[#0f1115] py-2.5 pl-3 pr-1.5">
+        <pre className="min-w-0 flex-1 overflow-x-auto text-[12px] leading-relaxed text-[#d9e0e8]">
           <code>
             <span className="mr-1.5 select-none text-brand">$</span>
             {command}
           </code>
         </pre>
         {command !== "" && (
-          <div className="absolute right-1 top-1">
-            <CopyCodeButton tone="dark" text={command} label={t("复制命令", "Copy command")} />
-          </div>
+          <CopyCodeButton tone="dark" text={command} label={t("复制命令", "Copy command")} />
         )}
       </div>
       {item.result !== undefined && item.result !== "" && (
