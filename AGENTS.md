@@ -309,6 +309,14 @@ hub ── manager ── session ── process ── claude (NDJSON)
   启动预热也先 `history.TranscriptExists` 再 Resume。
 - **删除是软删除**：`conversation.Delete` 写 `deleted` 墓碑并保留 jsonl；列表/自动恢复都要
   跳过 deleted/archived。不要把「删除」实现成直接 `os.Remove` 转录。
+- **列表摘要有缓存**（`history.List` 的 `summaryCache`）：`GET /api/conversations` /
+  `GET /api/history` 每次都会列出 projectsDir 下**每一份** jsonl，而旧实现把每份都从头
+  解一遍（逐行 `json.Unmarshal`，单份上限 `maxScanLines` = 20000 行）——实测 40 份 ×
+  20000 行要 **1.7–2.2s**，而归档/取消归档、打开对话、跨设备同步后面都挂着一次列表重建，
+  NAS 上就是「点一下等一秒」。转录只会被追加，所以按 **路径 + mtime + size** 缓存摘要
+  （命中 0.6ms），文件没变就不重扫；mtime/size 必须在读文件**之前**取（claude 可能正在
+  追加，取晚一步会把偏新的键配上半截内容）。条目随 List 按「本次没见到的」清掉，
+  **只清被扫目录下的**（同一进程里 List 会被多个目录调用）。
 - **自动预热不是新建**：`CCWEB_AUTO_START` 只恢复 `LastFor` 或最近转录；没有对话就什么都不做，
   由前端创建第一条。改回 `mgr.Ensure` 会让每次重启多一条空对话。
 - **分叉（`POST /api/conversations/fork`）不改写原转录**：CLI 的

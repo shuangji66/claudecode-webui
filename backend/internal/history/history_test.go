@@ -993,3 +993,105 @@ func TestScanTranscriptDropsContinuationRows(t *testing.T) {
 		t.Fatalf("lines = %d, want 2（续接提示不该回放）", len(tr.Lines))
 	}
 }
+
+// 列表摘要有缓存：文件没变就不重扫。
+//
+// 这条不是优化洁癖：`GET /api/conversations` 每次都把 projectsDir 下**每一份**
+// jsonl 从头解一遍（单份上限 20000 行），而归档/取消归档、打开对话、跨设备同步
+// 后面都挂着一次列表重建——实测 40 份 × 20000 行要 2.2s，NAS 上只会更慢。
+func TestListCachesUnchangedTranscripts(t *testing.T) {
+	root := t.TempDir()
+	writeJSONL(t, filepath.Join(root, "p", "s1.jsonl"),
+		`{"type":"user","cwd":"/tmp/work","sessionId":"s1","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"第一句"}}`)
+
+	_, scansBefore := summaryStats()
+	first, err := List(root)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	_, scansAfterFirst := summaryStats()
+	if scansAfterFirst-scansBefore != 1 {
+		t.Fatalf("首次应扫 1 份，实扫 %d", scansAfterFirst-scansBefore)
+	}
+
+	second, err := List(root)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if _, scansAfterSecond := summaryStats(); scansAfterSecond != scansAfterFirst {
+		t.Fatalf("文件没变不该重扫：%d → %d", scansAfterFirst, scansAfterSecond)
+	}
+	if len(second) != 1 || second[0] != first[0] {
+		t.Fatalf("命中缓存的结果应与首次一致：%+v vs %+v", second, first)
+	}
+}
+
+// 转录是追加写的：追加一行之后 size 变了，必须重扫并反映出来。
+func TestListRescansAfterAppend(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "p", "s1.jsonl")
+	writeJSONL(t, path, `{"type":"user","sessionId":"s1","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"第一句"}}`)
+	if _, err := List(root); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := f.WriteString(`{"type":"assistant","timestamp":"2026-02-02T00:00:00Z","message":{"role":"assistant","content":[{"type":"text","text":"回答"}]}}` + "\n"); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	f.Close()
+
+	_, scansBefore := summaryStats()
+	got, err := List(root)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if _, scansAfter := summaryStats(); scansAfter-scansBefore != 1 {
+		t.Fatalf("追加后应重扫 1 份，实扫 %d", scansAfter-scansBefore)
+	}
+	if len(got) != 1 || got[0].UpdatedAt.Year() != 2026 || got[0].UpdatedAt.Month() != time.February {
+		t.Fatalf("摘要应重新算出新的更新时间：%+v", got)
+	}
+}
+
+// 转录被删掉时缓存条目跟着清：否则同名文件重建（大小恰好相同）会拿到旧摘要。
+func TestListPrunesCacheForMissingFiles(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "p", "s1.jsonl")
+	writeJSONL(t, path, `{"type":"user","sessionId":"s1","message":{"role":"user","content":"第一句"}}`)
+	if _, err := List(root); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if cached := cachedUnder(root); cached == 0 {
+		t.Fatal("首次扫描后应有缓存")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	got, err := List(root)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("文件删掉后不应再列出：%+v", got)
+	}
+	if left := cachedUnder(root); left != 0 {
+		t.Fatalf("删掉的文件应从缓存里清掉，还剩 %d 条", left)
+	}
+}
+
+// cachedUnder 数这个目录下的缓存条目（同包测试用；别的用例的临时目录不算）。
+func cachedUnder(dir string) int {
+	prefix := filepath.Clean(dir) + string(filepath.Separator)
+	summaryCache.mu.Lock()
+	defer summaryCache.mu.Unlock()
+	n := 0
+	for p := range summaryCache.m {
+		if strings.HasPrefix(p, prefix) {
+			n++
+		}
+	}
+	return n
+}

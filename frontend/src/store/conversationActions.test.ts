@@ -5,6 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const calls: Array<{ url: string; init?: RequestInit }> = [];
 /** fork 的假回包；测试改它来覆盖「后端没给 id」这条路径。 */
 let forkReply: { ok: boolean; id?: string } = { ok: true, id: "c-fork" };
+/** 归档 PATCH 的闸门：不 resolve 就等于「请求还在路上」，用来断言乐观更新。 */
+let patchGate: Promise<void> | null = null;
+/** 归档 PATCH 失败的开关。 */
+let patchFails = false;
 
 vi.mock("../lib/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/runtime")>();
@@ -13,6 +17,10 @@ vi.mock("../lib/runtime", async (importOriginal) => {
     apiFetch: vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, init });
       if (url === "/api/conversations/fork") return forkReply;
+      if (url === "/api/conversations" && init?.method === "PATCH") {
+        if (patchGate) await patchGate;
+        if (patchFails) throw new Error("归档失败：后端不可达");
+      }
       return { ok: true };
     }),
   };
@@ -23,6 +31,8 @@ const { useAppStore } = await import("./useAppStore");
 function seed() {
   calls.length = 0;
   forkReply = { ok: true, id: "c-fork" };
+  patchGate = null;
+  patchFails = false;
   localStorage.clear();
   useAppStore.setState({
     activeId: "c1",
@@ -59,6 +69,36 @@ describe("归档对话", () => {
       id: "c1",
       archived: true,
     });
+  });
+
+  // 归档后面挂着一次整份列表重建（会把 ~/.claude/projects 下每份转录重扫一遍，
+  // NAS 上可到秒级）。等它等于让一次勾选卡住一屏，所以先就地改这一行。
+  it("点下去那一行立刻变成已归档，不等请求回包", async () => {
+    let release = () => {};
+    patchGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const p = useAppStore.getState().archiveConversation("c2", true);
+
+    const row = useAppStore.getState().conversations.find((c) => c.id === "c2");
+    expect(row?.archived).toBe(true);
+    // 当前对话不是 c2：界面不该跳走。
+    expect(useAppStore.getState().activeId).toBe("c1");
+
+    release();
+    await expect(p).resolves.toBe(true);
+    expect(useAppStore.getState().conversations.find((c) => c.id === "c2")?.archived).toBe(true);
+  });
+
+  it("归档失败时把这一行改回来，并回到原来那条对话", async () => {
+    patchFails = true;
+    const ok = await useAppStore.getState().archiveConversation("c1", true);
+
+    expect(ok).toBe(false);
+    const s = useAppStore.getState();
+    expect(s.conversations.find((c) => c.id === "c1")?.archived).toBe(false);
+    expect(s.activeId).toBe("c1");
+    expect(s.error).toContain("归档失败");
   });
 
   it("归档别的对话不动当前对话", async () => {

@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -61,7 +62,72 @@ type transcriptLine struct {
 	} `json:"message"`
 }
 
+// summaryEntry 是某份转录在上次扫描时的「身份 + 摘要」。
+//
+// 转录只会被追加，所以「路径 + mtime + size」不变就等于内容不变；命中时直接复用
+// 摘要，不再把整份 jsonl 从头解一遍。
+type summaryEntry struct {
+	modTime time.Time
+	size    int64
+	sess    Session
+}
+
+// summaryCache 按路径缓存列表摘要。列表接口（`GET /api/conversations` /
+// `GET /api/history`）每次都把 projectsDir 下**每一份** jsonl 扫一遍（逐行 JSON
+// 解码，单份上限 maxScanLines 行），在 NAS 上随对话数量与转录长度线性变贵——
+// 实测 40 份 × 20000 行约 2.2s，而归档/取消归档这类操作后面就挂着一次列表重建。
+// 键是绝对路径，条目在一份转录消失时随 List 一起清掉（按目录前缀 + 本次是否见到）。
+var summaryCache = struct {
+	mu    sync.Mutex
+	m     map[string]summaryEntry
+	hits  int
+	scans int
+}{m: map[string]summaryEntry{}}
+
+// cachedSummary 命中复用，未命中返回 false（调用方自己 summarize）。
+func cachedSummary(path string, info os.FileInfo) (Session, bool) {
+	summaryCache.mu.Lock()
+	defer summaryCache.mu.Unlock()
+	e, ok := summaryCache.m[path]
+	if !ok || !e.modTime.Equal(info.ModTime()) || e.size != info.Size() {
+		return Session{}, false
+	}
+	summaryCache.hits++
+	return e.sess, true
+}
+
+func storeSummary(path string, info os.FileInfo, sess Session) {
+	summaryCache.mu.Lock()
+	defer summaryCache.mu.Unlock()
+	summaryCache.m[path] = summaryEntry{modTime: info.ModTime(), size: info.Size(), sess: sess}
+	summaryCache.scans++
+}
+
+// pruneSummaryCache 清掉本次没见到的条目（转录被删 / 目录被改名）。
+//
+// 只清 dir 下的：同一进程里 List 可能被多个目录调用（测试、历史页），
+// 按别的目录的扫描结果删本目录的缓存等于每次都重扫。
+func pruneSummaryCache(dir string, seen map[string]bool) {
+	prefix := filepath.Clean(dir) + string(filepath.Separator)
+	summaryCache.mu.Lock()
+	defer summaryCache.mu.Unlock()
+	for p := range summaryCache.m {
+		if strings.HasPrefix(p, prefix) && !seen[p] {
+			delete(summaryCache.m, p)
+		}
+	}
+}
+
+// summaryStats 给测试用：命中与实扫次数。
+func summaryStats() (hits, scans int) {
+	summaryCache.mu.Lock()
+	defer summaryCache.mu.Unlock()
+	return summaryCache.hits, summaryCache.scans
+}
+
 // List 扫描 projectsDir 下所有转录，返回按更新时间倒序的会话摘要。
+//
+// 摘要按「路径 + mtime + size」缓存（见 summaryCache）：文件没变就不重扫。
 func List(projectsDir string) ([]Session, error) {
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
@@ -71,6 +137,7 @@ func List(projectsDir string) ([]Session, error) {
 		return nil, err
 	}
 	var out []Session
+	seen := make(map[string]bool)
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -85,13 +152,29 @@ func List(projectsDir string) ([]Session, error) {
 				continue
 			}
 			path := filepath.Join(projectDir, f.Name())
-			s := summarize(path, e.Name())
+			// mtime/size 要在读文件**之前**取：读的过程中文件还在长（claude 正在写），
+			// 取晚一步会把这个偏新的键配上不完整的内容，之后就一直返回半截摘要。
+			info, statErr := f.Info()
+			var s Session
+			if statErr == nil {
+				seen[path] = true
+				if cached, ok := cachedSummary(path, info); ok {
+					s = cached
+				} else {
+					s = summarize(path, e.Name())
+					storeSummary(path, info, s)
+				}
+			} else {
+				// 刚被删掉 / 权限变了：照旧现读一次，读不出来就是空摘要。
+				s = summarize(path, e.Name())
+			}
 			if s.ID == "" {
 				s.ID = strings.TrimSuffix(f.Name(), ".jsonl")
 			}
 			out = append(out, s)
 		}
 	}
+	pruneSummaryCache(projectsDir, seen)
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out, nil
 }

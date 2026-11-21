@@ -1882,18 +1882,31 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   archiveConversation: async (id, archived) => {
+    // **乐观更新**：先把这一行改掉（「隐藏已归档」的筛选、行上的归档态跟着立刻变），
+    // 请求发出去之后不等回包——回包后面那次 `refreshConversations()` 会把
+    // `~/.claude/projects` 下每一份转录重扫一遍（NAS 上可到秒级），等它等于让一次
+    // 勾选动作卡住一屏。失败再把这一行改回来。
+    const wasArchived = get().conversations.find((c) => c.id === id)?.archived ?? !archived;
+    const wasActive = get().activeId === id;
+    set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? { ...c, archived } : c)) }));
+    // 归档当前对话后回「新对话」页，不替用户挑下一条打开：那个「下一条」是按最近活跃
+    // 猜的，用户归档完想停下时却会被拉进另一个对话、又起一个 claude 进程。
+    if (archived && wasActive) get().setActive(null);
     try {
       await apiFetch("/api/conversations", {
         method: "PATCH",
         body: JSON.stringify({ id, archived }),
       });
+      // 归档时后端顺手结束了进程，本机这条连接跟着断。
       get().disconnect(id);
-      await get().refreshConversations();
-      // 归档当前对话后回「新对话」页，不替用户挑下一条打开：那个「下一条」是按最近活跃
-      // 猜的，用户归档完想停下时却会被拉进另一个对话、又起一个 claude 进程。
-      if (archived && get().activeId === id) get().setActive(null);
+      // 列表重建（live/state、最近活跃）放到后台：它只是对齐状态，不挡这一刻的交互。
+      void get().refreshConversations();
       return true;
     } catch (e) {
+      set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? { ...c, archived: wasArchived } : c)) }));
+      // 归档失败时把用户放回原来那条对话（只在没人抢先切走时）：让他停在一个
+      // 空的「新对话」页上、原来那段对话不见了，比报个错更让人困惑。
+      if (archived && wasActive && get().activeId === null) get().setActive(id);
       set({ error: errText(e) });
       return false;
     }
