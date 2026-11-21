@@ -6,6 +6,7 @@ import { loginAccess, setToken } from "../../../lib/runtime";
 import { passwordIssue, type PasswordIssue } from "../../../lib/password";
 import {
   LOGIN_TTL_MAX,
+  LOGIN_TTL_DEFAULT,
   LOGIN_TTL_MIN,
   LOGIN_TTL_STEP,
   TCP_PORT_MAX,
@@ -60,7 +61,12 @@ export function AccessSettings() {
   const savedEnabled = Boolean(settings?.tcp_enabled);
   const savedPort = settings?.tcp_port ?? 3141;
   const passwordSet = Boolean(settings?.tcp_password_set);
-  const savedTTL = clampLoginTTL(settings?.login_ttl_hours ?? 24);
+  // 后端允许任意 12–72（手改配置写 30 也有效），界面只按 12 的档位展示。
+  // 两者不同时记下「漂移」，否则界面显示 36、`dirty` 认为与已保存一致，
+  // 保存永远不会把它纠正过来。
+  const savedTTLRaw = settings?.login_ttl_hours ?? LOGIN_TTL_DEFAULT;
+  const savedTTL = clampLoginTTL(savedTTLRaw);
+  const ttlDrift = savedTTL !== savedTTLRaw;
 
   const [enabled, setEnabled] = useState(savedEnabled);
   const [port, setPort] = useState(String(savedPort));
@@ -86,7 +92,8 @@ export function AccessSettings() {
   const pwdValid = pwd === "" || issue === null;
   // 开启时必须有一个密码：要么已经存过，要么这次输入一个合规的。
   const hasPassword = passwordSet || (pwd !== "" && issue === null);
-  const dirty = enabled !== savedEnabled || Number(port) !== savedPort || ttl !== savedTTL || pwd !== "";
+  const dirty =
+    enabled !== savedEnabled || Number(port) !== savedPort || ttl !== savedTTL || ttlDrift || pwd !== "";
   const canSave = !saving && portValid && pwdValid && (!enabled || hasPassword) && dirty;
 
   const issueText = (v: PasswordIssue) => {
@@ -114,7 +121,7 @@ export function AccessSettings() {
       tcp_enabled: enabled,
       tcp_port: Number(port),
     };
-    if (ttl !== savedTTL) patch.login_ttl_hours = ttl;
+    if (ttl !== savedTTL || ttlDrift) patch.login_ttl_hours = ttl;
     if (pwd !== "") patch.tcp_password = pwd;
 
     const ok = await saveSettings(patch);
@@ -207,8 +214,8 @@ export function AccessSettings() {
       <Section
         title={t("登录有效期", "Login validity")}
         desc={t(
-          `登录一次可以保持多久（${LOGIN_TTL_MIN}–${LOGIN_TTL_MAX} 小时，默认 24）。登录状态保存在服务端，重启进程或升级应用不会掉登录；到期或改密码后需要重新输入访问密码。`,
-          `How long a sign-in lasts (${LOGIN_TTL_MIN}–${LOGIN_TTL_MAX} hours, default 24). Sessions are stored on the server, so restarting or upgrading the app does not sign you out; you sign in again after it expires or the password changes.`,
+          `登录一次可以保持多久（${LOGIN_TTL_MIN}–${LOGIN_TTL_MAX} 小时，默认 24）。登录状态保存在服务端，重启进程或升级应用不会掉登录；到期、改密码，或把有效期缩短到已登录设备的签发时长以内，都需要重新输入访问密码。`,
+          `How long a sign-in lasts (${LOGIN_TTL_MIN}–${LOGIN_TTL_MAX} hours, default 24). Sessions are stored on the server, so restarting or upgrading the app does not sign you out; you sign in again after it expires, the password changes, or you shorten the validity below how long a device has been signed in.`,
         )}
       >
         <div className="flex items-center gap-1.5">

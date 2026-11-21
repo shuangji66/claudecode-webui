@@ -86,6 +86,13 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
   const [searchTruncated, setSearchTruncated] = useState(false);
   const [searchError, setSearchError] = useState("");
   const searchSeq = useRef(0);
+  /**
+   * 当前 `results` 对应的是哪一次查询。
+   *
+   * 防抖 300ms + 请求往返期间 `results` 还是**上一次查询**的结果：这时按 Enter 会打开
+   * 旧查询的第一条（用户看到的是新查询还没出结果，点下去却跳到了别处）。
+   */
+  const resultsQuery = useRef("");
   const searchInput = useRef<HTMLInputElement | null>(null);
   // 搜索结果的目录命中：把它的祖先逐层展开，再滚到那一行。
   const [reveal, setReveal] = useState<{ path: string; seq: number } | null>(null);
@@ -100,6 +107,7 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
     const needle = query.trim();
     if (!needle) {
       searchSeq.current += 1;
+      resultsQuery.current = "";
       setResults(null);
       setSearching(false);
       setSearchTruncated(false);
@@ -115,6 +123,7 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
       void searchFiles(needle, { cwd, signal: controller.signal })
         .then((listing) => {
           if (searchSeq.current !== seq) return;
+          resultsQuery.current = needle;
           setResults(listing.entries ?? []);
           setSearchTruncated(Boolean(listing.truncated));
         })
@@ -420,6 +429,8 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
                 setQuery("");
                 setSearchOpen(false);
               } else if (event.key === "Enter" && results && results.length > 0) {
+                // 结果还挂在旧查询上（防抖 / 请求未回）：别打开一条对不上的文件。
+                if (resultsQuery.current !== query.trim()) return;
                 openResult(results[0]!);
               }
             }}
@@ -442,7 +453,9 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
       )}
 
       <div className={selected ? "hidden" : "flex min-h-0 flex-1 flex-col"}>
-        {showingResults ? (
+        {/* 搜索命中列表与文件树并列，两边都只隐藏不卸载：`TreeNode` 的展开状态在
+            组件本地，卸载一次就全丢（清空搜索后用户还得把目录重新点开一遍）。 */}
+        {showingResults && (
           <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto px-1 py-1" data-fs-search-results>
             {searchError && (
               <div className="mx-1 mb-1 rounded-lg border border-danger/25 bg-danger/[0.06] px-2 py-1.5 text-[11px] leading-relaxed text-danger">
@@ -487,8 +500,11 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
               </p>
             )}
           </div>
-        ) : (
-        <div className="dsh-scroll min-h-0 flex-1 overflow-y-auto px-1 py-1">
+        )}
+        <div
+          data-fs-tree
+          className={showingResults ? "hidden" : "dsh-scroll min-h-0 flex-1 overflow-y-auto px-1 py-1"}
+        >
           {errors[""] && (
             <div className="mx-1 mb-1 rounded-lg border border-danger/25 bg-danger/[0.06] px-2 py-1.5 text-[11px] leading-relaxed text-danger">
               {errors[""]}
@@ -518,7 +534,6 @@ export function FilesPanel({ cwd, active, pending = null }: Props) {
             <p className="px-2 py-2 text-[10.5px] text-warn">{t("目录项过多，仅显示前一部分。", "Directory truncated.")}</p>
           )}
         </div>
-        )}
       </div>
 
       <Menu

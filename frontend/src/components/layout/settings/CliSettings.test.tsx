@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { CliSettings } from "./CliSettings";
 import { useAppStore } from "../../../store/useAppStore";
 
@@ -178,5 +178,55 @@ describe("设置 → CLI", () => {
     useAppStore.setState({ settings: { idle_minutes: 60 } as never });
     render(<CliSettings />);
     expect(screen.getByRole("button", { name: "延长空闲回收" })).toBeDisabled();
+  });
+});
+
+// 连点两次 ± 会各发一个 PATCH：落库顺序与点击顺序无关的话，最终生效的可能是
+// 先点的那个档位（界面上停在 10，保存完又跳回 8）。保存必须串行。
+describe("设置 → CLI：档位连点", () => {
+  it("连点两次依次发两个补丁，最终显示最后点到的档位", async () => {
+    const calls: number[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const save = vi.fn(async (patch: { max_sessions?: number }) => {
+      if (patch.max_sessions !== undefined) calls.push(patch.max_sessions);
+      await gate;
+      return true;
+    });
+    useAppStore.setState({
+      settings: {
+        idle_minutes: 10,
+        max_sessions: 8,
+        subagent_max_concurrent: 10,
+        subagent_spawn_depth: 1,
+      } as never,
+      settingsSaving: false,
+      saveSettings: save as never,
+    });
+
+    // 用 within(container) 限定在自己这棵树里：上一个用例留下的实例可能还挂着。
+    const { container } = render(<CliSettings />);
+    const view = within(container);
+    const inc = view.getByRole("button", { name: "增加常驻会话数" });
+    // 两次真实点击之间会有一次渲染（`shownSessions` 已在 10），所以分两次点。
+    await act(async () => {
+      fireEvent.click(inc);
+    });
+    await act(async () => {
+      fireEvent.click(inc);
+    });
+    // 草稿先到 12（8 → 10 → 12）：第二次点击是在第一次的回包之前发生的。
+    expect(inc.parentElement).toHaveTextContent("−12+");
+    expect(calls).toEqual([10]); // 第二个补丁排在第一个后面
+
+    await act(async () => {
+      release();
+      await gate;
+    });
+    await act(async () => {});
+    // 补丁按点击顺序落库（真实 store 也会在保存后把新值写回 settings）。
+    expect(calls).toEqual([10, 12]);
   });
 });

@@ -299,6 +299,10 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     if (visible) void setCwd(cwd);
   }, [cwd, visible, setCwd]);
 
+  /** 拖动中的宽度：只改 state，不落盘（pointermove 每秒几十次，localStorage 是同步 IO）。 */
+  const previewWidth = (next: number) => setPreferredWidth(clampWidth(next, viewport));
+
+  /** 真正落盘的宽度：拖动结束、键盘微调、双击复位走这条。 */
   const applyWidth = (next: number) => {
     const value = clampWidth(next, viewport);
     setPreferredWidth(value);
@@ -327,18 +331,39 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onResizeMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!drag.current) return;
+    const current = drag.current;
+    if (!current) return;
+    // 没有按键还收到 move 说明 pointerup 丢了（拖出窗口、拖拽中弹了右键菜单、
+    // 期间布局变化导致元素重挂）：不复位的话之后**鼠标只是划过那条 8px**就会改宽度。
+    if (event.buttons === 0) {
+      drag.current = null;
+      return;
+    }
     // 左缘向左拖 = 变宽。
-    applyWidth(drag.current.startWidth + (drag.current.startX - event.clientX));
+    previewWidth(current.startWidth + (current.startX - event.clientX));
   };
   const onResizeEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
-    drag.current = null;
+    if (drag.current) {
+      // 拖动结束才落盘一次。
+      applyWidth(preferredWidth);
+      drag.current = null;
+    }
     try {
       event.currentTarget.releasePointerCapture(event.pointerId);
     } catch {
       /* 指针已释放 */
     }
   };
+  /** 指针捕获被系统收回（元素重挂、拖出窗口）：当作拖动结束，别留下半截状态。 */
+  const onResizeLost = () => {
+    if (!drag.current) return;
+    applyWidth(preferredWidth);
+    drag.current = null;
+  };
+  const onSplitLost = () => {
+    splitDrag.current = null;
+  };
+
   const onResizeKey = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.key === "ArrowLeft") {
       event.preventDefault();
@@ -365,6 +390,10 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
   const onSplitMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const current = splitDrag.current;
     if (!current || current.width <= 0) return;
+    if (event.buttons === 0) {
+      splitDrag.current = null;
+      return;
+    }
     const next = current.startRatio + (event.clientX - current.startX) / current.width;
     setRatio(Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, next)));
   };
@@ -736,11 +765,17 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
           role="separator"
           aria-orientation="vertical"
           aria-label={t("调整侧栏宽度", "Resize sidebar")}
+          // 读屏与键盘用户要知道「现在多宽、能调到哪里」：没有这三个值，
+          // 那颗可聚焦的分隔线只是一个说不清当前档位的空按钮。
+          aria-valuenow={Math.round(width)}
+          aria-valuemin={RIGHT_MIN_WIDTH}
+          aria-valuemax={RIGHT_MAX_WIDTH}
           tabIndex={0}
           onPointerDown={onResizeStart}
           onPointerMove={onResizeMove}
           onPointerUp={onResizeEnd}
           onPointerCancel={onResizeEnd}
+          onLostPointerCapture={onResizeLost}
           onDoubleClick={() => applyWidth(RIGHT_DEFAULT_WIDTH)}
           onKeyDown={onResizeKey}
           // `z-20` 不能删：拖动条跨在侧栏左边界上（外 4px 在对话区、内 4px 在侧栏里），
@@ -780,11 +815,15 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
                   role="separator"
                   aria-orientation="vertical"
                   aria-label={t("调整两栏宽度", "Resize panes")}
+                  aria-valuenow={Math.round(ratio * 100)}
+                  aria-valuemin={Math.round(SPLIT_MIN * 100)}
+                  aria-valuemax={Math.round(SPLIT_MAX * 100)}
                   tabIndex={0}
                   onPointerDown={onSplitStart}
                   onPointerMove={onSplitMove}
                   onPointerUp={onSplitEnd}
                   onPointerCancel={onSplitEnd}
+                  onLostPointerCapture={onSplitLost}
                   onKeyDown={onSplitKey}
                   className="absolute inset-y-0 z-30 w-2 -translate-x-1/2 cursor-col-resize hover:bg-brand/30"
                   style={{ left: "var(--split)" }}

@@ -1208,6 +1208,26 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
 - 改 `normalize` 时先写一个会失败的用例，再改实现。
 - 不要写依赖 `Date.now()` 精确值的断言。
 
+### 25.1 右侧栏的指针与持久化细节
+
+- **拖动分隔线要防「pointerup 丢了」**：`pointermove` 里先看 `event.buttons === 0`
+  （没有按键还收到 move = 上一次拖动的 up 没到）就复位拖动状态，并补
+  `onLostPointerCapture`。不复位的话之后**鼠标只是划过那条 8px**就会改宽度——
+  用户根本没在拖。宽度与分栏比例两条分隔线都要。
+- 拖动中只改 state（`previewWidth`），**松手才写 localStorage**：pointermove 每秒几十次，
+  `localStorage.setItem` 是同步 IO。
+- 可聚焦的 `role="separator"` 必须有 `aria-valuenow/valuemin/valuemax`：键盘与读屏用户
+  要知道「现在多宽、能调到哪」。
+- **文件树的展开状态在组件本地**，所以「搜索 → 清空」不能让树卸载：命中列表与树是并列
+  的两块，各自只隐藏（`[data-fs-tree]` / `[data-fs-search-results]`）。同理，改查询后
+  立刻按 Enter 时 `results` 还挂在**上一次查询**上（防抖 300ms + 请求往返），
+  必须比对 `resultsQuery` 再打开，否则会跳到一条跟当前关键词无关的文件。
+- 设置页的档位 ± 要**串行保存**（`queueSave` + 单调 seq）：连点两次会各发一个 PATCH，
+  落库顺序与点击顺序无关的话，最后生效的可能是先点的那个档位；也只有最后一次点击的
+  回包才能清掉本地草稿。
+- 登录有效期的界面值按 12 的档位**显示**，但后端允许任意 12–72（手改配置写 30 也有效）：
+  `dirty` 要按**原始值**判漂移，否则界面显示 36、保存永远不纠正。
+
 ### 26.1 速度计：只报「此刻」的速度
 
 - `throughput(snap, now)` **按 TTL（30 分钟）过滤样本**，窗口里一个新鲜样本都不剩时返回

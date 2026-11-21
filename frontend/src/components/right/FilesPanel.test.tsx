@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { FilesPanel } from "./FilesPanel";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { useAppStore } from "../../store/useAppStore";
@@ -342,10 +342,11 @@ describe("文件页顶部路径与搜索", () => {
     const input = screen.getByRole("textbox", { name: "搜索工作区文件" });
     fireEvent.change(input, { target: { value: "read" } });
 
-    // 防抖 300ms 之后才发请求；树在有关键词时让位给结果列表。
-    const hit = await screen.findByTitle("README.md");
+    // 防抖 300ms 之后才发请求；有结果时树只是隐藏（不卸载，展开状态要留着）。
+    const results = document.querySelector("[data-fs-search-results]") as HTMLElement;
+    const hit = await within(results).findByTitle("README.md");
     expect(hit).toHaveTextContent("README.md");
-    expect(screen.queryByText("目录为空")).toBeNull();
+    expect(document.querySelector("[data-fs-tree]")?.className).toContain("hidden");
     const urls = apiFetch.mock.calls.map((c) => String(c[0]));
     expect(urls.some((u) => u.includes("/api/fs/search") && u.includes("q=read"))).toBe(true);
   });
@@ -361,7 +362,8 @@ describe("文件页顶部路径与搜索", () => {
     render(<FilesPanel cwd={CWD} active />);
     fireEvent.click(screen.getByLabelText("搜索工作区文件"));
     fireEvent.change(screen.getByRole("textbox", { name: "搜索工作区文件" }), { target: { value: "read" } });
-    fireEvent.click(await screen.findByTitle("src"));
+    const results = document.querySelector("[data-fs-search-results]") as HTMLElement;
+    fireEvent.click(await within(results).findByTitle("src"));
 
     // 查询被清空、结果列表让位给树；命中的目录开始加载自己的子项。
     await waitFor(() => expect(screen.getByRole("textbox", { name: "搜索工作区文件" })).toHaveValue(""));
@@ -380,5 +382,29 @@ describe("文件页顶部路径与搜索", () => {
     fireEvent.keyDown(input, { key: "Escape" });
     expect(screen.queryByRole("textbox", { name: "搜索工作区文件" })).toBeNull();
     expect(screen.getByLabelText("搜索工作区文件")).toBeInTheDocument();
+  });
+});
+
+// 改查询后立刻按 Enter：`results` 还是上一次查询的（防抖 300ms + 请求往返），
+// 天真地打开 `results[0]` 会跳到一个跟当前关键词毫无关系的文件。
+describe("搜索结果与查询保持一致", () => {
+  it("新查询还没出结果时按 Enter 不打开旧结果", async () => {
+    render(<FilesPanel cwd={CWD} active />);
+    fireEvent.click(screen.getByLabelText("搜索工作区文件"));
+    const input = screen.getByRole("textbox", { name: "搜索工作区文件" });
+
+    fireEvent.change(input, { target: { value: "read" } });
+    const results = document.querySelector("[data-fs-search-results]") as HTMLElement;
+    await within(results).findByTitle("README.md");
+
+    // 改成另一个查询后立刻回车：旧结果还在列表上，但不能被打开。
+    fireEvent.change(input, { target: { value: "zzz" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // 打开了文件预览就会看到「返回」按钮（以及 /api/fs/file 请求）。
+    expect(screen.queryByRole("button", { name: /返回|Back/ })).toBeNull();
+    const urls = apiFetch.mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("/api/fs/file"))).toBe(false);
   });
 });

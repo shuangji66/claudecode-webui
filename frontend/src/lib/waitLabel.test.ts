@@ -120,3 +120,22 @@ describe("waitLabel 的读写", () => {
     expect(waitLabel()).toBe("");
   });
 });
+
+// 全是零宽字符的「文案」：宽度算 0，计时行落盘后只剩一个秒数——既不算合法，
+// 也不能被当成「空串 = 用内置文案」糊过去。
+describe("waitLabel：零宽字符不算宽度", () => {
+  it("六个零宽空格凑不出合法文案", () => {
+    expect(waitLabelWidth("\u200b".repeat(6))).toBe(0);
+    expect(isValidWaitLabel("\u200b".repeat(6))).toBe(false);
+    expect(normalizeWaitLabel("\u200b".repeat(6))).toBe("");
+  });
+
+  it("组合附加符号与 BOM 也不占位", () => {
+    expect(waitLabelWidth("\u0301\u0301\u2060\ufeff")).toBe(0);
+  });
+
+  it("零宽字符夹在正常文案里不影响宽度", () => {
+    expect(waitLabelWidth("少女祈祷中")).toBe(10);
+    expect(waitLabelWidth("\u200b少女祈祷中\u200b")).toBe(10);
+  });
+});

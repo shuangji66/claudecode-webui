@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { GeneralSettings } from "./GeneralSettings";
-import { resetWaitLabelCache } from "../../../lib/waitLabel";
+import { resetWaitLabelCache, setWaitLabel, waitLabel } from "../../../lib/waitLabel";
 import { useAppStore } from "../../../store/useAppStore";
 
 // 通用设置现在是「一行一项」的清单（对齐 DSH 的 Setting-Cell）：左边标题 + 说明、
@@ -133,5 +133,18 @@ describe("设置 → 通用", () => {
       fireEvent.blur(input);
     });
     expect(localStorage.getItem("ccweb-wait-label")).toBeNull();
+  });
+});
+
+// Esc 关抽屉不会派发 blur：只靠 onBlur 落盘会在「打了字按 Esc 关掉」时静默丢掉输入。
+describe("计时行文案：关闭抽屉也会落盘", () => {
+  it("输入后直接卸载（Esc 关抽屉）也会保存", async () => {
+    setWaitLabel("");
+    const { unmount } = render(<GeneralSettings />);
+    const input = screen.getByLabelText("自定义");
+    fireEvent.change(input, { target: { value: "稍等一下下" } });
+    unmount();
+    expect(waitLabel()).toBe("稍等一下下");
+    setWaitLabel("");
   });
 });

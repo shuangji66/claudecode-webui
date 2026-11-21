@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../../store/useAppStore";
 import { useT } from "../../../lib/i18n";
 import { Select } from "../../common/Select";
@@ -48,6 +48,17 @@ export function CliSettings() {
     return ok;
   };
 
+  /**
+   * 档位 ± 的保存是**串行**的：连点两次会各发一个 PATCH，落库顺序与点击顺序无关，
+   * 最后生效的可能是先点的那个档位（界面上明明停在 10，保存完又跳回 8）。
+   */
+  const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const queueSave = (patch: Parameters<typeof saveSettings>[0]) => {
+    const next = saveQueue.current.then(() => save(patch));
+    saveQueue.current = next.catch(() => undefined);
+    return next;
+  };
+
   const concurrent = settings?.subagent_max_concurrent || 10;
   const depth = settings?.subagent_spawn_depth || 1;
 
@@ -82,12 +93,18 @@ export function CliSettings() {
   const maxSessions = settings?.max_sessions || 8;
   const [pendingSessions, setPendingSessions] = useState<number | null>(null);
   const shownSessions = pendingSessions ?? maxSessions;
+  const bumpSeq = useRef(0);
   const bumpSessions = (delta: number) => {
     const index = Math.round(shownSessions / SESSIONS_STEP) + delta;
     const next = Math.min(SESSIONS_MAX, Math.max(SESSIONS_MIN, index * SESSIONS_STEP));
     if (next === shownSessions) return;
+    const seq = ++bumpSeq.current;
     setPendingSessions(next);
-    void save({ max_sessions: next }).then(() => setPendingSessions(null));
+    // 只有「最后一次点击」的那次回包才清掉草稿：先点的回包到达时不能把界面
+    // 拉回中间那个档位。
+    void queueSave({ max_sessions: next }).then(() => {
+      if (bumpSeq.current === seq) setPendingSessions(null);
+    });
   };
 
   // 空闲回收同样按本地递进值算，连点两次不会都从同一个旧值起步。
@@ -100,12 +117,16 @@ export function CliSettings() {
    * 每次按键挪一档。**在 5 的整数倍上算档位**，而不是 `shownIdle + delta`：
    * 配置文件被手改成 7 这类不在档位上的值时，加一次要落到 10 而不是 12。
    */
+  const idleSeq = useRef(0);
   const bumpIdle = (delta: number) => {
     const index = Math.round(shownIdle / IDLE_STEP) + delta;
     const next = Math.min(IDLE_MAX, Math.max(IDLE_MIN, index * IDLE_STEP));
     if (next === shownIdle) return;
+    const seq = ++idleSeq.current;
     setPendingIdle(next);
-    void save({ idle_minutes: next }).then(() => setPendingIdle(null));
+    void queueSave({ idle_minutes: next }).then(() => {
+      if (idleSeq.current === seq) setPendingIdle(null);
+    });
   };
 
   return (

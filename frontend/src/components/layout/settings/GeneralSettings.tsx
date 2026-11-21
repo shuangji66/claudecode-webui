@@ -1,5 +1,5 @@
 import { NO_AUTOFILL } from "../../../lib/autofill";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../../store/useAppStore";
 import { getToken, setToken } from "../../../lib/runtime";
 import { useT } from "../../../lib/i18n";
@@ -100,6 +100,13 @@ export function GeneralSettings() {
   const waitLabel = useWaitLabel();
   const [labelDraft, setLabelDraft] = useState(waitLabel);
   const labelInvalid = labelDraft.trim() !== "" && !isValidWaitLabel(labelDraft);
+  /**
+   * 抽屉按 Esc 直接 onClose（Dialog 不派发 blur），只靠 onBlur 落盘会在「打了字按 Esc
+   * 关掉」时静默丢掉这次输入。卸载时补一次提交。
+   */
+  const unmountCommit = useRef<() => void>(() => {});
+  useEffect(() => () => unmountCommit.current(), []);
+
   const commitLabel = () => {
     if (!isValidWaitLabel(labelDraft)) {
       setLabelDraft(waitLabel); // 不合法：退回上次生效的值
@@ -108,6 +115,12 @@ export function GeneralSettings() {
     const next = labelDraft.trim();
     setWaitLabel(next);
     setLabelDraft(next); // 输入框跟着显示落盘后的样子（去掉首尾空白）
+  };
+  // 每次渲染都把「当前输入框内容」这次提交挂上去：卸载时调用它。
+  // 只落合法值——不合法的那份本来就不该进 localStorage。
+  unmountCommit.current = () => {
+    const next = labelDraft.trim();
+    if (next !== waitLabel && isValidWaitLabel(next)) setWaitLabel(next);
   };
 
   /** 默认权限里的危险模式同样要二次确认：这里保存的是「以后新会话」的默认值。 */

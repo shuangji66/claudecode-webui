@@ -20,11 +20,17 @@ export const WAIT_LABEL_MAX = 12;
 
 /**
  * 一个码位的显示宽度：汉字 / 全角 / 假名 / 韩文 / emoji 算 2，其余算 1。
- * ZWJ（U+200D）与变体选择符（U+FE0F）按 0 计——`👩‍💻` 这类组合 emoji 的拼接符
- * 不占位，按 1 或 2 算都会让同一个表情在不同输入法下得出不同宽度。
+ *
+ * 零宽与组合字符按 0 计：ZWJ（U+200D）、变体选择符（U+FE0F/FE0E）是 `👩‍💻` 这类组合
+ * emoji 的拼接符；零宽空格（U+200B）、ZWNJ（U+200C）、word joiner（U+2060）、
+ * BOM（U+FEFF）与组合附加符号（U+0300–U+036F）在计时行里**看不见**。
+ * 不给它们记 0 的话，`"\u200b".repeat(6)` 能凑够 6 个宽度通过校验，落盘后计时行
+ * 就只剩一个秒数，看起来像文案丢了。
  */
 function charWidth(cp: number): number {
-  if (cp === 0x200d || cp === 0xfe0f || cp === 0xfe0e) return 0;
+  if (cp === 0x200b || cp === 0x200c || cp === 0x200d || cp === 0x2060 || cp === 0xfeff) return 0;
+  if (cp === 0xfe0f || cp === 0xfe0e) return 0;
+  if (cp >= 0x0300 && cp <= 0x036f) return 0; // 组合附加符号
   const wide =
     (cp >= 0x1100 && cp <= 0x115f) || // 韩文字母
     (cp >= 0x2e80 && cp <= 0xa4cf) || // CJK 部首 / 假名 / 汉字 / 注音
@@ -50,6 +56,9 @@ export function isValidWaitLabel(raw: string): boolean {
   const value = raw.trim();
   if (value === "") return true;
   const width = waitLabelWidth(value);
+  // 全是零宽字符时宽度是 0：既不该算「空串（用内置文案）」，也不该算合法——
+  // 它落盘之后计时行会剩下一片空白。
+  if (width === 0) return false;
   return width >= WAIT_LABEL_MIN && width <= WAIT_LABEL_MAX;
 }
 
@@ -96,8 +105,21 @@ export function setWaitLabel(next: string): void {
 
 export function subscribeWaitLabel(fn: () => void): () => void {
   listeners.add(fn);
+  // 跨标签页同步：另一页改了文案，这一页的计时行也要跟着换（与
+  // `lib/sidebarFeatures` 的偏好同一个做法）。只在有订阅者时挂监听。
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== KEY) return;
+    cached = null; // 让下一次读取重新走 normalize
+    fn();
+  };
+  if (listeners.size === 1 && typeof window !== "undefined") {
+    window.addEventListener("storage", onStorage);
+  }
   return () => {
     listeners.delete(fn);
+    if (listeners.size === 0 && typeof window !== "undefined") {
+      window.removeEventListener("storage", onStorage);
+    }
   };
 }
 
