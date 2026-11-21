@@ -454,7 +454,12 @@ func (m *Manager) createWith(abs, sessionID, resumeID, model, permissionMode str
 	}()
 
 	// 运行期设置优先：设置页选中的模型就是 CLI 的默认模型。
-	cfgSet := m.store.Get()
+	// store 为 nil 只出现在单测装配里（maxSessions/idleTimeout 同样兜底），
+	// 这里也别直接解引用——那会让「无 store 装配」变成一句空话。
+	var cfgSet settings.Settings
+	if m.store != nil {
+		cfgSet = m.store.Get()
+	}
 	if model == "" {
 		model = cfgSet.DefaultModel()
 	}

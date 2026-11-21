@@ -1095,3 +1095,44 @@ func cachedUnder(dir string) int {
 	}
 	return n
 }
+
+// 保留 mtime 的整文件替换（`rsync -a` / `cp -p` / `tar -x -p` 从备份恢复同名转录）
+// 会得到一个「看起来没变」的文件：mtime 与 size 都可能与旧内容一致。只按这两项判缓存，
+// 侧栏那份标题与消息数会一直是旧的，直到文件再变或进程重启。
+func TestListRescansWhenContentReplacedKeepingMtime(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "p", "s1.jsonl")
+	first := `{"type":"user","sessionId":"s1","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"第一句"}}`
+	writeJSONL(t, path, first)
+	if _, err := List(root); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 同一长度、把时间戳改回原样：这是备份恢复的典型形态。
+	second := `{"type":"user","sessionId":"s1","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":"第二句"}}`
+	if len(second) != len(first) {
+		t.Fatalf("测试前提：两段内容长度必须一致（%d vs %d）", len(second), len(first))
+	}
+	if err := os.WriteFile(path, []byte(second+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, st.ModTime(), st.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, scansBefore := summaryStats()
+	got, err := List(root)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if _, scansAfter := summaryStats(); scansAfter-scansBefore != 1 {
+		t.Fatalf("mtime+size 相同但内容被换掉时必须重扫，实扫 %d", scansAfter-scansBefore)
+	}
+	if len(got) != 1 || got[0].Title != "第二句" {
+		t.Fatalf("摘要应反映新内容：%+v", got)
+	}
+}

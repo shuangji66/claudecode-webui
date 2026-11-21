@@ -20,6 +20,10 @@ const (
 	// 分开计数：一棵目录很多的大仓库不能把「旁边的兄弟仓库」的预算吃光。
 	maxRepoScanDirs   = 4000
 	maxNestedScanDirs = 1200
+	// maxNestedScanDirsPerRepo 是**单个**外层仓库能用的嵌套扫描预算。
+	// 只给总预算的话，第一个目录很多的大仓库能把 1200 全吃掉，后面兄弟仓库里的
+	// 子模块 / 嵌套检出一个都出不来（谁出线取决于 ReadDir 顺序，等于随机）。
+	maxNestedScanDirsPerRepo = 300
 	// maxRepos 是最多返回的仓库数。
 	maxRepos = 50
 )
@@ -108,12 +112,20 @@ func FindRepos(root string, maxDepth int) ([]Repo, error) {
 
 	// 第二遍：外层仓库内部的嵌套仓库。即便预算用尽，已经找到的仓库照常返回。
 	nested := make([]string, 0, 4)
+	// 每个外层仓库**各自**拿一份嵌套扫描预算：共享一个总预算时，第一个大仓库
+	// 可以把 1200 个目录全吃掉，后面兄弟仓库里的子模块 / 嵌套检出一个都出不来
+	// ——而谁能出线取决于 `os.ReadDir` 的目录顺序，等于随机。
 	budget := maxNestedScanDirs
 	for _, repo := range outer {
 		if len(outer)+len(nested) >= maxRepos || budget <= 0 {
 			break
 		}
-		scanNestedRepos(repo, &nested, &budget, maxRepos-len(outer))
+		perRepo := maxNestedScanDirsPerRepo
+		if perRepo > budget {
+			perRepo = budget
+		}
+		scanNestedRepos(repo, &nested, &perRepo, maxRepos-len(outer))
+		budget -= perRepo
 	}
 
 	out := make([]Repo, 0, len(outer)+len(nested))

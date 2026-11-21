@@ -143,3 +143,38 @@ func TestSearchEmptyQueryAndCancel(t *testing.T) {
 		t.Fatalf("取消后应立刻停下并标记截断: %+v", listing)
 	}
 }
+
+// 读不了的子树会让结果**不完整**：必须把 truncated 置上，否则界面按「没有更多」
+// 展示，用户会以为真的没有匹配（NAS 上 ACL 缺一条很常见）。
+func TestSearchMarksTruncatedOnUnreadableDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root 无视目录权限，测不了读失败")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "findme.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(root, "locked")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	r, err := OpenRoot(root)
+	if err != nil {
+		t.Fatalf("NewRoot: %v", err)
+	}
+	res, err := r.Search(context.Background(), "findme", false, 50)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(res.Entries) != 1 {
+		t.Fatalf("可读子树的结果仍要返回，实得 %d 条", len(res.Entries))
+	}
+	if !res.Truncated {
+		t.Fatal("有目录读不了时必须标记结果不完整")
+	}
+}

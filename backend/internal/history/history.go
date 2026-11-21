@@ -69,7 +69,10 @@ type transcriptLine struct {
 type summaryEntry struct {
 	modTime time.Time
 	size    int64
-	sess    Session
+	// inode/ctime 见 `fileIdentity`：mtime+size 不足以识别「内容被整份换掉」。
+	inode uint64
+	ctime int64
+	sess  Session
 }
 
 // summaryCache 按路径缓存列表摘要。列表接口（`GET /api/conversations` /
@@ -92,6 +95,11 @@ func cachedSummary(path string, info os.FileInfo) (Session, bool) {
 	if !ok || !e.modTime.Equal(info.ModTime()) || e.size != info.Size() {
 		return Session{}, false
 	}
+	// mtime+size 相同还不够：保留 mtime 的整文件替换（rsync -a / cp -p / tar -x -p）
+	// 会得到一个「看起来没变」的文件，侧栏那份标题与消息数会一直是旧的。
+	if inode, ctime := fileIdentity(info); e.inode != inode || e.ctime != ctime {
+		return Session{}, false
+	}
 	summaryCache.hits++
 	return e.sess, true
 }
@@ -99,7 +107,8 @@ func cachedSummary(path string, info os.FileInfo) (Session, bool) {
 func storeSummary(path string, info os.FileInfo, sess Session) {
 	summaryCache.mu.Lock()
 	defer summaryCache.mu.Unlock()
-	summaryCache.m[path] = summaryEntry{modTime: info.ModTime(), size: info.Size(), sess: sess}
+	inode, ctime := fileIdentity(info)
+	summaryCache.m[path] = summaryEntry{modTime: info.ModTime(), size: info.Size(), inode: inode, ctime: ctime, sess: sess}
 	summaryCache.scans++
 }
 

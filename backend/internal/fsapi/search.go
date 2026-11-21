@@ -65,7 +65,9 @@ scan:
 		dir := queue[i]
 		items, err := os.ReadDir(dir.abs)
 		if err != nil {
-			// 读不了的子树只是少几条结果，别的分支照旧可用。
+			// 读不了的子树只是少几条结果，别的分支照旧可用；但结果**不完整**这件事
+			// 要告诉界面（NAS 上 ACL 缺一条很常见），否则用户会把「没搜到」当成真的没有。
+			truncated = true
 			continue
 		}
 		for _, item := range items {
