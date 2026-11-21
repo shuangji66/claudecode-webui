@@ -12,17 +12,21 @@ import { formatDuration, formatDurationWords } from "../../lib/elapsed";
  * 只有**已经结束**的轮才挂这一行：正在跑的轮必须看得见步骤，收起入口在那里只是干扰。
  * 文案因此只有两种：
  *   - 拿得到时长：`已完成，用时 3 分 15 秒`（中文用口语写法，英文沿用 mm:ss）；
- *   - 拿不到（转录回放没有 result 行）：`已完成`。
+ *   - 拿不到（老转录里连时间戳都没有）：`已完成`。
  *
- * 下面那条分隔线是这一行与正文之间的那道界（DSH 同款）：收起行是「过程的总括」，
- * 正文是这一轮的结果，两者需要一条视觉边界，否则标题与正文糊成一团。
+ * 箭头**紧跟在文字右边**，不推到行尾：它是这句话的一部分（「点这里展开」），
+ * 甩到整行最右侧就变成两颗互不相干的东西；而且行尾那个位置在宽屏上离文字太远，
+ * 鼠标要横跨半个屏幕才点到。收回时箭头朝右（还是「点开」的语义），展开后朝下。
+ *
+ * 下面那条分隔线是这一行与正文之间的那道界（DSH 同款，用主题色）：收起行是
+ * 「过程的总括」，正文是这一轮的结果，两者需要一条视觉边界，否则糊成一团。
  */
 export function TurnCollapse({
   durationMs,
   open,
   onToggle,
 }: {
-  /** 本轮耗时（result.duration_ms）；历史回放拿不到时为空。 */
+  /** 本轮耗时（实时来自 `result.duration_ms`，回放的轮按转录时间戳推）。 */
   durationMs?: number;
   open: boolean;
   onToggle: () => void;
@@ -38,17 +42,18 @@ export function TurnCollapse({
   const label = elapsed ? t(`已完成，用时 ${elapsed}`, `Finished in ${elapsed}`) : t("已完成", "Finished");
 
   return (
-    <div className="border-b border-line/70">
+    <div className="border-b border-brand/60">
       <button
         type="button"
         aria-expanded={open}
         onClick={onToggle}
-        className="flex w-full items-center gap-1.5 py-1.5 text-left text-[12px] text-muted hover:text-ink"
+        className="flex w-full items-center gap-1 py-1.5 text-left text-[12px] text-muted hover:text-ink"
       >
         <span className="shrink-0">{label}</span>
+        {/* 收起＝朝右（「这一点还有东西」），展开＝朝下：`IconChevronDown` 转 -90°。 */}
         <IconChevronDown
           size={13}
-          className={`ml-auto shrink-0 text-faint transition-transform ${open ? "rotate-180" : ""}`}
+          className={`shrink-0 text-faint transition-transform ${open ? "" : "-rotate-90"}`}
         />
       </button>
     </div>

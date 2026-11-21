@@ -107,7 +107,11 @@ export interface TurnSpan {
   finished: boolean;
   /**
    * 本轮耗时：本段各条 `result.duration_ms` 之和（一段里可能有多条：插话把一轮
-   * 拆成了多个子回合）。还在跑或者历史里没有 result 时为空。
+   * 拆成了多个子回合）。
+   *
+   * 转录回放没有 result 行，这时按本段首尾两条活动条目的时间戳推出来——否则重进
+   * 前端之后「已完成右边的用时」全丢（只有实时那一轮有数字）。还在跑、或者连时间戳
+   * 都不可用时为空。
    */
   durationMs?: number;
 }
@@ -439,6 +443,8 @@ export function turnSpans(items: Item[], running = true): TurnSpan[] {
     const process: Item[] = [];
     /** 最后一条「有内容的」条目与最后一条 result 的下标：判断收尾之后有没有再跑起来。 */
     let lastActivity = -1;
+    /** 第一条「有内容」的条目：拿不到 result 时长时按它和 lastActivity 的时间戳算耗时。 */
+    let firstActivity = -1;
     let lastResult = -1;
     let durationMs: number | undefined;
     for (let i = start; i < end; i += 1) {
@@ -457,6 +463,7 @@ export function turnSpans(items: Item[], running = true): TurnSpan[] {
         // 一段里可能有多条 result（插话把它拆成了几个子回合），整轮耗时按它们累加。
         if (typeof item.durationMs === "number") durationMs = (durationMs ?? 0) + item.durationMs;
       }
+      if (lastActivity === i && firstActivity < 0) firstActivity = i;
     }
     // 只有**最后一轮**才可能还在跑：前面的轮次后面已经开了新一轮，必然结束。
     // 转录回放里没有 result 行，按「会话在不在跑」一刀切的话，历史轮次会全被判成
@@ -479,6 +486,17 @@ export function turnSpans(items: Item[], running = true): TurnSpan[] {
     // 会让它永远收起不了，界面上那一段的过程一直摊着。实测：插话交棒之后用户又发了
     // 一句，前面那段的「已完成」就再也不出现。
     const finished = !isTail ? true : handoff ? false : settledByResult || settledByState;
+    // **转录回放没有 result 行**（claude 只把 result 写 stdout），`durationMs` 在那里
+    // 永远是 undefined——「重进前端，已完成右边的用时全丢了」就是这么来的。回放的条目
+    // 带着转录里的时间戳，所以退一步按这一轮的首尾两条活动消息自己算：
+    //   - 只给**已结束**的轮：还在跑的那一轮的耗时是「此刻说到哪」，没有意义；
+    //   - 差值不足 1 秒不报（同一条消息被拆成多行时时间戳会撞在一起，显示「用时 0 秒」
+    //     像 bug）。真·结果里 `result.duration_ms` 是 CLI 的权威口径，有就优先用它。
+    if (finished && durationMs === undefined && firstActivity >= 0 && lastActivity > firstActivity) {
+      const from = items[firstActivity].ts;
+      const to = items[lastActivity].ts;
+      if (Number.isFinite(from) && Number.isFinite(to) && to - from >= 1000) durationMs = to - from;
+    }
     spans.push({
       start,
       end,

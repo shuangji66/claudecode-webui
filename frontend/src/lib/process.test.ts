@@ -222,9 +222,61 @@ describe("turnSpans", () => {
     expect(turnSpans([user2("u1"), tool("x1"), result2("r1")], true)[0].finished).toBe(true);
   });
 
-  it("带上本轮耗时（没有 result 时为 undefined）", () => {
+  it("带上本轮耗时（没有 result 时按时间戳推，连时间戳都没有才是 undefined）", () => {
     expect(turnSpans([user2("u1"), result2("r1", 9000)], true)[0].durationMs).toBe(9000);
     expect(turnSpans([user2("u1")], false)[0].durationMs).toBeUndefined();
+  });
+
+  // 转录回放没有 result 行（claude 只把 result 写 stdout），以前「重进前端，已完成右边
+  // 的用时」全没了。回放的条目带着转录里的时间戳，按这一轮首尾两条活动条目自己算。
+  describe("回放没有 result 时按时间戳推耗时", () => {
+    const at = (id: string, kind: Item["kind"], ts: number, extra: Partial<Item> = {}): Item =>
+      ({ id, seq: 0, ts, kind, ...extra }) as Item;
+
+    it("从用户消息到这一轮最后一条活动（工具/思考都算）", () => {
+      const items = [
+        at("u1", "user", 1_000, { text: "问题" }),
+        at("t1", "thinking", 5_000, { text: "想想" }),
+        at("x1", "tool", 12_000, { name: "Bash", toolUseId: "tu1", input: {}, result: "ok" }),
+        at("a1", "assistant", 20_000, { text: "答案" }),
+      ];
+      expect(turnSpans(items, false)[0].durationMs).toBe(19_000);
+    });
+
+    it("有 result 时用 CLI 的口径，不再按时间戳另算一份", () => {
+      const items = [
+        at("u1", "user", 1_000, { text: "问题" }),
+        at("a1", "assistant", 20_000, { text: "答案" }),
+        at("r1", "result", 21_000, { durationMs: 9_000 }),
+      ];
+      expect(turnSpans(items, false)[0].durationMs).toBe(9_000);
+    });
+
+    // 同一条消息会被拆成多行，时间戳撞在一起就是 0；报「用时 0 秒」看着像 bug。
+    it("首尾时间戳不足 1 秒不给数字", () => {
+      const items = [at("u1", "user", 1_000, { text: "问题" }), at("a1", "assistant", 1_000, { text: "嗯" })];
+      expect(turnSpans(items, false)[0].durationMs).toBeUndefined();
+    });
+
+    it("还在跑的那一轮不算：那是「此刻说到哪」，不是耗时", () => {
+      const items = [at("u1", "user", 1_000, { text: "问题" }), at("a1", "assistant", 20_000, { text: "半句" })];
+      expect(turnSpans(items, true)[0].finished).toBe(false);
+      expect(turnSpans(items, true)[0].durationMs).toBeUndefined();
+    });
+
+    // 截断时回放会在最前面垫一条系统提示，它的时间戳是「现在」——拿它当起点会算出
+    // 一个几小时的耗时。只有「有内容」的条目（用户 / 回答 / 思考 / 工具）才是边界。
+    it("回放被截断时前面垫的系统提示不参与（它的时间戳是「现在」）", () => {
+      const items = [
+        at("s1", "system", Date.now(), { text: "更早的消息已被省略（只保留最近一段转录）" }),
+        at("u1", "user", 1_000, { text: "问题" }),
+        at("a1", "assistant", 61_000, { text: "答案" }),
+      ];
+      const spans = turnSpans(items, false);
+      // 那条系统提示自己占一段（用户消息才是轮首），它没有耗时。
+      expect(spans[0].durationMs).toBeUndefined();
+      expect(spans[1].durationMs).toBe(60_000);
+    });
   });
 
   // 会话正在跑最新一轮时，前面的轮次**必然已经结束**（后面已经开了新一轮，否则它们

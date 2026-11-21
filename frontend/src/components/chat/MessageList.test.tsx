@@ -858,6 +858,8 @@ describe("最终回答前面的分隔线", () => {
 
     expect(rowOf("a1").className).not.toContain("border-t");
     expect(rowOf("a2").className).toContain("border-t");
+    // 分隔线用主题色：和「已完成」下面那条是同一类边界（过程 / 结论的分界）。
+    expect(rowOf("a2").className).toContain("border-brand/60");
   });
 
   // 折叠之后过渡正文全部连在一起：逐段加线就是满屏横线（实测截图复现过）。

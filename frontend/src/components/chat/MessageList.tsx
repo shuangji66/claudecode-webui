@@ -277,6 +277,8 @@ const TurnRows = memo(function TurnRows({
                 // 分隔线：过渡正文 → 过程 → 最终回答之间的一道视觉边界。
                 // 只在这一段正文确实跨过了过程时才加（见 `replyDividerIds`），
                 // 否则相邻两段正文中间会凭空多一道线，像另起了一轮。
+                // **用主题色**：它和上面「已完成」下面那条是同一类边界（过程 /
+                // 结论的分界），灰色细线在正文里几乎看不见，读起来像排版失误。
                 const divider =
                   entry.item.kind === "assistant" && dividers[index]?.has(entry.item.id);
                 row = (
@@ -285,7 +287,7 @@ const TurnRows = memo(function TurnRows({
                     data-item-id={entry.item.id}
                     className={[
                       dense ? (isProcessItem(entry.item) ? "mt-1" : "mt-5") : "",
-                      divider ? "border-t border-line/70 pt-3" : "",
+                      divider ? "border-t border-brand/60 pt-3" : "",
                     ]
                       .filter(Boolean)
                       .join(" ") || undefined}
