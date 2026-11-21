@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strconv"
 
 	"ccweb/backend/internal/gitctl"
@@ -48,17 +49,58 @@ func writeGitError(w http.ResponseWriter, err error) {
 //
 // 返回的 root 是绝对路径，前端直接把它当后续 /api/git/* 的 cwd —— 子目录同样能
 // 过 authorizedCwd 的工作区校验，所以不需要为「选中的仓库」再加一套鉴权参数。
+//
+// 扫描从**授权目录**开始，而不是从会话目录开始：会话常常开在某个仓库的子目录里
+// （甚至只授权了仓库下面的一层），只扫 cwd 的子树会把旁边的兄弟仓库、以及 cwd
+// 所在仓库内部的嵌套仓库全漏掉，界面上就只剩「已经进入的那一个仓库」。
 func (s *Server) handleGitRepos(w http.ResponseWriter, r *http.Request) {
 	cwd, ok := s.gitCwd(w, r)
 	if !ok {
 		return
 	}
-	repos, err := gitctl.FindRepos(cwd, 0)
+	scanRoot := cwd
+	if s.d.Workspaces != nil {
+		if root := s.d.Workspaces.Containing(cwd); root != "" {
+			scanRoot = root
+		}
+	}
+	repos, err := gitctl.FindRepos(scanRoot, 0)
 	if err != nil {
 		writeGitError(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"repos": repos})
+	// cwd 所在的仓库可能不在列表里（工作区只授权了仓库下面的一层，那个仓库根
+	// 过不了围栏）。把它单独告诉前端：这种情况下不该自动选中列表里的**另一个**
+	// 仓库，否则面板会悄悄从「当前对话的仓库」跳到别的仓库上。
+	enclosing := gitctl.EnclosingRepo(cwd)
+	repos = s.withEnclosingRepo(enclosing, scanRoot, repos)
+	writeJSON(w, map[string]any{"repos": repos, "root": scanRoot, "cwd_repo": enclosing})
+}
+
+// withEnclosingRepo 把「cwd 属于、但扫描根在它里面」的那个仓库补到列表最前面。
+//
+// 典型场景：工作区只授权了仓库下面的一层（`<repo>/app`）。从工作区往下扫是看不到
+// 仓库根的，可 `git` 在 cwd 上本来就把整个仓库当上下文——不补的话，面板会从
+// 「进入的仓库」跳到列表里另一个仓库。授权范围外的仓库一律不补：后面每条
+// /api/git/* 都要过同一个围栏，列出来只会变成一串 403。
+func (s *Server) withEnclosingRepo(enclosing, scanRoot string, repos []gitctl.Repo) []gitctl.Repo {
+	if enclosing == "" || enclosing == scanRoot {
+		return repos
+	}
+	for _, r := range repos {
+		if r.Root == enclosing {
+			return repos
+		}
+	}
+	if err := s.ensureCwdAuthorized(enclosing); err != nil {
+		return repos
+	}
+	path := ""
+	if rel, err := filepath.Rel(scanRoot, enclosing); err == nil && rel != "." {
+		path = filepath.ToSlash(rel)
+	}
+	head := gitctl.Repo{Path: path, Name: filepath.Base(enclosing), Root: enclosing}
+	return append([]gitctl.Repo{head}, repos...)
 }
 
 // handleGitStatus 返回 Git 面板快照；不是仓库时返回 is_repo=false。

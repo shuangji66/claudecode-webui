@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -967,6 +968,95 @@ func TestGitRepos(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/git/repos?cwd="+outside, nil))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("未授权 cwd code = %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+type gitReposBody struct {
+	Root    string `json:"root"`
+	CwdRepo string `json:"cwd_repo"`
+	Repos   []struct {
+		Path   string `json:"path"`
+		Name   string `json:"name"`
+		Root   string `json:"root"`
+		Nested bool   `json:"nested"`
+	} `json:"repos"`
+}
+
+func getGitRepos(t *testing.T, srv *Server, cwd string) gitReposBody {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/git/repos?cwd="+url.QueryEscape(cwd), nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("repos code = %d: %s", rec.Code, rec.Body.String())
+	}
+	var out gitReposBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("解析 repos: %v", err)
+	}
+	return out
+}
+
+func mkGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+}
+
+// 会话开在某个仓库的子目录里时，面板要看到**整个工作区**里的仓库，
+// 而不是只剩「已经进入的那一个」。
+func TestGitReposScannedFromWorkspaceNotCwd(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	root := srv.d.ProjectsRoot
+	mkGitRepo(t, filepath.Join(root, "alpha"))
+	mkGitRepo(t, filepath.Join(root, "alpha", "vendor", "dep"))
+	mkGitRepo(t, filepath.Join(root, "beta"))
+	cwd := filepath.Join(root, "alpha", "src")
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	out := getGitRepos(t, srv, cwd)
+	if out.Root != root {
+		t.Fatalf("扫描根 = %q, want %q", out.Root, root)
+	}
+	if out.CwdRepo != filepath.Join(root, "alpha") {
+		t.Fatalf("cwd_repo = %q", out.CwdRepo)
+	}
+	want := []string{"alpha", "alpha/vendor/dep", "beta"}
+	if len(out.Repos) != len(want) {
+		t.Fatalf("repos = %+v", out.Repos)
+	}
+	for i, path := range want {
+		if out.Repos[i].Path != path {
+			t.Fatalf("repos[%d].Path = %q, want %q", i, out.Repos[i].Path, path)
+		}
+	}
+	if out.Repos[0].Nested || !out.Repos[1].Nested || out.Repos[2].Nested {
+		t.Fatalf("嵌套标记 = %+v", out.Repos)
+	}
+}
+
+// 工作区只是仓库下面的一层：仓库根过不了围栏，不能列进可切换的仓库，
+// 但要把 cwd_repo 告诉前端，避免自动选中列表里的另一个仓库。
+func TestGitReposEnclosingRepoOutsideWorkspace(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	outer := t.TempDir()
+	mkGitRepo(t, outer)
+	sub := filepath.Join(outer, "app")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := srv.d.Workspaces.Add(sub); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	out := getGitRepos(t, srv, sub)
+	if len(out.Repos) != 0 {
+		t.Fatalf("工作区外的仓库根不该列出: %+v", out.Repos)
+	}
+	if out.CwdRepo != outer {
+		t.Fatalf("cwd_repo = %q, want %q", out.CwdRepo, outer)
 	}
 }
 

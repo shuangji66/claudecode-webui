@@ -445,14 +445,68 @@ export function refsLabel(refs: string): string {
 export interface RepoRef {
   path: string;
   root: string;
+  /** 展示名：仓库目录名；缺省时退回相对路径的末段。 */
+  name?: string;
+  /** 仓库落在另一个仓库里面（子模块 / 嵌套检出）。 */
+  nested?: boolean;
+}
+
+/** 仓库的展示名：后端给的 name 优先，其次相对路径末段，最后是绝对路径。 */
+function repoName(r: RepoRef): string {
+  const name = r.name?.trim();
+  if (name) return name;
+  const segs = r.path.split("/").filter(Boolean);
+  return segs[segs.length - 1] ?? r.path ?? r.root;
 }
 
 /**
- * 选哪个仓库：保持当前选中（只要它还在列表里），否则工作区根（path 为 ""），
- * 再否则第一个。扫描结果可能因为新建/删除仓库而变化，不能直接取第一个。
+ * 每个仓库 chip 的展示文案，按 root 索引。
+ *
+ * 一个工作区里出现同名仓库（`a/service` 与 `b/service`，或者父仓库与它内部的
+ * 同名嵌套仓库）时只显示名字就分不清点的是哪一个，所以重名的那个改显示相对路径；
+ * 名字唯一时仍只显示名字，别让 chip 排成一长串路径。
  */
-export function pickRepo(repos: RepoRef[], current: string): string {
+export function repoLabels(repos: readonly RepoRef[]): Map<string, string> {
+  const names = repos.map(repoName);
+  const counts = new Map<string, number>();
+  for (const name of names) {
+    const key = name.toLowerCase();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const labels = new Map<string, string>();
+  repos.forEach((r, i) => {
+    const name = names[i] ?? r.root;
+    const dup = (counts.get(name.toLowerCase()) ?? 0) > 1;
+    labels.set(r.root, dup && r.path ? r.path : name);
+  });
+  return labels;
+}
+
+/** 包含 cwd 的最内层仓库（没有时返回空串）。 */
+function repoContaining(repos: readonly RepoRef[], cwd: string): string {
+  if (!cwd) return "";
+  let best = "";
+  for (const repo of repos) {
+    const root = repo.root.replace(/[/\\]+$/, "");
+    if (!root) continue;
+    if ((cwd === root || cwd.startsWith(root + "/")) && root.length > best.length) best = root;
+  }
+  return best;
+}
+
+/**
+ * 选哪个仓库：保持当前选中（只要它还在列表里）；否则选 **cwd 所在的那个仓库**
+ * ——会话常常开在某个仓库的目录里，面板该落在「已经进入的仓库」上，而不是列表
+ * 里的第一个；再否则工作区根（path 为 ""），最后才是第一个。
+ *
+ * `cwdRepo` 是后端算出来的「cwd 所在仓库」：它可能不在列表里（工作区只授权了
+ * 仓库下面的一层，仓库根过不了围栏）。那种情况返回空串，让面板照旧按 cwd 读
+ * 状态——自动选中列表里的**另一个**仓库会让人以为当前对话就在那个仓库里。
+ */
+export function pickRepo(repos: RepoRef[], current: string, cwd = "", cwdRepo = ""): string {
   if (current && repos.some((r) => r.root === current)) return current;
+  const inside = cwdRepo || repoContaining(repos, cwd);
+  if (inside) return repos.some((r) => r.root === inside) ? inside : "";
   const root = repos.find((r) => r.path === "");
   return (root ?? repos[0])?.root ?? "";
 }

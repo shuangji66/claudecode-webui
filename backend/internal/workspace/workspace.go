@@ -205,6 +205,35 @@ func (s *Store) Allows(abs string) bool {
 	return false
 }
 
+// Containing 返回包住 abs 的那个授权目录（嵌套时取最深的一个）；没有时返回空串。
+//
+// 右侧栏的 Git 面板按「工作区」扫仓库，而不是按会话目录扫：会话可能开在某个仓库
+// 的子目录里，只看 cwd 的子树会把旁边的兄弟仓库全漏掉，界面上就只剩「已进入的
+// 那一个仓库」。多个工作区互相嵌套时与 Allows 的最长匹配语义保持一致——
+// 会话属于最内层的那个工作区。
+func (s *Store) Containing(abs string) string {
+	abs = filepath.Clean(abs)
+	if !filepath.IsAbs(abs) {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	best := ""
+	for _, e := range s.cur.Workspaces {
+		candidates := []string{e.Path}
+		if real, err := filepath.EvalSymlinks(e.Path); err == nil && real != filepath.Clean(e.Path) {
+			candidates = append(candidates, real)
+		}
+		for _, root := range candidates {
+			root = filepath.Clean(root)
+			if withinDir(abs, root) && len(root) > len(best) {
+				best = root
+			}
+		}
+	}
+	return best
+}
+
 // withinDir 报告 abs 是否等于 root 或落在 root 之下（纯词法）。
 func withinDir(abs, root string) bool {
 	root = filepath.Clean(root)

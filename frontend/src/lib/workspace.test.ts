@@ -10,6 +10,7 @@ import {
   parseUnifiedDiff,
   pickRepo,
   previewKind,
+  repoLabels,
   refsLabel,
   statusOfXY,
 } from "./workspace";
@@ -247,5 +248,50 @@ describe("pickRepo", () => {
 
   it("一个仓库都没有时返回空串", () => {
     expect(pickRepo([], "/w")).toBe("");
+  });
+
+  it("会话开在某个仓库的子目录里时选中那个仓库（取最内层）", () => {
+    const nested = [
+      ...repos,
+      { path: "alpha/vendor/dep", root: "/w/alpha/vendor/dep" },
+    ];
+    expect(pickRepo(nested, "", "/w/alpha/src/app")).toBe("/w/alpha");
+    expect(pickRepo(nested, "", "/w/alpha/vendor/dep/src")).toBe("/w/alpha/vendor/dep");
+    expect(pickRepo(nested, "", "/w")).toBe("/w/alpha");
+    // 后端给的 cwd_repo 优先，且不依赖 cwd 的字符串包含关系。
+    expect(pickRepo(nested, "", "", "/w/beta")).toBe("/w/beta");
+  });
+
+  it("cwd 的仓库不在列表里时不乱选别的仓库", () => {
+    // 工作区只授权了仓库下面的一层：仓库根过不了围栏，列表里只有嵌套仓库。
+    const inside = [{ path: "vendor/dep", root: "/w/vendor/dep" }];
+    expect(pickRepo(inside, "", "/w", "/w")).toBe("");
+  });
+});
+
+describe("repoLabels", () => {
+  it("名字唯一时只显示名字", () => {
+    const labels = repoLabels([
+      { path: "", root: "/w", name: "work" },
+      { path: "alpha", root: "/w/alpha", name: "alpha" },
+    ]);
+    expect(labels.get("/w")).toBe("work");
+    expect(labels.get("/w/alpha")).toBe("alpha");
+  });
+
+  it("重名仓库改显示相对路径", () => {
+    const labels = repoLabels([
+      { path: "a/service", root: "/w/a/service", name: "service" },
+      { path: "b/service", root: "/w/b/service", name: "service" },
+      { path: "other", root: "/w/other", name: "other" },
+    ]);
+    expect(labels.get("/w/a/service")).toBe("a/service");
+    expect(labels.get("/w/b/service")).toBe("b/service");
+    expect(labels.get("/w/other")).toBe("other");
+  });
+
+  it("缺 name 时退回相对路径末段", () => {
+    const labels = repoLabels([{ path: "group/gamma", root: "/w/group/gamma" }]);
+    expect(labels.get("/w/group/gamma")).toBe("gamma");
   });
 });

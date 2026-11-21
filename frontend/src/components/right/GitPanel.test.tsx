@@ -302,3 +302,41 @@ describe("GitPanel 拉取不影响提交按钮的文案", () => {
     await waitFor(() => expect(commitButton).toHaveTextContent("提交"));
   });
 });
+
+// 工作区里并排放着多个仓库、或者某个仓库内部又嵌了独立仓库时，chip 是唯一能
+// 切过去的入口：重名仓库只显示名字会分不清点的是哪一个，嵌套仓库也要看得出层级。
+describe("GitPanel 多仓库 chip", () => {
+  it("嵌套仓库带层级标记，重名仓库显示相对路径", async () => {
+    apiFetch.mockImplementation(async (path: string): Promise<unknown> => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname.endsWith("/api/git/status")) return { is_repo: true, branch: "master", entries: [] };
+      if (url.pathname.endsWith("/api/git/branches")) return { current: "master", names: ["master"] };
+      if (url.pathname.endsWith("/api/git/log")) return { entries: [] };
+      return {};
+    });
+    useSidebarStore.setState({
+      repo: "/w",
+      repos: [
+        { path: "", name: "work", root: "/w" },
+        { path: "a/service", name: "service", root: "/w/a/service", nested: true },
+        { path: "b/service", name: "service", root: "/w/b/service", nested: true },
+        { path: "beta", name: "beta", root: "/w/beta" },
+      ],
+    });
+
+    render(<GitPanel cwd={CWD} active />);
+    // 名字唯一的仓库照旧只显示名字。
+    expect(await screen.findByTitle("beta")).toHaveTextContent("beta");
+    // 重名的两个改显示相对路径，并标出嵌套层级。
+    expect(screen.getByTitle("a/service（嵌套仓库）")).toHaveTextContent("a/service");
+    expect(screen.getByTitle("b/service（嵌套仓库）")).toHaveTextContent("b/service");
+    expect(screen.getByTitle("工作区根")).toHaveTextContent("work");
+
+    // 点 chip 切仓库：后续状态请求按那个仓库的绝对路径走。
+    fireEvent.click(screen.getByTitle("a/service（嵌套仓库）"));
+    await waitFor(() => {
+      const paths = apiFetch.mock.calls.map((c) => String(c[0]));
+      expect(paths.some((p) => p.includes("/api/git/status") && p.includes(encodeURIComponent("/w/a/service")))).toBe(true);
+    });
+  });
+});

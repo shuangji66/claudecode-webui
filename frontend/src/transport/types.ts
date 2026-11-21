@@ -589,6 +589,8 @@ export interface GitRepo {
   name: string;
   /** 绝对路径，直接当后续 /api/git/* 的 cwd 用。 */
   root: string;
+  /** 仓库落在另一个仓库里面（子模块 / 嵌套检出）。 */
+  nested?: boolean;
 }
 
 export interface GitStatus {

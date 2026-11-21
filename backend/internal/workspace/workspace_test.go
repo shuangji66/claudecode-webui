@@ -310,3 +310,53 @@ func TestAllowsResolvesSymlinkedWorkspace(t *testing.T) {
 		t.Fatal("工作区外目录不应被允许")
 	}
 }
+
+func TestContainingPicksDeepestWorkspace(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "work")
+	child := filepath.Join(parent, "proj")
+	deep := filepath.Join(child, "src")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(filepath.Join(root, "ws.json"), parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Add(child); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct{ path, want string }{
+		{parent, parent},
+		{child, child},
+		{deep, child}, // 嵌套工作区取最内层
+		{filepath.Join(root, "other"), ""},
+		{"relative/path", ""},
+	}
+	for _, c := range cases {
+		if got := s.Containing(c.path); got != c.want {
+			t.Fatalf("Containing(%q) = %q, want %q", c.path, got, c.want)
+		}
+	}
+}
+
+func TestContainingResolvesSymlinkedWorkspace(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	if err := os.MkdirAll(filepath.Join(real, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	s, err := Open(filepath.Join(root, "ws.json"), link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// cwd 是网关解析符号链接后的真实路径，必须能匹配到以软链登记的工作区。
+	if got := s.Containing(filepath.Join(real, "sub")); got != real {
+		t.Fatalf("Containing(真实子目录) = %q, want %q", got, real)
+	}
+}

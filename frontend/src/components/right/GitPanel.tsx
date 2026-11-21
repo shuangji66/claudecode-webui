@@ -10,6 +10,7 @@ import {
   parseDiffFiles,
   parseUnifiedDiff,
   refsLabel,
+  repoLabels,
   type ChangeRow,
   type DiffFile,
   type DiffLine,
@@ -87,6 +88,7 @@ export function GitPanel({ cwd, active }: Props) {
   const t = useT();
   const repos = useSidebarStore((s) => s.repos);
   const repoRoot = useSidebarStore((s) => s.repo);
+  const repoLabel = useMemo(() => repoLabels(repos), [repos]);
   const selectRepo = useSidebarStore((s) => s.selectRepo);
   const git = useSidebarStore((s) => s.git);
   const gitLoading = useSidebarStore((s) => s.gitLoading);
@@ -300,7 +302,9 @@ export function GitPanel({ cwd, active }: Props) {
     // **不按断点复位**：侧栏在 1000px 以下都是浮层（`DOCK_MIN`），平板竖屏
     // 同样贴着屏幕底边；桌面停靠时 env() 为 0，只剩这 8px。
     <div className="flex h-full min-h-0 flex-col pb-[calc(env(safe-area-inset-bottom,0px)+8px)]">
-      {/* 工作区里并排放着好几个仓库时给一排切换 chip；只有一个仓库就不用占这行。 */}
+      {/* 工作区里并排放着好几个仓库时给一排切换 chip；只有一个仓库就不用占这行。
+          嵌套仓库（子模块 / 独立检出）跟在它所属的仓库后面，用 `└` 标出层级：
+          它们各自是独立仓库，但只显示名字时看起来像并排的兄弟目录。 */}
       {repos.length > 1 && (
         <div className="dsh-scroll flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-2 py-1.5">
           {repos.map((r) => (
@@ -315,12 +319,13 @@ export function GitPanel({ cwd, active }: Props) {
                 setMode("changes");
                 void selectRepo(r.root);
               }}
-              title={r.path || t("工作区根", "Workspace root")}
+              title={r.path ? `${r.path}${r.nested ? t("（嵌套仓库）", " (nested repo)") : ""}` : t("工作区根", "Workspace root")}
               className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${
                 r.root === repoRoot ? "bg-panel-strong font-medium text-ink" : "text-muted hover:bg-black/[0.03] hover:text-ink"
               }`}
             >
-              {r.name}
+              {r.nested ? <span className="mr-0.5 text-faint">└</span> : null}
+              {repoLabel.get(r.root) ?? r.name}
             </button>
           ))}
         </div>

@@ -198,10 +198,12 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     const at = epoch;
     try {
       const query = new URLSearchParams({ cwd });
-      const payload = await apiFetch<{ repos: GitRepo[] }>(`/api/git/repos?${query.toString()}`);
+      const payload = await apiFetch<{ repos: GitRepo[]; cwd_repo?: string }>(
+        `/api/git/repos?${query.toString()}`,
+      );
       if (at !== epoch || get().cwd !== cwd) return;
       const repos = payload.repos ?? [];
-      set({ repos, repo: pickRepo(repos, get().repo) });
+      set({ repos, repo: pickRepo(repos, get().repo, cwd, payload.cwd_repo ?? "") });
     } catch (reason) {
       if (at !== epoch || get().cwd !== cwd) return;
       // 扫仓库失败不该让整块面板报错：退回「工作区根」视角，状态接口会给出真实原因。
