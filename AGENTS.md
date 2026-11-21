@@ -311,6 +311,18 @@ hub ── manager ── session ── process ── claude (NDJSON)
   用户正文里贴了这段 XML 时前后还有自己的话，不会命中。
   后端那份还负责让它**不参与消息计数、不当会话标题**：否则一条以「后台命令跑完了」
   开头的对话在侧栏里会叫 `<task-notification> <task-id>…`。
+- **`[Image: …]` 附图注解同样是 CLI 注入的 user 行，而且实时流上没有 `isMeta`**：
+  用户发图 / 模型 Read 一张图时 CLI 会额外写一行
+  `[Image: source: /tmp/…/1.png]`（带 `original 2748x1542, displayed at 2000x1122.
+  Multiply coordinates by 1.37 …`）把尺寸与换算系数告诉模型——它是给模型的坐标系说明，
+  不是用户说的话。**转录里这一行带 `isMeta: true` + `turnCompanion: true`**（顶上的
+  meta 过滤挡得住），但**实时帧上两个字段都没有**（实测 2.1.330：
+  `{type:"user", message:{content:[{type:"text", text:"[Image: original 2042x1406, …]"}]}}`）。
+  只靠 meta 过滤的话，转录回放正常、**实时流却多一个用户气泡**——用户看到的就是
+  「预览图片时，图片突然变成了一串消息」。
+  前端 `lib/normalize.isImageAnnotation` 与后端 `history.isImageAnnotation` 是同一份
+  规则的两份镜像（**两边都要改**），都只认「整条消息就是这些注解」（多图会连着好几段）；
+  用户自己打一句以 `[Image:` 开头的话时后面还有正文，不会命中。
 
 ### 4.4.1 WS 重连要补齐断线期间的事件（`sync` / `session.replay`）
 

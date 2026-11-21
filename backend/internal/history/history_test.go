@@ -851,6 +851,38 @@ func TestIsTaskNotification(t *testing.T) {
 	}
 }
 
+// 附图注解：CLI 把图片的尺寸与坐标换算系数写成一行 user 消息给模型看。
+// 转录里它带 isMeta（scanTranscript 已经丢掉），但**实时流上的同一帧没有 isMeta**
+// （实测 2.1.330），前端靠 isImageAnnotation 挡；后端这里只是双保险：
+// 万一哪天它不带 isMeta 落盘，也不能让列表标题变成一段英文坐标系说明。
+func TestIsImageAnnotation(t *testing.T) {
+	yes := []string{
+		"[Image: source: /tmp/claude-777/x/images/1.png]",
+		"[Image: original 2042x1406, displayed at 2000x1377. Multiply coordinates by 1.02 to map to original image.]",
+		"  [Image: source: /tmp/a.png]  ",
+		// 一条消息里连着好几张图。
+		"[Image: source: /tmp/a.png][Image: source: /tmp/b.png]",
+	}
+	no := []string{
+		"",
+		"hello",
+		// 用户自己打的话：后面还有正文。
+		"[Image: source: /tmp/a.png] 这张怎么是歪的？",
+		"[Image: 随便写的]",
+		"[Image: original 加一",
+	}
+	for _, v := range yes {
+		if !isImageAnnotation(v) {
+			t.Errorf("应判定为附图注解: %q", v)
+		}
+	}
+	for _, v := range no {
+		if isImageAnnotation(v) {
+			t.Errorf("不应判定为附图注解: %q", v)
+		}
+	}
+}
+
 // 以任务通知开头的对话，标题必须继续往后找真正的用户提问，而不是被那段 XML 占住。
 func TestSummarizeSkipsTaskNotificationForTitle(t *testing.T) {
 	dir := t.TempDir()

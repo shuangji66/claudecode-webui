@@ -161,6 +161,13 @@ func summarize(path, project string) Session {
 			if l.Type == "user" && isTaskNotification(extractText(l.Message.Content)) {
 				return true
 			}
+			// 附图注解（`[Image: source: …]`）同样是 CLI 加的：转录里它带 isMeta，
+			// 这里根本读不到（scanTranscript 已经丢了），但**同一帧到了实时流上
+			// 没有 isMeta**（实测 2.1.330）。计数与标题在这条路上是转录算的，
+			// 所以这一步只是双保险；真正的修复在前端 `isImageAnnotation`。
+			if l.Type == "user" && isImageAnnotation(extractText(l.Message.Content)) {
+				return true
+			}
 			// 压缩后的续接提示同理（见 isInjectedUserRow / stripContinuation）：
 			// 整条是微缩摘要就直接跳过；与用户那句话拼在一起时只留用户那半句。
 			// 不挡的话压缩过一轮的对话在侧栏里会叫
@@ -322,6 +329,32 @@ func isTaskNotification(text string) bool {
 		return false
 	}
 	return taskNotificationRE.MatchString(t)
+}
+
+// imageAnnotationRE 匹配 CLI 给附图加的坐标系注解（整条消息就是注解，可能连着几个）。
+//
+// 用户发图 / 模型 Read 一张图时，CLI 会额外写一行
+//
+//	[Image: source: /tmp/…/1.png]
+//	[Image: original 2748x1542, displayed at 2000x1122. Multiply coordinates by 1.37 to map to original image.]
+//
+// 把尺寸与换算系数告诉模型。转录里这一行带 `isMeta: true`，`scanTranscript` 已经丢掉；
+// 但**实时流上的同一帧没有 isMeta**（实测 2.1.330），前端 `lib/normalize.ts` 的
+// `isImageAnnotation` 是同一条规则的镜像（两边都要改）。
+//
+// 只认「整条消息就是这些注解」：用户自己打一句以 `[Image:` 开头的话时后面还有正事，
+// 且不会恰好以注解格式收尾。
+var imageAnnotationRE = regexp.MustCompile(
+	`^(?:\[Image: (?:source: [^\]]+|original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by [\d.]+ to map to original image\.)\])+$`,
+)
+
+// isImageAnnotation 判断一条 user 文本是否只是 CLI 加的附图注解。
+func isImageAnnotation(text string) bool {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "[Image:") {
+		return false
+	}
+	return imageAnnotationRE.MatchString(t)
 }
 
 // isInjectedUserRow 判断一条 user 行是不是上下文压缩后 CLI 塞回上下文的续接提示。

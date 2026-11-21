@@ -261,6 +261,29 @@ export function isTaskNotification(text: string): boolean {
   return taskNotificationRE.test(t);
 }
 
+// 附图注解：用户发图时 CLI 会额外写一行 `[Image: source: /tmp/…/1.png]`（还带
+// `original 2748x1542, displayed at 2000x1122. Multiply coordinates by 1.37 …`），
+// 把尺寸与换算系数告诉模型。**它只是给模型的坐标系说明，不是用户说的话。**
+//
+// 转录里这一行带 `isMeta: true` + `turnCompanion: true`，`applyCLI` 顶上那一道
+// 就能挡住；但**实时流上的同一帧没有 `isMeta`**（实测 2.1.330：`{type:"user",
+// message:{content:[{type:"text",text:"[Image: original 2042x1406, …]"}]}}`，
+// 没有 isMeta、没有 turnCompanion），于是它被当作用户消息插了一个气泡——用户看到
+// 的就是「预览图片时，图片突然变成了一串消息」。
+//
+// 判据只看**整条消息就是这些注解**：用户可以自己打一句以 `[Image:` 开头的话，
+// 但那时后面还有他自己的正文，且不会以 `]` 恰好收在注解格式上。一条消息里可能
+// 连着好几个（多图），所以用 `*` 匹配整串。
+const imageAnnotationRE =
+  /^(?:\[Image: (?:source: [^\]]+|original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by [\d.]+ to map to original image\.)\])+$/;
+
+/** 判断一条用户文本是否只是 CLI 加的附图注解（应整条忽略）。 */
+export function isImageAnnotation(text: string): boolean {
+  const t = text.trim();
+  if (!t.startsWith("[Image:")) return false;
+  return imageAnnotationRE.test(t);
+}
+
 const NOTIFY_STATUS: Record<string, SubagentInfo["status"]> = {
   completed: "completed",
   failed: "failed",
@@ -915,6 +938,11 @@ function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): 
   // 本地命令回显（/model 之类的 stdout、斜杠命令包装）整条丢弃：
   // 它不是用户说的话，也不是模型输出，渲染成气泡只会污染会话。
   if (isLocalCommandEcho(textOfContent(content))) return items;
+
+  // 附图注解（`[Image: source: …]` / `[Image: original …, displayed at …]`）：
+  // 转录里它带 `isMeta`，实时流里**没有**（见 isImageAnnotation 上的注释），
+  // 不挡的话每次 Read 一张图，用户气泡里就凭空多出一条英文注解。
+  if (isImageAnnotation(textOfContent(content))) return items;
 
   // 后台任务通知同样是 CLI 注入的 user 行（`isMeta` 是 null，绕过顶上那道过滤）。
   // 不丢的话，停掉一个后台命令再重进对话，界面上就多出一坨 `<task-notification>`

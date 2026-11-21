@@ -80,7 +80,10 @@ func LoadPreview(projectsDir, id string) (Preview, error) {
 			// 压缩续接提示与用户那句话拼在一起时只要后半截（见 history.stripContinuation）。
 			text := stripContinuation(extractText(l.Message.Content))
 			// 中断标记也是 CLI 写的合成 user 行，不是用户说的话。
-			if text == "" || isLocalCommandEcho(text) || isInterruptMarker(text) {
+			// 附图注解（`[Image: …]`）同理：转录里它通常带 isMeta 已被挡掉，
+			// 但实时流上的同一帧没有 isMeta（见 history.isImageAnnotation），
+			// 把它当 preview 会让列表里那一行显示成一段英文坐标系说明。
+			if text == "" || isLocalCommandEcho(text) || isInterruptMarker(text) || isImageAnnotation(text) {
 				continue
 			}
 			out.User = truncate(text, previewUserMax)

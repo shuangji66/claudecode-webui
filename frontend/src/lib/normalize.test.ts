@@ -11,6 +11,7 @@ import {
   isInterruptMarker,
   mergeReplayed,
   isLocalCommandEcho,
+  isImageAnnotation,
   isTaskNotification,
   settleSubagents,
   subagentFromResult,
@@ -2214,5 +2215,55 @@ describe("CLI 注入的后台任务通知", () => {
     expect(isTaskNotification("<task-notification>缺结束标签")).toBe(false);
     expect(isTaskNotification("hello")).toBe(false);
     expect(isTaskNotification("")).toBe(false);
+  });
+});
+
+// 附图注解：用户发图 / 模型 Read 一张图时，CLI 会额外写一行
+// `[Image: source: …]`（带 `original …, displayed at …, Multiply coordinates by …`）
+// 把尺寸与换算系数告诉模型。**转录里它带 isMeta、实时流上没有**（实测 2.1.330，
+// 抓到的帧是 `{type:"user", message:{content:[{type:"text", text:"[Image: original …]"}]}}`，
+// 既没有 isMeta 也没有 turnCompanion）。所以只靠顶上的 meta 过滤挡不住实时路——用户
+// 看到的就是「预览图片时，图片突然变成了一串消息」。
+describe("CLI 注入的附图注解", () => {
+  beforeEach(() => __resetIds());
+
+  const withSource = "[Image: source: /tmp/claude-777/x/images/1.png]";
+  const sizeOnly =
+    "[Image: original 2042x1406, displayed at 2000x1377. Multiply coordinates by 1.02 to map to original image.]";
+
+  it("实时帧（没有 isMeta）也不进消息流", () => {
+    for (const text of [withSource, sizeOnly]) {
+      const items = applyCLI([], { type: "user", message: { role: "user", content: [{ type: "text", text }] } });
+      expect(items).toHaveLength(0);
+    }
+  });
+
+  it("一张消息里连着好几个注解（多图）也整条丢弃", () => {
+    const items = applyCLI([], {
+      type: "user",
+      message: { role: "user", content: withSource + withSource },
+    });
+    expect(items).toHaveLength(0);
+  });
+
+  it("用户真的说了话时不吞", () => {
+    const items = applyCLI([], {
+      type: "user",
+      message: { role: "user", content: "帮我看下这张图" + withSource },
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("user");
+  });
+
+  it("isImageAnnotation 只认整条就是注解", () => {
+    expect(isImageAnnotation(withSource)).toBe(true);
+    expect(isImageAnnotation(sizeOnly)).toBe(true);
+    expect(isImageAnnotation("  " + withSource + "  ")).toBe(true);
+    expect(isImageAnnotation(withSource + withSource)).toBe(true);
+    // 用户自己打一句以 `[Image:` 开头的话：后面还有正文，不算注解。
+    expect(isImageAnnotation("[Image: source: a.png] 这张好奇怪")).toBe(false);
+    expect(isImageAnnotation("[Image: 随便写的]")).toBe(false);
+    expect(isImageAnnotation("hello")).toBe(false);
+    expect(isImageAnnotation("")).toBe(false);
   });
 });
