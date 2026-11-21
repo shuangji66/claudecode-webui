@@ -892,6 +892,14 @@ src/
     「深色底由外层那一行给，里面 `flex` 出 `pre.min-w-0.flex-1.overflow-x-auto` + 按钮」，
     按钮是兄弟节点，文字滚到头只会停在它左边（`ToolCardHost.test` 有回归用例钉住
     「按钮不在 `pre` 里」）。输出那块是折叠块标题行上的 `actions`，本来就不压内容。
+  - **命令块自己画滚动条 + 在文字下面留一条带子**（`.code-scroll`，`styles.css`）：
+    浏览器默认的 **overlay 滚动条是画在内容上面的**，命令一横向滚动，那条滑块就横穿
+    这一行命令（截图复现过）。两条一起做才稳：① 自定义 `::-webkit-scrollbar`（8px、
+    半透明白滑块——底色永远是 `#0f1115`，不能跟着主题变亮）；② `pb-2.5` 在文字下面
+    留 10px 带子。只靠 ① 的话 headless / 移动 WebView 仍是 overlay（实测
+    `offsetHeight - clientHeight` 为 0），滑块照样压字；只靠 ② 的话浅色主题下是一条
+    亮灰条。实测（Playwright）：文字底沿在 pre 顶部 18px，8–10px 滑块从 20–22px 起，
+    不重叠。
 - **分组只影响渲染**：`Item`、`seq`、id、`data-item-id` 与转录回放都不动，「最近 80 条」的窗口
   仍按原始条目算，`start` 记的是原始下标。
 - **对话区右下角必须有「回到底部」按钮**（`MessageList`）：不贴底时出现，圆形、带下箭头；

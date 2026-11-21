@@ -158,6 +158,38 @@ pre {
   background: var(--c-scroll-hover);
 }
 
+/* 深色代码块（工具卡片的命令块）里的滚动条。
+ *
+ * 两件事都不能省：
+ * 1. **必须自己画一遍**（哪怕只想「细一点」）。浏览器默认的滚动条在 overlay 模式下
+ *    直接压在内容上——命令横向滚动时那条滑块横穿文字，截图复现过；自定义过
+ *    `::-webkit-scrollbar` 的滚动条才会退回「占位」的经典形态，文字不会被盖。
+ * 2. **颜色固定成半透明白**。底色永远是 #0f1115，不能跟着主题走：浅色主题下
+ *    `--c-scroll` 是亮灰，在这块深色底上是一条刺眼的亮条。 */
+.code-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 22%) transparent;
+  overscroll-behavior: contain;
+}
+
+.code-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.code-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.code-scroll::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 22%);
+  border-radius: 999px;
+}
+
+.code-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 38%);
+}
+
 /* 移动端安全区：对话框下方必须给 Home Indicator 留出空间。 */
 @layer components {
   .safe-bottom {

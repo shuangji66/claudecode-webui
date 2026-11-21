@@ -190,6 +190,16 @@ describe("工具卡片的复制入口", () => {
     expect(pre.className).toContain("overflow-x-auto");
   });
 
+  // overlay 滚动条的滑块是画在内容**上面**的：默认样式下那条横条会横穿这一行命令
+  // （截图复现过）。所以命令块自己画滚动条 + 在文字下面留一条带子给滑块。
+  it("命令块的横向滚动条不会盖住文字", () => {
+    render(<ToolCardHost item={tool({ input: { command: `ls ${"x".repeat(200)}` } })} />);
+    const pre = screen.getByRole("button", { name: "复制命令" }).parentElement!.querySelector("pre") as HTMLElement;
+    expect(pre.className).toContain("code-scroll");
+    // 10px 的带子：8–10px 的 overlay 滑块只会落在这里，不压字。
+    expect(pre.className).toContain("pb-2.5");
+  });
+
   // 输出默认是收起的：复制入口得在折叠块标题行上，不用先展开再选中。
   it("输出不用展开就能复制", async () => {
     render(<ToolCardHost item={tool({ result: "line1\nline2" })} />);
