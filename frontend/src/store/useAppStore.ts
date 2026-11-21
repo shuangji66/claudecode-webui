@@ -25,7 +25,14 @@ import {
   subagentFrame,
   turnsFromTranscript,
 } from "../lib/normalize";
-import { applyUsageMessage, mergeUsage, usageFromTranscript, type UsageSnapshot } from "../lib/usage";
+import {
+  applyUsageMessage,
+  mergeSpeedSamples,
+  mergeUsage,
+  settleTurnUsage,
+  usageFromTranscript,
+  type UsageSnapshot,
+} from "../lib/usage";
 import { localWorkFrom, NO_LOCAL_WORK, type LocalWork } from "../lib/localWork";
 import { effortApply } from "../lib/providerForm";
 import { isNewChat } from "../lib/newChat";
@@ -882,7 +889,14 @@ async function replayTranscript(id: string, get: () => AppState): Promise<void> 
   try {
     const tr = await apiFetch<TranscriptPayload>(`/api/history/transcript?id=${encodeURIComponent(id)}`);
     const next = itemsFromTranscript(tr);
-    const snap = mergeUsage(conv?.usage, usageFromTranscript(tr.lines ?? []));
+    const base = mergeUsage(conv?.usage, usageFromTranscript(tr.lines ?? []));
+    // 断线重连的 resync 不能用磁盘那份整份覆盖内存里的速度样本：这一轮刚量到的
+    // 那几次请求磁盘上还没有（transcript 里没有 genMs），覆盖后速度计会退回上一轮。
+    const live = get().usage[id];
+    const snap =
+      base && live?.speedSamples?.length
+        ? { ...base, speedSamples: mergeSpeedSamples(base.speedSamples, live.speedSamples) }
+        : base;
     useAppStore.setState((s) => ({
       items: { ...s.items, [id]: mergeReplayed(next, s.items[id] ?? [], true) },
       ...(snap ? { usage: { ...s.usage, [id]: snap } } : {}),
@@ -2696,6 +2710,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
             conns: { ...s.conns, [sid]: { state: "closed" } },
             // 进程已退出，挂起的审批永远不可能被批准：留着只会让人点到一条失效回包。
             perms: { ...s.perms, [sid]: [] },
+            // 这一轮不会再有 result：本回合的生成合计作废，别带进下一轮
+            // （否则「本回合速度」会把上一轮那半截也算进去）。
+            ...(s.usage[sid] ? { usage: { ...s.usage, [sid]: settleTurnUsage(s.usage[sid])! } } : {}),
             conversations: s.conversations.map((c) => (c.id === sid ? { ...c, live: false, state: "closed" } : c)),
           };
         });

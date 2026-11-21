@@ -1208,6 +1208,20 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
 - 改 `normalize` 时先写一个会失败的用例，再改实现。
 - 不要写依赖 `Date.now()` 精确值的断言。
 
+### 26.1 速度计：只报「此刻」的速度
+
+- `throughput(snap, now)` **按 TTL（30 分钟）过滤样本**，窗口里一个新鲜样本都不剩时返回
+  `undefined`，不退回 `genMs/genTokens`（老快照没有 `speedSamples` 时才退）。
+  TTL 只在 `pushSpeedSample` 里生效是不够的：那只覆盖「一直在跑」的会话，关掉对话
+  放一晚上、隔天重开（快照从 `conversations.json` 读回来）会一直显示昨天的速度。
+  测试要用假时钟时显式传 `now`（默认 `Date.now()`）。
+- 样本合并走 `mergeSpeedSamples`（按 `at:ms:tokens` 去重、按时刻排序、只留窗口内最后几条），
+  `mergeUsage` 用它而不是「谁优先」：`session.resync` 用磁盘那份整份覆盖会把本回合刚量到
+  的样本抹掉，速度计退回上一轮。
+- 进程没有 `result` 就结束（被杀 / 崩溃）时走 `settleTurnUsage` 清掉本回合的
+  `turnGenMs/turnGenTokens`（窗口样本保留）：不清的话下一轮「本回合速度」会把上一轮那半截
+  一起算进分子分母。
+
 ### 27.1 轨迹跳转的锚点：过程行也要能定位
 
 - `MessageList` 的 `data-item-id` 以前只给「非过程行」，而轨迹面板绝大多数步骤

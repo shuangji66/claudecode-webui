@@ -251,23 +251,56 @@ function pushSpeedSample(prev: SpeedSample[] | undefined, sample: SpeedSample): 
 }
 
 /**
+ * 合并两份速度样本（按样本自身去重，按时刻排序后只留窗口内的最后几条）。
+ *
+ * 为什么要合并而不是「谁优先」：持久化那份是上次落盘的、内存那份是这一轮刚量的，
+ * 重连触发 resync 时整份覆盖会把本回合量到的样本抹掉（速度计退回上一轮的数）。
+ */
+export function mergeSpeedSamples(
+  a: SpeedSample[] | undefined,
+  b: SpeedSample[] | undefined,
+): SpeedSample[] | undefined {
+  if (!a?.length) return b?.length ? b.slice(-SPEED_WINDOW) : a;
+  if (!b?.length) return a.slice(-SPEED_WINDOW);
+  const seen = new Set<string>();
+  const merged: SpeedSample[] = [];
+  for (const sample of [...a, ...b]) {
+    const key = `${sample.at}:${sample.ms}:${sample.tokens}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(sample);
+  }
+  merged.sort((x, y) => x.at - y.at);
+  return merged.slice(-SPEED_WINDOW);
+}
+
+/**
  * 速度计读数（tok/s）：滚动窗口里 Σ输出 ÷ Σ生成耗时（加权，不是各次速度的平均）。
  *
  * 与 DSH 的 `decodeTokens ÷ decodeMs` 同一个口径：分母只算 decode（不含首字延迟），
  * 分子分母都按窗口累加。窗口为空（还没量到 / 全是合并下发的假样本）时退回
  * `genTokens / genMs`，再没有就不显示。
  */
-export function throughput(snap: UsageSnapshot | undefined): number | undefined {
+export function throughput(snap: UsageSnapshot | undefined, now: number = Date.now()): number | undefined {
   if (!snap) return undefined;
-  let tokens = 0;
-  let ms = 0;
-  for (const s of snap.speedSamples ?? []) {
-    if (s.tokens > 0 && s.ms > 0) {
-      tokens += s.tokens;
-      ms += s.ms;
+  const samples = snap.speedSamples ?? [];
+  if (samples.length > 0) {
+    // 只算「现在还新鲜」的样本：速度计回答的是「此刻多快」，半小时前量到的数
+    // 报出来只会让人以为上游还在那个速度上（关掉对话放一晚上/隔天重开最常见）。
+    // TTL 只在 pushSpeedSample 里生效是不够的——那只覆盖「一直在跑」的会话。
+    const cutoff = now - SPEED_SAMPLE_TTL_MS;
+    let tokens = 0;
+    let ms = 0;
+    for (const s of samples) {
+      if (s.tokens > 0 && s.ms > 0 && s.at >= cutoff) {
+        tokens += s.tokens;
+        ms += s.ms;
+      }
     }
+    // 窗口里一个新鲜样本都不剩：不显示，而不是拿旧的充数。
+    return tokens > 0 && ms > 0 ? tokens / (ms / 1000) : undefined;
   }
-  if (tokens > 0 && ms > 0) return tokens / (ms / 1000);
+  // 老快照（没有 speedSamples 字段）只有 genMs/genTokens 可用，按它兜底。
   return tokensPerSecond(snap.genTokens ?? 0, snap.genMs);
 }
 
@@ -277,10 +310,24 @@ export function throughput(snap: UsageSnapshot | undefined): number | undefined 
  * 回答下面那行小字报的是「本轮消耗」，速度就取同一层的数；拿最近一次请求凑数的话，
  * 一轮三十次工具调用里最后一个往往是个短回复，读数与这一轮的实际速度无关。
  */
-export function turnThroughput(snap: UsageSnapshot | undefined): number | undefined {
+export function turnThroughput(snap: UsageSnapshot | undefined, now: number = Date.now()): number | undefined {
   if (!snap) return undefined;
   const tps = tokensPerSecond(snap.turnGenTokens ?? 0, snap.turnGenMs);
-  return tps ?? throughput(snap);
+  return tps ?? throughput(snap, now);
+}
+
+/**
+ * 进程在没有 `result` 帧的情况下结束（被杀 / 崩溃）：本回合的生成合计作废。
+ *
+ * 不清的话，同一 id 接着聊时「本回合速度」会把上一轮那半截生成量算进分子分母，
+ * 读数偏低而且看不出原因。窗口样本（speedSamples）保留——它们是真实量到过的。
+ */
+export function settleTurnUsage(snap: UsageSnapshot | undefined): UsageSnapshot | undefined {
+  if (!snap || (snap.turnGenMs === undefined && snap.turnGenTokens === undefined)) return snap;
+  const next = { ...snap };
+  delete next.turnGenMs;
+  delete next.turnGenTokens;
+  return next;
 }
 
 /**
@@ -775,7 +822,9 @@ export function mergeUsage(
     sessionOutputTokens: live.sessionOutputTokens ?? base.sessionOutputTokens,
     genMs: base.genMs ?? live.genMs,
     genTokens: base.genTokens ?? live.genTokens,
-    speedSamples: base.speedSamples ?? live.speedSamples,
+    // 样本取并集：两边都可能带来对方没有的那几次请求（持久化的是上次落盘的，
+    // live 可能是这一轮刚量的）。整份替换会让速度计在一方为空时抖一下。
+    speedSamples: mergeSpeedSamples(base.speedSamples, live.speedSamples),
     turnGenMs: base.turnGenMs ?? live.turnGenMs,
     turnGenTokens: base.turnGenTokens ?? live.turnGenTokens,
     thinkingTokens: live.thinkingTokens ?? base.thinkingTokens,

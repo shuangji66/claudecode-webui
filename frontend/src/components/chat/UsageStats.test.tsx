@@ -191,9 +191,10 @@ describe("ContextUsage", () => {
         snap={{
           contextTokens: 1000,
           contextWindow: 200_000,
+          // 样本时刻用「相对现在」：速度计只认半小时内的样本（陈旧的不报数）。
           speedSamples: [
-            { tokens: 30, ms: 1000, at: 1 },
-            { tokens: 800, ms: 4000, at: 2 },
+            { tokens: 30, ms: 1000, at: Date.now() - 5_000 },
+            { tokens: 800, ms: 4000, at: Date.now() - 1_000 },
           ],
           genMs: 1000,
           genTokens: 30,

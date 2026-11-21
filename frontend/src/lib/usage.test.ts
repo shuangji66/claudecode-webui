@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   applyUsageMessage,
+  mergeSpeedSamples,
   mergeUsage,
+  settleTurnUsage,
   usageFromTranscript,
   cacheHitRate,
   contextPercent,
@@ -42,6 +44,16 @@ const RESULT = {
     "claude-sonnet-4-5": { inputTokens: 12, outputTokens: 7, cacheReadInputTokens: 9000, contextWindow: 200000, maxOutputTokens: 32000 },
   },
 };
+
+/**
+ * 让 `throughput` 用「样本自己的时刻」当参考时间。
+ *
+ * 这些用例用的是假时钟（1000 / 2000… 毫秒级），真实时钟下它们全都算「半小时前」的
+ * 陈旧样本——TTL 那条规则见下面专门的一组用例。
+ */
+function nowOf(snap: { speedSamples?: { at: number }[] } | undefined): number {
+  return Math.max(0, ...(snap?.speedSamples ?? []).map((sample) => sample.at));
+}
 
 describe("usage totals", () => {
   it("把 CLI 的 usage 折成驼峰字段", () => {
@@ -338,7 +350,7 @@ describe("applyUsageMessage", () => {
     )!;
     // 从正文增量算会是 800 ÷ 0.5s = 1600 tok/s（早被上限挡掉），从 start 算是 800 ÷ 4.5s。
     expect(done.genMs).toBe(4_500);
-    expect(throughput(done)).toBeCloseTo(177.8, 1);
+    expect(throughput(done, nowOf(done))).toBeCloseTo(177.8, 1);
   });
 
   // 思考增量正常转发时起点就是第一段思考的第一个字，不该退回 start。
@@ -365,7 +377,7 @@ describe("applyUsageMessage", () => {
       6_000,
     )!;
     expect(done.genMs).toBe(4_000);
-    expect(throughput(done)).toBe(200);
+    expect(throughput(done, nowOf(done))).toBe(200);
   });
 
   // 速度计读的是滚动窗口（Σ输出 ÷ Σ生成耗时），不是最近一次请求：工具循环里
@@ -400,7 +412,7 @@ describe("applyUsageMessage", () => {
     expect(snap.speedSamples).toHaveLength(1);
     snap = request(snap, 2_000, 2_100, 4_100, 400); // 400 tok / 2s = 200
     // 加权：(100 + 400) ÷ 3s = 166；不是两次速度的平均（150），也不是最后一次（200）。
-    expect(throughput(snap)).toBeCloseTo(166.67, 1);
+    expect(throughput(snap, nowOf(snap))).toBeCloseTo(166.67, 1);
     // 本回合合计：回答下面那行按这一轮的 Σ 报速度。
     expect(snap.turnGenMs).toBe(3_000);
     expect(snap.turnGenTokens).toBe(500);
@@ -446,7 +458,7 @@ describe("applyUsageMessage", () => {
       later + 2_000,
     )!;
     expect(snap.speedSamples).toEqual([{ tokens: 50, ms: 1_000, at: later + 2_000 }]);
-    expect(throughput(snap)).toBe(50);
+    expect(throughput(snap, nowOf(snap))).toBe(50);
   });
 
   it("上游把整段回复合并下发时不编造速度", () => {
@@ -491,7 +503,7 @@ describe("applyUsageMessage", () => {
     expect(done.turnGenTokens).toBeUndefined();
     expect(done.speedSamples).toHaveLength(1);
     // 回答那行退回窗口口径也仍然是同一个数（窗口里就这一次请求）。
-    expect(turnThroughput(done)).toBe(100);
+    expect(turnThroughput(done, nowOf(done))).toBe(100);
   });
 
   // 快照整份存进 conversations.json（后端 `maxUsageBytes` = 2KB），存不下就等于重开
@@ -854,7 +866,9 @@ describe("mergeUsage", () => {
     const fromTranscript = { contextTokens: 5100, genMs: 12_000, genTokens: 840 };
     const merged = mergeUsage(persisted, fromTranscript)!;
     expect(merged.genMs).toBe(4000);
-    expect(throughput(merged)).toBe(210);
+    // 持久化样本的 `at` 是真实时间戳（这里给 1 = 1970 年）：按它自己的时刻算，
+    // 否则 TTL 会把它当陈旧样本丢掉，这条用例就测不到「优先取实测值」了。
+    expect(throughput(merged, 1 + 1_000)).toBe(210);
   });
 
   it("只有一边时原样返回；都没有返回 undefined", () => {
@@ -882,5 +896,82 @@ describe("mergeUsage", () => {
       apiMs: 40,
       contextWindow: 1_000_000,
     });
+  });
+});
+
+// 速度计回答的是「此刻多快」：半小时前量到的样本不能继续报数。
+// TTL 以前只在 `pushSpeedSample` 里生效，那只覆盖「一直在跑」的会话——
+// 关掉对话放一晚上 / 隔天重开（快照从 conversations.json 读回来）会一直显示昨天的数。
+describe("速度计只认新鲜样本", () => {
+  const snap = {
+    contextTokens: 100,
+    speedSamples: [{ tokens: 500, ms: 2_000, at: 1_000_000 }],
+  };
+
+  it("样本还在有效期内时照常报数", () => {
+    expect(throughput(snap, 1_000_000 + 60_000)).toBe(250);
+  });
+
+  it("样本全过期时不报数，也不拿更旧的 genMs 充数", () => {
+    expect(throughput(snap, 1_000_000 + 31 * 60_000)).toBeUndefined();
+  });
+
+  it("老快照（没有 speedSamples）仍按 genMs/genTokens 兜底", () => {
+    expect(throughput({ contextTokens: 100, genTokens: 500, genMs: 2_000 }, Date.now())).toBe(250);
+  });
+});
+
+// 两边的样本各有对方没有的请求：合并成并集，而不是挑一份整份替换。
+// resync 时整份替换会把本回合刚量到的样本抹掉（速度计退回上一轮）。
+describe("mergeSpeedSamples", () => {
+  it("取并集、去重、按时刻排序、只留窗口内最后几条", () => {
+    const a = [{ tokens: 100, ms: 1_000, at: 1_000 }];
+    const b = [
+      { tokens: 200, ms: 1_000, at: 2_000 },
+      { tokens: 100, ms: 1_000, at: 1_000 }, // 与 a 重复
+    ];
+    expect(mergeSpeedSamples(a, b)).toEqual([
+      { tokens: 100, ms: 1_000, at: 1_000 },
+      { tokens: 200, ms: 1_000, at: 2_000 },
+    ]);
+  });
+
+  it("一边为空时原样返回另一边", () => {
+    const a = [{ tokens: 1, ms: 1, at: 1 }];
+    expect(mergeSpeedSamples(undefined, a)).toEqual(a);
+    expect(mergeSpeedSamples(a, undefined)).toEqual(a);
+    expect(mergeSpeedSamples(undefined, undefined)).toBeUndefined();
+  });
+
+  it("mergeUsage 不会丢掉 live 带来的新样本", () => {
+    const persisted = { contextTokens: 10, speedSamples: [{ tokens: 100, ms: 1_000, at: 1_000 }] };
+    const live = { contextTokens: 20, speedSamples: [{ tokens: 300, ms: 1_000, at: 2_000 }] };
+    const merged = mergeUsage(persisted, live)!;
+    expect(merged.speedSamples).toHaveLength(2);
+    expect(throughput(merged, 2_000)).toBe(200); // (100+300) ÷ 2s
+  });
+});
+
+// 进程被杀 / 崩溃时不会再有 result：本回合的生成合计必须作废，
+// 否则同一 id 接着聊时「本回合速度」会把上一轮那半截算进分子分母。
+describe("settleTurnUsage", () => {
+  it("清掉本回合的生成合计，保留窗口样本与上下文", () => {
+    const snap = {
+      contextTokens: 1234,
+      turnGenMs: 4_000,
+      turnGenTokens: 800,
+      speedSamples: [{ tokens: 800, ms: 4_000, at: Date.now() }],
+    };
+    const settled = settleTurnUsage(snap)!;
+    expect(settled.turnGenMs).toBeUndefined();
+    expect(settled.turnGenTokens).toBeUndefined();
+    expect(settled.contextTokens).toBe(1234);
+    expect(settled.speedSamples).toHaveLength(1);
+  });
+
+  it("本来就没有回合合计时原样返回", () => {
+    const snap = { contextTokens: 1 };
+    expect(settleTurnUsage(snap)).toBe(snap);
+    expect(settleTurnUsage(undefined)).toBeUndefined();
   });
 });
