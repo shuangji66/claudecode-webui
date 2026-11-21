@@ -82,7 +82,8 @@ src/
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu
                        / MentionMenu（@ 候选菜单）/ useMention（候选拉取、防抖与键盘仲裁）
                        / ImageLightbox（正文图片放大）
-                       / UsageStats（环 + 用量弹层，另导出 UsageSummary）/ ResultBar / WorkspacePicker
+                       / UsageStats（轮数 / 总量 / 速度 + 占用环**整块一个按钮**，点开用量弹层）
+                       / ResultBar / WorkspacePicker
   components/tools/    ToolCardHost（注册表）/ AgentCard / BashCard / EditCard / AskQuestionCard（提问回放）
                        / AskReplyBubble（已作答的提问：问题 + 我的回答渲染成用户气泡）
                        / GenericCard（兜底）

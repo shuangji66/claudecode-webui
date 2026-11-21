@@ -8,10 +8,19 @@
 //     几十上百次请求会把 cache_read 加到一起（长任务实测能到 900 万，而窗口只有 100 万）；
 //   - `result.modelUsage.<model>.contextWindow`：模型上下文窗口（init 里没有）。
 //
-// 这里刻意**不做**的事：CLI 不提供「步骤数」「实时 tok/s」「官方上下文百分比」，
-// 所以步数用工具调用次数、tok/s 用输出 token ÷ API 耗时、上下文用
-// (input + cache_read + cache_creation) ÷ contextWindow —— 都是同一套数据算出来的，
-// 不在界面上编造。
+// 这里刻意**不做**的事：CLI 不提供「步骤数」「官方上下文百分比」，所以步数用工具调用
+// 次数、上下文用 (input + cache_read + cache_creation) ÷ contextWindow —— 都是同一套
+// 数据算出来的，不在界面上编造。
+//
+// tok/s 的口径（对齐 DSH 的速度计，见 `throughput`）：
+//   - **分母只算 decode**：第一个 token 增量 → `message_delta`，不含首字延迟。
+//     `message_start` → `message_delta` 会把这次请求的 TTFT 摊进分母，一句几十 token 的
+//     短回复（工具循环里最常见）能因此读成实际速度的三分之一到七分之一；
+//   - **分子分母都按窗口累加**：Σ输出 ÷ Σ生成耗时（最近 `SPEED_WINDOW` 次请求）。
+//     单次请求的速度抖动极大（30 token 的 tool_use 与 800 token 的正文差好几倍），
+//     拿最近一次请求的数当速度计，看起来就是「一会儿很高一会儿很低」；
+//   - 攒不出来就不显示：上游把整段回复合并下发（算出来超过 `MAX_GENERATION_TPS`）时
+//     宁可不显示，也不编。
 
 import { isInjectedUserRow, splitContinuation } from "./continuation";
 
@@ -66,18 +75,54 @@ export interface UsageSnapshot {
   /** 内部：当前这次请求已经计进 `turnCountedOutputTokens` 的输出（个别中转会连发多条 delta）。 */
   requestOutputCounted?: number;
   /**
-   * 最近一次请求的**纯生成耗时**（message_start → message_delta，毫秒）与那一次请求的输出。
-   * tok/s 只认这一对：整轮输出 ÷ 整轮 API 耗时会把每次请求的首字延迟一起摊进去，
-   * 长任务里能低到实际速度的三分之一。
+   * 最近一次请求的**纯生成耗时**（第一个 token 增量 → message_delta，毫秒）与那一次请求的
+   * 输出。整轮输出 ÷ 整轮 API 耗时会把每次请求的首字延迟一起摊进去，长任务里能低到实际
+   * 速度的三分之一；`message_start` → `message_delta` 同样含首字延迟，短回复能差好几倍。
    */
   genMs?: number;
   genTokens?: number;
+  /**
+   * 最近几次请求的速度样本（滚动窗口，最多 `SPEED_WINDOW` 条）。速度计读的是
+   * Σ输出 ÷ Σ生成耗时，不是最近一次请求——单次请求的样本抖得厉害（工具循环里
+   * 一次 tool_use 只有几十 token，和几百 token 的正文不是同一件事）。
+   */
+  speedSamples?: SpeedSample[];
+  /** 本回合已量到的生成耗时 / 输出之和（= 这一轮自己的平均速度，给回答下面那行用）。 */
+  turnGenMs?: number;
+  turnGenTokens?: number;
   /** 输出里用于思考的 token；CLI 没给（或为 0）时为空。 */
   thinkingTokens?: number;
   /** 最近一回合的 API 耗时（整轮累计，与 `duration_api_ms` 同口径）。 */
   apiMs?: number;
-  /** 内部：最近一次请求的开始时刻（客户端时钟），只用来量 genMs，回合结束时清掉。 */
+  /**
+   * 内部：最近一次请求的开始时刻（客户端时钟）。
+   *
+   * 它**不是** decode 起点（那个是 `requestFirstAt`），只在没收到任何 token 增量帧的中转上
+   * 兜底当起点；回合结束时清掉。
+   */
   requestStartedAt?: number;
+  /** 内部：这次请求**第一个 token 增量**的到达时刻；decode 耗时从这里起算。 */
+  requestFirstAt?: number;
+  /**
+   * 内部：第一个增量是思考还是正文。
+   *
+   * 用来认「中转没转发 thinking_delta」：`output_tokens` 含思考 token，一帧思考增量都没
+   * 见到的话 decode 起点就无从判断（起点会是第一段正文，思考那几秒被白摘出分母），
+   * 这时退回 `requestStartedAt`，宁可偏低也不虚高。
+   */
+  requestFirstKind?: "thinking" | "text";
+}
+
+/**
+ * 一次请求的速度样本：这次请求纯生成的耗时与输出。
+ *
+ * `at` 是样本时刻，用来淘汰太旧的样本：半小时前（可能还是另一个模型）的速度不该继续
+ * 算进「现在的速度」里。
+ */
+export interface SpeedSample {
+  tokens: number;
+  ms: number;
+  at: number;
 }
 
 function num(v: unknown): number {
@@ -180,10 +225,73 @@ function thinkingTokensOf(usage: unknown): number | undefined {
   return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined;
 }
 
-/** 输出速度（tok/s）：输出 token ÷ API 耗时。耗时缺失或为 0 时返回 undefined。 */
+/** 输出速度（tok/s）：输出 token ÷ 生成耗时。耗时缺失或为 0 时返回 undefined。 */
 export function tokensPerSecond(outputTokens: number, apiMs: number | undefined): number | undefined {
   if (!apiMs || apiMs <= 0 || outputTokens <= 0) return undefined;
   return outputTokens / (apiMs / 1000);
+}
+
+/**
+ * 速度窗口里保留几次请求的样本。
+ *
+ * 一轮工具循环里十几二十次请求，只留最后一次就是「速度计一会儿高一会儿低」；
+ * 全都会留则换个模型之后半天不更新。8 次：短回复（几十 token）被长回复按 token
+ * 加权盖住，窗口里只要有几百 token 的正文，读数就不再跳。
+ */
+const SPEED_WINDOW = 8;
+
+/** 样本的有效期：超过半小时的样本在下一次测量时丢掉（换过模型就别再拿旧速度报数）。 */
+const SPEED_SAMPLE_TTL_MS = 30 * 60_000;
+
+/** 把一次请求的样本压进滚动窗口（先淘汰过期的，再截到 `SPEED_WINDOW` 条）。 */
+function pushSpeedSample(prev: SpeedSample[] | undefined, sample: SpeedSample): SpeedSample[] {
+  const cutoff = sample.at - SPEED_SAMPLE_TTL_MS;
+  const kept = (prev ?? []).filter((s) => s.at >= cutoff && s.ms > 0 && s.tokens > 0);
+  return [...kept, sample].slice(-SPEED_WINDOW);
+}
+
+/**
+ * 速度计读数（tok/s）：滚动窗口里 Σ输出 ÷ Σ生成耗时（加权，不是各次速度的平均）。
+ *
+ * 与 DSH 的 `decodeTokens ÷ decodeMs` 同一个口径：分母只算 decode（不含首字延迟），
+ * 分子分母都按窗口累加。窗口为空（还没量到 / 全是合并下发的假样本）时退回
+ * `genTokens / genMs`，再没有就不显示。
+ */
+export function throughput(snap: UsageSnapshot | undefined): number | undefined {
+  if (!snap) return undefined;
+  let tokens = 0;
+  let ms = 0;
+  for (const s of snap.speedSamples ?? []) {
+    if (s.tokens > 0 && s.ms > 0) {
+      tokens += s.tokens;
+      ms += s.ms;
+    }
+  }
+  if (tokens > 0 && ms > 0) return tokens / (ms / 1000);
+  return tokensPerSecond(snap.genTokens ?? 0, snap.genMs);
+}
+
+/**
+ * 本回合的生成速度（tok/s）：这一轮所有已量到请求的 Σ输出 ÷ Σ生成耗时。
+ *
+ * 回答下面那行小字报的是「本轮消耗」，速度就取同一层的数；拿最近一次请求凑数的话，
+ * 一轮三十次工具调用里最后一个往往是个短回复，读数与这一轮的实际速度无关。
+ */
+export function turnThroughput(snap: UsageSnapshot | undefined): number | undefined {
+  if (!snap) return undefined;
+  const tps = tokensPerSecond(snap.turnGenTokens ?? 0, snap.turnGenMs);
+  return tps ?? throughput(snap);
+}
+
+/**
+ * 速度的显示文本（对齐 DSH）：≥10 取整，<10 留一位小数。
+ *
+ * 一位小数只给低区间：0.8 与 3.4 tok/s 的差别有意义（上游在压），而 210.4 那位小数
+ * 只是抖动。
+ */
+export function formatSpeed(tps: number): string {
+  const clamped = Number.isFinite(tps) ? Math.max(0, tps) : 0;
+  return clamped >= 10 ? String(Math.round(clamped)) : String(Math.round(clamped * 10) / 10);
 }
 
 /** 上下文占窗口的百分比（0..100 的整数）；缺窗口或窗口为 0 时返回 undefined。 */
@@ -259,8 +367,9 @@ export function sessionTotals(snap: UsageSnapshot | undefined): {
  * 从一条 CLI 原始消息更新快照。
  *
  * - `stream_event` 的 message_start / message_delta：流式期间就能更新上下文与输出
- *   （**上下文只认这里**，它是单次请求的数）；顺带用两帧的到达时刻量出这一请求的
- *   纯生成耗时（`genMs` / `genTokens`），tok/s 靠它，不靠整轮平均；
+ *   （**上下文只认这里**，它是单次请求的数）；`content_block_delta` 只用来记下这次
+ *   请求第一个 token 的时刻，`message_delta` 据此量出**纯生成耗时**（不含首字延迟），
+ *   压进滚动窗口（`speedSamples`）与本回合合计（`turnGen*`）；
  * - `result`：回合结束，补上窗口、整轮输出与整轮输入（`turnInputTokens`，这是「消耗」），
  *   并把本回合加进会话累计。它的 usage 是整轮累计，所以不碰上下文。
  *
@@ -315,6 +424,8 @@ export function applyUsageMessage(
       const started = {
         ...(prev ?? { contextTokens: 0 }),
         requestStartedAt: at,
+        requestFirstAt: undefined,
+        requestFirstKind: undefined,
         requestInputCounted: false,
         requestOutputCounted: 0,
       };
@@ -346,6 +457,7 @@ export function applyUsageMessage(
       //   没有（官方形状）→ 保留上一份上下文，只更新输出。
       // 回合进行中不更新上下文的话，整个回合都显示不出占用，只能等 result。
       const context = plausibleContext(contextTokens(totals), prev?.contextWindow);
+      const thinking = thinkingTokensOf(ev.usage);
       const next: UsageSnapshot = { ...(prev ?? { contextTokens: 0 }), outputTokens: totals.output };
       if (context > 0) {
         next.contextTokens = context;
@@ -354,23 +466,58 @@ export function applyUsageMessage(
         countRequestInput(next, context);
       }
       countRequestOutput(next, totals.output);
-      // 纯生成耗时：start 帧到 delta 帧（start 是上游开始回话，已含首字延迟之外的部分）。
+      // 生成耗时只从**第一个 token 增量**算起（decode 口径）：`message_start` 到
+      // `message_delta` 还含这次请求的首字延迟，短回复（工具循环里的 tool_use 常常只有
+      // 几十 token）会被摊成实际速度的几分之一。中转不发增量帧时退回 start 帧。
       const started = prev?.requestStartedAt;
+      const firstAt = prev?.requestFirstAt;
       delete next.requestStartedAt;
-      if (started !== undefined && at > started && totals.output > 0) {
-        const ms = at - started;
+      delete next.requestFirstAt;
+      // 这次请求有思考、但第一个增量是正文 → 中转没转发 thinking_delta（有的中转只转
+      // 正文）。那样 decode 起点就落在思考结束之后，而分子里的 output 含着思考 token，
+      // 速度会被虚抬好几倍；退回 `message_start`（含首字延迟，偏低不虚高）。
+      const missedThinking = thinking !== undefined && (prev?.requestFirstKind ?? "text") === "text";
+      const from = missedThinking ? started : (firstAt ?? started);
+      delete next.requestFirstKind;
+      const ms = from !== undefined && at > from ? at - from : undefined;
+      if (ms !== undefined && totals.output > 0) {
         if (totals.output / (ms / 1000) <= MAX_GENERATION_TPS) {
           next.genMs = ms;
           next.genTokens = totals.output;
+          next.speedSamples = pushSpeedSample(prev?.speedSamples, { tokens: totals.output, ms, at });
+          next.turnGenMs = (prev?.turnGenMs ?? 0) + ms;
+          next.turnGenTokens = (prev?.turnGenTokens ?? 0) + totals.output;
         } else {
           // 合并下发，量不出速度：清掉上一次的，别拿旧请求的数冒充这一次。
+          // 窗口里已有的真样本照旧留着——它们量的是别的请求，不是这一次。
           delete next.genMs;
           delete next.genTokens;
         }
       }
-      const thinking = thinkingTokensOf(ev.usage);
       if (thinking !== undefined) next.thinkingTokens = thinking;
       return next;
+    }
+    // 逐字增量只用一个信息：这次请求的**第一个 token** 什么时候到（decode 起点）。
+    // `--include-partial-messages` 下每个 token 都有一帧，但 token 计数只有
+    // `message_delta` 才权威，所以其余增量不必让快照变一次（返回 undefined）。
+    if (ev.type === "content_block_delta") {
+      if (prev?.requestFirstAt !== undefined) return undefined;
+      const delta = ev.delta as Record<string, unknown> | undefined;
+      const piece =
+        typeof delta?.text === "string"
+          ? delta.text
+          : typeof delta?.thinking === "string"
+            ? delta.thinking
+            : typeof delta?.partial_json === "string"
+              ? delta.partial_json
+              : "";
+      // `ping` / `signature_delta` 这类没有正文，不算首字。
+      if (!piece) return undefined;
+      return {
+        ...(prev ?? { contextTokens: 0 }),
+        requestFirstAt: at,
+        requestFirstKind: delta?.type === "thinking_delta" ? "thinking" : "text",
+      };
     }
     return undefined;
   }
@@ -405,8 +552,15 @@ export function applyUsageMessage(
       apiMs: apiMs ?? prev?.apiMs,
     };
     delete next.requestStartedAt;
+    delete next.requestFirstAt;
+    delete next.requestFirstKind;
     delete next.requestInputCounted;
     delete next.requestOutputCounted;
+    // 回合结束：这一轮的生成耗时合计由 `TurnUsage` 带走（normalize 的 applyResult 从
+    // 更新前的快照里取），快照里清空，下一轮从 0 重新累。滚动窗口 `speedSamples`
+    // 不随回合清 —— 它是「这台机器现在的速度」，跨轮才稳。
+    delete next.turnGenMs;
+    delete next.turnGenTokens;
     if (turnInput !== undefined) {
       next.turnInputTokens = turnInput;
       // 会话累计：只在本进程里滚（`prev` 在就说明这一路的事件都看到了）。`prev` 空着
@@ -466,12 +620,18 @@ function isPromptLine(m: Record<string, unknown>): boolean {
  * 底部那行统计就消失了。转录里其实都有：
  *   - `assistant` 行的 `message.usage`：那次请求的 input/cache/output；
  *   - `api-request` 行是请求发出时刻、`assistant` 行是回复落盘时刻，两者之差就是这次
- *     请求的耗时（实测慢速 mock：sleep 1.5s → 差值 1517ms）；
+ *     请求的**墙钟**耗时（实测慢速 mock：sleep 1.5s → 差值 1517ms）；
  *   - `cost-state` 行（只在 print 模式出现）作为兜底：累计 API 耗时取相邻差值。
  * 窗口转录里没有，由调用方用设置里的模型窗口兜底。
  *
  * 口径与实时路径对齐：上下文取**最后一次请求**；「本轮输入 / 输出 / API 耗时」是本轮
  * 所有请求之和（= `result.usage` / `duration_api_ms` 的口径）；会话累计是全转录求和。
+ *
+ * **这里不给生成速度（`genMs` / `genTokens`）**：转录只落到「回复写完了」这一刻，
+ * 没有第一个 token 的时间，`api-request` → `assistant` 含着首字延迟。拿它当 tok/s 的
+ * 分母，同一个对话「实时看 200、刷新后 60」，正是速度计看起来不准的一半原因。
+ * 实测值随快照持久化（`PATCH /api/conversations {usage}`），重开对话由 `mergeUsage`
+ * 优先取那份；转录这边只报 token 与墙钟耗时。
  */
 export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined {
   let lastTotals: UsageTotals | undefined;
@@ -479,9 +639,6 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
   let prevApiMs = 0;
   let apiMsFromCost: number | undefined;
   let lastRequestAt: number | undefined;
-  // 最近一次请求自己的耗时与输出（算 tok/s 用），与「整轮」区分开。
-  let genMs: number | undefined;
-  let genTokens: number | undefined;
   // 最后一轮：从最后一条提问行起算，遇到提问就清零。
   let turnInput = 0;
   let turnOutput = 0;
@@ -528,11 +685,7 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
       turnOutput += t.output;
       sessionInput += contextTokens(t);
       sessionOutput += t.output;
-      if (requestMs !== undefined) {
-        turnApiMs += requestMs;
-        genMs = requestMs;
-        genTokens = t.output;
-      }
+      if (requestMs !== undefined) turnApiMs += requestMs;
     } else if (m.type === "cost-state") {
       if (typeof m.totalAPIDuration === "number") {
         // 每条 cost-state 都是累计值：与本条之前的差值才是「最近一回合」的 API 耗时。
@@ -561,8 +714,6 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
     turnInputTokens: turnInput,
     sessionInputTokens: sessionInput || undefined,
     sessionOutputTokens: sessionOutput || undefined,
-    genMs,
-    genTokens,
     thinkingTokens: thinking,
     apiMs,
     contextWindow: window,
@@ -583,6 +734,9 @@ function withoutContext(snap: UsageSnapshot): UsageSnapshot {
     sessionOutputTokens: snap.sessionOutputTokens,
     genMs: snap.genMs,
     genTokens: snap.genTokens,
+    speedSamples: snap.speedSamples,
+    turnGenMs: snap.turnGenMs,
+    turnGenTokens: snap.turnGenTokens,
     thinkingTokens: snap.thinkingTokens,
     apiMs: snap.apiMs,
   };
@@ -591,6 +745,10 @@ function withoutContext(snap: UsageSnapshot): UsageSnapshot {
 /**
  * 合并两份快照：转录回放给的是「最近一次请求」的 token 数（更准），
  * 持久化那份补上转录里没有的 API 耗时与上下文窗口。
+ *
+ * **速度只认持久化那份**（`genMs` / `speedSamples` / `turnGenMs` 都是实测值）：
+ * 转录里只有 `api-request` → `assistant` 的时间差，含首字延迟，拿去当生成速度正是
+ * 那个「一刷新就变小一半」的来源（见 `usageFromTranscript`）。
  */
 export function mergeUsage(
   persisted: UsageSnapshot | undefined,
@@ -615,8 +773,11 @@ export function mergeUsage(
     turnInputTokens: live.turnInputTokens ?? base.turnInputTokens,
     sessionInputTokens: live.sessionInputTokens ?? base.sessionInputTokens,
     sessionOutputTokens: live.sessionOutputTokens ?? base.sessionOutputTokens,
-    genMs: live.genMs ?? base.genMs,
-    genTokens: live.genTokens ?? base.genTokens,
+    genMs: base.genMs ?? live.genMs,
+    genTokens: base.genTokens ?? live.genTokens,
+    speedSamples: base.speedSamples ?? live.speedSamples,
+    turnGenMs: base.turnGenMs ?? live.turnGenMs,
+    turnGenTokens: base.turnGenTokens ?? live.turnGenTokens,
     thinkingTokens: live.thinkingTokens ?? base.thinkingTokens,
     apiMs: live.apiMs ?? base.apiMs,
     contextWindow: live.contextWindow ?? base.contextWindow,

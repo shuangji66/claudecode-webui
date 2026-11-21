@@ -1,7 +1,7 @@
 import { Markdown } from "../common/Markdown";
 import { CopyButton } from "./CopyButton";
 import { useT } from "../../lib/i18n";
-import { formatTokens, tokensPerSecond } from "../../lib/usage";
+import { formatSpeed, formatTokens, turnThroughput } from "../../lib/usage";
 import { formatDuration } from "../../lib/elapsed";
 import type { TurnUsage } from "../../lib/model";
 
@@ -12,8 +12,8 @@ import type { TurnUsage } from "../../lib/model";
  *   纯秒数得自己心算；
  * - 中间那个数是**这一轮一共吃掉的 token**（输入含缓存 + 输出），不是「输出 tok」：
  *   一轮几十次工具调用里，输入侧占了绝大多数，只报输出会让人以为几乎没花钱；
- * - tok/s 用最近一次请求的输出 ÷ 它自己的生成耗时，不用整轮平均（那会把每次请求的
- *   首字延迟都摊进去，长任务里能低到实际速度的三分之一）。CLI 没给的数不编。
+ * - tok/s 是**这一轮**的 Σ输出 ÷ Σ生成耗时（`turnThroughput`）：分母不含首字延迟，
+ *   也不拿最后一次请求凑数——工具循环里最后一个请求往往只是个短回复。CLI 没给的数不编。
  */
 function turnParts(turn: TurnUsage, t: (zh: string, en?: string) => string): string[] {
   const parts: string[] = [];
@@ -21,8 +21,8 @@ function turnParts(turn: TurnUsage, t: (zh: string, en?: string) => string): str
   const usage = turn.usage;
   const total = (usage?.turnInputTokens ?? 0) + (usage?.outputTokens ?? 0);
   if (total > 0) parts.push(`${t("本轮 ", "turn ")}${formatTokens(total)} tok`);
-  const tps = tokensPerSecond(usage?.genTokens ?? 0, usage?.genMs);
-  if (tps !== undefined) parts.push(`${Math.round(tps)} tok/s`);
+  const tps = turnThroughput(usage);
+  if (tps !== undefined) parts.push(`${formatSpeed(tps)} tok/s`);
   return parts;
 }
 

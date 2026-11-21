@@ -64,9 +64,14 @@ describe("UsageSummary", () => {
 });
 
 describe("ContextUsage", () => {
-  it("上下文用圈 + 百分比，点开只讲占用", () => {
+  it("上下文用圈 + 百分比，整个用量块是一个按钮", () => {
     const { container } = render(<UsageStats snap={SNAP} turns={3} tools={12} events={40} />);
-    expect(screen.getByLabelText("上下文占用 5%")).toBeInTheDocument();
+    // 轮数 / 总量 / 速度 / 占用**在同一个按钮里**：以前只有那颗小圈能点，
+    // 想看一眼总量得先瞄准右边，点偏了没反应。
+    const trigger = screen.getByRole("button", { name: "3 轮 · 2M · 210 tok/s · 上下文占用 5%" });
+    expect(trigger).toHaveTextContent("3 轮 · 2M · 210 tok/s");
+    expect(trigger).toHaveTextContent("5%");
+    expect(screen.queryAllByRole("button")).toHaveLength(1);
     // 圈是两段圆：底环 + 按比例画弧（5% → dashoffset 接近满周长）
     const arcs = container.querySelectorAll("svg circle");
     expect(arcs).toHaveLength(2);
@@ -81,10 +86,10 @@ describe("ContextUsage", () => {
     // 关着的时候不渲染，也不再往 title 里塞长文（触屏拿不到悬停）。
     expect(screen.queryByRole("dialog")).toBeNull();
 
-    const trigger = screen.getByRole("button", { name: "上下文占用 5%" });
+    const trigger = screen.getByRole("button", { name: /上下文占用 5%/ });
     fireEvent.click(trigger);
 
-    const panel = screen.getByRole("dialog", { name: "上下文占用" });
+    const panel = screen.getByRole("dialog", { name: "用量" });
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(panel).toHaveTextContent("已用9.1K / 195.3K");
     // 会话累计与缓存明细合成一块，不挂分组标题；输入 / 输出各占一行
@@ -125,8 +130,8 @@ describe("ContextUsage", () => {
         events={25}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "上下文占用 6%" }));
-    const panel = screen.getByRole("dialog", { name: "上下文占用" });
+    fireEvent.click(screen.getByRole("button", { name: /上下文占用 6%/ }));
+    const panel = screen.getByRole("dialog", { name: "用量" });
     expect(panel).toHaveTextContent("合计61.2K tok");
     expect(panel).toHaveTextContent("输入60.1K");
     expect(panel).toHaveTextContent("输出1.2K");
@@ -134,7 +139,7 @@ describe("ContextUsage", () => {
 
   it("再点一次、按 Esc、点外部都会关闭详情", () => {
     render(<UsageStats snap={SNAP} turns={1} tools={0} events={9} />);
-    const trigger = screen.getByRole("button", { name: "上下文占用 5%" });
+    const trigger = screen.getByRole("button", { name: /上下文占用 5%/ });
 
     fireEvent.click(trigger);
     expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -154,5 +159,52 @@ describe("ContextUsage", () => {
     const { container } = render(<UsageStats snap={{ contextTokens: 9312 }} turns={0} tools={0} events={0} />);
     expect(container.textContent).toBe("");
     expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  // 没有窗口（还没跑完第一轮，result 没到）不等于没有用量：合计 / 输入 / 输出与速度
+  // 都是独立的数。占用的圈可以不画，但入口要能点开看那几个数。
+  it("没有上下文窗口时仍然可点，弹层只少了占用那一段", () => {
+    render(
+      <UsageStats
+        snap={{ contextTokens: 61_500, sessionInputTokens: 20_000, sessionOutputTokens: 1200, genMs: 2000, genTokens: 400 }}
+        turns={2}
+        tools={3}
+        events={12}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "2 轮 · 20.7K · 200 tok/s" });
+    expect(trigger.querySelector("svg")).toBeNull();
+    fireEvent.click(trigger);
+    const panel = screen.getByRole("dialog", { name: "用量" });
+    expect(panel).toHaveTextContent("合计20.7K tok");
+    expect(panel).toHaveTextContent("生成速度200 tok/s");
+    // 占用那一段整块不出现（没有窗口就不报百分比），也不留一个空标题。
+    expect(panel).not.toHaveTextContent("上下文占用");
+    expect(panel).not.toHaveTextContent("已用");
+  });
+
+  // 速度计读的是滚动窗口的加权值（Σ输出 ÷ Σ生成耗时），不是最近一次请求：
+  // 单次请求的样本在工具循环里能差好几倍。
+  it("速度用窗口里的 Σ输出 ÷ Σ生成耗时，不是最近一次请求", () => {
+    render(
+      <UsageStats
+        snap={{
+          contextTokens: 1000,
+          contextWindow: 200_000,
+          speedSamples: [
+            { tokens: 30, ms: 1000, at: 1 },
+            { tokens: 800, ms: 4000, at: 2 },
+          ],
+          genMs: 1000,
+          genTokens: 30,
+        }}
+        turns={1}
+        tools={0}
+        events={2}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /上下文占用 1%/ }));
+    // (30 + 800) ÷ 5s = 166 tok/s，而不是最后那次 30 ÷ 1s = 30 tok/s。
+    expect(screen.getByRole("dialog", { name: "用量" })).toHaveTextContent("生成速度166 tok/s");
   });
 });

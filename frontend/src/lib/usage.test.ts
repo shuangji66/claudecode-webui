@@ -7,10 +7,13 @@ import {
   contextPercent,
   contextTokens,
   formatCacheHit,
+  formatSpeed,
   formatTokens,
   sessionTotals,
+  throughput,
   tokensPerSecond,
   totalsFromUsage,
+  turnThroughput,
 } from "./usage";
 
 // 下面两条是 2.1.325 实测抓到的真实帧（本地 mock API，一个 7 token 的回合）。
@@ -251,6 +254,201 @@ describe("applyUsageMessage", () => {
     expect(Math.round(tokensPerSecond(result.outputTokens ?? 0, result.apiMs)!)).toBe(70);
   });
 
+  // 首字延迟不进分母：`message_start` 到第一个 token 增量之间的等待是 prefill，
+  // 与「这个模型吐字多快」无关。一句 400 token 的回复等了 3s 才开口、用 1s 写完，
+  // 真实 decode 速度是 400 tok/s，而 start 口径会读成 100。
+  it("从第一个 token 增量起算，首字延迟不进分母", () => {
+    let snap = applyUsageMessage(
+      undefined,
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 410, output_tokens: 1 } } } },
+      1_000,
+    )!;
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "先看看" } } },
+      4_000,
+    )!;
+    expect(snap.requestFirstAt).toBe(4_000);
+    // 只认第一个增量：后面每帧都让快照变一次会把消息流拖慢（一帧一个 token）。
+    expect(
+      applyUsageMessage(
+        snap,
+        { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "。后面还有" } } },
+        4_500,
+      ),
+    ).toBeUndefined();
+    const done = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 400 } } },
+      5_000,
+    )!;
+    expect(done.genMs).toBe(1000);
+    expect(done.genTokens).toBe(400);
+    expect(tokensPerSecond(done.genTokens ?? 0, done.genMs)).toBeCloseTo(400, 5);
+  });
+
+  // `signature_delta` / `ping` 没有正文，不能当成「第一个 token」——它们往往在
+  // message_start 之后立刻到达，认下来等于把首字延迟又摊回分母。
+  it("没有正文的增量帧不算首字", () => {
+    let snap = applyUsageMessage(
+      undefined,
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } } },
+      1_000,
+    )!;
+    expect(
+      applyUsageMessage(
+        snap,
+        { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "abc" } } },
+        1_100,
+      ),
+    ).toBeUndefined();
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "嗯" } } },
+      3_000,
+    )!;
+    expect(snap.requestFirstAt).toBe(3_000);
+  });
+
+  // 有的中转只转发正文、不转 `thinking_delta`，而 output_tokens 里含着思考 token。
+  // 那时「第一个正文增量」比真正的 decode 起点晚了好几秒，分子却把思考算进去，
+  // 速度会被虚抬好几倍。认出来就退回 message_start（含首字延迟，偏低不虚高）。
+  it("中转没转思考增量时不让速度虚高", () => {
+    let snap = applyUsageMessage(
+      undefined,
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } } },
+      1_000,
+    )!;
+    // 思考阶段一帧都没有：第一条增量直接是正文。
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "答案" } } },
+      5_000,
+    )!;
+    const done = applyUsageMessage(
+      snap,
+      {
+        type: "stream_event",
+        event: {
+          type: "message_delta",
+          usage: { output_tokens: 800, output_tokens_details: { thinking_tokens: 700 } },
+        },
+      },
+      5_500,
+    )!;
+    // 从正文增量算会是 800 ÷ 0.5s = 1600 tok/s（早被上限挡掉），从 start 算是 800 ÷ 4.5s。
+    expect(done.genMs).toBe(4_500);
+    expect(throughput(done)).toBeCloseTo(177.8, 1);
+  });
+
+  // 思考增量正常转发时起点就是第一段思考的第一个字，不该退回 start。
+  it("思考增量正常转发时按第一个思考增量起算", () => {
+    let snap = applyUsageMessage(
+      undefined,
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } } },
+      1_000,
+    )!;
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "想" } } },
+      2_000,
+    )!;
+    const done = applyUsageMessage(
+      snap,
+      {
+        type: "stream_event",
+        event: {
+          type: "message_delta",
+          usage: { output_tokens: 800, output_tokens_details: { thinking_tokens: 700 } },
+        },
+      },
+      6_000,
+    )!;
+    expect(done.genMs).toBe(4_000);
+    expect(throughput(done)).toBe(200);
+  });
+
+  // 速度计读的是滚动窗口（Σ输出 ÷ Σ生成耗时），不是最近一次请求：工具循环里
+  // 一次 tool_use 只有几十 token，和几百 token 的正文差好几倍，拿最后一次当速度
+  // 就是「一会儿很高一会儿很低」。
+  it("速度计用窗口里的 Σ输出 ÷ Σ生成耗时，短请求不会把读数打下去", () => {
+    const request = (
+      prev: ReturnType<typeof applyUsageMessage>,
+      startAt: number,
+      firstAt: number,
+      endAt: number,
+      output: number,
+    ) => {
+      let snap = applyUsageMessage(
+        prev,
+        { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } } },
+        startAt,
+      )!;
+      snap = applyUsageMessage(
+        snap,
+        { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "x" } } },
+        firstAt,
+      )!;
+      return applyUsageMessage(
+        snap,
+        { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: output } } },
+        endAt,
+      )!;
+    };
+
+    let snap = request(undefined, 0, 500, 1_500, 100); // 100 tok / 1s = 100
+    expect(snap.speedSamples).toHaveLength(1);
+    snap = request(snap, 2_000, 2_100, 4_100, 400); // 400 tok / 2s = 200
+    // 加权：(100 + 400) ÷ 3s = 166；不是两次速度的平均（150），也不是最后一次（200）。
+    expect(throughput(snap)).toBeCloseTo(166.67, 1);
+    // 本回合合计：回答下面那行按这一轮的 Σ 报速度。
+    expect(snap.turnGenMs).toBe(3_000);
+    expect(snap.turnGenTokens).toBe(500);
+    expect(turnThroughput(snap)).toBeCloseTo(166.67, 1);
+
+    // 窗口只留最近 8 次：一轮几十次请求不能无限攒下去（快照要随对话落盘）。
+    for (let i = 0; i < 10; i += 1) snap = request(snap, 10_000 + i * 2_000, 10_100 + i * 2_000, 11_100 + i * 2_000, 100);
+    expect(snap.speedSamples).toHaveLength(8);
+  });
+
+  it("半小时前的样本不再算进速度（换过模型就别拿旧速度报数）", () => {
+    const at = 1_000;
+    let snap = applyUsageMessage(
+      undefined,
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } } },
+      at,
+    )!;
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "x" } } },
+      at + 1_000,
+    )!;
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 900 } } },
+      at + 3_000,
+    )!;
+    expect(snap.speedSamples).toHaveLength(1);
+    const later = at + 31 * 60_000;
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } } },
+      later,
+    )!;
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "x" } } },
+      later + 1_000,
+    )!;
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 50 } } },
+      later + 2_000,
+    )!;
+    expect(snap.speedSamples).toEqual([{ tokens: 50, ms: 1_000, at: later + 2_000 }]);
+    expect(throughput(snap)).toBe(50);
+  });
+
   it("上游把整段回复合并下发时不编造速度", () => {
     const started = applyUsageMessage(
       undefined,
@@ -264,6 +462,86 @@ describe("applyUsageMessage", () => {
     )!;
     expect(done.genMs).toBeUndefined();
     expect(done.genTokens).toBeUndefined();
+    // 假样本也不能进窗口：它会把速度计抬到没有上限。
+    expect(done.speedSamples ?? []).toHaveLength(0);
+    expect(turnThroughput(done)).toBeUndefined();
+  });
+
+  // 回合结束要把本回合的合计清掉（`TurnUsage` 已经带走一份）：不清的话下一轮会接着
+  // 往上加，回答下面那行的速度会混进上一轮。
+  it("result 清掉本回合的生成合计，窗口保留", () => {
+    let snap = applyUsageMessage(
+      undefined,
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } } },
+      1_000,
+    )!;
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "x" } } },
+      1_500,
+    )!;
+    snap = applyUsageMessage(
+      snap,
+      { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 100 } } },
+      2_500,
+    )!;
+    expect(snap.turnGenTokens).toBe(100);
+    const done = applyUsageMessage(snap, { type: "result", usage: { input_tokens: 10, output_tokens: 100 } })!;
+    expect(done.turnGenMs).toBeUndefined();
+    expect(done.turnGenTokens).toBeUndefined();
+    expect(done.speedSamples).toHaveLength(1);
+    // 回答那行退回窗口口径也仍然是同一个数（窗口里就这一次请求）。
+    expect(turnThroughput(done)).toBe(100);
+  });
+
+  // 快照整份存进 conversations.json（后端 `maxUsageBytes` = 2KB），存不下就等于重开
+  // 对话时速度没了。窗口只留 8 条就是为了这个：别让它长到落不了盘。
+  it("带窗口的快照仍然很小（后端单条上限 2KB）", () => {
+    let snap = applyUsageMessage(
+      undefined,
+      {
+        type: "stream_event",
+        event: {
+          type: "message_start",
+          message: { usage: { input_tokens: 410, cache_read_input_tokens: 168_000, output_tokens: 1 } },
+        },
+      },
+      0,
+    )!;
+    for (let i = 0; i < 8; i += 1) {
+      const base = i * 5_000;
+      snap = applyUsageMessage(
+        snap,
+        {
+          type: "stream_event",
+          event: {
+            type: "message_start",
+            message: { usage: { input_tokens: 410 + i, cache_read_input_tokens: 168_000, output_tokens: 1 } },
+          },
+        },
+        base,
+      )!;
+      snap = applyUsageMessage(
+        snap,
+        { type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "x" } } },
+        base + 500,
+      )!;
+      snap = applyUsageMessage(
+        snap,
+        { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 900 } } },
+        base + 4_500,
+      )!;
+    }
+    const done = applyUsageMessage(snap, { type: "result", usage: { input_tokens: 3_000, output_tokens: 7_200 } })!;
+    expect(done.speedSamples).toHaveLength(8);
+    expect(JSON.stringify(done).length).toBeLessThan(2 * 1024);
+  });
+
+  it("速度文本 ≥10 取整、<10 留一位小数", () => {
+    expect(formatSpeed(210.4)).toBe("210");
+    expect(formatSpeed(9.96)).toBe("10");
+    expect(formatSpeed(3.44)).toBe("3.4");
+    expect(formatSpeed(0)).toBe("0");
   });
 
   it("result 给出本轮消耗（输入含缓存 + 输出），并滚进会话累计", () => {
@@ -498,6 +776,11 @@ describe("usageFromTranscript", () => {
     expect(snap.apiMs).toBe(1517);
     expect(snap.outputTokens).toBe(7);
     expect(snap.contextTokens).toBe(9012);
+    // 这段墙钟时间含首字延迟，不能当生成速度：转录里没有第一个 token 的时刻，
+    // 拿它算 tok/s 会让同一个对话「实时看 200、刷新后 60」。
+    expect(snap.genMs).toBeUndefined();
+    expect(snap.genTokens).toBeUndefined();
+    expect(snap.speedSamples).toBeUndefined();
   });
 
   it("转录里没有 usage 时返回 undefined，不编数字", () => {
@@ -556,6 +839,22 @@ describe("mergeUsage", () => {
       apiMs: 40,
       contextWindow: 200000,
     });
+  });
+
+  // 速度只认实测（持久化那份）：转录那份没有首字时间，`api-request` → `assistant`
+  // 的时间差含着首字延迟。以前这里反过来取，于是刷新一次速度就掉一半。
+  it("生成速度优先取持久化的实测值，不用转录推算的墙钟耗时", () => {
+    const persisted = {
+      contextTokens: 5000,
+      contextWindow: 200000,
+      genMs: 4000,
+      genTokens: 840,
+      speedSamples: [{ tokens: 840, ms: 4000, at: 1 }],
+    };
+    const fromTranscript = { contextTokens: 5100, genMs: 12_000, genTokens: 840 };
+    const merged = mergeUsage(persisted, fromTranscript)!;
+    expect(merged.genMs).toBe(4000);
+    expect(throughput(merged)).toBe(210);
   });
 
   it("只有一边时原样返回；都没有返回 undefined", () => {

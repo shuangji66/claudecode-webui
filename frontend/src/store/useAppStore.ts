@@ -2699,8 +2699,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // usage 只在 CLI 真的给出数字时更新（stream_event 的 message_start/delta、
         // 以及 result）；不认识的形状保持原样。
         const usage = applyUsageMessage(get().usage[sid], ev.data);
-        // 把这一路攒下的用量快照带进 applyCLI：result 的整轮口径里没有「最近一次请求」
-        // 的生成耗时，回答下面那行 tok/s 只能从流式阶段借（否则实时回合永远少这一段）。
+        // 把这一路攒下的用量快照带进 applyCLI：result 的整轮口径里没有生成耗时，
+        // 回答下面那行 tok/s（本回合的 Σ输出 ÷ Σ生成耗时）只能从流式阶段借
+        // （否则实时回合永远少这一段）。
         const hint = get().usage[sid];
         set((s) => ({
           items: { ...s.items, [sid]: applyCLI(s.items[sid] ?? [], ev.data, Date.now(), hint) },

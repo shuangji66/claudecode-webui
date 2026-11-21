@@ -6,7 +6,7 @@ import { TaskPanel } from "./TaskPanel";
 import { MessageList } from "./MessageList";
 import { TurnTimer } from "./TurnTimer";
 import { WorkspacePicker } from "./WorkspacePicker";
-import { UsageStats, UsageSummary } from "./UsageStats";
+import { UsageStats } from "./UsageStats";
 import { TopBar } from "../layout/TopBar";
 import { PermissionPanel } from "../permission/PermissionPanel";
 import { AskUserQuestionPanel } from "../permission/AskUserQuestionPanel";
@@ -273,8 +273,9 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
               </>
             )}
       </span>
-      <span className="flex shrink-0 items-center gap-2">
-        <UsageSummary snap={snap} turns={turns} events={itemList.length} />
+      {/* 轮数 / 总量 / 速度 / 占用**整块一个按钮**（见 UsageStats）：以前只有那颗小圈能点，
+          想看一眼总数得先瞄准右边，点偏了没反应。 */}
+      <span className="flex shrink-0 items-center">
         <UsageStats snap={snap} turns={turns} tools={tools} events={itemList.length} />
       </span>
     </>

@@ -174,9 +174,10 @@ describe("normalize", () => {
     expect(items.map((i) => i.kind)).toEqual(["assistant", "assistant", "tool", "assistant"]);
   });
 
-  // tok/s 用「最近一次请求」的口径（genMs/genTokens）：result 的整轮累计里没有这一对，
-  // 必须从流式阶段那份快照借过来，否则实时回合的回答下面永远少一段「· N tok/s」。
-  it("result 的用量会带上流式阶段量到的生成速度", () => {
+  // tok/s 用**本回合**的 Σ输出 ÷ Σ生成耗时（turnGenMs/turnGenTokens）：result 的整轮
+  // 累计里没有生成耗时，必须从流式阶段那份快照借过来，否则实时回合的回答下面永远少
+  // 一段「· N tok/s」。
+  it("result 的用量会带上流式阶段量到的本回合生成速度", () => {
     let items = applyCLI([], {
       type: "assistant",
       message: { role: "assistant", content: [{ type: "text", text: "答案" }] },
@@ -190,10 +191,27 @@ describe("normalize", () => {
         usage: { input_tokens: 10, output_tokens: 900 },
       },
       Date.now(),
+      { contextTokens: 1000, turnGenMs: 5000, turnGenTokens: 1000 },
+    );
+    const answer = items.find((i) => i.kind === "assistant") as { turn?: { usage?: Record<string, number> } };
+    expect(answer.turn?.usage).toMatchObject({ turnGenMs: 5000, turnGenTokens: 1000, outputTokens: 900 });
+  });
+
+  // 本回合一次都没量到（中转不发增量帧、或整段合并下发）时退回最近一次真量到的请求：
+  // 那是测出来的数，只是不含这一轮的其它请求。
+  it("本回合没量到生成耗时的时候退回最近一次请求的速度", () => {
+    let items = applyCLI([], {
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "text", text: "答案" }] },
+    });
+    items = applyCLI(
+      items,
+      { type: "result", subtype: "success", duration_ms: 4000, usage: { input_tokens: 10, output_tokens: 900 } },
+      Date.now(),
       { contextTokens: 1000, genMs: 2000, genTokens: 400 },
     );
     const answer = items.find((i) => i.kind === "assistant") as { turn?: { usage?: Record<string, number> } };
-    expect(answer.turn?.usage).toMatchObject({ genMs: 2000, genTokens: 400, outputTokens: 900 });
+    expect(answer.turn?.usage).toMatchObject({ genMs: 2000, genTokens: 400 });
   });
 
   // 「本轮花了多少」挂在回答那一行最顺手：result 来时把用量回填到该回合

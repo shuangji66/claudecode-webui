@@ -167,7 +167,8 @@ export interface ApplyOptions {
  *
  * `at` 用于回放历史转录时保留原始时间，不传则用当前时间。
  * `usageHint` 是实时流里已经攒下的用量快照（store 的 `usage[sid]`）：`result` 的整轮
- * 口径里没有「最近一次请求的生成速度」，tok/s 只能从流式阶段量到的 genMs/genTokens 借。
+ * 口径里没有生成耗时，回答下面那行的 tok/s 只能从流式阶段量到的 turnGenMs / turnGenTokens
+ * 借（本回合一次都没量到时退回最近一次请求的 genMs / genTokens）。
  */
 export function applyCLI(
   items: Item[],
@@ -1096,7 +1097,9 @@ export interface TranscriptTurn {
  * 转录里没有 result 行（claude 只把 result 写 stdout），于是「本轮耗时 · 输出 tok」
  * 一刷新就没了。转录里其实有全部原料：
  *   - `assistant` 行的 `message.usage`：那次请求的 input/cache/output；
- *   - `api-request` 行 → 下一条 `assistant` 行的间隔 = 这次请求的 API 耗时；
+ *   - `api-request` 行 → 下一条 `assistant` 行的间隔 = 这次请求的 API 耗时
+ *     （**含首字延迟**，所以只报耗时，不拿它算 tok/s，见 `lib/usage` 的
+ *     `usageFromTranscript`）；
  *   - 用户提问行 → 本轮最后一条 assistant 行的时间差 = 整个回合的墙钟耗时
  *     （与 result.duration_ms 同一个口径）。
  *
@@ -1169,9 +1172,6 @@ export function turnsFromTranscript(lines: unknown[]): TranscriptTurn[] {
         usage: {
           contextTokens: contextTokens(totals),
           cacheHitRate: cacheHitRate(totals),
-          // 最近一次请求自己的耗时与输出：tok/s 靠它（整轮平均会把每次请求的首字延迟摊进去）。
-          genMs: apiMs,
-          genTokens: totals.output,
         },
       };
     }
@@ -1302,12 +1302,19 @@ function applyResult(items: Item[], m: Raw, at: number, usageHint?: UsageSnapsho
   const reason = isError ? stripAnsi(raw || errors.join("\n")) : "";
   const text = reason && !repeatedByApiErrorAnswer(items, reason) ? reason : "";
   const usage = applyUsageMessage(undefined, m);
-  // tok/s 用的是「最近一次请求」的 genMs/genTokens（见 lib/usage 的文件头）：result 的
-  // 整轮累计里没有这一对，只能从流式阶段那份快照借过来。不借的话实时回合的回答下面
-  // 永远少一段「· 210 tok/s」，而重开对话走转录回放反而有。
+  // 回答下面那行的速度用的是**本回合**的 Σ输出 ÷ Σ生成耗时（见 lib/usage 的
+  // `turnThroughput`）：result 的整轮累计里没有生成耗时，只能从流式阶段那份快照借。
+  // 不借的话实时回合的回答下面永远少一段「· 210 tok/s」，而重开对话走转录回放反而有。
+  // （`speedSamples` 是跨轮的滚动窗口，回答这一行不报它——那是底栏速度计的口径。）
   if (usage && usageHint) {
-    if (usageHint.genMs !== undefined) usage.genMs = usageHint.genMs;
-    if (usageHint.genTokens !== undefined) usage.genTokens = usageHint.genTokens;
+    if (usageHint.turnGenMs !== undefined) usage.turnGenMs = usageHint.turnGenMs;
+    if (usageHint.turnGenTokens !== undefined) usage.turnGenTokens = usageHint.turnGenTokens;
+    // 本回合一次都没量到（中转没有增量帧 / 全是合并下发）时，退回最近一次真量到的
+    // 请求——总比整行少一段强，而且它确实是测出来的数。
+    if (usage.turnGenMs === undefined && usageHint.genMs !== undefined) {
+      usage.genMs = usageHint.genMs;
+      usage.genTokens = usageHint.genTokens;
+    }
   }
   // 回合结束（成功/失败/中断都一样）：悬着的流式气泡必须收尾，否则光标永远在闪。
   const out = stampTurnUsage(settleStreaming(items), {

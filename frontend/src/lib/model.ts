@@ -55,7 +55,9 @@ export interface TurnUsage {
   durationMs?: number;
   /**
    * 这一轮的用量快照：`turnInputTokens` + `outputTokens` 是「本轮消耗」（输入含缓存），
-   * `genMs` / `genTokens` 是**最近一次请求**的生成耗时与输出，用来算 tok/s。
+   * `turnGenMs` / `turnGenTokens` 是**这一轮所有量到的请求**的生成耗时与输出之和，
+   * `turnThroughput` 用它算本轮 tok/s（`genMs` / `genTokens` 只是兜底：本回合一次都没
+   * 量到时退回最近一次真量到的请求）。
    *
    * 不是「最后一次请求的上下文占用」——上下文占用归底栏那颗圆环（store 的 `usage`），
    * 回答下面只报这一轮花了多少。别按旧口径改回去。
