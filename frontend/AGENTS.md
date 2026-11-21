@@ -223,6 +223,10 @@ src/
     `ccweb-active-session` 一并清掉），**不要**自动打开同工作区的下一条：那个「下一条」只是
     按最近活跃猜的，用户归档完想停下时却被拉进另一个对话、又起一个 claude 进程。
     删除当前对话仍打开该工作区的下一条（没有就空态）——删除的意图是「继续干活」。
+    **已归档的对话禁止点进去**（对齐 DSH：归档 = 从当前视图收起）：侧栏行与历史记录行
+    都先看一眼 `c.archived`，命中就 `showToast(「需要先取消归档」)` 并 return，**不要**打开
+    对话（历史记录页在「全部 / 仅已归档」下会列出这些行，正是误点的来源）。
+    行尾那颗「取消归档」按钮不受影响——它就是用户该走的那条路。
     **归档/取消归档是乐观更新**（`archiveConversation`）：先就地改那一行的 `archived`、
     归档当前对话时立刻 `setActive(null)`，PATCH 在后台发——回包后面那次
     `refreshConversations()` 是全量重建（旧实现要重扫每份转录，NAS 上秒级），等它等于让
@@ -564,6 +568,11 @@ src/
 - 每个会话的消息独立存 `items[sid]`，切换会话不重新拉取；
 - WebSocket 实例放在**模块级 `Map`**，不进 store（避免被当成可序列化数据）；
 - store 的 action 只做三件事：调 API、转发命令、把事件交给纯函数；
+- **轻提示走 `showToast`**（`store.toast` + `components/common/Toast`，挂在 `App` 里）：
+  一句话的反馈（「已归档的对话需要先取消归档」这类），几秒后自己消失、整块
+  `pointer-events-none` 不挡点按。**不要用它报错误**——错误走 `error` 那条（要用户处理、
+  带关闭键、不自动收）；也不要为一句提示去弹 `Dialog`。
+  再次 `showToast` 会覆盖上一条并重新计时（`seq` 区分，旧计时器不会收掉新的）。
 - **对话列表**存 `conversations`（后端合并转录+元数据+live），`openConversation(id)` 负责
   `--resume`、切换工作区、回放 transcript、连接 WS；组件不要自己调 `/api/session`。
 - 新建对话用 `createSession`；空对话等首条 prompt 才由后端落元数据，前端不要提前 touch。

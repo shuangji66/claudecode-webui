@@ -902,3 +902,39 @@ describe("Sidebar 工作区行（对齐 DSH）", () => {
     expect(screen.getByText("c-6")).toBeInTheDocument();
   });
 });
+
+describe("Sidebar 已归档对话", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    // 归档的行只在「全部 / 仅已归档」筛选下出现，正好是用户能点到它的场景。
+    localStorage.setItem("ccweb-sidebar-view", JSON.stringify({ group: "workspace", sort: "recent", archive: "all" }));
+    useAppStore.setState({
+      activeId: null,
+      currentWorkspace: "/w",
+      workspaces: [{ path: "/w", name: "w", last_used: "", exists: true }],
+      conversations: [
+        { id: "c-1", cwd: "/w", title: "会话甲", created_at: "", last_active: "2026-01-02T00:00:00Z", messages: 2, archived: false, live: false },
+        { id: "c-2", cwd: "/w", title: "会话乙", created_at: "", last_active: "2026-01-01T00:00:00Z", messages: 1, archived: true, live: false },
+      ],
+      openConversation: vi.fn(async () => true),
+      toast: null,
+    } as never);
+  });
+
+  // 对齐 DSH：已归档 = 从当前视图收起。点进去等于把刚归档的那条又拉回面前，
+  // 所以只提示一句「先取消归档」。
+  it("点已归档的那行只提示先取消归档，不打开", () => {
+    renderSidebar();
+
+    fireEvent.click(screen.getByText("会话乙"));
+    expect(useAppStore.getState().openConversation).not.toHaveBeenCalled();
+    expect(useAppStore.getState().toast?.text).toContain("取消归档");
+  });
+
+  it("未归档的那行照常打开", () => {
+    renderSidebar();
+
+    fireEvent.click(screen.getByText("会话甲"));
+    expect(useAppStore.getState().openConversation).toHaveBeenCalledWith("c-1");
+  });
+});

@@ -113,6 +113,22 @@ describe("HistoryPage 行操作", () => {
     expect(archive.className).not.toContain("text-brand");
   });
 
+  // 已归档的对话不能点进去（对齐 DSH）：这一页在「全部 / 仅已归档」下会列出它们，
+  // 误点一下就等于把刚归档的那条又拉回对话区。要打开得先点右侧那颗「取消归档」。
+  it("已归档的行点了不打开，只提示先取消归档", async () => {
+    const openConversation = vi.fn(async () => true);
+    useAppStore.setState({ openConversation, toast: null });
+    render(<HistoryPage onClose={() => {}} />);
+
+    fireEvent.click(screen.getByText("会话乙"));
+    expect(openConversation).not.toHaveBeenCalled();
+    expect(useAppStore.getState().toast?.text).toContain("取消归档");
+
+    // 未归档的那条照常能进（别把整页都拦掉）。
+    fireEvent.click(screen.getByText("会话甲"));
+    await waitFor(() => expect(openConversation).toHaveBeenCalledWith("c-1", false, expect.any(Function)));
+  });
+
   it("删除必须先二次确认", async () => {
     askConfirmMock.mockResolvedValue(false);
     render(<HistoryPage onClose={() => {}} />);

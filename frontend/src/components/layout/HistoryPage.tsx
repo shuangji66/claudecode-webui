@@ -32,6 +32,7 @@ export function HistoryPage({ onClose, onOpenSidebar }: Props) {
   const probeDir = useAppStore((s) => s.probeDir);
   const refreshConversations = useAppStore((s) => s.refreshConversations);
   const openConversation = useAppStore((s) => s.openConversation);
+  const showToast = useAppStore((s) => s.showToast);
   const archiveConversation = useAppStore((s) => s.archiveConversation);
   const deleteConversation = useAppStore((s) => s.deleteConversation);
   const [query, setQuery] = useState("");
@@ -72,6 +73,12 @@ export function HistoryPage({ onClose, onOpenSidebar }: Props) {
 
   const openHistory = async (id: string, cwd: string) => {
     if (busyCwd) return;
+    // 已归档的对话不能进入（对齐 DSH）：这一页本来就会列出归档项（筛选「全部 / 仅已归档」），
+    // 点进去等于把刚归档的那条又拉回对话区。要打开得先取消归档 —— 行尾那颗图章按钮。
+    if (conversations.find((c) => c.id === id)?.archived) {
+      showToast(t("已归档的对话需要先取消归档才能打开", "This conversation is archived; unarchive it to open"));
+      return;
+    }
     setBusyCwd(cwd);
     setErr(null);
     try {

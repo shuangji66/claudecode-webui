@@ -246,6 +246,13 @@ interface AppState {
 
   loading: boolean;
   error: string | null;
+  /**
+   * 一次性轻提示（toast）：只报一句人话，几秒后自己消失。
+   *
+   * 与 `error` 分开：错误条要用户处理（带关闭键、不会被自动收掉），
+   * 而「麻烦先取消归档」这类说明看完就过去了。`seq` 让重复点同一处也能重新计时。
+   */
+  toast: { seq: number; text: string } | null;
 
   bootstrap: () => Promise<void>;
   loadSettings: () => Promise<void>;
@@ -389,6 +396,9 @@ interface AppState {
 
   applyEvent: (sid: string, ev: WireEvent) => void;
   clearError: () => void;
+  /** 弹一条轻提示（覆盖上一条并重新计时）。 */
+  showToast: (text: string) => void;
+  clearToast: () => void;
 }
 
 const clients = new Map<string, ClaudeClient>();
@@ -564,6 +574,11 @@ const flushing = new Set<string>();
 let editingQueuedId: string | null = null;
 /** 因为「正在编辑」被跳过的那次自动发送，编辑结束后补上。 */
 const flushPending = new Set<string>();
+/** toast 的停留时间：够看完一句「先取消归档」，又不至于挡着下面接着点。 */
+export const TOAST_MS = 4000;
+let toastSeq = 0;
+let toastTimer: number | null = null;
+
 // openSeq 记录「用户最近一次想打开/切换对话」的序号。openConversation 里有多段 await，
 // 迟到的旧请求不能在结束时把 activeId 改回它自己 —— 用户看到的是他最后点的那条。
 let openSeq = 0;
@@ -1028,8 +1043,28 @@ export const useAppStore = create<AppState>()((set, get) => ({
   verify: null,
   loading: false,
   error: null,
+  toast: null,
 
   clearError: () => set({ error: null }),
+
+  showToast: (text) => {
+    const seq = ++toastSeq;
+    set({ toast: { seq, text } });
+    if (toastTimer !== null) window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => {
+      toastTimer = null;
+      // 期间又弹了一条就不收：那条有自己的计时器。
+      if (get().toast?.seq === seq) set({ toast: null });
+    }, TOAST_MS);
+  },
+
+  clearToast: () => {
+    if (toastTimer !== null) {
+      window.clearTimeout(toastTimer);
+      toastTimer = null;
+    }
+    set({ toast: null });
+  },
 
   bootstrap: async () => {
     if (bootstrapPromise) return bootstrapPromise;

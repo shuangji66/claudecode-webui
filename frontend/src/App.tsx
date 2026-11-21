@@ -9,6 +9,7 @@ import { ChatPane } from "./components/chat/ChatPane";
 import { ClaudeInstallPrompt } from "./components/layout/ClaudeInstallPrompt";
 import { TokenGate } from "./components/layout/TokenGate";
 import { SystemDialogs } from "./components/common/SystemDialogs";
+import { Toast } from "./components/common/Toast";
 import { BrandMark, IconClose, IconRetry } from "./components/common/Icons";
 import type { FeatureKey } from "./lib/sidebarFeatures";
 
@@ -287,6 +288,7 @@ function AppShell() {
       />
       {/* 全局确认 / 输入框（替代 window.confirm / prompt），由这里挂一次 */}
       <SystemDialogs />
+      <Toast />
 
       {/* 提示条放顶部：底部会压住输入卡和它的提示行，而错误恰恰需要用户一边看一边改。 */}
       {error && (
