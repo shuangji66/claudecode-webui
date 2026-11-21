@@ -24,6 +24,7 @@ import (
 	"ccweb/backend/internal/agent/manager"
 	"ccweb/backend/internal/agent/session"
 	"ccweb/backend/internal/authz"
+	"ccweb/backend/internal/browserbin"
 	"ccweb/backend/internal/config"
 	"ccweb/backend/internal/conversation"
 	"ccweb/backend/internal/hub"
@@ -87,6 +88,9 @@ type Deps struct {
 	// Mcp 管理 MCP server 配置（用户级 .claude.json / 项目级 .mcp.json）；
 	// 为 nil 时相关路由返回 503。
 	Mcp *mcp.Manager
+	// Browser 管理内置浏览器的 playwright 运行时与内核（下载/状态）；
+	// 为 nil 时浏览器相关路由返回 503（内置服务的注册与工具不受影响）。
+	Browser *browserbin.Manager
 	// Plugins 通过 `claude plugin` 管理插件与 marketplace；为 nil 时相关路由返回 503。
 	Plugins *plugin.Manager
 	// Dirs 读写飞牛「用户授权目录」（scope trim.file.userAccess）；为 nil 时
@@ -241,6 +245,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/mcp", s.authed(s.handleDeleteMcp))
 	s.mux.HandleFunc("POST /api/mcp/enabled", s.authed(s.handleSetMcpEnabled))
 	s.mux.HandleFunc("POST /api/mcp/probe", s.authed(s.handleProbeMcp))
+	// 内置浏览器：运行时（playwright 包 + 两个内核）的下载与状态。
+	s.mux.HandleFunc("GET /api/browser", s.authed(s.handleBrowserStatus))
+	s.mux.HandleFunc("POST /api/browser/install", s.authed(s.handleBrowserInstall))
+	s.mux.HandleFunc("POST /api/browser/cancel", s.authed(s.handleBrowserCancel))
+	s.mux.HandleFunc("DELETE /api/browser", s.authed(s.handleBrowserRemove))
 	s.mux.HandleFunc("GET /api/plugins", s.authed(s.handleListPlugins))
 	s.mux.HandleFunc("GET /api/plugins/available", s.authed(s.handleAvailablePlugins))
 	s.mux.HandleFunc("POST /api/plugins/refresh", s.authed(s.handleRefreshPlugins))

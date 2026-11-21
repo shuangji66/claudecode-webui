@@ -46,6 +46,9 @@ type Config struct {
 	// SchedulesFile 是自动化任务的持久化路径（CCWEB_SCHEDULES_FILE）。
 	// MCP 子命令 `ccweb mcp-schedule` 读的是同一份文件。
 	SchedulesFile string
+	// BrowserDir 是内置浏览器运行时（固定版本 playwright 包 + 内核）的根目录
+	// （CCWEB_BROWSER_DIR）。MCP 子命令 `ccweb mcp-browser` 读同一份路径。
+	BrowserDir string
 	// AutoStart 为 true 时，进程启动后恢复当前工作区最近的一条对话（CCWEB_AUTO_START）；
 	// 没有历史对话时不新建，由前端创建第一条。
 	AutoStart bool
@@ -144,6 +147,7 @@ func Load(version string) Config {
 		WorkspacesFile:    EnvOr("WORKSPACES_FILE", filepath.Join(dataDir, "workspaces.json")),
 		ConversationsFile: EnvOr("CONVERSATIONS_FILE", filepath.Join(dataDir, "conversations.json")),
 		SchedulesFile:     EnvOr("SCHEDULES_FILE", filepath.Join(dataDir, "schedules.json")),
+		BrowserDir:        EnvOr("BROWSER_DIR", filepath.Join(dataDir, "browser")),
 		AutoStart:         envBool("AUTO_START", true),
 		MaxSessions:       maxSessions,
 		PermissionMode:    EnvOr("PERMISSION_MODE", ""),

@@ -850,3 +850,43 @@ export interface SchedulesPayload {
   tasks: ScheduleTask[];
   limits?: { min_gap_seconds?: number; max_deliveries?: number };
 }
+
+/** 内置浏览器的一个内核（Chromium / Firefox）。 */
+export interface BrowserKernel {
+  id: string;
+  label: string;
+  /** 浏览器自身的版本号（界面展示用）。 */
+  version: string;
+  /** playwright 缓存目录的后缀（chromium-1243 里的 1243）。 */
+  build: string;
+  installed: boolean;
+  /** 装好之后真的能启动（Firefox 依赖系统 libnss3 的符号版本，可能装得上但起不来）。 */
+  available: boolean;
+  /** available 为 false 时的原因（截断后的 playwright 报错）。 */
+  problem?: string;
+}
+
+/** 内置浏览器运行时的状态快照（`GET /api/browser`）。 */
+export interface BrowserStatus {
+  /** 运行时根目录（用户可以据此手工清理）。 */
+  root: string;
+  /** 固定的 playwright 包版本。 */
+  playwright: string;
+  /** runner 脚本与全部内核就绪。 */
+  installed: boolean;
+  /** 解析到的 node；空表示没找到。 */
+  node_path: string;
+  node_version: string;
+  kernels: BrowserKernel[];
+  /** "" | downloading | extracting | installing | done | error | cancelled */
+  phase: string;
+  progress: number;
+  total: number;
+  /** 当前动作（「正在下载 Chromium …」），进度条上方那行字。 */
+  note: string;
+  error: string;
+  source: string;
+  running: boolean;
+  /** 正在跑启动自检：结论还没出来，「可用」这时只是「还没测出问题」。 */
+  testing: boolean;
+}

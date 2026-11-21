@@ -23,6 +23,7 @@ import (
 	"ccweb/backend/internal/agent/manager"
 	"ccweb/backend/internal/agent/session"
 	"ccweb/backend/internal/authz"
+	"ccweb/backend/internal/browserbin"
 	"ccweb/backend/internal/claudebin"
 	"ccweb/backend/internal/config"
 	"ccweb/backend/internal/conversation"
@@ -54,6 +55,11 @@ func main() {
 	// `ccweb mcp-schedule` 是自动化任务的模型入口（schema 与建/改逻辑都在子命令里）。
 	if len(os.Args) > 1 && os.Args[1] == "mcp-schedule" {
 		os.Exit(runMCPSchedule())
+	}
+	// `ccweb mcp-browser` 是内置浏览器的模型入口：MCP 协议在这里，浏览器交给
+	// 随包释放的 runner.mjs（node + playwright）驱动，运行时由 browserbin 托管。
+	if len(os.Args) > 1 && os.Args[1] == "mcp-browser" {
+		os.Exit(runMCPBrowser())
 	}
 
 	logger := log.New(os.Stdout, "[ccweb] ", log.LstdFlags)
@@ -112,9 +118,11 @@ func main() {
 	settings.SetProxySource(proxyNow)
 	claudebin.SetProxySource(proxyNow)
 	gitctl.SetProxySource(proxyNow)
-	// MCP 探测与内置搜索都是面板自己发的出站请求，不会自动继承设置里的代理。
+	// MCP 探测、内置搜索与浏览器运行时下载都是面板自己发的出站请求，
+	// 不会自动继承设置里的代理。
 	mcp.SetProxySource(proxyNow)
 	search.SetProxySource(proxyNow)
+	browserbin.SetProxySource(proxyNow)
 	// 插件的下载走 CLI 内部的 git：不接代理会直接克隆失败（实测 GnuTLS 报错）。
 	plugin.SetProxySource(proxyNow)
 
@@ -125,6 +133,14 @@ func main() {
 		filepath.Join(cfg.ClaudeHome, ".claude.json"),
 		filepath.Join(cfg.DataDir, "mcp-disabled.json"),
 	)
+
+	// 内置浏览器的运行时（固定版本 playwright 包 + Chromium/Firefox 内核）：
+	// 下载到数据目录，由「设置 → MCP → 内置浏览器」管理，不随包分发。
+	browserMgr, err := browserbin.Open(cfg.BrowserDir)
+	if err != nil {
+		logger.Printf("启动失败: 初始化浏览器运行时目录: %v", err)
+		os.Exit(1)
+	}
 
 	// 插件与 marketplace：真源是 CLI 自己维护的状态文件，只能 spawn 它来读写。
 	pluginMgr := plugin.New(resolveClaude, cfg.ClaudeHome)
@@ -209,6 +225,10 @@ func main() {
 			case gateway.ScheduleMCPServer:
 				// 自动化任务的三个工具：注册了才放行（同样是为了不每建一条弹一次审批）。
 				allow = append(allow, gateway.ScheduleToolRules()...)
+			case gateway.BrowserMCPServer:
+				// 内置浏览器的十个工具：每一步点击都弹审批的话，用户只会去切「跳过权限」，
+				// 那等于把所有工具一起放开。收尾靠工具描述里的 browser_close 契约。
+				allow = append(allow, gateway.BrowserToolRules()...)
 			}
 		}
 		return allow, deny
@@ -229,6 +249,7 @@ func main() {
 		// CCWEB_CLAUDE_HOME，所以这里不能用自己的 ~/.claude/skills。
 		Skills:  skills.New(filepath.Join(cfg.ClaudeHome, ".claude", "skills")),
 		Mcp:     mcpMgr,
+		Browser: browserMgr,
 		Plugins: pluginMgr,
 		// 飞牛「已授权目录」只能由服务端经 apiscope socket 查/删；
 		// token 由飞牛在启动 cmd/main 时注入，这里传函数每次现读。
@@ -248,6 +269,10 @@ func main() {
 	// 失败只记日志：注册不上不影响面板自己用，最多是模型看不到那几个工具。
 	if err := srv.EnsureScheduleMCP(); err != nil {
 		logger.Printf("注册自动化任务 MCP 失败: %v", err)
+	}
+	// 内置浏览器：同样注册成用户级服务（运行时没装也能注册，工具会提示去设置里安装）。
+	if err := srv.EnsureBrowserMCP(); err != nil {
+		logger.Printf("注册内置浏览器 MCP 失败: %v", err)
 	}
 
 	// 自动化任务的调度循环：到期投递由 gateway 实现（它才有 manager / 对话元数据 /

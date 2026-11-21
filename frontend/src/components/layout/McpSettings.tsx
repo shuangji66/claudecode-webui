@@ -28,6 +28,7 @@ import { IconAlert, IconPlus, IconRefresh, IconTrash } from "../common/Icons";
 import { PageShell } from "./FeaturePage";
 import { SETTINGS_PANE_FLEX } from "./settings/SettingsSurface";
 import { SearchSettings } from "./SearchSettings";
+import { BrowserSettings } from "./BrowserSettings";
 
 /** 编辑中的表单。name + scope 是标识，编辑已有项时不允许改。 */
 interface Draft {
@@ -298,6 +299,7 @@ export function McpSettings({
         )}
 
         <SearchSettings />
+        <BrowserSettings />
 
         <section className="mb-4">
           <div className="mb-1.5 flex items-baseline justify-between gap-2">

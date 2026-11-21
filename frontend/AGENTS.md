@@ -64,6 +64,7 @@ src/
   store/useSkillsStore.ts  设置页技能数据（/api/skills 的列表与正文）
   store/useMcpStore.ts     设置页 MCP 数据（/api/mcp 的列表、探测结果、停用开关）
   store/useSearchStore.ts  内置搜索数据（/api/search 的配置、测试结果、注册状态）
+  store/useBrowserStore.ts 内置浏览器运行时数据（/api/browser 的安装/进度/内核可用性）
   store/usePluginStore.ts  设置页插件数据（/api/plugins 的列表/任务轮询/详情）
   store/useDirsStore.ts    设置页「目录」数据（飞牛已授权目录的列表/撤销）
   components/common/   共享 UI 原语：Dialog / SystemDialogs / Select / Menu / Button / Icons / StateDot
@@ -74,7 +75,7 @@ src/
                        / AuthCallbackPage（飞牛授权回调页，不挂应用壳层）
                        / FeaturePage（功能区整页视图外壳 PageShell + 模型/插件/MCP/技能四页）
                        / SchedulePage（自动化任务）/ HistoryPage（历史记录）
-                       / WorkspaceDialog / ModelsSettings / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / DeploySettings
+                       / WorkspaceDialog / ModelsSettings / SkillsSettings / PluginsSettings / McpSettings / SearchSettings / BrowserSettings / DeploySettings
                        / ClaudeInstallPrompt
   components/layout/settings/  设置页分区：GeneralSettings / CliSettings（子代理限制与空闲回收）/ DirsSettings（飞牛已授权目录）/ ProxySettings / AccessSettings（TCP 端口与访问密码）/ Section（共用分区标题 + SettingRow/SettingRows 行式设置项）
   components/chat/     ChatPane / MessageList / Composer / bubbles / ThinkingBlock / ModelMenu

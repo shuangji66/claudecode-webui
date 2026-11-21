@@ -117,7 +117,7 @@ func (s *Server) handleSaveMcp(w http.ResponseWriter, r *http.Request) {
 	// 内置服务也不许编辑：改了下次启动被 EnsureScheduleMCP 覆盖回原样，中间那段时间
 	// 会话里跑的是「用户以为改过、实际马上会消失」的配置。启停仍然开放（那是暂存语义）。
 	if isBuiltinMcp(body.Server.Scope, body.Server.Name) {
-		writeErr(w, "内置服务由 ccweb 自动维护（自动化任务的模型入口），不能编辑；需要临时关掉请用「停用」",
+		writeErr(w, "内置服务由 ccweb 自动维护（自动化任务 / 内置浏览器），不能编辑；需要临时关掉请用「停用」",
 			http.StatusConflict)
 		return
 	}
@@ -140,7 +140,7 @@ func (s *Server) handleDeleteMcp(w http.ResponseWriter, r *http.Request) {
 	// 下次启动 EnsureScheduleMCP 又原样写回来——用户看到的是「删了又自己长出来」。
 	// 只想暂时关掉就用「停用」（写进暂存文件，重启后仍然保持）。
 	if isBuiltinMcp(q.Get("scope"), q.Get("name")) {
-		writeErr(w, "内置服务由 ccweb 自动维护（自动化任务的模型入口），不能删除；需要临时关掉请用「停用」",
+		writeErr(w, "内置服务由 ccweb 自动维护（自动化任务 / 内置浏览器），不能删除；需要临时关掉请用「停用」",
 			http.StatusConflict)
 		return
 	}
