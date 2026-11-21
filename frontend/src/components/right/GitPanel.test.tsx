@@ -264,3 +264,41 @@ describe("GitPanel 空仓库的历史", () => {
     expect(await screen.findByText("还没有提交。")).toBeInTheDocument();
   });
 });
+
+// `busy` 是「有任何 Git 动作在跑」的全局开关：拉取、暂存、切分支都会置真。
+// 拿它当提交按钮的文案依据时，点一下右上角那颗同步图标，提交按钮就自己变成
+// 「提交中…」——用户根本没提交任何东西。文案只认 `committing`。
+describe("GitPanel 拉取不影响提交按钮的文案", () => {
+  it("拉取进行中，提交按钮仍然写着「提交」", async () => {
+    let releasePull: (() => void) | null = null;
+    apiFetch.mockImplementation(async (path: string): Promise<unknown> => {
+      const url = new URL(path, "http://localhost");
+      if (url.pathname.endsWith("/api/git/status")) {
+        return { is_repo: true, branch: "master", upstream: "origin/master", entries: [] };
+      }
+      if (url.pathname.endsWith("/api/git/branches")) return { current: "master", names: ["master"] };
+      if (url.pathname.endsWith("/api/git/log")) return { entries: [] };
+      if (url.pathname.endsWith("/api/git/pull")) {
+        return new Promise((resolve) => {
+          releasePull = () => resolve({ ok: true });
+        });
+      }
+      return {};
+    });
+    useSidebarStore.setState({
+      git: { is_repo: true, branch: "master", upstream: "origin/master", entries: [] },
+      branches: { current: "master", names: ["master"] },
+    });
+
+    render(<GitPanel cwd={CWD} active />);
+    const commitButton = await screen.findByRole("button", { name: "提交" });
+    fireEvent.click(screen.getByLabelText("拉取"));
+
+    await waitFor(() => expect(releasePull).not.toBeNull());
+    expect(commitButton).toHaveTextContent("提交");
+    expect(commitButton).not.toHaveTextContent("提交中…");
+
+    releasePull!();
+    await waitFor(() => expect(commitButton).toHaveTextContent("提交"));
+  });
+});

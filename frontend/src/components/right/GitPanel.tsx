@@ -113,6 +113,15 @@ export function GitPanel({ cwd, active }: Props) {
   const [mode, setMode] = useState<Mode>("changes");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  /**
+   * 正在提交。
+   *
+   * 与 `busy`（有任何 Git 动作在跑）分开：拉取、暂存、切分支也会把 `busy` 置真，
+   * 拿它当提交按钮的文案依据时，点一下拉取那颗同步图标，提交按钮就变成「提交中…」
+   * ——用户在提交框里根本没提交任何东西。`busy` 继续负责禁用（一次只跑一个动作），
+   * 文案只认这一颗。
+   */
+  const [committing, setCommitting] = useState(false);
   const [selected, setSelected] = useState<{ path: string; staged: boolean } | null>(null);
   const [diff, setDiff] = useState<DiffViewState | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
@@ -264,9 +273,14 @@ export function GitPanel({ cwd, active }: Props) {
     const text = message.trim();
     if (!text || stagedCount === 0 || groups.conflicts.length > 0 || busy) return;
     setBusy(true);
-    const ok = await commit(text);
-    setBusy(false);
-    if (ok) setMessage("");
+    setCommitting(true);
+    try {
+      const ok = await commit(text);
+      if (ok) setMessage("");
+    } finally {
+      setCommitting(false);
+      setBusy(false);
+    }
   };
 
   const backFromDiff = () => {
@@ -452,7 +466,7 @@ export function GitPanel({ cwd, active }: Props) {
                   disabled={busy || !message.trim() || stagedCount === 0 || groups.conflicts.length > 0}
                   className="ml-auto shrink-0 rounded-lg bg-ink px-3 py-1.5 text-[11.5px] font-medium text-canvas hover:opacity-90 disabled:opacity-35"
                 >
-                  {busy ? t("提交中…", "Committing…") : t("提交", "Commit")}
+                  {committing ? t("提交中…", "Committing…") : t("提交", "Commit")}
                 </button>
               </div>
             </div>
