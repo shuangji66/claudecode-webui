@@ -13,6 +13,8 @@
 // `selected: []` 表达「跳过」；claude 的答案是 map，没有「无答案」这种合法值。
 // 本实现因此不提供跳过：每题必须有选择或自定义文本，提交前自检。
 
+import type { Item, ToolItem } from "./model";
+
 /** 一个选项。 */
 export interface AskQuestionOption {
   /**
@@ -63,10 +65,20 @@ export interface AskDraft {
 export const ASK_SKIP_ZH = "（用户跳过此题，按你的最佳判断继续）";
 export const ASK_SKIP_EN = "(The user skipped this question; proceed with your best judgment)";
 
+/**
+ * CLI 自己给的「这题没有选择」占位答案。
+ *
+ * 用户只写了备注、一个选项都没勾时，`tool_result` 里那道题写成
+ * `"<问题原文>"=(no option selected)`（claude 2.1.325 的
+ * `mapToolResultToToolResultBlockParam`）。它和「跳过」是同一类展示：**没有选任何选项**，
+ * 不能当自定义回答渲染出来。
+ */
+export const ASK_NO_SELECTION = "(no option selected)";
+
 /** 这条答案是不是「跳过」占位（历史回放用它显示「已跳过」而不是「自定义回答」）。 */
 export function isSkipAnswer(answer: string | string[] | undefined): boolean {
   if (typeof answer !== "string") return false;
-  return answer === ASK_SKIP_ZH || answer === ASK_SKIP_EN;
+  return answer === ASK_SKIP_ZH || answer === ASK_SKIP_EN || answer === ASK_NO_SELECTION;
 }
 
 /** 推荐的两种写法（claude 自己的 TUI 用英文，DSH 两种都认）：只认行尾。 */
@@ -222,10 +234,46 @@ export function askUpdatedInput(
 }
 
 /**
+ * CLI 把答案写回 `tool_result` 的**人话**形状（真机数据就是这个）。
+ *
+ * 实测 claude 2.1.325 的 `mapToolResultToToolResultBlockParam`：逐题拼成
+ * `"<问题原文>"="<答案>"`（多选是数组被模板直接插值，于是变成 `A,B`，逗号后没有空格），
+ * 一道没选的题写成 `"<问题>"=(no option selected)`，整串冠在下面某句前缀之后：
+ *   - `Your questions have been answered: … You can now continue with these answers in mind.`
+ *   - `The user answered: … Read the answers carefully — …`（有自定义回答时）
+ *   - 超时（afk）：`… Before going idle the user had selected: …`
+ *
+ * **它不是 JSON**——所以只认 JSON 的旧解析在真机上一条都读不出来，卡片上所有选项都是
+ * 未勾选状态。两种形状都认，JSON 在前（未来的结构化结果优先）。
+ */
+const PROSE_MARKERS = [
+  "Your questions have been answered: ",
+  "The user answered: ",
+  "the user had selected: ",
+];
+
+/** 一对 `"问题"="答案"`，或没有选择时的 `"问题"=(no option selected)`。 */
+const PROSE_PAIR = /"([^"]*)"=(?:"([^"]*)"|\((no option selected)\))/g;
+
+function proseAnswers(text: string): Record<string, string> | null {
+  if (!PROSE_MARKERS.some((marker) => text.includes(marker))) return null;
+  const out: Record<string, string> = {};
+  let found = false;
+  for (const match of text.matchAll(PROSE_PAIR)) {
+    // 问题原文里带引号时这对会被切歪（CLI 不做转义）：宁可整份作废，也不要造一个
+    // 配不上任何题目的键，让界面显示「没有记录到答案」。
+    if (match[1] === "") return null;
+    found = true;
+    out[match[1]] = match[2] ?? ASK_NO_SELECTION;
+  }
+  return found ? out : null;
+}
+
+/**
  * 从工具结果的文本里捞回问答对（历史回放用）。
  *
- * CLI 的 result 具体形状没有文档，所以这里只认「JSON 里带 answers」这一种形态，
- * 认不出就返回 null，由界面原样展示结果文本——不猜、不吞。
+ * 认两种形态：JSON（`{answers: {...}}`）与 CLI 的人话形状（见 `proseAnswers`）。
+ * 都认不出就返回 null，由界面原样展示结果文本——不猜、不吞。
  */
 export function answersFromResult(
   result: string | undefined,
@@ -235,14 +283,111 @@ export function answersFromResult(
   try {
     value = JSON.parse(result);
   } catch {
-    return null;
+    // 真机数据走这条：CLI 给的是人话，不是 JSON。
+    return proseAnswers(result);
   }
   const answers = isRecord(value) ? value.answers : undefined;
-  if (!isRecord(answers)) return null;
+  if (!isRecord(answers)) return proseAnswers(result);
   const out: Record<string, string | string[]> = {};
   for (const [key, raw] of Object.entries(answers)) {
     if (typeof raw === "string") out[key] = raw;
     else if (Array.isArray(raw) && raw.every((x) => typeof x === "string")) out[key] = raw as string[];
   }
   return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
+ * 按题目取答案：把多选的 `A,B` 拆回数组。
+ *
+ * 人话形状里多选是**逗号拼接**的（模板把数组插值了），不拆的话每一项都配不上 label，
+ * 界面上就是「一道题都没选」。拆法按已知 label 走，三条边界：
+ *   - 前面连续的都是已知 label → 拆成数组；「选项 + 自定义文本」拼在后面的，尾部落成一项；
+ *   - 一个都不是已知 label → 整份就是自定义回答，原样留着（含逗号的自由文本不能被拆碎）；
+ *   - 只有一项 → 保持字符串（单选与「只有一个多选项」都是这种）。
+ */
+export function answersOfQuestions(
+  questions: AskQuestion[],
+  result: string | undefined,
+): Record<string, string | string[]> | null {
+  const answers = answersFromResult(result);
+  if (!answers) return null;
+  const out: Record<string, string | string[]> = {};
+  for (const question of questions) {
+    const answer = answers[question.question];
+    if (answer === undefined) continue;
+    if (typeof answer !== "string" || !question.multiSelect) {
+      out[question.question] = answer;
+      continue;
+    }
+    const labels = new Set(question.options.map((option) => option.label));
+    const parts = answer.split(",").map((part) => part.trim());
+    const head: string[] = [];
+    while (head.length < parts.length && labels.has(parts[head.length])) head.push(parts[head.length]);
+    if (head.length === parts.length) out[question.question] = head.length > 1 ? head : answer;
+    else if (head.length === 0) out[question.question] = answer;
+    else out[question.question] = [...head, parts.slice(head.length).join(",")];
+  }
+  return out;
+}
+
+/** 一题的作答，已经折成**展示用**的样子（气泡只渲染这个）。 */
+export interface AskReply {
+  question: AskQuestion;
+  /** 选中选项的展示名，顺序与作答一致。 */
+  chosen: string[];
+  /** 不属于任何选项的部分 = 用户自己写的回答（多选时可能和选项并存）。 */
+  custom: string;
+  /** 这题被跳过（我们发的占位文本，或 CLI 的 `(no option selected)`）。 */
+  skipped: boolean;
+  /** 这次结果里有没有这道题的答案。false 时界面说「没有记录到答案」。 */
+  recorded: boolean;
+}
+
+/**
+ * 把「提问 + 结果」折成逐题问答。
+ *
+ * 题目解析不出来、或者答案形状认不出来时返回 null：调用方据此**继续用工具卡片**
+ * （原样展示结果文本），而不是把一条读不懂的记录渲染成一个半空气泡。
+ */
+export function askReplies(input: unknown, result: string | undefined): AskReply[] | null {
+  const questions = parseAskQuestions(input);
+  if (questions.length === 0) return null;
+  const answers = answersOfQuestions(questions, result);
+  if (!answers) return null;
+  return questions.map((question) => {
+    const answer = answers[question.question];
+    const labels = new Map(question.options.map((option) => [option.label, option.display]));
+    const parts = answer === undefined ? [] : Array.isArray(answer) ? answer : [answer];
+    const chosen: string[] = [];
+    const custom: string[] = [];
+    for (const part of parts) {
+      if (part.trim() === "" || isSkipAnswer(part)) continue;
+      const display = labels.get(part);
+      if (display === undefined) custom.push(part);
+      else chosen.push(display);
+    }
+    return {
+      question,
+      chosen,
+      custom: custom.join("、"),
+      skipped: isSkipAnswer(answer),
+      recorded: answer !== undefined,
+    };
+  });
+}
+
+/**
+ * 这条工具项是「已经答完的模型提问」：渲染成问答气泡，并且**不算过程**。
+ *
+ * 还在等回答（没有 result）、被拒 / 报错、或者结果形状认不出来时都返回 false，
+ * 继续走原来的工具卡片——那些情况没有可展示的答案，把卡片换成气泡等于把结果原文吞掉。
+ */
+export function isAnsweredAsk(item: Item): item is ToolItem {
+  return (
+    item.kind === "tool" &&
+    item.name === "AskUserQuestion" &&
+    item.result !== undefined &&
+    item.isError !== true &&
+    askReplies(item.input, item.result) !== null
+  );
 }

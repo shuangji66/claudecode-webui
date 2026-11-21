@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import {
+  IconChat,
   IconChevronRight,
   IconFile,
   IconFolder,
@@ -24,6 +25,7 @@ const ICONS: Record<ToolCategory, (props: { size?: number; className?: string })
   webFetch: IconGlobe,
   subagents: IconSpark,
   plan: IconSliders,
+  ask: IconChat,
   tools: IconWrench,
   analysis: IconSpark,
 };

@@ -497,6 +497,38 @@ describe("MessageList 过程展示", () => {
     expect(screen.getByText("ls -la")).toBeInTheDocument();
   });
 
+  // 作答完的提问要**两层都画**（对齐 DSH）：过程里留一步「提问 · 已回答」（点开是完整
+  // 选项卡片），正文流里再挂一枚问答气泡。收起过程只藏步骤，气泡是用户说的话，得留下。
+  it("已作答的提问：过程里保留这一步，正文流里另有气泡；收起后只剩气泡", () => {
+    setSessionRunning(false);
+    const ask: Item = {
+      id: "ask1",
+      seq: 0,
+      ts: 0,
+      kind: "tool",
+      toolUseId: "ask1",
+      name: "AskUserQuestion",
+      input: { questions: [{ question: "用哪个数据库？", options: [{ label: "SQLite" }] }] },
+      result: 'Your questions have been answered: "用哪个数据库？"="SQLite". You can now continue with these answers in mind.',
+    };
+    render(<MessageList items={[user(), thinking("这是思考首行"), ask, answer, done]} />);
+
+    // 收起态：步骤（思考、提问）都不画，问答气泡留在正文里。
+    expect(screen.queryByText("思考过程")).toBeNull();
+    expect(screen.getByRole("button", { name: /已完成/ })).toBeInTheDocument();
+    expect(screen.queryByText("提问")).toBeNull();
+    // 只有气泡里有题目（步骤那一行收起来了）
+    expect(screen.getAllByText("用哪个数据库？")).toHaveLength(1);
+    expect(screen.getByText("SQLite")).toBeInTheDocument();
+
+    // 点开收起那一行：步骤回来（提问这一步也在），气泡照旧。
+    fireEvent.click(screen.getByRole("button", { name: /已完成/ }));
+    expect(screen.getByText("思考过程")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /提问/ })).toBeInTheDocument();
+    // 题目出现两次：步骤行的副标题（`toolSummary` 取第一题）+ 气泡里的那一份。
+    expect(screen.getAllByText("用哪个数据库？")).toHaveLength(2);
+  });
+
   it("没有过程可收的轮次不挂那一行（纯问答不该多一行）", () => {
     setSessionRunning(false);
     render(<MessageList items={[user(), answer, done]} />);

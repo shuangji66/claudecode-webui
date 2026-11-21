@@ -45,6 +45,19 @@ describe("isProcessItem", () => {
     expect(isProcessItem(tool("b"))).toBe(true);
     expect(isProcessItem(reply("c"))).toBe(false);
   });
+
+  // 提问要两层都画：过程里留一步「提问 · 已回答」（点开看完整选项），正文流里再挂
+  // 一枚问答气泡。气泡是 MessageList 另外从同一个 Item 派生的，不能靠把这条判成
+  // 「不是过程」来实现——那样步骤就跟着没了。
+  it("已作答的提问仍然是过程（步骤要留在过程里）", () => {
+    const ask: ToolItem = {
+      ...tool("ask", "AskUserQuestion"),
+      input: { questions: [{ question: "Q", options: [{ label: "A" }] }] },
+    };
+    const answered = 'Your questions have been answered: "Q"="A". You can now continue with these answers in mind.';
+    expect(isProcessItem({ ...ask, result: answered })).toBe(true);
+    expect(isProcessItem(ask)).toBe(true);
+  });
 });
 
 describe("buildProcessRows", () => {
@@ -524,5 +537,21 @@ describe("replyDividerIds 只在轮次结束后画线", () => {
   it("默认参数按已结束处理（历史回放与既有调用点不受影响）", () => {
     const turn: Item[] = [reply("a1"), thinking("t1"), reply("a2")];
     expect([...replyDividerIds(turn)]).toEqual(["a2"]);
+  });
+});
+
+describe("提问在组头里的说法", () => {
+  it("提问单独一类：不和「调用工具」混在一起", () => {
+    expect(toolCategory("AskUserQuestion")).toBe("ask");
+  });
+
+  it("命令 + 提问拼成人话，与 DSH 的组头一致", () => {
+    const ask: ToolItem = {
+      ...tool("ask", "AskUserQuestion"),
+      input: { questions: [{ question: "Q", options: [{ label: "A" }] }] },
+      result: 'Your questions have been answered: "Q"="A". You can now continue with these answers in mind.',
+    };
+    const items: Item[] = [tool("b", "Bash", "ok"), ask];
+    expect(groupTitle(items, "done", "zh")).toBe("执行了命令并向你提出了问题");
   });
 });

@@ -33,7 +33,8 @@ src/
   lib/download.ts      带鉴权的文件下载（fetch → blob → <a download>，token 走头）
   lib/newChat.ts       「新对话」判定（按对话元数据，不是 items 是否为空）
   lib/drafts.ts        输入框草稿（按对话存 localStorage，重进前端不丢；只存正文）
-  lib/askQuestion.ts   模型提问（AskUserQuestion）：解析 questions、推荐标记、提交自检与答案编码（纯函数）
+  lib/askQuestion.ts   模型提问（AskUserQuestion）：解析 questions、推荐标记、提交自检、答案编码，
+                        以及从 tool_result（人话或 JSON）读回答案并折成逐题问答（纯函数）
   lib/askDrafts.ts     模型提问的作答草稿（按 request_id 存 localStorage，切对话/重载不丢）
   lib/permissionModes.ts 权限模式判定与危险模式标记（唯一入口）
   lib/sessionExport.ts 会话导出 Markdown（右上角「更多」菜单）
@@ -83,6 +84,7 @@ src/
                        / ImageLightbox（正文图片放大）
                        / UsageStats（环 + 用量弹层，另导出 UsageSummary）/ ResultBar / WorkspacePicker
   components/tools/    ToolCardHost（注册表）/ AgentCard / BashCard / EditCard / AskQuestionCard（提问回放）
+                       / AskReplyBubble（已作答的提问：问题 + 我的回答渲染成用户气泡）
                        / GenericCard（兜底）
   components/permission/ PermissionPanel（按钮由 permission_suggestions 决定）
                        / AskUserQuestionPanel（模型提问：翻页 + 单选多选 + 自定义回答 + 提交自检）

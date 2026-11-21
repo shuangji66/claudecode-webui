@@ -27,6 +27,7 @@ export type ToolCategory =
   | "webFetch"
   | "subagents"
   | "plan"
+  | "ask"
   | "tools"
   | "analysis";
 
@@ -54,6 +55,9 @@ const CATEGORY_BY_TOOL: Record<string, ToolCategory> = {
   TaskList: "plan",
   TaskGet: "plan",
   ExitPlanMode: "plan",
+  // 模型中途的提问也算「用户在做的事」：和人话组头「执行了命令并向你提出了问题」
+  // 对齐 DSH，不要落进「调用工具」那一类。
+  AskUserQuestion: "ask",
 };
 
 /** 未收录的工具归到「调用工具」，不要因此不显示组头。 */
@@ -71,6 +75,7 @@ const CATEGORY_TEXT: Record<ToolCategory, { running: [string, string]; done: [st
   webFetch: { running: ["正在访问网页", "Fetching pages"], done: ["已访问网页", "Fetched pages"] },
   subagents: { running: ["正在协调子代理", "Coordinating subagents"], done: ["已协调子代理", "Coordinated subagents"] },
   plan: { running: ["正在更新计划", "Updating the plan"], done: ["更新了计划", "Updated the plan"] },
+  ask: { running: ["正在向你提问", "Asking you"], done: ["向你提出了问题", "Asked you"] },
   tools: { running: ["正在调用工具", "Calling tools"], done: ["已调用工具", "Called tools"] },
   analysis: { running: ["正在分析请求", "Analyzing the request"], done: ["已完成分析", "Finished analyzing"] },
 };
@@ -116,7 +121,14 @@ export interface TurnSpan {
   durationMs?: number;
 }
 
-/** 思考与工具调用都是「过程」，正文回答与用户消息不是。 */
+/**
+ * 思考与工具调用都是「过程」，正文回答与用户消息不是。
+ *
+ * 已作答的模型提问**两层都要**：步骤留在过程里（「提问 · 已回答」，点开是完整的选项
+ * 卡片——那是「模型问过什么」的记录），同时在正文流里再挂一枚问答气泡
+ * （`AskReplyBubble`，那是「我答了什么」）。所以这条判断对提问照常返回 true，
+ * 气泡由 `MessageList` 另外从同一个 Item 派生，**别为了气泡把它从过程里摘出去**。
+ */
 export function isProcessItem(item: Item): boolean {
   return item.kind === "tool" || item.kind === "thinking";
 }

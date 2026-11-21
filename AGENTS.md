@@ -233,6 +233,24 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `canUseTool` 不被调用，提问到不了前端，模型会自己往下走。
 - 作答草稿按 `request_id` 存浏览器本地（`lib/askDrafts.ts`）：切对话 / 重载回来还在；
   提交成功、`permission.resolved`、进程结束、中断时清掉，避免下次同 id 的卡片带着过期答案回填。
+- **答完之后两层都画**（对齐 DSH 的 `QuestionToolRow` + `question-reply`）：
+  ① **过程里留一步**——`AskUserQuestion` 照旧是过程（`isProcessItem` 返回 true），
+  简洁档折进组头（组头给「执行了命令并向你提出了问题」，见 `toolCategory` 的 `ask` 类），
+  标准/详细档是「提问 · 已回答」这一行，点开是完整的选项卡片（`AskQuestionCard`）；
+  ② **正文流里再挂一枚气泡**（`components/tools/AskReplyBubble`）：右对齐 `bg-bubble`，
+  题目 + header + 用户给的答案，右下角时间与复制。
+  **气泡不是过程，所以它挂在过程块之外**（`MessageList` 的 `repliedAsks`）：整轮收起、
+  或者简洁档把组折起来时，步骤跟着藏，气泡照样看得见——那是用户说的话，不是过程。
+  **别把这条判成「不是过程」来实现气泡**：那样步骤（以及点开就能看的选项卡片）就没了，
+  一轮里相邻的工具调用还会被它劈成两组。**还在等回答 / 被拒 / 结果读不出答案**的那几条
+  只有卡片、没有气泡：没有可展示的答案，凭空造一枚气泡等于把结果原文吞掉。
+- **`tool_result` 是人话，不是 JSON**（实测 2.1.325 的 `mapToolResultToToolResultBlockParam`）：
+  `Your questions have been answered: "问题"="答案", … You can now continue with these answers in mind.`
+  有自定义回答时前缀换成 `The user answered: … Read the answers carefully …`，
+  一道没选的题写成 `"问题"=(no option selected)`（CLI 的 `JLn="(notes only)"` 是同一场景的另一半）。
+  多选是数组被模板插值，于是变成 `A,B`（逗号后没有空格）。`lib/askQuestion.answersFromResult`
+  JSON 与人话两种都认，`answersOfQuestions` 再按已知 label 把多选拆回数组。
+  **别只留 JSON 那条**：真机数据走人话，只认 JSON 时卡片上所有选项都是未选、答案一个字都不显示。
 
 ### 4.2.2 CLI 撤回审批（`control_cancel_request`）
 

@@ -9,12 +9,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { Item } from "../../lib/model";
+import type { Item, ToolItem } from "../../lib/model";
 import { AssistantBubble } from "./AssistantBubble";
 import { ResultBar } from "./ResultBar";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { UserBubble } from "./UserBubble";
 import { ToolCardHost } from "../tools/ToolCardHost";
+import { AskReplyBubble } from "../tools/AskReplyBubble";
+import { isAnsweredAsk } from "../../lib/askQuestion";
 import { IconAlert, IconChevronDown, IconSpark } from "../common/Icons";
 import { useT } from "../../lib/i18n";
 import { activeTurnIndex, turnsOf, windowStart, type Turn } from "../../lib/turns";
@@ -64,6 +66,22 @@ const VISIBLE_STEP = 80;
  * 气泡这边交给浏览器自己的离屏绘制跳过。
  */
 const OFFSCREEN_ROW = { contentVisibility: "auto", containIntrinsicSize: "auto 32px" } as const;
+
+/**
+ * 一条过程行 / 一组过程里包含的「已作答提问」。
+ *
+ * 提问要**两层都画**（对齐 DSH 的 `QuestionToolRow` + `question-reply`）：过程里留一步
+ * 「提问 · 已回答」（点开是完整选项卡片），正文流里再挂一枚问答气泡。气泡不算过程，
+ * 所以它挂在**过程块之外**——整轮收起、或者简洁档把组折起来时，步骤跟着藏，
+ * 气泡照样看得见（那是用户说的话，不是过程）。
+ */
+function repliedAsks(entry: ProcessEntry): ToolItem[] {
+  if (entry.type === "process") return entry.items.filter(isAnsweredAsk);
+  if (entry.type === "item" && entry.item.kind === "tool" && isAnsweredAsk(entry.item)) {
+    return [entry.item];
+  }
+  return [];
+}
 
 /** 单条消息。memo 化：流式追加时只有最后一个气泡需要重渲染。 */
 const MessageRow = memo(function MessageRow({
@@ -245,9 +263,22 @@ const TurnRows = memo(function TurnRows({
           <Fragment key={shown[span.start].id}>
             {!headIsUser && collapseRow}
             {turnRows.map((entry, rowIndex) => {
+              // 已经答完的提问：气泡挂在过程块之外，收起 / 折组都不影响它。
+              const asks = repliedAsks(entry);
+              const askBubbles = asks.length > 0 && (
+                <div className="space-y-2 pt-2">
+                  {asks.map((item) => (
+                    <div key={`ask-${item.id}`} className="animate-rise">
+                      <AskReplyBubble item={item} />
+                    </div>
+                  ))}
+                </div>
+              );
               // 过程收起来了：整批跳过，只留正文。正文与用户消息是「结果」，
-              // 收起要藏的只有过程（思考与工具调用）。
-              if (collapsed && entryTouchesProcess(entry)) return null;
+              // 收起要藏的只有过程（思考与工具调用）——但问答气泡不是过程，留下。
+              if (collapsed && entryTouchesProcess(entry)) {
+                return askBubbles ? <Fragment key={entry.key}>{askBubbles}</Fragment> : null;
+              }
               // 「仅最终回答」：阶段回复整行跳过，不缩成一行占位。
               if (entry.type === "item" && hiddenReplies?.has(entry.item.id)) return null;
               let row: ReactNode = null;
@@ -300,15 +331,25 @@ const TurnRows = memo(function TurnRows({
                   </div>
                 );
               }
+              // 气泡挂在过程块**之后**：步骤在上（「提问 · 已回答」），我的回答在下。
+              // 不挂进 `ProcessGroup` 的展开体里——组一折起来气泡就跟着没了。
+              const content = askBubbles ? (
+                <>
+                  {row}
+                  {askBubbles}
+                </>
+              ) : (
+                row
+              );
               if (rowIndex === 0 && headIsUser) {
                 return (
                   <Fragment key={entry.key}>
-                    {row}
+                    {content}
                     {collapseRow}
                   </Fragment>
                 );
               }
-              return <Fragment key={entry.key}>{row}</Fragment>;
+              return <Fragment key={entry.key}>{content}</Fragment>;
             })}
           </Fragment>
         );

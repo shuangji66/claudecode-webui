@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
+import type { ToolItem } from "./model";
 import {
+  ASK_NO_SELECTION,
   ASK_SKIP_EN,
   ASK_SKIP_ZH,
   answersFromResult,
+  answersOfQuestions,
+  askReplies,
   askUpdatedInput,
   buildAskAnswers,
   duplicateQuestionIndexes,
   emptyAskDrafts,
   firstUnanswered,
+  isAnsweredAsk,
   isDraftAnswered,
   isSkipAnswer,
   parseAskQuestions,
@@ -210,5 +215,93 @@ describe("answersFromResult", () => {
     expect(answersFromResult(undefined)).toBeNull();
     expect(answersFromResult("User has answered your questions")).toBeNull();
     expect(answersFromResult('{"foo":1}')).toBeNull();
+  });
+});
+
+// 真机数据（claude 2.1.325 的 `mapToolResultToToolResultBlockParam`）：tool_result 是
+// 人话，不是 JSON。这几条钉住「读得回答案」这件事——读不回来的话界面上所有选项都是未选。
+const prose = (pairs: string, tail = "You can now continue with these answers in mind.") =>
+  `Your questions have been answered: ${pairs}. ${tail}`;
+
+describe("answersFromResult / 人话形状的结果", () => {
+  it("从「问」=「答」串里读回答案", () => {
+    expect(answersFromResult(prose('"Q"="A"'))).toEqual({ Q: "A" });
+    expect(answersFromResult(`The user answered: "Q"="其实用 MySQL". Read the answers carefully — …`)).toEqual({
+      Q: "其实用 MySQL",
+    });
+  });
+
+  it("(no option selected) 当「没选」，不当自定义回答", () => {
+    expect(answersFromResult(prose('"Q"=(no option selected)'))).toEqual({ Q: ASK_NO_SELECTION });
+    expect(isSkipAnswer(ASK_NO_SELECTION)).toBe(true);
+  });
+
+  it("没有答案的几种说法都不猜", () => {
+    expect(answersFromResult("The user did not answer the questions.")).toBeNull();
+    expect(answersFromResult(prose("没有引号的东西"))).toBeNull();
+  });
+});
+
+describe("answersOfQuestions", () => {
+  it("多选是逗号拼接：按已知选项拆回数组", () => {
+    const result = prose('"用哪个数据库？"="SQLite", "要包含哪些章节？"="安装,迁移"');
+    expect(answersOfQuestions(parseAskQuestions(twoQuestions), result)).toEqual({
+      "用哪个数据库？": "SQLite",
+      "要包含哪些章节？": ["安装", "迁移"],
+    });
+  });
+
+  it("选项后面跟着自定义文本：前面拆成选项，尾部原样留成一项", () => {
+    const result = prose('"用哪个数据库？"="SQLite", "要包含哪些章节？"="安装,还有别的"');
+    const answers = answersOfQuestions(parseAskQuestions(twoQuestions), result);
+    expect(answers?.["要包含哪些章节？"]).toEqual(["安装", "还有别的"]);
+  });
+
+  it("一个选项都对不上就整份当自定义回答（带逗号的自由文本不能被拆碎）", () => {
+    const result = prose('"用哪个数据库？"="SQLite", "要包含哪些章节？"="MySQL,其实都行"');
+    const answers = answersOfQuestions(parseAskQuestions(twoQuestions), result);
+    expect(answers?.["要包含哪些章节？"]).toBe("MySQL,其实都行");
+  });
+});
+
+describe("askReplies", () => {
+  it("折成逐题问答：选中的用展示名，自定义单独给出", () => {
+    const replies = askReplies(
+      twoQuestions,
+      prose('"用哪个数据库？"="SQLite", "要包含哪些章节？"="安装,自定义章节"'),
+    );
+    expect(replies?.map((r) => ({ chosen: r.chosen, custom: r.custom, skipped: r.skipped }))).toEqual([
+      { chosen: ["SQLite"], custom: "", skipped: false },
+      { chosen: ["安装"], custom: "自定义章节", skipped: false },
+    ]);
+  });
+
+  it("题目或答案认不出时返回 null，由工具卡片原样展示结果", () => {
+    expect(askReplies(twoQuestions, "The user did not answer the questions.")).toBeNull();
+    expect(askReplies({ nope: true }, prose('"Q"="A"'))).toBeNull();
+  });
+});
+
+describe("isAnsweredAsk", () => {
+  const tool = (over?: Partial<ToolItem>): ToolItem => ({
+    id: "t1",
+    seq: 0,
+    ts: 0,
+    kind: "tool",
+    toolUseId: "t1",
+    name: "AskUserQuestion",
+    input: twoQuestions,
+    ...over,
+  });
+
+  it("答完且答案读得出来才走气泡", () => {
+    expect(isAnsweredAsk(tool({ result: prose('"用哪个数据库？"="SQLite"') }))).toBe(true);
+  });
+
+  it("等回答 / 被拒 / 结果认不出都还是工具卡片", () => {
+    expect(isAnsweredAsk(tool())).toBe(false);
+    expect(isAnsweredAsk(tool({ result: "boom", isError: true }))).toBe(false);
+    expect(isAnsweredAsk(tool({ result: "The user did not answer the questions." }))).toBe(false);
+    expect(isAnsweredAsk({ id: "b", seq: 0, ts: 0, kind: "assistant", text: "x", streaming: false })).toBe(false);
   });
 });
