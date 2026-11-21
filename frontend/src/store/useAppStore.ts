@@ -33,6 +33,8 @@ import { openFnosFileManager } from "../lib/fnos";
 import { draftKeyFor, dropDraft, moveDraft } from "../lib/drafts";
 import { userBubblePayload } from "../lib/attachments";
 import type { Item } from "../lib/model";
+import { ARCHIVED_NOTICE_EN, ARCHIVED_NOTICE_ZH } from "../lib/conversations";
+import { tr } from "../lib/i18n";
 import { ClaudeClient, type ConnStatus, type StatusDetail } from "../transport/client";
 import type {
   AuthMethod,
@@ -581,7 +583,16 @@ let toastTimer: number | null = null;
 
 // openSeq 记录「用户最近一次想打开/切换对话」的序号。openConversation 里有多段 await，
 // 迟到的旧请求不能在结束时把 activeId 改回它自己 —— 用户看到的是他最后点的那条。
+//
+// **新建 / 归档 / 删除也要递增它**：它们同样改 `activeId`。不参与这套序号的后果是
+// 「冷启动 --resume 期间点新对话，几秒后旧对话的回包又把用户抢回去」，甚至把刚归档
+// 的对话重新拉起来（那条 open 的 connect 不在 seq 保护里）。
 let openSeq = 0;
+
+// startingCount 是 `starting` 的来源：新建与打开可能同时进行（用户在启动期间点了别的
+// 对话），布尔值会互相覆盖——一方结束就把另一方的「启动中」也关掉，或者反过来永久
+// 卡在 true（输入框与「新对话」按钮一起禁用，只能靠再开一条对话自愈）。
+let startingCount = 0;
 
 /**
  * 把一个「按会话 id 分桶」的 map 里 from 那条搬到 to 下。
@@ -1689,6 +1700,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
       const empty = (get().items[previousId] ?? []).length === 0 && (!previous || (previous.messages === 0 && !previous.title));
       if (empty && cwd === dir && (previous || live)) return;
     }
+    // 用户的意图变成「新建」：正在进行的 open 不能再改 activeId / 建连接。
+    openSeq += 1;
+    startingCount += 1;
     set({ starting: true, error: null });
     // **先把「新对话页」摆出来**：`POST /api/session` 要 spawn 子进程再等
     // `initialize` 握手（冷启动几秒），这期间如果还停在旧对话上，用户会以为点击
@@ -1731,7 +1745,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         set({ error: errText(e) });
         return null;
       } finally {
-        set({ starting: false });
+        startingCount = Math.max(0, startingCount - 1);
+        if (startingCount === 0) set({ starting: false });
       }
     })();
     createTask = task;
@@ -1746,6 +1761,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const conv = get().conversations.find((c) => c.id === id);
     if (!conv) {
       set({ error: "对话不存在或已被删除" });
+      return false;
+    }
+    // 已归档的对话不能进入：它已经从当前视图收起了，打开等于把用户刚收起的那条
+    // 又拉回来（还会起一个进程）。判断放在这里而不是各个入口，是因为入口不止两个
+    // ——侧栏、历史记录页、定时任务页、断线重试都能走到这条路上。
+    if (conv.archived) {
+      const locale = get().settings?.locale;
+      get().showToast(tr(locale, ARCHIVED_NOTICE_ZH, ARCHIVED_NOTICE_EN));
       return false;
     }
 
@@ -1827,6 +1850,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       return ok;
     }
     const promise = (async () => {
+      startingCount += 1;
       set({ starting: true, error: null });
       // 转录是磁盘上的 jsonl，跟子进程无关：**与起会话并行**拉，先把历史铺出来，
       // 别让用户盯着「正在启动 Claude…」等 `--resume` 的 initialize 握手（冷启动
@@ -1839,9 +1863,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
           body: JSON.stringify({ cwd: conv.cwd, resume: id }),
         });
         await Promise.all([get().refreshSessions(), get().refreshConversations(), transcript]);
-        // 只有这仍是用户最后一次意图时才改 activeId；WS 照连，历史照填。
-        if (seq === openSeq) get().setActive(info.id);
-        get().connect(info.id);
+        // 只有这仍是用户最后一次意图时才改 activeId / 建连接：用户可能已经点了别的
+        // 对话、新建了一条、或者把这条归档了。这时再 connect 会留下一条对已归档对话
+        // 的重连循环，`recoverSession` 还会按 `--resume` 把进程重新拉起来。
+        if (seq === openSeq) {
+          get().setActive(info.id);
+          get().connect(info.id);
+        }
         return true;
       } catch (e) {
         // 会话起不来（claude 未安装 / 版本被删 / 并发冲突返回 409）不等于历史读不到：
@@ -1849,11 +1877,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // 「开始新的对话」，像是整个对话被弄丢了。并行那次已经发出去过（不回放）
         // 就不再补一次请求，等它落定即可。
         await transcript;
-        set({ error: errText(e) });
+        // 迟到的失败不要盖在当前对话上：用户可能已经切到别的对话，
+        // 那条红条会显得是「正在看的这条起不来」。
+        if (seq === openSeq) set({ error: errText(e) });
         return false;
       } finally {
         resumePromises.delete(id);
-        if (seq === openSeq) set({ starting: false });
+        startingCount = Math.max(0, startingCount - 1);
+        if (startingCount === 0) set({ starting: false });
       }
     })();
     resumePromises.set(id, promise);
@@ -1921,12 +1952,26 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // 请求发出去之后不等回包——回包后面那次 `refreshConversations()` 会把
     // `~/.claude/projects` 下每一份转录重扫一遍（NAS 上可到秒级），等它等于让一次
     // 勾选动作卡住一屏。失败再把这一行改回来。
-    const wasArchived = get().conversations.find((c) => c.id === id)?.archived ?? !archived;
+    const target = get().conversations.find((c) => c.id === id);
+    const wasArchived = target?.archived ?? !archived;
+    const wasLive = target?.live ?? false;
     const wasActive = get().activeId === id;
-    set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? { ...c, archived } : c)) }));
+    // 作废在途的列表刷新：归档请求发出前发出、之后才回来的那一份会把
+    // `archived:false` 又写回来（「隐藏已归档」下那一行重新冒出来）。
+    conversationsSeq += 1;
+    set((s) => ({
+      // 归档时后端会顺手结束进程：`live` 一起改掉，否则「显示已归档」的行仍按
+      // conversationStatus 画「进行中」绿点，一直到后台那次刷新回来。
+      conversations: s.conversations.map((c) => (c.id === id ? { ...c, archived, ...(archived ? { live: false } : {}) } : c)),
+    }));
     // 归档当前对话后回「新对话」页，不替用户挑下一条打开：那个「下一条」是按最近活跃
     // 猜的，用户归档完想停下时却会被拉进另一个对话、又起一个 claude 进程。
-    if (archived && wasActive) get().setActive(null);
+    // 同时作废在途的 open：慢 `--resume` 回来时会把这条刚归档的对话又设成 active
+    // 并 `connect` 上去（`recoverSession` 据此把进程重新拉起来）。
+    if (archived && wasActive) {
+      openSeq += 1;
+      get().setActive(null);
+    }
     try {
       await apiFetch("/api/conversations", {
         method: "PATCH",
@@ -1938,7 +1983,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
       void get().refreshConversations();
       return true;
     } catch (e) {
-      set((s) => ({ conversations: s.conversations.map((c) => (c.id === id ? { ...c, archived: wasArchived } : c)) }));
+      conversationsSeq += 1; // 回滚同样要压住在途的那份列表
+      set((s) => ({
+        conversations: s.conversations.map((c) => (c.id === id ? { ...c, archived: wasArchived, live: wasLive } : c)),
+      }));
       // 归档失败时把用户放回原来那条对话（只在没人抢先切走时）：让他停在一个
       // 空的「新对话」页上、原来那段对话不见了，比报个错更让人困惑。
       if (archived && wasActive && get().activeId === null) get().setActive(id);
@@ -1973,6 +2021,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       });
       await get().refreshConversations();
       if (get().activeId === id) {
+        openSeq += 1; // 同归档：作废在途的 open
         const root = conv ? workspaceFor(conv.cwd, get().workspaces) || conv.cwd : get().currentWorkspace;
         const next = get()
           .conversations.filter((c) => c.id !== id && !c.archived && belongs(c.cwd, root))

@@ -59,6 +59,16 @@ export function latestConversation(cwd: string, conversations: ConversationInfo[
  * 「完成未看」只在结果到达时会话不是当前打开的那条时置位，打开即清除；
  * 否则一轮结束后会永远挂着绿点，反倒成了噪音。
  */
+/**
+ * 「已归档的对话要先取消归档」那句提示。
+ *
+ * 文案放在这里而不是各入口各写一份：store 的 `openConversation` 与侧栏 / 历史记录页
+ * 都要给同一句话（store 是兜底闸门，两个页面是「别先做一堆准备工作再被拦下」的早退），
+ * 两份字符串迟早会漂。
+ */
+export const ARCHIVED_NOTICE_ZH = "已归档的对话需要先取消归档才能打开";
+export const ARCHIVED_NOTICE_EN = "This conversation is archived; unarchive it to open";
+
 export type ConversationStatus = "approval" | "ongoing" | "done" | "active" | "off";
 
 export function conversationStatus(input: {

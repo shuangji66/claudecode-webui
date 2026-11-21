@@ -1208,6 +1208,27 @@ npx tsc --noEmit                   # 类型检查（构建也依赖它）
 - 改 `normalize` 时先写一个会失败的用例，再改实现。
 - 不要写依赖 `Date.now()` 精确值的断言。
 
+### 28. `starting` 与 `openSeq`：意图序号，不是布尔标记
+
+- **`starting` 由计数派生**（`startingCount`，store 模块级）：新建与打开可能同时进行，
+  布尔值会互相覆盖——一方结束就把另一方的「启动中」也关掉，或者反过来**永久卡在 true**
+  （同一条对话被并发打开时最容易复现：第二次走「已经在起」的分支，它从不写 `starting:false`，
+  而第一次的 finally 又因为序号变了跳过清理）。输入框与「新对话」按钮一起禁用，只能靠
+  再打开另一条对话自愈。
+- **改 `activeId` 的动作都要参与同一个 `openSeq`**：`openConversation`、`createSession`、
+  `archiveConversation`、`deleteConversation`。只有 open 参与的话，冷启动 `--resume`
+  期间点「新对话」或归档当前对话，迟到的回包会把用户抢回旧对话，甚至 `connect` 上一条
+  刚归档的会话（`recoverSession` 会按 `--resume` 把进程重新拉起来）。
+  `connect` 与 `set({error})` 同样要过这个序号：迟到的失败不该盖在当前对话上。
+- **「已归档不能打开」的闸门在 store**（`openConversation` 里的 `conv.archived`），
+  不只侧栏与历史记录页那两个入口：定时任务页、断线重试都能走到这条路上。
+  文案只留一份（`lib/conversations.ARCHIVED_NOTICE_*`），两个页面留早退只是为了
+  别先做一堆准备工作（目录授权、刷新列表）再被拦下。
+- **乐观更新要作废在途的列表刷新**（`conversationsSeq += 1`）：归档请求发出之前发出、
+  之后才回来的那份列表会把 `archived:false` 写回来，「隐藏已归档」下那一行重新冒出来。
+  归档还要顺手把 `live` 改掉（后端会结束进程），否则那一行会按 `conversationStatus`
+  继续画「进行中」绿点，直到后台刷新回来。
+
 ## 8. 常见错误对照
 
 | 现象 | 原因 |

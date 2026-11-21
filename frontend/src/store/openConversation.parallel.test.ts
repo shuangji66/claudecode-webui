@@ -125,3 +125,67 @@ describe("openConversation：历史记录页的「先收起」回调", () => {
     expect(seen.length).toBe(1);
   });
 });
+
+describe("openConversation：并发与意图序号", () => {
+  beforeEach(() => {
+    h.calls.length = 0;
+    h.releaseSession = null;
+    useAppStore.setState({
+      activeId: null,
+      conversations: [conv] as never,
+      workspaces: [],
+      sessions: [],
+      items: {},
+      error: null,
+      starting: false,
+      toast: null,
+      connect: (() => undefined) as never,
+    });
+  });
+
+  // 双击侧栏同一行（或一次点击 + 一次回车）会打进两次 openConversation：
+  // 第二次走「已经在起」的分支，它从不写 starting:false，而第一次的 finally
+  // 又因为序号变了跳过清理 —— `starting` 就此永久为 true，输入框与「新对话」
+  // 一起禁用，只能靠再打开另一条对话自愈。
+  it("同一条对话被并发打开时 starting 最终会落回 false", async () => {
+    const first = useAppStore.getState().openConversation("c1");
+    const second = useAppStore.getState().openConversation("c1");
+    await vi.waitFor(() => {
+      expect(h.releaseSession).not.toBeNull();
+    });
+    h.releaseSession?.();
+    await Promise.all([first, second]);
+    expect(useAppStore.getState().starting).toBe(false);
+  });
+
+  // 归档一条正在「拉起中」的对话：迟到的回包不能把它设回 activeId，更不能连上去
+  // ——`connect` 之后 `recoverSession` 会按 --resume 把刚结束的进程重新拉起来。
+  it("open 期间归档：迟到的回包不再抢回 activeId，也不建连接", async () => {
+    const connect = vi.fn();
+    useAppStore.setState({ connect: connect as never });
+
+    const opening = useAppStore.getState().openConversation("c1");
+    await vi.waitFor(() => {
+      expect(h.releaseSession).not.toBeNull();
+    });
+    await useAppStore.getState().archiveConversation("c1", true);
+    expect(useAppStore.getState().activeId).toBeNull();
+
+    h.releaseSession?.();
+    await opening;
+    expect(useAppStore.getState().activeId).toBeNull();
+    expect(connect).not.toHaveBeenCalled();
+    expect(useAppStore.getState().starting).toBe(false);
+  });
+
+  // 已归档的对话不能从任何入口被打开（store 是兜底闸门，不只是侧栏那两个入口）。
+  it("已归档的对话拒绝打开，并给一句轻提示", async () => {
+    useAppStore.setState({ conversations: [{ ...conv, archived: true }] as never });
+    const before = h.calls.length;
+    const ok = await useAppStore.getState().openConversation("c1");
+    expect(ok).toBe(false);
+    expect(h.calls.length).toBe(before); // 一个请求都不该发
+    expect(useAppStore.getState().toast?.text).toContain("已归档");
+    expect(useAppStore.getState().starting).toBe(false);
+  });
+});

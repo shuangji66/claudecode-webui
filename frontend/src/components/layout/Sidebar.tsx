@@ -5,7 +5,7 @@ import { baseName, conversationTitle, relativeTime } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
 import { ConversationPreview } from "./ConversationPreview";
 import { WorkspacePreview } from "./WorkspacePreview";
-import { belongs, conversationStatus, pinnedFirst, sortByRecent, type ConversationStatus } from "../../lib/conversations";
+import { ARCHIVED_NOTICE_EN, ARCHIVED_NOTICE_ZH, belongs, conversationStatus, pinnedFirst, sortByRecent, type ConversationStatus } from "../../lib/conversations";
 import {
   FLAT_KEY,
   OTHER_KEY,
@@ -634,7 +634,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     // 已归档的对话不能进入（对齐 DSH）：它已经「从当前视图收起」了，
     // 点进去等于把用户刚归档的那条又拉回面前。要打开得先取消归档。
     if (c.archived) {
-      showToast(t("已归档的对话需要先取消归档才能打开", "This conversation is archived; unarchive it to open"));
+      showToast(t(ARCHIVED_NOTICE_ZH, ARCHIVED_NOTICE_EN));
       return;
     }
     // 先回对话区再打开：点的是当前这条时 activeId 不变，靠上层观察状态永远收不到。

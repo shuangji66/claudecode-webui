@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import type { ConversationInfo } from "../../transport/types";
 import { relativeTime } from "../../lib/labels";
-import { sortByRecent } from "../../lib/conversations";
+import { ARCHIVED_NOTICE_EN, ARCHIVED_NOTICE_ZH, sortByRecent } from "../../lib/conversations";
 import { authorizeFnosDir } from "../../lib/fnos";
 import { useLocale, useT } from "../../lib/i18n";
 import { PageShell } from "./FeaturePage";
@@ -76,7 +76,7 @@ export function HistoryPage({ onClose, onOpenSidebar }: Props) {
     // 已归档的对话不能进入（对齐 DSH）：这一页本来就会列出归档项（筛选「全部 / 仅已归档」），
     // 点进去等于把刚归档的那条又拉回对话区。要打开得先取消归档 —— 行尾那颗图章按钮。
     if (conversations.find((c) => c.id === id)?.archived) {
-      showToast(t("已归档的对话需要先取消归档才能打开", "This conversation is archived; unarchive it to open"));
+      showToast(t(ARCHIVED_NOTICE_ZH, ARCHIVED_NOTICE_EN));
       return;
     }
     setBusyCwd(cwd);
