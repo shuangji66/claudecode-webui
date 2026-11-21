@@ -253,6 +253,12 @@ hub ── manager ── session ── process ── claude (NDJSON)
   多选是数组被模板插值，于是变成 `A,B`（逗号后没有空格）。`lib/askQuestion.answersFromResult`
   JSON 与人话两种都认，`answersOfQuestions` 再按已知 label 把多选拆回数组。
   **别只留 JSON 那条**：真机数据走人话，只认 JSON 时卡片上所有选项都是未选、答案一个字都不显示。
+  **人话解析必须按已知题目锚定**（`"<题目原文>"=`），不能按形状切：CLI 不转义引号，题干
+  自带一个 `"` 就会切出伪键（`"Why foo="bar"?"="A"` → 键 ` bar?"`），结果「一道题都没配上」
+  却返回非空 map——气泡显示「没有记录到答案」，真正的 `tool_result` 被吞掉。
+  锚定后切片的终点是**下一道题的锚点**，答案里带引号也不会连收尾句一起吞。
+  `(no option selected)` 与 `(notes only)` 是同一件事（这题没选），都归成 `ASK_NO_SELECTION`；
+  一条都配不上就返回 `null`，交回工具卡片原样展示结果。
 
 ### 4.2.2 CLI 撤回审批（`control_cancel_request`）
 

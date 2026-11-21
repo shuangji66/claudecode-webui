@@ -252,18 +252,75 @@ const PROSE_MARKERS = [
   "the user had selected: ",
 ];
 
-/** 一对 `"问题"="答案"`，或没有选择时的 `"问题"=(no option selected)`。 */
-const PROSE_PAIR = /"([^"]*)"=(?:"([^"]*)"|\((no option selected)\))/g;
+/** 一对 `"问题"="答案"`；一道没选的题是 `(no option selected)` / `(notes only)`。 */
+const PROSE_PAIR = /"([^"]*)"=(?:"([^"]*)"|\(([^)]*)\))/g;
 
+/**
+ * 读出一个引号包的答案。
+ *
+ * CLI 不做转义，答案里**可以带引号**（自定义回答、题干里本身就带引号），所以不能
+ * 「取到下一个引号」了事——那样会把后面的文案一起吞进来。真机形状是
+ * `"Q"="A", "Q2"="A2". You can now continue…`：结束引号后面紧跟 `, `（下一对）、
+ * `.`（收尾句）或串尾。
+ */
+function readQuotedValue(raw: string): string | undefined {
+  if (!raw.startsWith('"')) return undefined;
+  for (let i = 1; i < raw.length; i += 1) {
+    if (raw[i] !== '"') continue;
+    const next = raw[i + 1];
+    // 逗号也算收尾：切片按下一道题的锚点切开后，末尾那个 `, ` 可能已经被 trim 掉。
+    if (next === undefined || next === "." || next === "," || raw.startsWith(", ", i + 1)) {
+      return raw.slice(1, i);
+    }
+  }
+  return raw.slice(1); // 没有像样的收尾引号：整段当答案，总比丢成空串好
+}
+
+/**
+ * 人话里的答案，**按已知题目锚定**。
+ *
+ * 不锚定的话，题干里带一个引号就把整串切歪：`"Why does foo="bar" break?"="Because"`
+ * 会解析出伪键 ` break?`，于是「题目一条都没配上」却返回了非空 map —— 气泡显示
+ * 「没有记录到答案」并把真正的 `tool_result` 吞掉（AGENTS 4.2.1 明确不允许这样）。
+ * 按 `"<题目原文>"=` 找锚点还顺带解决了「答案里带引号」：切片的终点是**下一道题的
+ * 锚点**，不是下一个引号。
+ */
+function proseAnswersFor(text: string, questions: AskQuestion[]): Record<string, string> | null {
+  if (!PROSE_MARKERS.some((marker) => text.includes(marker))) return null;
+  const anchorOf = (q: string) => `"${q}"=`;
+  const hits = questions
+    .map((q) => ({ question: q.question, at: text.indexOf(anchorOf(q.question)) }))
+    .filter((hit) => hit.at >= 0)
+    .sort((a, b) => a.at - b.at);
+  if (hits.length === 0) return null;
+
+  const out: Record<string, string> = {};
+  for (const [i, hit] of hits.entries()) {
+    const anchor = anchorOf(hit.question);
+    const from = hit.at + anchor.length;
+    const to = i + 1 < hits.length ? hits[i + 1].at : text.length;
+    const slice = text.slice(from, to).trim();
+    if (slice.startsWith("(")) {
+      // `(no option selected)` 与 CLI 的另一半 `(notes only)` 都是「这题没选」，
+      // 统一成同一个哨兵值，`isSkipAnswer` 据此显示「已跳过」。
+      out[hit.question] = ASK_NO_SELECTION;
+      continue;
+    }
+    const value = readQuotedValue(slice);
+    if (value !== undefined) out[hit.question] = value;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** 不知道题目时只能按形状切（兜底：只在调用方拿不到题目时走到）。 */
 function proseAnswers(text: string): Record<string, string> | null {
   if (!PROSE_MARKERS.some((marker) => text.includes(marker))) return null;
   const out: Record<string, string> = {};
   let found = false;
   for (const match of text.matchAll(PROSE_PAIR)) {
-    // 问题原文里带引号时这对会被切歪（CLI 不做转义）：宁可整份作废，也不要造一个
-    // 配不上任何题目的键，让界面显示「没有记录到答案」。
-    if (match[1] === "") return null;
+    if (match[1] === "") continue;
     found = true;
+    // 括号形态统一成哨兵值（`(no option selected)` / `(notes only)` 都是「没选」）。
     out[match[1]] = match[2] ?? ASK_NO_SELECTION;
   }
   return found ? out : null;
@@ -272,11 +329,13 @@ function proseAnswers(text: string): Record<string, string> | null {
 /**
  * 从工具结果的文本里捞回问答对（历史回放用）。
  *
- * 认两种形态：JSON（`{answers: {...}}`）与 CLI 的人话形状（见 `proseAnswers`）。
- * 都认不出就返回 null，由界面原样展示结果文本——不猜、不吞。
+ * 认两种形态：JSON（`{answers: {...}}`）与人话（见 `proseAnswersFor`）。
+ * **能拿到题目时一定要传进来**：按锚点切才不会被题干里的引号带歪；拿不到题目时退回
+ * 按形状切。都认不出就返回 null，由界面原样展示结果文本——不猜、不吞。
  */
 export function answersFromResult(
   result: string | undefined,
+  questions?: AskQuestion[],
 ): Record<string, string | string[]> | null {
   if (!result) return null;
   let value: unknown;
@@ -284,10 +343,12 @@ export function answersFromResult(
     value = JSON.parse(result);
   } catch {
     // 真机数据走这条：CLI 给的是人话，不是 JSON。
-    return proseAnswers(result);
+    return questions && questions.length > 0 ? proseAnswersFor(result, questions) : proseAnswers(result);
   }
   const answers = isRecord(value) ? value.answers : undefined;
-  if (!isRecord(answers)) return proseAnswers(result);
+  if (!isRecord(answers)) {
+    return questions && questions.length > 0 ? proseAnswersFor(result, questions) : proseAnswers(result);
+  }
   const out: Record<string, string | string[]> = {};
   for (const [key, raw] of Object.entries(answers)) {
     if (typeof raw === "string") out[key] = raw;
@@ -309,7 +370,7 @@ export function answersOfQuestions(
   questions: AskQuestion[],
   result: string | undefined,
 ): Record<string, string | string[]> | null {
-  const answers = answersFromResult(result);
+  const answers = answersFromResult(result, questions);
   if (!answers) return null;
   const out: Record<string, string | string[]> = {};
   for (const question of questions) {

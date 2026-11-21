@@ -6,7 +6,7 @@
 // 答案来自 `tool_result`：CLI 的结果形状没有文档，`lib/askQuestion.answersFromResult`
 // 只认「JSON 里带 answers」这一种，认不出就把原文本折叠显示——不猜、不吞。
 import type { ToolItem } from "../../lib/model";
-import { answersFromResult, isSkipAnswer, parseAskQuestions, type AskQuestion } from "../../lib/askQuestion";
+import { answersOfQuestions, isSkipAnswer, parseAskQuestions, type AskQuestion } from "../../lib/askQuestion";
 import { useT } from "../../lib/i18n";
 import { IconChat, IconCheck } from "../common/Icons";
 import { Collapsible } from "../common/Collapsible";
@@ -98,7 +98,8 @@ function QuestionView({ question, answer }: { question: AskQuestion; answer: str
 export function AskQuestionBody({ item }: { item: ToolItem }) {
   const t = useT();
   const questions = parseAskQuestions(item.input);
-  const answers = answersFromResult(item.result);
+  // 带上题目再解析：人话结果按 `"<题目原文>"=` 锚定切，题干里带引号也不会切歪。
+  const answers = answersOfQuestions(questions, item.result);
 
   // 结构解析不出来（旧版本 CLI / 载荷被改坏）：交回兜底卡片，至少能看到原始 JSON。
   if (questions.length === 0) return <GenericBody item={item} />;

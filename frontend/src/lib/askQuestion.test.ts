@@ -305,3 +305,56 @@ describe("isAnsweredAsk", () => {
     expect(isAnsweredAsk({ id: "b", seq: 0, ts: 0, kind: "assistant", text: "x", streaming: false })).toBe(false);
   });
 });
+
+// 题干里带引号：CLI 不做转义，按形状切会切出伪键（` break?`），于是「一道题都没配上」
+// 却返回了非空 map —— 气泡显示「没有记录到答案」并把真正的 tool_result 吞掉。
+// 现在按已知题目锚定解析，锚点是 `"<题目原文>"=`，切片的终点是下一道题的锚点。
+describe("answersOfQuestions：题干或答案里带引号", () => {
+  const tricky = {
+    questions: [
+      {
+        question: 'Why does foo="bar" break?',
+        header: "排查",
+        options: [{ label: "先看作用域" }, { label: "先看求值顺序" }],
+      },
+      { question: "要改哪个文件？", options: [{ label: "a.ts" }, { label: "b.ts" }] },
+    ],
+  };
+
+  it("题干带引号时仍能按题目原文取到答案", () => {
+    const result =
+      'Your questions have been answered: "Why does foo="bar" break?"="先看作用域", "要改哪个文件？"="b.ts". ' +
+      "You can now continue with these answers in mind.";
+    expect(answersOfQuestions(parseAskQuestions(tricky), result)).toEqual({
+      'Why does foo="bar" break?': "先看作用域",
+      "要改哪个文件？": "b.ts",
+    });
+  });
+
+  it("答案里带引号也不会把后面的收尾句吞进来", () => {
+    const questions = { questions: [{ question: "要写什么？", options: [] }] };
+    const result =
+      'The user answered: "要写什么？"="改成 "foo" 这个写法". Read the answers carefully.';
+    expect(answersOfQuestions(parseAskQuestions(questions), result)).toEqual({
+      "要写什么？": '改成 "foo" 这个写法',
+    });
+  });
+
+  it("(notes only) 与 (no option selected) 一样算「跳过」", () => {
+    const questions = {
+      questions: [
+        { question: "要测试吗？", options: [{ label: "要" }, { label: "不要" }] },
+      ],
+    };
+    const result = 'Your questions have been answered: "要测试吗？"=(notes only)';
+    const answers = answersOfQuestions(parseAskQuestions(questions), result);
+    expect(answers?.["要测试吗？"]).toBe(ASK_NO_SELECTION);
+    expect(isSkipAnswer(answers?.["要测试吗？"] as string)).toBe(true);
+  });
+
+  it("一条都配不上时不返回半份答案（交给卡片原样展示结果）", () => {
+    const questions = { questions: [{ question: "这个题目根本不在结果里", options: [] }] };
+    const result = 'Your questions have been answered: "别的题目"="答案"';
+    expect(answersOfQuestions(parseAskQuestions(questions), result)).toBeNull();
+  });
+});
