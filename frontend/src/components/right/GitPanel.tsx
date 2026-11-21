@@ -17,7 +17,7 @@ import {
   type GitTone,
 } from "../../lib/workspace";
 import { useSidebarStore } from "../../store/useSidebarStore";
-import { watchGitRepo } from "../../store/useAppStore";
+import { acquireGitWatch } from "../../store/useAppStore";
 import { Select } from "../common/Select";
 import { FileIcon } from "../common/FileIcon";
 import { askConfirm } from "../common/SystemDialogs";
@@ -159,13 +159,14 @@ export function GitPanel({ cwd, active }: Props) {
   }, [active, mode, logLoaded, logLoading, logError, loadLog]);
 
   // 可见时不再自己轮询：让后端盯住这个仓库，变了就推 `git.changed`
-  // （系统通道的 git.watch，见 useAppStore.watchGitRepo）。切走标签就退订，
+  // （系统通道的 git.watch，见 useAppStore.acquireGitWatch）。切走标签就释放，
   // 否则关掉的侧栏也会一直让 NAS 上每几秒跑一次 git status。
+  // 用**可重入**的 acquire：分栏时两栏可能各有一个 Git 面板，一边切走不能把
+  // 另一边还在看的订阅一起退掉。
   const watchCwd = repoRoot || cwd;
   useEffect(() => {
     if (!active || !watchCwd) return;
-    watchGitRepo(watchCwd);
-    return () => watchGitRepo(null);
+    return acquireGitWatch(watchCwd);
   }, [active, watchCwd]);
 
   // 推送只在「变了」时来：重新可见时要先把停用期间的变化补齐，不然面板停在旧数据上。

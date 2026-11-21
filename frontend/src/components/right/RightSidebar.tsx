@@ -210,6 +210,9 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
   /** 标签实际落在哪一栏：不分栏时所有标签都按 `a` 渲染。 */
   const paneOf = (tab: Tab): PaneId => (splitActive ? tab.pane : "a");
 
+  /** 文件 / Git / 子代理在**每一栏各占一份**，id 带栏后缀；终端每次新建，id 已唯一。 */
+  const scopedId = (base: string, pane: PaneId) => `${base}-${pane}`;
+
   /** 某一栏当前激活的标签；引用的标签不在这一栏时按「开始页」处理。 */
   const activeOf = (pane: PaneId): string => {
     const id = pane === "a" ? activeA : activeB;
@@ -230,12 +233,10 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
   useEffect(() => {
     if (!split) return;
     if (docked && width >= SPLIT_MIN_WIDTH) return;
-    setSplit(false);
-    setTabs((prev) => prev.map((tab) => (tab.pane === "b" ? { ...tab, pane: "a" } : tab)));
-    setActiveA((prev) => prev || activeB);
-    setActiveB("");
-    setFocused("a");
-  }, [docked, split, width, activeB]);
+    foldPanes();
+    // foldPanes 只读当前渲染的 tabs / active，不放进依赖数组（与其它标签逻辑一致）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docked, split, width]);
 
   // 聊天里的「查看对话」只放一个请求到 store，标签的打开/切换留在这里做。
   //
@@ -277,19 +278,13 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     if (!cwdChanged && !becameVisible) return;
     if (cwdChanged) {
       termSeq.current = 0;
-      let fallback = "";
-      setTabs((prev) => {
-        // 保留下来的文件/Git 标签统一回到 A 栏：换工作区连分栏一起收，
-        // 否则 B 栏可能停着一个已经指向旧目录的标签。
-        const kept = prev
-          .filter((tab) => tab.kind === "files" || tab.kind === "git")
-          .map((tab) => ({ ...tab, pane: "a" as PaneId }));
-        fallback = kept[0]?.id ?? "";
-        return kept;
-      });
-      setActiveA(fallback);
-      setActiveB("");
-      setFocused("a");
+      // 文件 / Git 标签各自留在原来那一栏（换工作区不该把两栏收成一栏）；
+      // 终端与子代理仍然结束——旧 shell 的 cwd 已不成立。
+      const kept = tabs.filter((tab) => tab.kind === "files" || tab.kind === "git");
+      setTabs(kept);
+      setActiveA(kept.find((tab) => tab.pane === "a")?.id ?? "");
+      setActiveB(kept.find((tab) => tab.pane === "b")?.id ?? "");
+      setFocused(kept.some((tab) => tab.pane === "b") ? "b" : "a");
     }
     // 看不见的时候只收拾标签，不发请求：收着侧栏（或功能区盖着）时切工作区，
     // 数据留给「重新可见」那一次，别让没人看的界面向 NAS 拉目录树和 git status。
@@ -385,38 +380,32 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
   };
 
   /**
-   * 打开标签：文件/Git 是单例（已开就切过去），终端每次都新建一个。
+   * 打开标签：文件 / Git / 子代理在**每一栏各占一份**，终端每次新建。
    *
-   * 分栏时目标栏默认是**当前聚焦的那一栏**：点哪一栏的标签就在哪一栏打开。
-   * 单例标签在另一栏里开着时**移过来**而不是开第二份——两栏看同一份文件/Git
-   * 没有意义，而「移过来」不会重挂面板（见函数头注释）。
+   * 分栏时目标栏默认是**当前聚焦的那一栏**：点哪一栏的卡片就在哪一栏打开。
+   * 同一种面板在另一栏里开着**不搬过来**——搬走会让那一栏突然空掉，用户看到的
+   * 就是「分栏后还是只能同时看一个面板」；而两栏各开一份文件 / Git 本来就有用
+   * （左边浏览、右边预览另一个）。同一栏里已经开着才切过去。
    */
-  const openTab = (kind: TabKind, pane?: PaneId) => {
+  const openTab = (kind: TabKind, pane?: PaneId): PaneId => {
     const target: PaneId = splitActive ? (pane ?? focused) : "a";
-    if (kind !== "terminal") {
-      const existing = tabs.find((tab) => tab.kind === kind);
-      if (existing) {
-        if (splitActive && existing.pane !== target) {
-          const from = existing.pane;
-          setTabs((prev) => prev.map((tab) => (tab.id === existing.id ? { ...tab, pane: target } : tab)));
-          if (from === "a") setActiveA((cur) => (cur === existing.id ? "" : cur));
-          else setActiveB((cur) => (cur === existing.id ? "" : cur));
-        }
-        setActiveFor(target, existing.id);
-        return;
-      }
-      const label = kind === "files" ? t("文件", "Files") : t("Git", "Git");
-      setTabs((prev) => [...prev, { id: kind, kind, label, pane: target }]);
-      setActiveFor(target, kind);
-      return;
+    if (kind === "terminal") {
+      if (tabs.filter((tab) => tab.kind === "terminal").length >= MAX_TERMINALS) return target;
+      termSeq.current += 1;
+      const n = termSeq.current;
+      const id = `term-${n}`;
+      // 第一个叫 bash，之后编号；序号单调递增，关掉中间那个也不会重排。
+      setTabs((prev) => [...prev, { id, kind: "terminal", label: n === 1 ? "bash" : `bash ${n}`, pane: target }]);
+      setActiveFor(target, id);
+      return target;
     }
-    if (tabs.filter((tab) => tab.kind === "terminal").length >= MAX_TERMINALS) return;
-    termSeq.current += 1;
-    const n = termSeq.current;
-    const id = `term-${n}`;
-    // 第一个叫 bash，之后编号；序号单调递增，关掉中间那个也不会重排。
-    setTabs((prev) => [...prev, { id, kind: "terminal", label: n === 1 ? "bash" : `bash ${n}`, pane: target }]);
+    const id = scopedId(kind, target);
+    if (!tabs.some((tab) => tab.id === id)) {
+      const label = kind === "files" ? t("文件", "Files") : t("Git", "Git");
+      setTabs((prev) => [...prev, { id, kind, label, pane: target }]);
+    }
     setActiveFor(target, id);
+    return target;
   };
 
   const handledOpenFile = useRef(0);
@@ -427,13 +416,15 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
    * 会踩到「先开标签、面板后挂载」的时序——两个消费方各读一个 seq，先挂载的那个
    * 把它用掉，后挂载的就永远看不到请求（首次进入前端时只开标签、不进预览）。
    */
-  const [pendingOpen, setPendingOpen] = useState<{ path: string; seq: number } | null>(null);
+  const [pendingOpen, setPendingOpen] = useState<{ path: string; seq: number; pane: PaneId } | null>(null);
   useEffect(() => {
     const req = openRequest;
     if (!req || req.seq <= handledOpenFile.current) return;
     handledOpenFile.current = req.seq;
-    setPendingOpen(req);
-    openTab("files");
+    // 在**当前聚焦的那一栏**打开文件面板，并把这这次请求只交给那一栏的面板：
+    // 两栏各有一份 FilesPanel 时，不限定栏位等于两边同时跳进同一个预览。
+    const target = openTab("files");
+    setPendingOpen({ ...req, pane: target });
     // 请求只消费一次：**由 store 记「已处理」，不靠组件内的 ref**。关掉侧栏再打开
     // 会重新挂载，ref 归零，留着请求就会重放（又开一个「文件」标签、又预览那张图）。
     consumeOpenFile();
@@ -442,40 +433,36 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openRequest]);
 
-  /** 打开某个子代理的对话：同一个 agent 只占一个标签。 */
+  /** 打开某个子代理的对话：同一栏里同一个 agent 只占一个标签。 */
   const openSubagentTab = (sessionId: string, agentId: string, label: string) => {
-    const id = `sub-${sessionId}-${agentId}`;
     const target: PaneId = splitActive ? focused : "a";
-    setTabs((prev) => {
-      const found = prev.find((tab) => tab.id === id);
-      if (found) {
-        return found.pane === target ? prev : prev.map((tab) => (tab.id === id ? { ...tab, pane: target } : tab));
-      }
-      return [
-        ...prev,
-        { id, kind: "subagent", label: label || t("子代理", "Subagent"), sessionId, agentId, pane: target },
-      ];
-    });
+    const id = scopedId(`sub-${sessionId}-${agentId}`, target);
+    setTabs((prev) =>
+      prev.some((tab) => tab.id === id)
+        ? prev
+        : [
+            ...prev,
+            { id, kind: "subagent", label: label || t("子代理", "Subagent"), sessionId, agentId, pane: target },
+          ],
+    );
     setActiveFor(target, id);
   };
 
   const closeTab = (id: string) => {
+    const hit = tabs.find((tab) => tab.id === id);
+    if (!hit) return;
+    const pane = paneOf(hit);
     // 「文件」面板关掉后 pending 就没意义了：再打开标签时面板会重新挂载、
     // 消费用的 ref 归零，留着它就会自动跳进上次那个文件的预览。
-    if (id === "files") setPendingOpen(null);
-    setTabs((prev) => {
-      const index = prev.findIndex((tab) => tab.id === id);
-      if (index < 0) return prev;
-      const pane = paneOf(prev[index]!);
-      const siblings = prev.filter((tab) => paneOf(tab) === pane);
-      const at = siblings.findIndex((tab) => tab.id === id);
-      const next = prev.filter((tab) => tab.id !== id);
-      const remaining = next.filter((tab) => paneOf(tab) === pane);
-      const fallback = remaining[Math.min(Math.max(at, 0), remaining.length - 1)]?.id ?? "";
-      if (pane === "a") setActiveA((cur) => (cur === id ? fallback : cur));
-      else setActiveB((cur) => (cur === id ? fallback : cur));
-      return next;
-    });
+    if (hit.kind === "files" && pendingOpen?.pane === pane) setPendingOpen(null);
+    const siblings = tabs.filter((tab) => paneOf(tab) === pane);
+    const at = siblings.findIndex((tab) => tab.id === id);
+    const next = tabs.filter((tab) => tab.id !== id);
+    const remaining = next.filter((tab) => paneOf(tab) === pane);
+    const fallback = remaining[Math.min(Math.max(at, 0), remaining.length - 1)]?.id ?? "";
+    setTabs(next);
+    if (pane === "a") setActiveA((cur) => (cur === id ? fallback : cur));
+    else setActiveB((cur) => (cur === id ? fallback : cur));
   };
 
   /** 把当前栏分成两栏：A 栏保持原样，B 栏从开始页起步，焦点交给 B。
@@ -489,13 +476,40 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     setActiveB("");
   };
 
-  /** 关掉 B 栏：它的标签并回 A 栏，不卸载、不重排。 */
-  const mergePanes = () => {
+  /**
+   * 两栏并回一栏（点「并回左栏」、窗口变窄或面板被拖窄）。
+   *
+   * 文件 / Git / 子代理的 id 带栏后缀，并栏时要改回 `-a`；A 栏已经有同一种面板时
+   * 丢掉 B 栏那份副本（一栏里只留一份，否则「打开文件」会不知道切哪一份）。
+   * 终端 id 不变、只改归属：元素不搬家，PTY 不会被 SIGHUP。
+   */
+  const foldPanes = () => {
+    const next: Tab[] = [];
+    const renamed = new Map<string, string>();
+    for (const tab of tabs) {
+      if (tab.pane === "a") {
+        next.push(tab);
+        continue;
+      }
+      if (tab.kind === "terminal") {
+        next.push({ ...tab, pane: "a" });
+        continue;
+      }
+      const id = `${tab.id.replace(/-[ab]$/, "")}-a`;
+      if (tabs.some((other) => other.id === id)) continue;
+      next.push({ ...tab, id, pane: "a" });
+      renamed.set(tab.id, id);
+    }
+    setTabs(next);
     setSplit(false);
-    setTabs((prev) => prev.map((tab) => (tab.pane === "b" ? { ...tab, pane: "a" } : tab)));
-    setActiveA((prev) => prev || activeB);
     setActiveB("");
     setFocused("a");
+    // 待打开的请求原本指向 B 栏的文件面板：并栏后交给 A 栏那一份，
+    // 否则请求会落在一个已经不存在的栏位上（用户点了「在右侧栏打开」却什么都没发生）。
+    setPendingOpen((prev) => (prev && prev.pane === "b" ? { ...prev, pane: "a" } : prev));
+    const keepA = activeA && next.some((tab) => tab.id === activeA) ? activeA : "";
+    const fromB = activeB ? (renamed.get(activeB) ?? (next.some((tab) => tab.id === activeB) ? activeB : "")) : "";
+    setActiveA(keepA || fromB || next[0]?.id || "");
   };
 
   const startCards: { kind: TabKind; title: string; desc: string; icon: typeof IconFolder; tone: string }[] = [
@@ -601,7 +615,7 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
           {pane === "b" && (
             <button
               type="button"
-              onClick={mergePanes}
+              onClick={foldPanes}
               className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
               aria-label={t("关闭这一栏", "Close pane")}
               title={t("并回左栏", "Merge into the left pane")}
@@ -781,7 +795,13 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
                   onPointerDownCapture={() => setFocused(pane)}
                   className={`${position} ${on ? "" : "hidden"}`}
                 >
-                  {tab.kind === "files" && <FilesPanel cwd={cwd} active={on} pending={pendingOpen} />}
+                  {tab.kind === "files" && (
+                    <FilesPanel
+                      cwd={cwd}
+                      active={on}
+                      pending={pendingOpen && pendingOpen.pane === pane ? pendingOpen : null}
+                    />
+                  )}
                   {tab.kind === "git" && <GitPanel cwd={cwd} active={on} />}
                   {tab.kind === "subagent" && tab.agentId && (
                     <SubagentPanel sessionId={tab.sessionId ?? ""} agentId={tab.agentId} />

@@ -646,6 +646,38 @@ export function watchGitRepo(cwd: string | null): void {
   sendGitWatch();
 }
 
+/** 正在盯 Git 的面板（按 cwd 计数）。
+ *
+ *  分栏之后两栏可以各开一个 Git 面板，它们共用一个系统通道订阅：没有引用计数时，
+ *  左栏切走（cleanup 退订）会把右栏还在看的仓库一起取消，右栏从此收不到
+ *  `git.changed`。计数归零才真的退订。 */
+const gitWatchHolders = new Map<string, number>();
+
+function syncGitWatch(): void {
+  // 多个面板通常盯同一个仓库（repo 选择在共享 store 里）；真出现两个不同仓库时
+  // 以最后加入、仍然被持有的那个为准，退订后回落到前一个。
+  const held = [...gitWatchHolders.keys()].pop() ?? "";
+  watchGitRepo(held || null);
+}
+
+/** 申请盯一个仓库，返回释放函数（必须成对调用：面板卸载 / 切走时释放）。
+ *  与 `watchGitRepo` 的区别是**可重入**：多个面板看同一个仓库只订阅一次。 */
+export function acquireGitWatch(cwd: string | null): () => void {
+  const key = (cwd ?? "").trim();
+  if (!key) return () => {};
+  gitWatchHolders.set(key, (gitWatchHolders.get(key) ?? 0) + 1);
+  syncGitWatch();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (gitWatchHolders.get(key) ?? 1) - 1;
+    if (left > 0) gitWatchHolders.set(key, left);
+    else gitWatchHolders.delete(key);
+    syncGitWatch();
+  };
+}
+
 /** 已经发给服务端的订阅值；null 表示这条连接上还没同步过（新建/重连后）。 */
 let sentGitWatch: string | null = null;
 

@@ -329,34 +329,48 @@ describe("RightSidebar 桌面全屏与分栏", () => {
     expect(screen.getByLabelText("调整侧栏宽度")).not.toHaveClass("hidden");
   });
 
-  it("分栏后两栏各看一个标签，标签在栏之间移动不重挂面板", () => {
+  it("两栏可以同时打开文件与 Git（一边一个）", () => {
     setup();
-    openFiles();
-    openStart();
-    openGit(); // A 栏显示 Git，文件被隐藏
-    const filesNode = screen.getByText("FILES");
-    expect(filesNode.closest("div.hidden")).not.toBeNull();
-
+    openGit(); // A 栏：Git
     fireEvent.click(screen.getByRole("button", { name: "分栏" }));
-    // B 栏从开始页起步；两栏各有一条分隔线（标签行 + 面板区各一条）。
-    expect(screen.getByRole("separator", { name: "调整两栏宽度" })).toBeInTheDocument();
-
-    // 在 B 栏点「工作区文件」：文件标签从 A 栏**移过来**，不是开第二份。
+    // B 栏的开始页开文件：A 栏的 Git 不受影响。
     fireEvent.click(screen.getByRole("button", { name: /工作区文件/ }));
 
-    expect(screen.getAllByText("FILES")).toHaveLength(1);
-    // 同一个 DOM 节点 = 组件没有卸载重挂（终端 PTY 就靠这一点活着）。
-    expect(screen.getByText("FILES")).toBe(filesNode);
-    expect(screen.getByText("FILES").closest("div.hidden")).toBeNull();
-    // 两栏可以同时看到不同的面板。
     expect(screen.getByText("GIT").closest("div.hidden")).toBeNull();
+    expect(screen.getByText("FILES").closest("div.hidden")).toBeNull();
+    expect(screen.getAllByText("FILES")).toHaveLength(1);
+    expect(screen.getAllByText("GIT")).toHaveLength(1);
+  });
 
-    // 关掉 B 栏：它的标签并回 A 栏，分栏消失，焦点回到 A 栏当前的标签。
+  it("同一个面板也能两栏各开一份，关栏时重复的那份丢掉", () => {
+    setup();
+    openFiles(); // A 栏：文件
+    fireEvent.click(screen.getByRole("button", { name: "分栏" }));
+    fireEvent.click(screen.getByRole("button", { name: /工作区文件/ })); // B 栏：再来一份
+
+    expect(screen.getAllByText("FILES")).toHaveLength(2);
+    for (const node of screen.getAllByText("FILES")) {
+      expect(node.closest("div.hidden")).toBeNull();
+    }
+
+    // 并回一栏：A 栏已经有文件面板，B 栏那份副本丢掉，只留一份。
     fireEvent.click(screen.getByRole("button", { name: "关闭这一栏" }));
     expect(screen.queryByRole("separator", { name: "调整两栏宽度" })).toBeNull();
-    expect(screen.getByText("GIT").closest("div.hidden")).toBeNull();
-    expect(screen.getByText("FILES")).toBe(filesNode);
-    expect(screen.getByText("FILES").closest("div.hidden")).not.toBeNull();
+    expect(screen.getAllByText("FILES")).toHaveLength(1);
+    expect(screen.getByText("FILES").closest("div.hidden")).toBeNull();
+  });
+
+  it("并栏时终端标签只改归属，不重挂（PTY 不会被杀）", async () => {
+    setup();
+    openFiles(); // A 栏有标签，分栏后只有 B 栏显示开始页
+    fireEvent.click(screen.getByRole("button", { name: "分栏" }));
+    // B 栏开一个终端
+    fireEvent.click(screen.getByRole("button", { name: /新建终端/ }));
+    const term = await screen.findByText("TERM");
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭这一栏" }));
+    await waitFor(() => expect(screen.getByText("TERM")).toBe(term));
+    expect(screen.getAllByText("TERM")).toHaveLength(1);
   });
 
   it("窄屏（浮层）下不出现全屏/分栏入口", () => {
