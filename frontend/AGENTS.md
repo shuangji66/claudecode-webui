@@ -203,6 +203,17 @@ src/
 17. **打开对话先回放 transcript 再连 WS**：`--resume` 不会回放历史；`openConversation`
     会读 `/api/history/transcript` 并用 `applyCLI(items,line,timestamp)` 折叠。切换对话时
     如果 `items[id]` 已有内容就不要再回放，避免重复。
+    **转录与 `POST /api/session` 并行，不等 claude 拉起**：`--resume` 要 spawn 子进程再等
+    `initialize` 握手，冷启动几秒里只回放历史会让人盯着「正在启动 Claude…」看空屏；转录是
+    磁盘上的 jsonl，跟进程无关（会话起不来的 catch 分支早就是这么做的）。顺序仍是
+    「历史与进程并行 → 两边都落定 → 再 `connect`」，WS 连接排在后面，实时事件不会插进
+    回放中间。`openConversation` 的第三个参数 `onHistory` 在历史铺好（含「本地已有 items」
+    与「没有转录」两种立即返回）时触发一次——历史记录页靠它先收起自己，让用户在对话区
+    看历史、子进程在后台继续握手。
+    **同理，顶部那条「正在连接…」横幅要延迟出现**（`ChatPane` 的 `CONN_BAR_DELAY`）：
+    它是 `flex` 列里 `shrink-0` 的一行，插进去会把 `flex-1` 的消息区压短、消失时又长回来。
+    历史已经先上屏的情况下，握手那几十毫秒里闪一下横幅就是「claude 一起来界面闪一下」
+    的来源。`closed` 是终态，立刻显示；`connecting` / `reconnecting` 要过阈值仍没连上才显示。
 18. **列表标题**走 `conversationTitle(自定义标题, items, locale)`：自定义 > 首条用户消息 >
     “新对话”。不要用目录名当空对话标题。
 19. **归档/删除后**要刷新对话列表；删除是软删除，前端不要把转录当作可删除文件。

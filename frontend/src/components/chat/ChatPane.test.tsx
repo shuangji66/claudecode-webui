@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { ChatPane } from "./ChatPane";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { ChatPane, CONN_BAR_DELAY } from "./ChatPane";
 import { useAppStore } from "../../store/useAppStore";
 import type { ConversationInfo, SessionInfo } from "../../transport/types";
 
@@ -111,5 +111,56 @@ describe("ChatPane 回合计时", () => {
   it("空闲时不显示计时行", () => {
     setupTurn("ready");
     expect(screen.queryByText("少女祈祷中")).not.toBeInTheDocument();
+  });
+});
+
+describe("ChatPane 连接横幅", () => {
+  // 打开既有对话时历史已经先上屏，握手就那几十毫秒：这时候插一条横幅会把消息区
+  // 顶下去再拉回来，看起来就是「claude 一拉起整个界面闪一下」。
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("握手期间不插横幅，真的连不上才出现", () => {
+    vi.useFakeTimers();
+    setup("c1", [conv({ messages: 2 })], [session("c1")]);
+    act(() => {
+      useAppStore.setState({ conns: { c1: { state: "connecting" } } } as never);
+    });
+    // 页面刚打开：历史在屏幕上，连接还在握手，不要多一行。
+    expect(screen.queryByText(/正在连接/)).not.toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(CONN_BAR_DELAY - 100);
+    });
+    expect(screen.queryByText(/正在连接/)).not.toBeInTheDocument();
+    // 过了阈值仍然没连上：这才需要告诉用户，并给出「立即重试」。
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(screen.getByText(/正在连接/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /立即重试/ })).toBeInTheDocument();
+  });
+
+  it("连上以后不残留横幅", () => {
+    vi.useFakeTimers();
+    setup("c1", [conv({ messages: 2 })], [session("c1")]);
+    act(() => {
+      useAppStore.setState({ conns: { c1: { state: "connecting" } } } as never);
+    });
+    act(() => {
+      useAppStore.setState({ conns: { c1: { state: "open" } } } as never);
+    });
+    act(() => {
+      vi.advanceTimersByTime(CONN_BAR_DELAY + 100);
+    });
+    expect(screen.queryByText(/正在连接/)).not.toBeInTheDocument();
+  });
+
+  it("连接被关闭是终态，立刻说", () => {
+    setup("c1", [conv({ messages: 2 })], [session("c1")]);
+    act(() => {
+      useAppStore.setState({ conns: { c1: { state: "closed" } } } as never);
+    });
+    expect(screen.getByText(/连接已关闭/)).toBeInTheDocument();
   });
 });

@@ -34,6 +34,14 @@ interface Props {
   onToggleRight: () => void;
 }
 
+/**
+ * 「正在连接…」横幅的延迟（毫秒）。
+ *
+ * 打开对话时的 WS 握手只有几十毫秒，立刻插横幅会把刚回放的历史顶一下再拉回来；
+ * 真的连不上（部署慢 / 断网）才需要这条提示。测试里直接挪这个值。
+ */
+export const CONN_BAR_DELAY = 600;
+
 export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleRight }: Props) {
   const t = useT();
   const locale = useLocale();
@@ -115,6 +123,24 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
   const conn = activeId ? (conns[activeId] ?? { state: "idle" as const }) : { state: "idle" as const };
   const state = activeId ? (states[activeId] ?? session?.state ?? "idle") : "idle";
   const busy = state === "busy";
+
+  // 顶部那条「正在连接…」横幅必须**等到真连不上再出现**。
+  //
+  // 握手期间插一条横幅，等于在刚回放好的历史上面顶进一行：`flex-1` 的消息区被压短，
+  // 横幅一消失又长回来——打开一条既有对话时，用户看到的就是「历史先出来，claude 一
+  // 起来整个界面闪一下」。打开对话时的 WS 握手通常只有几十毫秒，这段时间也不缺信息
+  // （输入框提示已经写着「正在启动 Claude…」）。所以非 `open` 状态先等一个阈值，
+  // 仍然没连上才显示；`closed` 是终态（进程结束 / 服务端关连接），立刻说。
+  const [connBarArmed, setConnBarArmed] = useState(false);
+  useEffect(() => {
+    setConnBarArmed(conn.state === "closed");
+    if (conn.state === "open" || conn.state === "idle" || conn.state === "closed") return;
+    const timer = window.setTimeout(() => setConnBarArmed(true), CONN_BAR_DELAY);
+    return () => window.clearTimeout(timer);
+  }, [conn.state, activeId]);
+  // 渲染时再核一遍当前状态：状态刚变 `open` 的那一帧 effect 还没跑，
+  // 只认 `connBarArmed` 会让横幅闪出一帧「正在连接…」。
+  const showConnBar = connBarArmed && conn.state !== "open" && conn.state !== "idle";
   // 本回合的起点取「最后一条用户消息的时间」：local 插入与转录回放都带时间戳，
   // 不再另存一份「回合开始时间」，免得重连、切对话后两份状态对不上。
   // **插话不是起点**：它并进当前回合（与 `lib/process.turnSpans` 同一套锚点），
@@ -305,7 +331,7 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
         onRevealWorkspace={() => void openWorkspaceInFiles(revealPath)}
       />
 
-      {activeId && conn.state !== "open" && conn.state !== "idle" && (
+      {activeId && showConnBar && (
         <div
           className={`flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-[11px] md:px-4 ${
             conn.state === "closed"

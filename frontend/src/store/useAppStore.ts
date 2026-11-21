@@ -318,7 +318,14 @@ interface AppState {
   /** 打开目录下最近一条对话；createIfEmpty=false 时没有对话就保持空态，不新建。 */
   ensureSession: (cwd?: string, createIfEmpty?: boolean) => Promise<SessionInfo | null>;
   createSession: (cwd?: string) => Promise<void>;
-  openConversation: (id: string, force?: boolean) => Promise<boolean>;
+  /**
+   * 打开一条既有对话。
+   *
+   * `onHistory` 在「转录已经铺进消息流」时调用一次，**早于 claude 拉起**——
+   * 历史是磁盘上的 jsonl，跟子进程无关（见 openConversation 里的并行那一段）。
+   * 历史记录页借此先把自己收起来，让用户在对话区看历史，而不是盯着列表等握手。
+   */
+  openConversation: (id: string, force?: boolean, onHistory?: () => void) => Promise<boolean>;
   renameConversation: (id: string, title: string) => Promise<boolean>;
   archiveConversation: (id: string, archived: boolean) => Promise<boolean>;
   pinConversation: (id: string, pinned: boolean) => Promise<boolean>;
@@ -1683,7 +1690,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (createTask === task) createTask = null;
   },
 
-  openConversation: async (id, force = false) => {
+  openConversation: async (id, force = false, onHistory) => {
     const seq = ++openSeq;
     // 新对话还在创建时先等它落定，避免创建完成后的 setActive 覆盖用户新选的对话。
     if (createTask) await createTask.catch(() => null);
@@ -1721,25 +1728,38 @@ export const useAppStore = create<AppState>()((set, get) => ({
         .catch(() => undefined);
     }
 
+    // 「历史已经铺好」只报一次：本地已有 items、转录落定、转录读不到（新对话 / 404）
+    // 都算这个时刻——调用方（历史记录页）据此收起自己，剩下的最多是进程还没握手。
+    let historyNotified = false;
+    const notifyHistory = () => {
+      if (historyNotified) return;
+      historyNotified = true;
+      onHistory?.();
+    };
+
     const loadTranscript = async () => {
-      if ((get().items[id] ?? []).length > 0) return;
-      // 全新空对话没有转录文件；直接跳过，避免制造一次预期的 404。
-      if (conv.messages === 0 && !conv.title) return;
       try {
-        const tr = await apiFetch<TranscriptPayload>(`/api/history/transcript?id=${encodeURIComponent(id)}`);
         if ((get().items[id] ?? []).length > 0) return;
-        const next = itemsFromTranscript(tr);
-        // 转录里带着 usage（assistant 行），重开对话时据此还原底部统计；
-        // 转录算不出的 API 耗时 / 窗口，用上次持久化的快照补。实时快照不覆盖。
-        const snap = mergeUsage(conv.usage, usageFromTranscript(tr.lines ?? []));
-        if (next.length > 0) {
-          set((s) => ({
-            items: { ...s.items, [id]: next },
-            ...(snap && !s.usage[id] ? { usage: { ...s.usage, [id]: snap } } : {}),
-          }));
+        // 全新空对话没有转录文件；直接跳过，避免制造一次预期的 404。
+        if (conv.messages === 0 && !conv.title) return;
+        try {
+          const tr = await apiFetch<TranscriptPayload>(`/api/history/transcript?id=${encodeURIComponent(id)}`);
+          if ((get().items[id] ?? []).length > 0) return;
+          const next = itemsFromTranscript(tr);
+          // 转录里带着 usage（assistant 行），重开对话时据此还原底部统计；
+          // 转录算不出的 API 耗时 / 窗口，用上次持久化的快照补。实时快照不覆盖。
+          const snap = mergeUsage(conv.usage, usageFromTranscript(tr.lines ?? []));
+          if (next.length > 0) {
+            set((s) => ({
+              items: { ...s.items, [id]: next },
+              ...(snap && !s.usage[id] ? { usage: { ...s.usage, [id]: snap } } : {}),
+            }));
+          }
+        } catch {
+          // 新对话还没有转录；实时 WS 会补上后续消息。
         }
-      } catch {
-        // 新对话还没有转录；实时 WS 会补上后续消息。
+      } finally {
+        notifyHistory();
       }
     };
 
@@ -1750,16 +1770,26 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
 
     const pending = resumePromises.get(id);
-    if (pending) return pending;
+    if (pending) {
+      // 同一条对话正在起：历史由那次负责回放，这里等它落定再补一次「历史已上屏」
+      // 的回调——不然这个调用方（历史记录页）会一直停在列表上等子进程。
+      const ok = await pending;
+      notifyHistory();
+      return ok;
+    }
     const promise = (async () => {
       set({ starting: true, error: null });
+      // 转录是磁盘上的 jsonl，跟子进程无关：**与起会话并行**拉，先把历史铺出来，
+      // 别让用户盯着「正在启动 Claude…」等 `--resume` 的 initialize 握手（冷启动
+      // 要等 spawn + 握手，几秒钟里消息区是空的）。两边都完成才继续——WS 连接、
+      // activeId 复位仍然排在后面，实时事件不会插进回放中间。
+      const transcript = loadTranscript();
       try {
         const info = await apiFetch<SessionInfo>("/api/session", {
           method: "POST",
           body: JSON.stringify({ cwd: conv.cwd, resume: id }),
         });
-        await Promise.all([get().refreshSessions(), get().refreshConversations()]);
-        await loadTranscript();
+        await Promise.all([get().refreshSessions(), get().refreshConversations(), transcript]);
         // 只有这仍是用户最后一次意图时才改 activeId；WS 照连，历史照填。
         if (seq === openSeq) get().setActive(info.id);
         get().connect(info.id);
@@ -1767,8 +1797,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
       } catch (e) {
         // 会话起不来（claude 未安装 / 版本被删 / 并发冲突返回 409）不等于历史读不到：
         // 转录是磁盘上的 jsonl，跟进程无关。先回放历史再报错——否则用户看到的是
-        // 「开始新的对话」，像是整个对话被弄丢了。
-        await loadTranscript();
+        // 「开始新的对话」，像是整个对话被弄丢了。并行那次已经发出去过（不回放）
+        // 就不再补一次请求，等它落定即可。
+        await transcript;
         set({ error: errText(e) });
         return false;
       } finally {

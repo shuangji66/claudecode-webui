@@ -104,7 +104,10 @@ export function HistoryPage({ onClose, onOpenSidebar }: Props) {
         if (!ok) return;
       }
       await refreshConversations();
-      const ok = await openConversation(id);
+      // 转录与 claude 拉起是并行的（历史是磁盘上的 jsonl，跟子进程无关）：
+      // 历史一上屏就把这一页收掉，让用户在对话区看历史，子进程在后台继续握手。
+      // 起不来由对话区的错误条报，不必把用户扣在列表上等。
+      const ok = await openConversation(id, false, onClose);
       if (ok) onClose();
     } finally {
       setBusyCwd(null);
