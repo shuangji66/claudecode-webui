@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TCP_PORT_MAX, TCP_PORT_MIN, validTCPPort } from "./access";
+import { LOGIN_TTL_DEFAULT, LOGIN_TTL_MAX, LOGIN_TTL_MIN, TCP_PORT_MAX, TCP_PORT_MIN, clampLoginTTL, validTCPPort } from "./access";
 
 describe("validTCPPort", () => {
   it("接受范围内端口", () => {
@@ -19,5 +19,24 @@ describe("validTCPPort", () => {
     expect(validTCPPort("3141.5")).toBe(false);
     expect(validTCPPort("")).toBe(false);
     expect(validTCPPort("abc")).toBe(false);
+  });
+});
+
+describe("clampLoginTTL", () => {
+  it("落在 12/24/36/48/60/72 这些档位上", () => {
+    for (const v of [12, 24, 36, 48, 60, 72]) expect(clampLoginTTL(v)).toBe(v);
+  });
+
+  it("不在档位上的值归到最近档位", () => {
+    expect(clampLoginTTL(28)).toBe(24);
+    expect(clampLoginTTL(30)).toBe(36); // 正好一半时向上归（Math.round）
+    expect(clampLoginTTL(31)).toBe(36);
+    expect(clampLoginTTL(7)).toBe(LOGIN_TTL_MIN);
+  });
+
+  it("越界与脏值夹到两端或默认值", () => {
+    expect(clampLoginTTL(0)).toBe(LOGIN_TTL_MIN);
+    expect(clampLoginTTL(1000)).toBe(LOGIN_TTL_MAX);
+    expect(clampLoginTTL(Number.NaN)).toBe(LOGIN_TTL_DEFAULT);
   });
 });

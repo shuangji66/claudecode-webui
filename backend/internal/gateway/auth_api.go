@@ -21,10 +21,11 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 // handleLogin 用访问密码换一个登录会话令牌。
 //
 // 这是唯一接受明文密码的接口：密码在这里按 PBKDF2 摘要校验一次，之后浏览器
-// 带的是随机会话令牌（Guard.Check 只查内存里的会话表）。密码本身不再能当
-// Bearer 用，settings.json 里也只有摘要。
+// 带的是随机会话令牌（Guard.Check 只查会话表，表里的键是令牌的 SHA-256）。
+// 密码本身不再能当 Bearer 用，settings.json 里也只有摘要。
 //
-// 会话只存在进程内存：重启进程后需要重新登录，但设置不会因此丢失。
+// 会话表落盘，重启进程/升级应用不会把已登录的设备踢下线；它的唯一边界是
+// 「签发时刻 + 「设置 → 访问」里的登录有效期」（默认 24 小时）。
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Password string `json:"password"`

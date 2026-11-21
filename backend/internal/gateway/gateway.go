@@ -165,6 +165,15 @@ func New(d Deps, logger *log.Logger) *Server {
 			_, hash := d.Settings.TCPAccess()
 			return hash
 		})
+		// 登录有效期同样是设置项（「设置 → 访问」），守卫在签发与校验时现读。
+		d.Guard.SetTTLSource(d.Settings.LoginTTL)
+	}
+	// 会话表落盘：重启进程/升级应用不再把已经登录的设备踢下线。
+	// 读失败只记日志（从空会话表起来，用户重登一次），不能挡住启动。
+	if d.Guard != nil && d.Cfg.DataDir != "" {
+		if err := d.Guard.SetSessionStore(filepath.Join(d.Cfg.DataDir, "access_sessions.json")); err != nil {
+			logger.Printf("读取登录会话表失败（本次需要重新登录）: %v", err)
+		}
 	}
 	s.routes()
 	return s

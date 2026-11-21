@@ -452,6 +452,12 @@ export interface PublicSettings {
   tcp_port?: number;
   /** 密码只回「是否已设置」，摘要与明文都不下发。 */
   tcp_password_set?: boolean;
+  /**
+   * TCP 登录会话的有效期（小时，默认 24，范围 12–72、步进 12）。
+   *
+   * 会话表在服务端落盘，所以这是登录态唯一的过期边界——重启进程不会失效。
+   */
+  login_ttl_hours?: number;
   path: string;
 }
 

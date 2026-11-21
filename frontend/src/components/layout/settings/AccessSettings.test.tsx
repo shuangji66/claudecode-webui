@@ -138,6 +138,52 @@ describe("AccessSettings", () => {
     expect(body).toEqual({ tcp_enabled: true, tcp_port: 3141 });
   });
 
+  it("登录有效期 12–72 步进 12，默认 24，改了才写进补丁", async () => {
+    setStore({ tcp_password_set: true, login_ttl_hours: 24 });
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/settings" && init?.method === "PUT") {
+        return jsonResponse({ ...baseSettings, tcp_password_set: true, login_ttl_hours: 36 });
+      }
+      if (url === "/api/info") return jsonResponse({ ...baseInfo, tcp_listening: true, tcp_port: 3141 });
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AccessSettings />);
+    const save = screen.getByRole("button", { name: "保存访问设置" }) as HTMLButtonElement;
+    expect(screen.getByText("24 小时")).toBeTruthy();
+    // 默认值不该让页面变成「未保存」
+    expect(save.disabled).toBe(true);
+
+    const dec = screen.getByRole("button", { name: "缩短登录有效期" }) as HTMLButtonElement;
+    const inc = screen.getByRole("button", { name: "延长登录有效期" }) as HTMLButtonElement;
+    fireEvent.click(dec);
+    fireEvent.click(dec);
+    // 12 是下限：再点不动
+    expect(screen.getByText("12 小时")).toBeTruthy();
+    expect(dec.disabled).toBe(true);
+
+    fireEvent.click(inc);
+    fireEvent.click(inc);
+    expect(screen.getByText("36 小时")).toBeTruthy();
+    expect(save.disabled).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(save);
+    });
+    const put = fetchMock.mock.calls.find(([url, init]) => url === "/api/settings" && (init as RequestInit)?.method === "PUT");
+    expect(put).toBeTruthy();
+    const body = JSON.parse(String((put as unknown as [string, RequestInit])[1].body));
+    expect(body).toEqual({ tcp_enabled: false, tcp_port: 3141, login_ttl_hours: 36 });
+  });
+
+  it("有效期已经到 72 小时时上限按钮不再点得动", () => {
+    setStore({ login_ttl_hours: 72 });
+    render(<AccessSettings />);
+    expect(screen.getByText("72 小时")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "延长登录有效期" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("监听失败时把原因显示出来", () => {
     setStore({ tcp_enabled: true }, { tcp_listening: false, tcp_port: 0, tcp_error: "listen tcp :3141: address already in use" });
     render(<AccessSettings />);

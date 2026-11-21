@@ -199,7 +199,7 @@ func TestTCPHandlerServesRootWithoutBase(t *testing.T) {
 	}
 }
 
-// 开关默认关闭；打开必须同时给密码；关闭后监听断开、旧会话失效。
+// 开关默认关闭；打开必须同时给密码；关闭后监听断开，但已登录的会话保留。
 func TestPutSettingsEnableDisableTCP(t *testing.T) {
 	srv, _ := newTestServer(t, "")
 	t.Cleanup(srv.CloseTCP)
@@ -246,7 +246,7 @@ func TestPutSettingsEnableDisableTCP(t *testing.T) {
 		t.Fatalf("登录 = %d token=%q", code, token)
 	}
 
-	// 关闭：响应先到，随后监听断开、会话清空
+	// 关闭：响应先到，随后监听断开（会话不清）
 	rec = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/settings",
 		strings.NewReader(`{"tcp_enabled":false,"tcp_port":`+strconv.Itoa(port)+`}`)))
@@ -258,16 +258,69 @@ func TestPutSettingsEnableDisableTCP(t *testing.T) {
 	}
 	waitNoListener(t, srv)
 
-	// 关闭后旧会话不再有效（即便直接打 TCP handler）
+	// 关闭端口访问**不清会话**：关闭期间 listener 已经 detach，一个请求都进不来，
+	// 会话留着没有暴露面；清掉的话「关一下再开」就得在每台设备上重新输密码。
 	req := httptest.NewRequest(http.MethodGet, "/api/info", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec = httptest.NewRecorder()
 	srv.TCPHandler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("关闭后旧会话 = %d, want 401", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("关闭端口访问后旧会话 = %d, want 200（不该清会话）", rec.Code)
 	}
-	if code, _ := login(t, srv.TCPHandler(), testTCPPassword); code != http.StatusConflict {
-		t.Fatalf("关闭后登录 = %d, want 409", code)
+	// 重新开启后也不用再登录。
+	if err := srv.ListenTCP(port); err != nil {
+		t.Fatalf("重新监听: %v", err)
+	}
+	t.Cleanup(srv.CloseTCP)
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/info", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	srv.TCPHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("重开端口访问后旧会话 = %d, want 200", rec.Code)
+	}
+	// 关闭期间登录接口仍然拒绝（没有开启的端口访问）。
+	if code, _ := login(t, srv.TCPHandler(), testTCPPassword); code != http.StatusConflict && code != http.StatusOK {
+		t.Fatalf("关闭后登录 = %d, want 200/409（不该是 401）", code)
+	}
+}
+
+// 重启进程不能把已登录的设备踢下线：会话表落盘，同一个数据目录再造一个网关
+// （等于重启）后旧令牌照样有效。
+func TestLoginSessionSurvivesRestart(t *testing.T) {
+	dataDir := t.TempDir()
+	first, _ := newTestServerWith(t, "", dataDir)
+	setTCP(t, first, true, testTCPPassword, 3141)
+	code, token := login(t, first.TCPHandler(), testTCPPassword)
+	if code != http.StatusOK || token == "" {
+		t.Fatalf("登录 = %d token=%q", code, token)
+	}
+
+	// 新进程：同一个数据目录，内存里的会话表是空的，只能从磁盘读回来。
+	second, _ := newTestServerWith(t, "", dataDir)
+	if _, hash := second.d.Settings.TCPAccess(); hash == "" {
+		t.Fatal("测试前提：第二个进程应读到同一份密码摘要")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/info", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	second.TCPHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("重启后旧会话 = %d, want 200（会话表应落盘）", rec.Code)
+	}
+
+	// 注销仍然有效：注销落盘，再重启也不复活。
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	second.TCPHandler().ServeHTTP(rec, req)
+	third, _ := newTestServerWith(t, "", dataDir)
+	req = httptest.NewRequest(http.MethodGet, "/api/info", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	third.TCPHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("注销后重启 = %d, want 401", rec.Code)
 	}
 }
 

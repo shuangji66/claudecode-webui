@@ -4,7 +4,15 @@ import { useAppStore } from "../../../store/useAppStore";
 import { useT } from "../../../lib/i18n";
 import { loginAccess, setToken } from "../../../lib/runtime";
 import { passwordIssue, type PasswordIssue } from "../../../lib/password";
-import { TCP_PORT_MAX, TCP_PORT_MIN, validTCPPort } from "../../../lib/access";
+import {
+  LOGIN_TTL_MAX,
+  LOGIN_TTL_MIN,
+  LOGIN_TTL_STEP,
+  TCP_PORT_MAX,
+  TCP_PORT_MIN,
+  clampLoginTTL,
+  validTCPPort,
+} from "../../../lib/access";
 import { Button } from "../../common/Button";
 import { IconCheck, IconEye, IconEyeOff } from "../../common/Icons";
 import { Section } from "./Section";
@@ -36,6 +44,9 @@ function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: 
  *   - 密码开启前必须设置，且有基础复杂度（≥8 位、含字母与数字）——后端存 PBKDF2
  *     摘要，不落明文；
  *   - 端口范围 1025–65535，保存时后端会真的 bind 一次，端口被占用就报错、不落盘；
+ *   - 登录有效期 12–72 小时、步进 12、默认 24：会话表在服务端落盘，重启进程不会
+ *     踢人，有效期是登录态唯一的过期边界；改密码仍然让旧会话立刻失效（指纹即摘要，
+ *     当前若走 TCP 通道会用新密码重新登录一次，用户无感）；
  *   - unix socket（前置网关反代）是本机可信入口，不校验这个密码。
  */
 export function AccessSettings() {
@@ -49,9 +60,11 @@ export function AccessSettings() {
   const savedEnabled = Boolean(settings?.tcp_enabled);
   const savedPort = settings?.tcp_port ?? 3141;
   const passwordSet = Boolean(settings?.tcp_password_set);
+  const savedTTL = clampLoginTTL(settings?.login_ttl_hours ?? 24);
 
   const [enabled, setEnabled] = useState(savedEnabled);
   const [port, setPort] = useState(String(savedPort));
+  const [ttl, setTTL] = useState(savedTTL);
   const [pwd, setPwd] = useState("");
   const [showPwd, setShowPwd] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -62,17 +75,18 @@ export function AccessSettings() {
   useEffect(() => {
     setEnabled(savedEnabled);
     setPort(String(savedPort));
+    setTTL(savedTTL);
     setPwd("");
     setNotice(null);
     setSaveError(null);
-  }, [savedEnabled, savedPort, passwordSet]);
+  }, [savedEnabled, savedPort, savedTTL, passwordSet]);
 
   const portValid = validTCPPort(port);
   const issue = pwd ? passwordIssue(pwd) : null;
   const pwdValid = pwd === "" || issue === null;
   // 开启时必须有一个密码：要么已经存过，要么这次输入一个合规的。
   const hasPassword = passwordSet || (pwd !== "" && issue === null);
-  const dirty = enabled !== savedEnabled || Number(port) !== savedPort || pwd !== "";
+  const dirty = enabled !== savedEnabled || Number(port) !== savedPort || ttl !== savedTTL || pwd !== "";
   const canSave = !saving && portValid && pwdValid && (!enabled || hasPassword) && dirty;
 
   const issueText = (v: PasswordIssue) => {
@@ -100,6 +114,7 @@ export function AccessSettings() {
       tcp_enabled: enabled,
       tcp_port: Number(port),
     };
+    if (ttl !== savedTTL) patch.login_ttl_hours = ttl;
     if (pwd !== "") patch.tcp_password = pwd;
 
     const ok = await saveSettings(patch);
@@ -188,6 +203,48 @@ export function AccessSettings() {
           </p>
         )}
       </div>
+
+      <Section
+        title={t("登录有效期", "Login validity")}
+        desc={t(
+          `登录一次可以保持多久（${LOGIN_TTL_MIN}–${LOGIN_TTL_MAX} 小时，默认 24）。登录状态保存在服务端，重启进程或升级应用不会掉登录；到期或改密码后需要重新输入访问密码。`,
+          `How long a sign-in lasts (${LOGIN_TTL_MIN}–${LOGIN_TTL_MAX} hours, default 24). Sessions are stored on the server, so restarting or upgrading the app does not sign you out; you sign in again after it expires or the password changes.`,
+        )}
+      >
+        <div className="flex items-center gap-1.5">
+          <div className="inline-flex items-center rounded-lg bg-panel dark:bg-panel-strong">
+            <button
+              type="button"
+              onClick={() => {
+                setTTL(clampLoginTTL(Math.max(LOGIN_TTL_MIN, ttl - LOGIN_TTL_STEP)));
+                setSavedAt(null);
+                setSaveError(null);
+              }}
+              disabled={ttl <= LOGIN_TTL_MIN}
+              className="h-8 w-8 rounded-l-lg text-[13px] text-muted transition hover:bg-panel-strong hover:text-ink disabled:opacity-30 dark:hover:bg-line disabled:hover:bg-transparent"
+              aria-label={t("缩短登录有效期", "Shorten login validity")}
+            >
+              −
+            </button>
+            <span className="w-16 text-center font-mono text-[12.5px] text-ink tabular-nums">
+              {t(`${ttl} 小时`, `${ttl} h`)}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setTTL(clampLoginTTL(Math.min(LOGIN_TTL_MAX, ttl + LOGIN_TTL_STEP)));
+                setSavedAt(null);
+                setSaveError(null);
+              }}
+              disabled={ttl >= LOGIN_TTL_MAX}
+              className="h-8 w-8 rounded-r-lg text-[13px] text-muted transition hover:bg-panel-strong hover:text-ink disabled:opacity-30 dark:hover:bg-line disabled:hover:bg-transparent"
+              aria-label={t("延长登录有效期", "Extend login validity")}
+            >
+              +
+            </button>
+          </div>
+        </div>
+      </Section>
 
       <Section title={t("访问密码", "Access password")}>
         <div className="relative">

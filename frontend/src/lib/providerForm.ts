@@ -140,6 +140,7 @@ export function normalizeSettings(s: PublicSettings | null): PublicSettings | nu
     max_sessions: s.max_sessions || 8,
     subagent_max_concurrent: s.subagent_max_concurrent || 10,
     subagent_spawn_depth: s.subagent_spawn_depth || 1,
+    login_ttl_hours: s.login_ttl_hours || 24,
     providers: providers.map((p) => {
       const models = ((p.models as unknown as string[] | null | undefined) ?? []).filter(Boolean);
       const rawMeta = (p.model_meta as unknown as Record<string, ModelSpec> | null | undefined) ?? {};

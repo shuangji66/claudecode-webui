@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"ccweb/backend/internal/authz"
 )
@@ -73,6 +74,23 @@ const (
 	MinTCPPort = 1025
 	MaxTCPPort = 65535
 )
+
+// TCP 登录会话的有效期（小时）。
+//
+// 访问密码登录后换来的令牌能活多久：面板常驻在浏览器标签里，太短会天天重输密码；
+// 而会话表是落盘的（`authz.Guard` 写 CCWEB_DATA_DIR，重启进程不再踢人），
+// 所以有效期是它唯一的时间边界，必须让用户自己定。
+// 12–72、步进 12（12/24/36/48/60/72），默认 24：一天一换，够用又不会长期有效。
+// 步进只约束界面：手改配置文件写 30 小时仍然有效。
+const (
+	DefaultLoginTTLHours = 24
+	MinLoginTTLHours     = 12
+	MaxLoginTTLHours     = 72
+	StepLoginTTLHours    = 12
+)
+
+// ValidLoginTTLHours 判断登录有效期是否在可设范围内。
+func ValidLoginTTLHours(h int) bool { return h >= MinLoginTTLHours && h <= MaxLoginTTLHours }
 
 // 空闲会话回收阈值（分钟）。超过这个时间没有任何读写的会话会被结束，释放常驻进程。
 //
@@ -283,6 +301,9 @@ type Settings struct {
 	TCPEnabled      bool   `json:"tcp_enabled"`
 	TCPPort         int    `json:"tcp_port"`
 	TCPPasswordHash string `json:"tcp_password_hash,omitempty"`
+	// LoginTTLHours 是登录会话的有效期（小时，12–72，默认 24）。守卫现读它，
+	// 所以改完对已经签发的会话也立刻生效（过期时刻 = 签发时刻 + 当前值）。
+	LoginTTLHours int `json:"login_ttl_hours"`
 
 	// 内置搜索（DeepSeek Search / Fetch API）。密钥与对话用的密钥分开：
 	// 搜索按次计费，不能指望用户愿意把对话密钥复用出去。
@@ -338,6 +359,8 @@ type Public struct {
 	TCPEnabled     bool `json:"tcp_enabled"`
 	TCPPort        int  `json:"tcp_port"`
 	TCPPasswordSet bool `json:"tcp_password_set"`
+	// LoginTTLHours 是 TCP 登录会话的有效期（小时）。
+	LoginTTLHours int `json:"login_ttl_hours"`
 
 	// Path 是配置文件路径，方便在 NAS 上备份。
 	Path string `json:"path"`
@@ -396,6 +419,8 @@ type Patch struct {
 	TCPEnabled  *bool   `json:"tcp_enabled"`
 	TCPPort     *int    `json:"tcp_port"`
 	TCPPassword *string `json:"tcp_password"`
+	// LoginTTLHours 空表示不改。
+	LoginTTLHours *int `json:"login_ttl_hours"`
 
 	SearchBaseURL  *string `json:"search_base_url"`
 	SearchAPIKey   *string `json:"search_api_key"`
@@ -502,6 +527,14 @@ func normalizePreferences(v *Settings) {
 	// （会把所有人永远挡在登录页），一律回落成关闭。
 	if !ValidTCPPort(v.TCPPort) {
 		v.TCPPort = DefaultTCPPort
+	}
+	// 登录有效期：0 是「老配置里没这个字段」，补默认值（老版本硬编码 7 天，
+	// 那个值不在可设范围里，手改配置留下 168 也回落成默认）。
+	if v.LoginTTLHours == 0 {
+		v.LoginTTLHours = DefaultLoginTTLHours
+	}
+	if !ValidLoginTTLHours(v.LoginTTLHours) {
+		v.LoginTTLHours = DefaultLoginTTLHours
 	}
 	if v.TCPPasswordHash == "" {
 		v.TCPEnabled = false
@@ -630,6 +663,21 @@ func (s *Store) TCPAccess() (enabled bool, passwordHash string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.cur.TCPEnabled, s.cur.TCPPasswordHash
+}
+
+// LoginTTL 返回当前登录会话的有效期。
+//
+// 鉴权守卫在签发与校验会话时都现读它（同样不做深拷贝），所以设置页改完
+// 对已经登录的设备也立刻生效。越界值在 Open/Apply 已经挡过，这里再夹一次
+// 是为了防手改的配置文件：0 会让令牌一签发就过期。
+func (s *Store) LoginTTL() time.Duration {
+	s.mu.RLock()
+	hours := s.cur.LoginTTLHours
+	s.mu.RUnlock()
+	if !ValidLoginTTLHours(hours) {
+		hours = DefaultLoginTTLHours
+	}
+	return time.Duration(hours) * time.Hour
 }
 
 // IdleMinutes 返回当前的空闲会话回收阈值（分钟），永远落在合法区间内。
@@ -866,6 +914,7 @@ func (s *Store) Public() Public {
 		TCPEnabled:                cur.TCPEnabled,
 		TCPPort:                   cur.TCPPort,
 		TCPPasswordSet:            cur.TCPPasswordHash != "",
+		LoginTTLHours:             cur.LoginTTLHours,
 		SearchBaseURL:             cur.SearchBaseURL,
 		SearchAPIKeySet:           cur.SearchAPIKey != "",
 		SearchAPIKeyMask:          Mask(cur.SearchAPIKey),
@@ -1001,6 +1050,13 @@ func (s *Store) Apply(p Patch) (Public, error) {
 	if newHash != "" {
 		// 空串=沿用旧密码（与其它密钥一致），已在锁外跳过哈希。
 		next.TCPPasswordHash = newHash
+	}
+	if p.LoginTTLHours != nil {
+		if !ValidLoginTTLHours(*p.LoginTTLHours) {
+			s.mu.Unlock()
+			return Public{}, fmt.Errorf("settings: 登录有效期必须在 %d–%d 小时之间", MinLoginTTLHours, MaxLoginTTLHours)
+		}
+		next.LoginTTLHours = *p.LoginTTLHours
 	}
 	if next.TCPEnabled && next.TCPPasswordHash == "" {
 		s.mu.Unlock()

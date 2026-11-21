@@ -51,7 +51,8 @@
   `settings.Env()` 注入 `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` /
   `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`，只在会话启动时生效；
   其余是代理、claude 版本的下载源/安装/切换，
-  以及飞牛已授权目录的查看/添加/撤销、端口访问开关、TCP 端口与访问密码（单密码，无用户名）；
+  以及飞牛已授权目录的查看/添加/撤销、端口访问开关、TCP 端口、访问密码（单密码，无用户名）
+  与**登录有效期**（12–72 小时、步进 12、默认 24；会话落盘，重启进程不掉登录，见 4.15）；
   **模型页不在这里**（见下面那条功能区）；
 - 左侧栏功能区（对齐 DSH）是**整页视图**，不是弹窗：模型 / 插件 / MCP / 技能中心 / 自动化任务 /
   历史记录打开后接管「左侧栏以外的剩余区域」（移动端铺满视口），入口在原地高亮，再点一次
@@ -1268,18 +1269,32 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **密码只存摘要**：`authz.HashPassword` 产出
   `pbkdf2-sha256$<iter>$<salt>$<key>`（随机盐）；`settings.json` 只有 `tcp_password_hash`，
   `Public` 只回 `tcp_password_set`。密码不能当 Bearer 用：唯一接受明文的是
-  `POST /api/auth/login`，它校验摘要后发随机会话令牌（`Guard.NewSession`，有效期
-  `SessionTTL`=7 天，仅进程内存）。浏览器 localStorage 里存的是令牌，不是密码。
+  `POST /api/auth/login`，它校验摘要后发随机会话令牌（`Guard.NewSession`）。
+  浏览器 localStorage 里存的是令牌，不是密码。
+- **会话表落盘、重启不掉登录**：`Guard.SetSessionStore(CCWEB_DATA_DIR/access_sessions.json)`
+  （网关 `New` 里接，0600、tmp+rename；文件里只存令牌的 SHA-256，不存原文）。
+  以前会话只在进程内存里，**重启/升级应用就把所有设备踢下线**——那是踩过的坑：
+  NAS 上更新一次版本，每台设备都要重输一次访问密码。
+  有效期的唯一边界是「签发时刻 + **当前**有效期」，所以「设置 → 访问」改完对已经登录的
+  设备也立刻生效（不是只对新登录生效）。
+- **登录有效期是设置项**：`settings.login_ttl_hours`，**12–72、步进 12、默认 24**（小时），
+  `Guard.SetTTLSource(settings.Store.LoginTTL)` 现读；范围与步进的前端镜像在
+  `lib/access.ts`（`clampLoginTTL`）。0（老配置）与越界值都在 `Open` 时回落默认——
+  0 会让令牌一签发就过期，那是最难排查的静默故障。老版本硬编码的 7 天因此被收窄成 24 小时。
   `CCWEB_AUTH_TOKEN` 仍然可以直接当 Bearer；`/api/auth/login` 也会原样接受它并回同一个值，
   否则启用令牌的旧部署会卡在鉴权页（令牌本身只能当 Bearer，没法存成密码）。
 - **注销**：`POST /api/auth/logout` 只吊销请求里自带的会话令牌（无令牌/已失效也回 200，
   便于前端在任何情况下清本地凭据）。侧栏底部在 `info.auth_required` 时显示「退出登录」，
   点击后清 localStorage 并整页重载回鉴权页。环境变量令牌不是会话，注销不会让它失效
   （清掉本地值后仍可用同一令牌重新登录）。
-- **改密码/关端口必须让旧会话失效**：会话里记录签发时的摘要指纹，摘要一变自动失效；
-  关闭端口访问时 `Guard.ClearSessions()` 让令牌立刻失效，并 `StopTCPGracefully`：
-  **立刻关闭 listener**（端口可立刻重开），500ms 后再 `http.Server.Close()` 断开已有连接
-  （含 WebSocket）——先把本次响应发出去，否则正在用 TCP 的管理员只会看到「请求失败」。
+- **改密码必须让旧会话失效，关端口不必**：会话里记录签发时的摘要指纹（就是密码摘要），
+  摘要一变旧令牌立刻失效（重启时读盘也会把指纹对不上的丢掉）——这是「密码泄漏后改密码
+  能踢人」的唯一依据，别为了省事去掉。**关闭端口访问则不再清会话**：listener 已经
+  detach，一个请求都进不来，会话留着没有暴露面；清掉只会让「关一下再开」（换端口、
+  排查问题）在每台设备上都要重新输一次密码。
+  关闭时走 `StopTCPGracefully`：**立刻关闭 listener**（端口可立刻重开），500ms 后
+  再 `http.Server.Close()` 断开已有连接（含 WebSocket）——先把本次响应发出去，
+  否则正在用 TCP 的管理员只会看到「请求失败」。
   **不要用「延迟执行一次 `CloseTCP`」**：那会把 500ms 内重新开启的新 listener 一起关掉。
 - **`CloseTCP` 要连活动连接一起断**：换端口只关旧 listener（页面不被踢），但关闭端口访问
   是安全动作，必须 `http.Server.Close()` 掉当前与所有 retired server（含 WebSocket）。
@@ -1297,8 +1312,8 @@ hub ── manager ── session ── process ── claude (NDJSON)
   否则「上次端口没绑上」会把改模型之类的保存也连带报错。
 - **前端凭据跟着通道走**：改密码后，若当前是 TCP 通道（`info.channel === "tcp"`），
   AccessSettings 会用新密码重新登录换令牌；unix 通道用的是环境变量令牌，
-  绝不能拿访问密码覆盖它（unix 不认它，覆盖等于把自己锁在外面）。服务重启后会话失效，
-  鉴权页会重新要求输入密码——这是刻意的（令牌不落盘）。
+  绝不能拿访问密码覆盖它（unix 不认它，覆盖等于把自己锁在外面）。服务重启**不再**让
+  会话失效（令牌落盘），鉴权页只在令牌真的过期/被吊销时出现。
 - **想只绑本机用 `CCWEB_TCP_HOST=127.0.0.1`**（默认所有网卡）；TCP 是明文 HTTP，
   跨不可信网络要加 HTTPS 反代。
 

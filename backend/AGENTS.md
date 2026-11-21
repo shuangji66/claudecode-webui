@@ -299,10 +299,16 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   （`POST /api/auth/login` 用访问密码换随机会话令牌，unix socket 免密）。
   登录接口也要接受环境变量令牌并原样返回（`Guard.EnvTokenMatches`），
   否则用旧令牌部署的用户会被鉴权页挡死。
-- **密码只存 PBKDF2-SHA256 摘要**（`authz.HashPassword`，随机盐），会话只在内存里
-  （`Guard.NewSession`，7 天）。密码唯一被接受的地方是登录接口；`Bearer <密码>` 必须被拒。
-  关闭端口访问/改密码要让旧会话失效（指纹失配 + `ClearSessions`），
-  服务重启后重新登录是预期行为。
+- **密码只存 PBKDF2-SHA256 摘要**（`authz.HashPassword`，随机盐）。密码唯一被接受的
+  地方是登录接口；`Bearer <密码>` 必须被拒。
+- **登录会话落盘、跨重启有效**：`Guard.SetSessionStore(CCWEB_DATA_DIR/access_sessions.json)`
+  在网关 `New` 里接（0600、tmp+rename；磁盘上只存令牌的 SHA-256）。**不要再退回「会话只在
+  内存、重启就重登」**——NAS 上每次升级都要每台设备重输一次密码。有效期由
+  「签发时刻 + 当前值」算（`Guard.SetTTLSource(settings.Store.LoginTTL)`），设置页改完对
+  已登录设备也立刻生效；设置项 `login_ttl_hours` 范围 12–72、步进 12、默认 24。
+- **改密码要让旧会话失效，关端口不用**：令牌里记着签发时的密码摘要，摘要一变立刻失效
+  （读盘时对不上的直接丢掉）；而关闭端口访问**不清会话**——listener 已 detach，会话留着
+  没有暴露面，清掉只会让「关一下再开」在每台设备上都要重输密码。
 - **密码复杂度**：`authz.ValidatePassword`（≥8 位、含字母与数字、无控制字符）。
   开启端口访问必须已有密码，`settings.Apply` 与 `PUT /api/settings` 都会挡。
 - **端口范围 1025–65535**（`settings.MinTCPPort/MaxTCPPort`）：前端先挡一次，
@@ -311,7 +317,7 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - TCP 端口是设置项（`settings.DefaultTCPPort` = 3141）。`PUT /api/settings` 碰
   `tcp_enabled`/`tcp_port` 时**先 `ListenTCP` 成功再 `Apply`**，Apply 失败把监听切回原状态；
   换端口只关旧 listener（页面不踢）；**关闭端口访问走两段式**：立刻 `detach` + 关 listener
-  （端口可立即重开、`Guard.ClearSessions`），500ms 后再关旧 `http.Server` 断开已有连接
+  （端口可立即重开），500ms 后再关旧 `http.Server` 断开已有连接
   （含 WS）。**不要延迟执行 `CloseTCP`**，否则会把期间重新开启的新监听一起关掉。
   启动时 TCP 绑定失败只记日志
   （不能挡住用户去设置页改端口）；其它设置页的保存不碰监听。

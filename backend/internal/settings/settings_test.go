@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ccweb/backend/internal/authz"
 )
@@ -1044,9 +1045,60 @@ func TestTCPAccessDefaults(t *testing.T) {
 	if got.TCPPasswordHash != "" {
 		t.Fatal("默认不应有密码摘要")
 	}
+	if got.LoginTTLHours != DefaultLoginTTLHours {
+		t.Fatalf("LoginTTLHours = %d, want %d", got.LoginTTLHours, DefaultLoginTTLHours)
+	}
 	pub := s.Public()
 	if pub.TCPEnabled || pub.TCPPasswordSet || pub.TCPPort != DefaultTCPPort {
 		t.Fatalf("Public 默认值不对: %+v", pub)
+	}
+	if pub.LoginTTLHours != DefaultLoginTTLHours {
+		t.Fatalf("Public.LoginTTLHours = %d, want %d", pub.LoginTTLHours, DefaultLoginTTLHours)
+	}
+	if ttl := s.LoginTTL(); ttl != DefaultLoginTTLHours*time.Hour {
+		t.Fatalf("LoginTTL() = %v, want %v", ttl, DefaultLoginTTLHours*time.Hour)
+	}
+}
+
+// 登录有效期 12–72 小时，越界直接报错；落盘后重启仍然读得回来。
+func TestLoginTTLHours(t *testing.T) {
+	s, path := openTemp(t)
+	for _, bad := range []int{11, 0, 73, -24} {
+		v := bad
+		if _, err := s.Apply(Patch{LoginTTLHours: &v}); err == nil {
+			t.Fatalf("有效期 %d 小时应当报错", bad)
+		}
+	}
+	v := 48
+	pub, err := s.Apply(Patch{LoginTTLHours: &v})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if pub.LoginTTLHours != 48 {
+		t.Fatalf("Public.LoginTTLHours = %d, want 48", pub.LoginTTLHours)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got := reopened.LoginTTL(); got != 48*time.Hour {
+		t.Fatalf("重启后 LoginTTL() = %v, want 48h", got)
+	}
+}
+
+// 手改配置文件写了越界值要回落默认：0 会让令牌一签发就过期。
+func TestLoginTTLNormalize(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte(`{"login_ttl_hours": 500}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got := s.Get().LoginTTLHours; got != DefaultLoginTTLHours {
+		t.Fatalf("越界值应回落默认: %d", got)
 	}
 }
 

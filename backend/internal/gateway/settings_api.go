@@ -104,10 +104,12 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if disabling {
-		// 会话立刻作废；listener 也马上关掉（端口可立刻重开），
+		// 只关监听与已有连接，**不清登录会话**：关闭期间一个请求都进不来
+		// （listener 已经 detach），会话留着没有任何暴露面；而清掉的话，
+		// 用户「关一下再开」（换端口、排查问题）就得在每台设备上重新输密码。
+		// 真要踢人请改访问密码——令牌指纹就是密码摘要，改了立刻全部失效。
 		// 已有连接再活 500ms——足够让「保存成功」的响应送出去。
 		// 先摘状态再延迟关旧 server，能避免「关掉后立刻重开」被误杀。
-		s.d.Guard.ClearSessions()
 		if prevListening {
 			s.StopTCPGracefully(500 * time.Millisecond)
 		}

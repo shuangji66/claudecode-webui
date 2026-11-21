@@ -114,7 +114,7 @@ export function TokenGate({ onSaved, stale = false }: { onSaved: () => void; sta
           )}
           {!error && stale && (
             <p className="mt-3 text-[11px] leading-relaxed text-muted">
-              {t("本地登录已失效（改过密码或服务重启），请重新输入访问密码。", "Your session is no longer valid (password changed or server restarted). Enter the access password again.")}
+              {t("本地登录已失效（改过密码或已过期），请重新输入访问密码。", "Your session is no longer valid (password changed or expired). Enter the access password again.")}
             </p>
           )}
 

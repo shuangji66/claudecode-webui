@@ -1,6 +1,9 @@
 package authz
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -143,13 +146,10 @@ func TestSessionInvalidatedByPasswordChange(t *testing.T) {
 }
 
 func TestSessionExpiry(t *testing.T) {
-	old := SessionTTL
-	SessionTTL = 20 * time.Millisecond
-	defer func() { SessionTTL = old }()
-
 	hash := mustHash(t, "s3cret-123")
 	g := New("")
 	g.SetPasswordSource(func() string { return hash })
+	g.SetTTLSource(func() time.Duration { return 20 * time.Millisecond })
 	token, _, err := g.NewSession(hash)
 	if err != nil {
 		t.Fatal(err)
@@ -160,17 +160,141 @@ func TestSessionExpiry(t *testing.T) {
 	}
 }
 
-func TestClearSessions(t *testing.T) {
+// 有效期是「签发时刻 + 当前值」：设置页改完对已经登录的设备也立刻生效。
+func TestSessionTTLFollowsSettings(t *testing.T) {
 	hash := mustHash(t, "s3cret-123")
+	ttl := time.Hour
 	g := New("")
 	g.SetPasswordSource(func() string { return hash })
+	g.SetTTLSource(func() time.Duration { return ttl })
 	token, _, err := g.NewSession(hash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	g.ClearSessions()
+	if !g.Check(ChannelTCP, "Bearer "+token, "") {
+		t.Fatal("1 小时内应有效")
+	}
+	ttl = time.Nanosecond
+	time.Sleep(2 * time.Millisecond)
 	if g.Check(ChannelTCP, "Bearer "+token, "") {
-		t.Fatal("清空后会话令牌必须失效")
+		t.Fatal("把有效期调短后，已签发的会话也应按新值过期")
+	}
+}
+
+// 会话表落盘：重启进程（新建一个 Guard 读同一个文件）后仍保持登录。
+func TestSessionSurvivesRestart(t *testing.T) {
+	hash := mustHash(t, "s3cret-123")
+	path := filepath.Join(t.TempDir(), "access_sessions.json")
+
+	first := New("")
+	first.SetPasswordSource(func() string { return hash })
+	if err := first.SetSessionStore(path); err != nil {
+		t.Fatalf("SetSessionStore: %v", err)
+	}
+	token, _, err := first.NewSession(hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 文件里不能有令牌原文：只有它的 SHA-256。
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读会话表: %v", err)
+	}
+	if strings.Contains(string(raw), token) {
+		t.Fatal("会话表不该出现令牌原文")
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("会话表权限应为 0600: %v %v", info.Mode().Perm(), err)
+	}
+
+	second := New("")
+	second.SetPasswordSource(func() string { return hash })
+	if err := second.SetSessionStore(path); err != nil {
+		t.Fatalf("SetSessionStore(重启): %v", err)
+	}
+	if !second.Check(ChannelTCP, "Bearer "+token, "") {
+		t.Fatal("重启后同一令牌应仍然有效")
+	}
+
+	// 注销要落盘：再重启一次也不能复活。
+	second.RevokeSession(token)
+	third := New("")
+	third.SetPasswordSource(func() string { return hash })
+	if err := third.SetSessionStore(path); err != nil {
+		t.Fatalf("SetSessionStore: %v", err)
+	}
+	if third.Check(ChannelTCP, "Bearer "+token, "") {
+		t.Fatal("注销后的令牌重启也不该复活")
+	}
+}
+
+// 停机期间改过密码：读回来的旧会话不能再用（指纹与当前摘要不一致）。
+func TestStoredSessionDroppedOnPasswordChange(t *testing.T) {
+	oldHash := mustHash(t, "old-pass-123")
+	newHash := mustHash(t, "new-pass-456")
+	path := filepath.Join(t.TempDir(), "access_sessions.json")
+
+	first := New("")
+	first.SetPasswordSource(func() string { return oldHash })
+	if err := first.SetSessionStore(path); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := first.NewSession(oldHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second := New("")
+	second.SetPasswordSource(func() string { return newHash })
+	if err := second.SetSessionStore(path); err != nil {
+		t.Fatal(err)
+	}
+	if second.Check(ChannelTCP, "Bearer "+token, "") {
+		t.Fatal("改密码后旧会话必须失效")
+	}
+}
+
+// 磁盘上已过期的会话读回来时直接不要。
+func TestStoredSessionExpiredOnLoad(t *testing.T) {
+	hash := mustHash(t, "s3cret-123")
+	path := filepath.Join(t.TempDir(), "access_sessions.json")
+
+	first := New("")
+	first.SetPasswordSource(func() string { return hash })
+	first.SetTTLSource(func() time.Duration { return time.Hour })
+	if err := first.SetSessionStore(path); err != nil {
+		t.Fatal(err)
+	}
+	token, _, err := first.NewSession(hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second := New("")
+	second.SetPasswordSource(func() string { return hash })
+	second.SetTTLSource(func() time.Duration { return time.Nanosecond })
+	if err := second.SetSessionStore(path); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if second.Check(ChannelTCP, "Bearer "+token, "") {
+		t.Fatal("过期会话不该被读回来")
+	}
+}
+
+// 会话表文件坏掉不能把登录安全地放行：从空表开始（用户重登一次）。
+func TestBrokenSessionStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "access_sessions.json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := New("")
+	g.SetPasswordSource(func() string { return mustHash(t, "s3cret-123") })
+	if err := g.SetSessionStore(path); err == nil {
+		t.Fatal("坏文件应返回错误，交给装配层记日志")
+	}
+	if g.Check(ChannelTCP, "Bearer anything", "") {
+		t.Fatal("坏文件不应放行任何令牌")
 	}
 }
 

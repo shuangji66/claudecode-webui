@@ -5,14 +5,25 @@
 //   - TCP 端口：局域网可达，开启端口访问后必须登录（访问密码）。
 //
 // 密码只以 PBKDF2-SHA256 摘要落盘（见 password.go），登录成功换一个随机会话令牌：
-// 浏览器之后每次请求带的是这个令牌，不是密码本身。会话只存在进程内存里，
-// 重启后需要重新登录——这是刻意的：令牌不落盘，泄漏面更小。
+// 浏览器之后每次请求带的是这个令牌，不是密码本身。
+//
+// 会话表**落盘**（`SetSessionStore`，0600、原子替换，文件里只存令牌的 SHA-256）：
+// 重启进程/升级应用不再把已经登录的设备全部踢下线。有效期的唯一边界是
+// 「签发时刻 + 当前有效期」（有效期来自设置页，见 settings.Store.LoginTTL）；
+// 改密码仍然让旧令牌立刻失效——签发时记的指纹就是密码摘要。
 package authz
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,10 +39,10 @@ const (
 	ChannelTCP
 )
 
-// SessionTTL 是 TCP 登录会话的有效期。面板会常驻在浏览器标签里，
-// 太短会天天重输密码；太长又失去"关掉端口访问即失效"的意义（关闭时会主动清空）。
-// 是变量而不是常量：测试会临时调小它验证过期路径。
-var SessionTTL = 7 * 24 * time.Hour
+// DefaultSessionTTL 是登录会话的兜底有效期（设置页没给值、或给了非法值时用）。
+// 与 settings.DefaultLoginTTLHours 同一个数，这里不 import settings：
+// authz 是底层包，取值函数由装配层接进来（`SetTTLSource`）。
+const DefaultSessionTTL = 24 * time.Hour
 
 // Guard 持有环境变量令牌、TCP 访问密码摘要与登录会话。
 type Guard struct {
@@ -39,16 +50,36 @@ type Guard struct {
 	// password 返回 TCP 访问密码的摘要（来自设置页，可运行期修改）。
 	// 摘要为空表示从未设置过密码，TCP 通道不要求登录（此时也没有监听端口）。
 	password func() string
+	// ttl 返回当前登录有效期（来自设置页）。nil 表示用 DefaultSessionTTL。
+	ttl func() time.Duration
+	// storePath 是会话表的落盘路径；空表示只存内存（测试用）。
+	storePath string
 
 	mu       sync.Mutex
 	sessions map[string]session
 }
 
 type session struct {
-	expires time.Time
+	// issued 是签发时刻。过期时刻 = issued + **当前**有效期：设置页改完，
+	// 已经登录的设备也按新值算，不必等下一次登录。
+	issued time.Time
 	// fingerprint 是签发时的密码摘要。密码一改，旧会话立刻失效，
 	// 不需要额外广播"踢掉所有设备"。
 	fingerprint string
+}
+
+// persistedSession 是会话表的磁盘格式。
+//
+// Token 存的是**令牌的 SHA-256**（`tokenKey`），不是令牌原文：备份、同步、
+// 截图把这个文件带走时，拿到的摘要不能直接当凭据用。指纹与签发时刻照存。
+type persistedSession struct {
+	Token       string    `json:"token"`
+	Fingerprint string    `json:"fingerprint"`
+	Issued      time.Time `json:"issued"`
+}
+
+type persistedSessions struct {
+	Sessions []persistedSession `json:"sessions"`
 }
 
 // New 构造 Guard。token 为空表示未配置环境变量令牌。
@@ -61,6 +92,56 @@ func (g *Guard) SetPasswordSource(fn func() string) {
 	g.mu.Lock()
 	g.password = fn
 	g.mu.Unlock()
+}
+
+// SetTTLSource 接入登录有效期的取值函数（通常是 settings.Store.LoginTTL）。
+// nil 表示用 DefaultSessionTTL。
+func (g *Guard) SetTTLSource(fn func() time.Duration) {
+	g.mu.Lock()
+	g.ttl = fn
+	g.mu.Unlock()
+}
+
+// SetSessionStore 指定会话表的落盘路径，并把磁盘上仍然有效的会话读回来。
+//
+// 调用时机是进程启动（装配层给 CCWEB_DATA_DIR 下的一个文件）。文件不存在不是错误；
+// 坏文件返回错误、已登录的会话从空开始——调用方记一条日志，用户重登一次即可。
+// 读回来的会话会先过两道筛子：已经过期的不收，签发时用的密码摘要与**现在**的
+// 摘要不一致的也不收（进程停机期间改过密码）。
+func (g *Guard) SetSessionStore(path string) error {
+	loaded := make(map[string]session)
+	var err error
+	if path != "" {
+		loaded, err = readSessions(path)
+	}
+
+	// 两个取值都在锁外做：它们会去读设置，锁序不要叠起来。
+	ttl := g.ttlValue()
+	fingerprint := passwordOf(g.passwordSource())
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.storePath = path
+	g.sessions = make(map[string]session, len(loaded))
+
+	now := time.Now()
+	for token, s := range loaded {
+		if now.After(s.issued.Add(ttl)) {
+			continue
+		}
+		if fingerprint != "" && s.fingerprint != fingerprint {
+			continue
+		}
+		g.sessions[token] = s
+	}
+	if err != nil {
+		return err
+	}
+	// 读进来就顺手把淘汰过的条目从磁盘上抹掉：否则过期令牌会一直躺在文件里。
+	if len(g.sessions) != len(loaded) {
+		_ = g.persistLocked()
+	}
+	return nil
 }
 
 // TokenConfigured 表示是否配置了环境变量令牌。
@@ -87,6 +168,17 @@ func (g *Guard) passwordHash() string {
 	g.mu.Lock()
 	fn := g.password
 	g.mu.Unlock()
+	return passwordOf(fn)
+}
+
+// passwordSource 取密码摘要的取值函数（调用方负责在锁外调用它）。
+func (g *Guard) passwordSource() func() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.password
+}
+
+func passwordOf(fn func() string) string {
 	if fn == nil {
 		return ""
 	}
@@ -138,56 +230,168 @@ func (g *Guard) RevokeSession(token string) {
 		return
 	}
 	g.mu.Lock()
-	delete(g.sessions, token)
-	g.mu.Unlock()
+	defer g.mu.Unlock()
+	key := tokenKey(token)
+	if _, ok := g.sessions[key]; !ok {
+		return
+	}
+	delete(g.sessions, key)
+	_ = g.persistLocked()
 }
 
 // NewSession 在密码校验通过后签发一个会话令牌。
+//
+// 落盘失败会撤掉这条会话并返回错误：让用户重试，而不是"登录成功但重启就掉"。
 func (g *Guard) NewSession(fingerprint string) (string, time.Time, error) {
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", time.Time{}, err
 	}
 	token := hex.EncodeToString(raw[:])
-	expires := time.Now().Add(SessionTTL)
+	now := time.Now()
+	ttl := g.ttlValue()
+
 	g.mu.Lock()
+	defer g.mu.Unlock()
 	if g.sessions == nil {
 		g.sessions = make(map[string]session)
 	}
-	g.pruneLocked(time.Now())
-	g.sessions[token] = session{expires: expires, fingerprint: fingerprint}
-	g.mu.Unlock()
-	return token, expires, nil
-}
-
-// ClearSessions 让所有 TCP 登录会话立刻失效（关闭端口访问/改密码时用）。
-func (g *Guard) ClearSessions() {
-	g.mu.Lock()
-	g.sessions = make(map[string]session)
-	g.mu.Unlock()
+	g.pruneLocked(now, ttl)
+	key := tokenKey(token)
+	g.sessions[key] = session{issued: now, fingerprint: fingerprint}
+	if err := g.persistLocked(); err != nil {
+		delete(g.sessions, key)
+		return "", time.Time{}, err
+	}
+	return token, now.Add(ttl), nil
 }
 
 func (g *Guard) sessionValid(token, fingerprint string) bool {
+	key := tokenKey(token)
+	ttl := g.ttlValue()
+	now := time.Now()
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	s, ok := g.sessions[token]
+	s, ok := g.sessions[key]
 	if !ok {
 		return false
 	}
-	if time.Now().After(s.expires) || s.fingerprint != fingerprint {
-		delete(g.sessions, token)
+	if now.After(s.issued.Add(ttl)) || s.fingerprint != fingerprint {
+		delete(g.sessions, key)
+		_ = g.persistLocked()
 		return false
 	}
 	return true
 }
 
-// pruneLocked 清掉过期会话；签发与校验都会顺手调用，避免 map 无限增长。
-func (g *Guard) pruneLocked(now time.Time) {
-	for token, s := range g.sessions {
-		if now.After(s.expires) {
-			delete(g.sessions, token)
+// pruneLocked 清掉过期会话；签发时顺手调用，避免 map 与磁盘无限增长。
+func (g *Guard) pruneLocked(now time.Time, ttl time.Duration) {
+	for key, s := range g.sessions {
+		if now.After(s.issued.Add(ttl)) {
+			delete(g.sessions, key)
 		}
 	}
+}
+
+// ttlValue 取当前有效期（不持锁调用取值函数：那会去读设置，锁序不要叠起来）。
+func (g *Guard) ttlValue() time.Duration {
+	g.mu.Lock()
+	fn := g.ttl
+	g.mu.Unlock()
+	return ttlOf(fn)
+}
+
+func ttlOf(fn func() time.Duration) time.Duration {
+	if fn == nil {
+		return DefaultSessionTTL
+	}
+	if d := fn(); d > 0 {
+		return d
+	}
+	return DefaultSessionTTL
+}
+
+// persistLocked 把会话表原子写到 storePath（没有配置路径时什么都不做）。
+//
+// 写入发生在登录/注销/淘汰之后，都是低频动作；文件很小，占着锁写盘可以接受
+// （读路径上的校验只在真的删掉一条会话时才写）。
+func (g *Guard) persistLocked() error {
+	if g.storePath == "" {
+		return nil
+	}
+	out := persistedSessions{Sessions: make([]persistedSession, 0, len(g.sessions))}
+	for token, s := range g.sessions {
+		out.Sessions = append(out.Sessions, persistedSession{Token: token, Fingerprint: s.fingerprint, Issued: s.issued})
+	}
+	// map 顺序随机：排一下，同一份会话表每次写出来的字节稳定，便于比对与备份。
+	sort.Slice(out.Sessions, func(i, j int) bool { return out.Sessions[i].Token < out.Sessions[j].Token })
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return fmt.Errorf("authz: 编码登录会话表: %w", err)
+	}
+	dir := filepath.Dir(g.storePath)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("authz: 创建会话表目录 %s: %w", dir, err)
+		}
+	}
+	temp, err := os.CreateTemp(dir, ".access_sessions-*.json")
+	if err != nil {
+		return fmt.Errorf("authz: 创建会话表临时文件: %w", err)
+	}
+	name := temp.Name()
+	defer os.Remove(name) // rename 成功后这里是 no-op
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return fmt.Errorf("authz: 设置会话表权限: %w", err)
+	}
+	if _, err := temp.Write(b); err != nil {
+		temp.Close()
+		return fmt.Errorf("authz: 写入会话表: %w", err)
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return fmt.Errorf("authz: 落盘会话表: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("authz: 关闭会话表: %w", err)
+	}
+	if err := os.Rename(name, g.storePath); err != nil {
+		return fmt.Errorf("authz: 替换会话表 %s: %w", g.storePath, err)
+	}
+	return nil
+}
+
+// readSessions 读出磁盘上的会话表（key = 令牌的 SHA-256）。
+func readSessions(path string) (map[string]session, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("authz: 读取登录会话表 %s: %w", path, err)
+	}
+	var onDisk persistedSessions
+	if err := json.Unmarshal(b, &onDisk); err != nil {
+		return nil, fmt.Errorf("authz: 解析登录会话表 %s: %w", path, err)
+	}
+	out := make(map[string]session, len(onDisk.Sessions))
+	for _, ps := range onDisk.Sessions {
+		if ps.Token == "" || ps.Fingerprint == "" || ps.Issued.IsZero() {
+			continue
+		}
+		out[ps.Token] = session{issued: ps.Issued, fingerprint: ps.Fingerprint}
+	}
+	return out, nil
+}
+
+// tokenKey 是会话表的内存键与磁盘键：令牌的 SHA-256（十六进制）。
+//
+// 不直接拿令牌当键，是为了让磁盘上的文件即使泄漏也不能当凭据用。
+func tokenKey(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 // Mode 返回该通道的鉴权方式，供 /api/info 与设置页区分凭据类型。

@@ -140,6 +140,8 @@ export interface SettingsPatch {
   tcp_port?: number;
   /** 留空表示沿用已保存的密码。 */
   tcp_password?: string;
+  /** 登录会话有效期（小时，12–72）。 */
+  login_ttl_hours?: number;
 }
 
 interface AppState {

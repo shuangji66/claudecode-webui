@@ -158,8 +158,18 @@ var errFake = fakeErr{}
 
 func newTestServer(t *testing.T, token string) (*Server, *fakeMgr) {
 	t.Helper()
+	return newTestServerWith(t, token, "")
+}
+
+// newTestServerWith 让调用方指定数据目录：同一个目录再造一个网关，就等于
+// 「进程重启」（settings.json 与登录会话表都落在它下面）。
+func newTestServerWith(t *testing.T, token, dataDir string) (*Server, *fakeMgr) {
+	t.Helper()
+	if dataDir == "" {
+		dataDir = t.TempDir()
+	}
 	mgr := &fakeMgr{}
-	store, err := settings.Open(filepath.Join(t.TempDir(), "settings.json"))
+	store, err := settings.Open(filepath.Join(dataDir, "settings.json"))
 	if err != nil {
 		t.Fatalf("settings.Open: %v", err)
 	}
@@ -173,6 +183,7 @@ func newTestServer(t *testing.T, token string) (*Server, *fakeMgr) {
 			BaseURL:   "",
 			AdminSock: "/tmp/cc.sock",
 			Version:   "test-1",
+			DataDir:   dataDir,
 		},
 		Guard:         authz.New(token),
 		Hub:           hub.New(),
