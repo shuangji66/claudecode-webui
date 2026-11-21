@@ -302,8 +302,12 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - **密码只存 PBKDF2-SHA256 摘要**（`authz.HashPassword`，随机盐）。密码唯一被接受的
   地方是登录接口；`Bearer <密码>` 必须被拒。
 - **登录会话落盘、跨重启有效**：`Guard.SetSessionStore(CCWEB_DATA_DIR/access_sessions.json)`
-  在网关 `New` 里接（0600、tmp+rename；磁盘上只存令牌的 SHA-256）。**不要再退回「会话只在
-  内存、重启就重登」**——NAS 上每次升级都要每台设备重输一次密码。有效期由
+  在网关 `New` 里接（0600、tmp+rename + 目录 fsync；磁盘上只存令牌的 SHA-256）。**不要再退回
+  「会话只在内存、重启就重登」**——NAS 上每次升级都要每台设备重输一次密码。
+  **落盘失败不能让登录失败**：数据目录只读 / 属主变了 / 磁盘满时，会话留在内存里照常工作，
+  只把错误交给调用方记日志（重启后重登一次）。以前在这里撤会话并回 500，结果是
+  「unix socket 能用、用访问密码登录整个不可用」。落盘本身在 `persistMu` 里取快照、
+  在 `g.mu` 外写盘——鉴权热路径（`sessionValid`）不能持着锁等 fsync。有效期由
   「签发时刻 + 当前值」算（`Guard.SetTTLSource(settings.Store.LoginTTL)`），设置页改完对
   已登录设备也立刻生效；设置项 `login_ttl_hours` 范围 12–72、步进 12、默认 24。
 - **改密码要让旧会话失效，关端口不用**：令牌里记着签发时的密码摘要，摘要一变立刻失效

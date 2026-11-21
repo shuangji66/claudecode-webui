@@ -14,7 +14,11 @@ import (
 // 不能吊销别人的会话；环境变量令牌不是会话，这里对它没有影响。
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	token := authz.Credential(r.Header.Get("Authorization"), r.URL.Query().Get("token"))
-	s.d.Guard.RevokeSession(token)
+	// 内存里的会话一定已经删掉（这次之后就无效）；落盘失败只影响「重启后它是否复活」，
+	// 不该把注销接口变成 500——前端据此清本地凭据，失败重试也没有意义。
+	if err := s.d.Guard.RevokeSession(token); err != nil {
+		s.log.Printf("注销会话落盘失败（重启后该令牌可能仍然有效）: %v", err)
+	}
 	writeJSON(w, map[string]any{"ok": true})
 }
 
@@ -56,9 +60,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token, expires, err := s.d.Guard.NewSession(hash)
-	if err != nil {
+	if token == "" {
 		writeErr(w, "无法创建登录会话", http.StatusInternalServerError)
 		return
+	}
+	if err != nil {
+		// 会话表写不进盘（只读挂载 / 磁盘满 / 属主变了）：登录照常，
+		// 只是重启进程后要重登一次。不要因为这个回 500——那会让「端口访问」整个不可用。
+		s.log.Printf("登录会话落盘失败（本次登录仍然有效，重启后需要重新登录）: %v", err)
 	}
 	writeJSON(w, map[string]any{"token": token, "expires_at": expires})
 }

@@ -57,6 +57,10 @@ type Guard struct {
 
 	mu       sync.Mutex
 	sessions map[string]session
+
+	// persistMu 串行化落盘，并保证「快照 → 写盘」的顺序与内存变更顺序一致：
+	// g.mu 只护内存，I/O 在它外面做（持锁 fsync 会把所有并发鉴权串在慢盘后面）。
+	persistMu sync.Mutex
 }
 
 type session struct {
@@ -119,12 +123,8 @@ func (g *Guard) SetSessionStore(path string) error {
 	ttl := g.ttlValue()
 	fingerprint := passwordOf(g.passwordSource())
 
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.storePath = path
-	g.sessions = make(map[string]session, len(loaded))
-
 	now := time.Now()
+	kept := make(map[string]session, len(loaded))
 	for token, s := range loaded {
 		if now.After(s.issued.Add(ttl)) {
 			continue
@@ -132,14 +132,21 @@ func (g *Guard) SetSessionStore(path string) error {
 		if fingerprint != "" && s.fingerprint != fingerprint {
 			continue
 		}
-		g.sessions[token] = s
+		kept[token] = s
 	}
+
+	g.mu.Lock()
+	g.storePath = path
+	g.sessions = kept
+	g.mu.Unlock()
+
 	if err != nil {
 		return err
 	}
 	// 读进来就顺手把淘汰过的条目从磁盘上抹掉：否则过期令牌会一直躺在文件里。
-	if len(g.sessions) != len(loaded) {
-		_ = g.persistLocked()
+	// 写失败不影响启动（多半也正是写不进去的环境），下一次登录会再写一遍。
+	if len(kept) != len(loaded) {
+		_ = g.persist()
 	}
 	return nil
 }
@@ -225,23 +232,32 @@ func Credential(authorization, queryToken string) string {
 }
 
 // RevokeSession 让指定会话令牌立刻失效（注销）。不存在的令牌是幂等的 no-op。
-func (g *Guard) RevokeSession(token string) {
+//
+// 返回值是落盘结果：内存里的会话**一定**已经删掉了（这次请求之后就用不了），
+// 落盘失败只意味着「重启进程后这个令牌还能用」——调用方该把这件事记进日志。
+func (g *Guard) RevokeSession(token string) error {
 	if token == "" {
-		return
+		return nil
 	}
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	key := tokenKey(token)
-	if _, ok := g.sessions[key]; !ok {
-		return
+	_, ok := g.sessions[key]
+	if ok {
+		delete(g.sessions, key)
 	}
-	delete(g.sessions, key)
-	_ = g.persistLocked()
+	g.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	return g.persist()
 }
 
 // NewSession 在密码校验通过后签发一个会话令牌。
 //
-// 落盘失败会撤掉这条会话并返回错误：让用户重试，而不是"登录成功但重启就掉"。
+// 落盘失败**不让登录失败**：会话表是「跨进程重启」的加分项，不是登录的前置条件。
+// CCWEB_DATA_DIR 只读挂载 / 升级后属主变了 / 磁盘满时，以前会出现「unix socket 能用、
+// 用访问密码登录却 500」——那是把可写磁盘当成访问密码的前提。现在会话留在内存里照常
+// 工作，只把落盘错误返回给调用方记日志（重启后需要重登一次）。
 func (g *Guard) NewSession(fingerprint string) (string, time.Time, error) {
 	var raw [32]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -252,18 +268,14 @@ func (g *Guard) NewSession(fingerprint string) (string, time.Time, error) {
 	ttl := g.ttlValue()
 
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	if g.sessions == nil {
 		g.sessions = make(map[string]session)
 	}
 	g.pruneLocked(now, ttl)
-	key := tokenKey(token)
-	g.sessions[key] = session{issued: now, fingerprint: fingerprint}
-	if err := g.persistLocked(); err != nil {
-		delete(g.sessions, key)
-		return "", time.Time{}, err
-	}
-	return token, now.Add(ttl), nil
+	g.sessions[tokenKey(token)] = session{issued: now, fingerprint: fingerprint}
+	g.mu.Unlock()
+
+	return token, now.Add(ttl), g.persist()
 }
 
 func (g *Guard) sessionValid(token, fingerprint string) bool {
@@ -272,14 +284,21 @@ func (g *Guard) sessionValid(token, fingerprint string) bool {
 	now := time.Now()
 
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	s, ok := g.sessions[key]
 	if !ok {
+		g.mu.Unlock()
 		return false
 	}
-	if now.After(s.issued.Add(ttl)) || s.fingerprint != fingerprint {
+	stale := now.After(s.issued.Add(ttl)) || s.fingerprint != fingerprint
+	if stale {
 		delete(g.sessions, key)
-		_ = g.persistLocked()
+	}
+	g.mu.Unlock()
+
+	if stale {
+		// 顺手把清掉的条目落盘（否则过期令牌会留在文件里）。写失败无所谓：
+		// 重启后 SetSessionStore 会用同样的两道筛子（TTL 与密码指纹）再筛一次。
+		_ = g.persist()
 		return false
 	}
 	return true
@@ -312,25 +331,35 @@ func ttlOf(fn func() time.Duration) time.Duration {
 	return DefaultSessionTTL
 }
 
-// persistLocked 把会话表原子写到 storePath（没有配置路径时什么都不做）。
+// persist 把会话表原子写到 storePath（没有配置路径时什么都不做）。
 //
-// 写入发生在登录/注销/淘汰之后，都是低频动作；文件很小，占着锁写盘可以接受
-// （读路径上的校验只在真的删掉一条会话时才写）。
-func (g *Guard) persistLocked() error {
-	if g.storePath == "" {
+// 锁的分工：g.mu 只护内存，快照在 persistMu 里取、写盘在锁外做——
+// `sessionValid` 是鉴权热路径，持着 g.mu 去 fsync 会把所有并发请求（含 WS 握手）
+// 串在慢盘后面。persistMu 同时保证「快照 → 写盘」的顺序与内存变更顺序一致：
+// 两个协程各自取快照时不会写出「更旧的快照后落盘」。
+func (g *Guard) persist() error {
+	g.persistMu.Lock()
+	defer g.persistMu.Unlock()
+
+	g.mu.Lock()
+	path := g.storePath
+	if path == "" {
+		g.mu.Unlock()
 		return nil
 	}
 	out := persistedSessions{Sessions: make([]persistedSession, 0, len(g.sessions))}
 	for token, s := range g.sessions {
 		out.Sessions = append(out.Sessions, persistedSession{Token: token, Fingerprint: s.fingerprint, Issued: s.issued})
 	}
+	g.mu.Unlock()
+
 	// map 顺序随机：排一下，同一份会话表每次写出来的字节稳定，便于比对与备份。
 	sort.Slice(out.Sessions, func(i, j int) bool { return out.Sessions[i].Token < out.Sessions[j].Token })
 	b, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return fmt.Errorf("authz: 编码登录会话表: %w", err)
 	}
-	dir := filepath.Dir(g.storePath)
+	dir := filepath.Dir(path)
 	if dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("authz: 创建会话表目录 %s: %w", dir, err)
@@ -357,8 +386,17 @@ func (g *Guard) persistLocked() error {
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("authz: 关闭会话表: %w", err)
 	}
-	if err := os.Rename(name, g.storePath); err != nil {
-		return fmt.Errorf("authz: 替换会话表 %s: %w", g.storePath, err)
+	if err := os.Rename(name, path); err != nil {
+		return fmt.Errorf("authz: 替换会话表 %s: %w", path, err)
+	}
+	// rename 只保证「指向新 inode」，目录项本身也要落盘：否则掉电后可能回到旧文件
+	// （甚至找不到文件），那时所有已登录设备都要重登一次。
+	if d, err := os.Open(dir); err == nil {
+		syncErr := d.Sync()
+		_ = d.Close()
+		if syncErr != nil {
+			return fmt.Errorf("authz: 落盘会话表目录 %s: %w", dir, syncErr)
+		}
 	}
 	return nil
 }

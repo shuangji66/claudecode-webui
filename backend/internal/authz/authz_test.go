@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -335,5 +336,93 @@ func TestTokenAndPasswordCoexist(t *testing.T) {
 	}
 	if !g.Check(ChannelUnix, "Bearer env-token", "") {
 		t.Fatal("unix 通道应接受环境变量令牌")
+	}
+}
+
+// 会话表写不进盘（只读挂载 / 属主变了 / 磁盘满）不能让登录本身不可用：
+// 登录只要能在内存里成立就够了，落盘失败只意味着「重启后要重登一次」。
+// 以前这里会撤掉会话并回错误，结果 TCP 通道整个登不进去。
+func TestLoginWorksWhenStoreUnwritable(t *testing.T) {
+	dir := t.TempDir()
+	// 让「创建会话表目录」这一步失败：拿一个普通文件当父目录。
+	blocker := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(blocker, "access_sessions.json")
+
+	hash := mustHash(t, "s3cret-123")
+	g := New("")
+	g.SetPasswordSource(func() string { return hash })
+	if err := g.SetSessionStore(path); err == nil {
+		t.Fatal("测试前提：这个路径写不进去，SetSessionStore 应报错")
+	}
+
+	token, expires, err := g.NewSession(hash)
+	if token == "" {
+		t.Fatal("落盘失败也必须签发令牌")
+	}
+	if err == nil {
+		t.Fatal("落盘失败要返回给调用方记日志")
+	}
+	if expires.IsZero() {
+		t.Fatal("expires 不该是零值")
+	}
+	if !g.Check(ChannelTCP, "Bearer "+token, "") {
+		t.Fatal("内存里的会话应立即可用")
+	}
+	// 注销同样以内存为准：删掉就不再有效（哪怕磁盘上本来也没写成功）。
+	_ = g.RevokeSession(token)
+	if g.Check(ChannelTCP, "Bearer "+token, "") {
+		t.Fatal("注销后不该再通过")
+	}
+}
+
+// 并发登录/校验/注销不能死锁，也不能写出比内存更旧的会话表。
+func TestPersistConcurrency(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "access_sessions.json")
+	hash := mustHash(t, "s3cret-123")
+	g := New("")
+	g.SetPasswordSource(func() string { return hash })
+	if err := g.SetSessionStore(path); err != nil {
+		t.Fatalf("SetSessionStore: %v", err)
+	}
+
+	const n = 16
+	var wg sync.WaitGroup
+	tokens := make([]string, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			token, _, err := g.NewSession(hash)
+			if err != nil {
+				t.Errorf("NewSession: %v", err)
+				return
+			}
+			tokens[i] = token
+			if !g.Check(ChannelTCP, "Bearer "+token, "") {
+				t.Errorf("刚签发的会话应有效")
+			}
+		}(i)
+	}
+	wg.Wait()
+	for i := 0; i < n; i += 2 {
+		if err := g.RevokeSession(tokens[i]); err != nil {
+			t.Errorf("RevokeSession: %v", err)
+		}
+	}
+
+	// 重启：落盘内容不能比内存旧（偶数号已注销，重启后也不该复活）。
+	second := New("")
+	second.SetPasswordSource(func() string { return hash })
+	if err := second.SetSessionStore(path); err != nil {
+		t.Fatalf("SetSessionStore(重启): %v", err)
+	}
+	for i, token := range tokens {
+		got := second.Check(ChannelTCP, "Bearer "+token, "")
+		if want := i%2 == 1; got != want {
+			t.Fatalf("token[%d] 重启后有效=%v，want %v", i, got, want)
+		}
 	}
 }
