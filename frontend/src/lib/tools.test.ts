@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolItem } from "./model";
-import { toolSummary } from "./tools";
+import { toolLabel, toolSummary } from "./tools";
 
 function tool(over: Partial<ToolItem> = {}): ToolItem {
   return {
@@ -77,5 +77,30 @@ describe("toolSummary", () => {
     const out = toolSummary(tool({ name: "SomeFutureTool", input: { blob: long } }));
     expect(out.length).toBeLessThanOrEqual(161);
     expect(out.endsWith("…")).toBe(true);
+  });
+});
+
+describe("toolLabel", () => {
+  const zh = (z: string) => z;
+  const en = (_z: string, e?: string) => e ?? _z;
+
+  it("中文界面给「在做什么」，不是英文工具名", () => {
+    expect(toolLabel("Bash", zh)).toBe("运行命令");
+    expect(toolLabel("Read", zh)).toBe("读取文件");
+    expect(toolLabel("Edit", zh)).toBe("编辑文件");
+    expect(toolLabel("Write", zh)).toBe("写入文件");
+    expect(toolLabel("Grep", zh)).toBe("搜索内容");
+  });
+
+  // 英文用户看 `Bash` / `Read` 就是最短的说明，翻成 "Run command" 反而和官方文档对不上。
+  it("英文界面原样回工具名", () => {
+    expect(toolLabel("Bash", en)).toBe("Bash");
+    expect(toolLabel("Read", en)).toBe("Read");
+  });
+
+  // 未知工具（CLI 版本漂移、MCP）绝不能变成空标题：空标题整行只剩一个摘要。
+  it("未收录的工具回落原名", () => {
+    expect(toolLabel("SomeFutureTool", zh)).toBe("SomeFutureTool");
+    expect(toolLabel("mcp__fs__stat", zh)).toBe("mcp__fs__stat");
   });
 });

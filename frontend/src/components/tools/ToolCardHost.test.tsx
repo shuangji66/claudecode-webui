@@ -1,7 +1,18 @@
-import { describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ToolCardHost } from "./ToolCardHost";
 import type { ToolItem } from "../../lib/model";
+
+const copyText = vi.fn();
+
+vi.mock("../../lib/clipboard", () => ({
+  copyText: (text: string) => copyText(text),
+}));
+
+beforeEach(() => {
+  copyText.mockReset();
+  copyText.mockResolvedValue(true);
+});
 
 function tool(over: Partial<ToolItem> = {}): ToolItem {
   return {
@@ -20,7 +31,7 @@ describe("ToolCardHost", () => {
   it("按工具名分派：Bash 卡片显示命令", () => {
     render(<ToolCardHost item={tool()} />);
     expect(screen.getByText(/echo hi/)).toBeInTheDocument();
-    expect(screen.getByText("Bash")).toBeInTheDocument();
+    expect(screen.getByText("运行命令")).toBeInTheDocument();
   });
 
   it("Bash 有结果时显示输出行数摘要", () => {
@@ -66,7 +77,7 @@ describe("Write 与工具结果图片", () => {
         })}
       />,
     );
-    expect(screen.getByText("Write")).toBeInTheDocument();
+    expect(screen.getByText("写入文件")).toBeInTheDocument();
     expect(screen.getByText(/新建\.md/)).toBeInTheDocument();
     expect(screen.getByText("第一行")).toBeInTheDocument();
     expect(screen.getByText("第二行")).toBeInTheDocument();
@@ -120,7 +131,7 @@ describe("Write 与工具结果图片", () => {
 describe("ToolCardHost 紧凑模式", () => {
   it("默认只占一行：工具名 + 摘要，正文要点开", () => {
     render(<ToolCardHost dense item={tool({ result: "line1\nline2" })} />);
-    expect(screen.getByText("Bash")).toBeInTheDocument();
+    expect(screen.getByText("运行命令")).toBeInTheDocument();
     expect(screen.getByText("echo hi")).toBeInTheDocument();
     expect(screen.queryByText("输出")).toBeNull();
 
@@ -150,5 +161,41 @@ describe("ToolCardHost 紧凑模式", () => {
     expect(row.textContent).toContain("/a.go");
     fireEvent.click(row);
     expect(screen.getByText("old")).toBeInTheDocument();
+  });
+});
+
+describe("工具卡片的复制入口", () => {
+  it("命令块上有一颗复制按钮，复制的是整条命令（含换行）", async () => {
+    render(<ToolCardHost item={tool({ input: { command: "cd /tmp\necho hi" } })} />);
+    fireEvent.click(screen.getByRole("button", { name: "复制命令" }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith("cd /tmp\necho hi"));
+  });
+
+  it("回执是图标换勾：按钮的可访问名跟着变成「已复制」", async () => {
+    render(<ToolCardHost item={tool()} />);
+    fireEvent.click(screen.getByRole("button", { name: "复制命令" }));
+    expect(await screen.findByRole("button", { name: "已复制" })).toBeInTheDocument();
+  });
+
+  // 输出默认是收起的：复制入口得在折叠块标题行上，不用先展开再选中。
+  it("输出不用展开就能复制", async () => {
+    render(<ToolCardHost item={tool({ result: "line1\nline2" })} />);
+    expect(screen.queryByText("line1")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "复制输出" }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith("line1\nline2"));
+  });
+});
+
+describe("工具名的中文标题", () => {
+  it("没有专属卡片的工具同样有中文名（Read / Grep）", () => {
+    render(<ToolCardHost dense item={tool({ name: "Read", input: { file_path: "/w/a.md" } })} />);
+    expect(screen.getByText("读取文件")).toBeInTheDocument();
+    render(<ToolCardHost dense item={tool({ name: "Grep", input: { pattern: "todo" } })} />);
+    expect(screen.getByText("搜索内容")).toBeInTheDocument();
+  });
+
+  it("未收录的工具回落原名，不能变成空标题", () => {
+    render(<ToolCardHost dense item={tool({ name: "mcp__fs__stat", input: { path: "/w" } })} />);
+    expect(screen.getByText("mcp__fs__stat")).toBeInTheDocument();
   });
 });

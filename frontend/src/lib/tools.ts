@@ -9,6 +9,45 @@ import type { ToolItem } from "./model";
 /** 摘要的长度上限：真正截断由 CSS 做，这里只防止把整段文件内容塞进 DOM。 */
 const SUMMARY_MAX = 160;
 
+/**
+ * 工具名的人话标题：紧凑行与卡片标题共用这一份。
+ *
+ * 中文给「在做什么」——一行 `Bash` 对着中文界面什么也说明不了；英文**原样回工具名**
+ * （`Bash` / `Read` 就是最短的说明，翻成 "Run command" 反而和官方文档对不上）。
+ * 未收录的工具（CLI 版本漂移带来的新工具、MCP 的 `mcp__server__tool`）回落原名，
+ * 绝不返回空串：标题空了整行看起来就只剩一个摘要，分不出这步在干什么。
+ * 名字表只收「工具语义稳定」的那些，别把 MCP 工具名往里塞。
+ */
+const TOOL_LABELS: Record<string, string> = {
+  Read: "读取文件",
+  NotebookRead: "读取笔记本",
+  Write: "写入文件",
+  Edit: "编辑文件",
+  MultiEdit: "批量编辑文件",
+  NotebookEdit: "编辑笔记本",
+  LS: "列出目录",
+  Glob: "查找文件",
+  Grep: "搜索内容",
+  Bash: "运行命令",
+  BashOutput: "读取命令输出",
+  KillShell: "结束命令",
+  KillBash: "结束命令",
+  WebSearch: "搜索网页",
+  WebFetch: "访问网页",
+  Skill: "调用技能",
+  TodoWrite: "更新计划",
+  TaskCreate: "新建任务",
+  TaskUpdate: "更新任务",
+  TaskList: "列出任务",
+  TaskGet: "查看任务",
+};
+
+/** 工具显示名；`t` 就是 `useT()` 给的那个（中文 / 英文双串）。 */
+export function toolLabel(name: string, t: (zh: string, en?: string) => string): string {
+  const zh = TOOL_LABELS[name];
+  return zh ? t(zh, name) : name;
+}
+
 function text(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }

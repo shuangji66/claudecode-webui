@@ -2,6 +2,7 @@ import { Collapsible } from "../common/Collapsible";
 import { IconWrench } from "../common/Icons";
 import type { ToolItem } from "../../lib/model";
 import { useT } from "../../lib/i18n";
+import { toolLabel } from "../../lib/tools";
 import { ToolImages } from "./ToolImages";
 import { ToolShell } from "./ToolShell";
 
@@ -26,10 +27,16 @@ export function GenericBody({ item }: { item: ToolItem }) {
   );
 }
 
-/** 兜底卡片：保证版本升级后新工具不会渲染成空白。 */
+/**
+ * 兜底卡片：保证版本升级后新工具不会渲染成空白。
+ *
+ * 标题走 `toolLabel`：有中文名的工具（`Read` / `Grep` / `LS` …）就算没有自己的卡片，
+ * 也不该在中文界面上露出英文原名；未收录的工具回落原名。
+ */
 export function GenericCard({ item }: { item: ToolItem }) {
+  const t = useT();
   return (
-    <ToolShell item={item} icon={<IconWrench size={14} />} title={item.name}>
+    <ToolShell item={item} icon={<IconWrench size={14} />} title={toolLabel(item.name, t)}>
       <GenericBody item={item} />
     </ToolShell>
   );

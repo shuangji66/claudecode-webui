@@ -3,6 +3,7 @@ import { Collapsible } from "../common/Collapsible";
 import { IconWrench } from "../common/Icons";
 import { writeDiff } from "../../lib/diff";
 import type { ToolItem } from "../../lib/model";
+import { toolLabel } from "../../lib/tools";
 import { useT } from "../../lib/i18n";
 import { ToolImages } from "./ToolImages";
 import { ToolShell } from "./ToolShell";
@@ -51,7 +52,7 @@ export function WriteCard({ item }: { item: ToolItem }) {
     <ToolShell
       item={item}
       icon={<IconWrench size={14} />}
-      title="Write"
+      title={toolLabel(item.name, t)}
       subtitle={`${path}${diff ? `  +${diff.added}` : ""}`}
     >
       <WriteBody item={item} />

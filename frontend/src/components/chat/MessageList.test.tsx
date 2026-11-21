@@ -411,18 +411,18 @@ describe("MessageList 过程展示", () => {
   it("标准模式：不分组，每一步各占一行，工具操作折成一行", () => {
     setSessionRunning(true);
     render(<MessageList items={turn} />);
-    // 没有组头：思考、Read、Bash 各自一行。
+    // 没有组头：思考、Read、Bash 各自一行（工具名走中文标题，见 lib/tools.toolLabel）。
     expect(screen.queryByText("已读取文件并执行了命令")).toBeNull();
     expect(screen.getByText("思考过程")).toBeInTheDocument();
-    expect(screen.getByText("Read")).toBeInTheDocument();
-    expect(screen.getByText("Bash")).toBeInTheDocument();
+    expect(screen.getByText("读取文件")).toBeInTheDocument();
+    expect(screen.getByText("运行命令")).toBeInTheDocument();
     expect(screen.getByText("答案")).toBeInTheDocument();
   });
 
   it("标准模式：工具行不是死行，点开看正文", () => {
     setSessionRunning(true);
     render(<MessageList items={turn} />);
-    fireEvent.click(screen.getByRole("button", { name: /Bash/ }));
+    fireEvent.click(screen.getByRole("button", { name: /运行命令/ }));
     expect(screen.getByText("输出")).toBeInTheDocument();
   });
 
@@ -521,7 +521,7 @@ describe("MessageList 过程展示", () => {
   it("紧凑行始终有可展开入口：点开能看到输出", () => {
     setSessionRunning(true);
     render(<MessageList items={[user(), bash(), answer]} />);
-    fireEvent.click(screen.getByRole("button", { name: /Bash/ }));
+    fireEvent.click(screen.getByRole("button", { name: /运行命令/ }));
     expect(screen.getByText("输出")).toBeInTheDocument();
   });
 });

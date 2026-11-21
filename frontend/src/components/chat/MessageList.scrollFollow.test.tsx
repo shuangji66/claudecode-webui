@@ -148,7 +148,7 @@ describe("MessageList 展开后贴底跟随", () => {
     const el = await mountAndSettle([bash, answer]);
     el.scrollTop = 500;
 
-    fireEvent.click(screen.getByRole("button", { name: /Bash|执行了命令/ }));
+    fireEvent.click(screen.getByRole("button", { name: /运行命令|执行了命令/ }));
     grow(el, 1200);
     await fireResize();
 

@@ -3,6 +3,7 @@ import { Collapsible } from "../common/Collapsible";
 import { IconWrench } from "../common/Icons";
 import { buildDiff, editSummary } from "../../lib/diff";
 import type { ToolItem } from "../../lib/model";
+import { toolLabel } from "../../lib/tools";
 import { useT } from "../../lib/i18n";
 import { ToolImages } from "./ToolImages";
 import { ToolShell } from "./ToolShell";
@@ -49,12 +50,13 @@ export function EditBody({ item }: { item: ToolItem }) {
 }
 
 export function EditCard({ item }: { item: ToolItem }) {
+  const t = useT();
   const diff = useMemo(() => buildDiff(item.input, item.structured), [item.input, item.structured]);
   return (
     <ToolShell
       item={item}
       icon={<IconWrench size={14} />}
-      title="Edit"
+      title={toolLabel(item.name, t)}
       subtitle={editSummary(item.input, diff)}
     >
       <EditBody item={item} />

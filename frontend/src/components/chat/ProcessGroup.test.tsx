@@ -52,6 +52,6 @@ describe("ProcessGroup", () => {
       </ProcessGroup>,
     );
     expect(screen.getByText("执行了命令")).toBeInTheDocument();
-    expect(screen.queryByText("Bash")).toBeNull();
+    expect(screen.queryByText("运行命令")).toBeNull();
   });
 });
