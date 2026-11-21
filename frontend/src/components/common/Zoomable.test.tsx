@@ -6,6 +6,8 @@ import {
   ZOOM_STEP,
   ZoomBar,
   ZoomableImage,
+  clampPan,
+  clampZoom,
   fitSize,
   stepZoom,
 } from "./Zoomable";
@@ -27,6 +29,31 @@ describe("stepZoom", () => {
     for (let i = 0; i < 40; i += 1) z = stepZoom(z, 1);
     expect(z).toBe(MAX_ZOOM);
     expect(ZOOM_STEP).toBe(0.25);
+  });
+});
+
+describe("clampZoom", () => {
+  it("原样保留区间内的连续值（滚轮给的不是步进的整数倍）", () => {
+    expect(clampZoom(1.37)).toBe(1.37);
+    expect(clampZoom(0.2)).toBe(MIN_ZOOM);
+    expect(clampZoom(9)).toBe(MAX_ZOOM);
+  });
+});
+
+describe("clampPan", () => {
+  it("图片比容器大时，最多挪到图片边缘贴住容器边缘", () => {
+    // 800×600 的图在 400×400 的窗口里：横向最多 ±200，纵向 ±100。
+    expect(clampPan({ x: 500, y: -500 }, { w: 800, h: 600 }, { w: 400, h: 400 })).toEqual({ x: 200, y: -100 });
+    expect(clampPan({ x: 60, y: 40 }, { w: 800, h: 600 }, { w: 400, h: 400 })).toEqual({ x: 60, y: 40 });
+  });
+
+  // 缩回 1 倍时图片比容器小，上限是 0：不强制居中会让「拖歪了」这个状态留到下一眼。
+  it("图片比容器小时强制居中", () => {
+    expect(clampPan({ x: 80, y: -40 }, { w: 200, h: 100 }, { w: 400, h: 400 })).toEqual({ x: 0, y: 0 });
+  });
+
+  it("只有一个方向溢出时，另一个方向仍然居中", () => {
+    expect(clampPan({ x: 30, y: 90 }, { w: 800, h: 200 }, { w: 400, h: 400 })).toEqual({ x: 30, y: 0 });
   });
 });
 
@@ -142,5 +169,121 @@ describe("ZoomableImage", () => {
     const { container } = render(<ZoomableImage src="/a.png" alt="图" zoom={1} onImgClick={onClick} />);
     fireEvent.click(container.querySelector("img")!);
     expect(onClick).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ZoomableImage 滚轮缩放与拖动（pannable）", () => {
+  let roCallback: ResizeObserverCallback | null = null;
+
+  afterEach(() => {
+    roCallback = null;
+    vi.unstubAllGlobals();
+  });
+
+  /** 挂载 pannable 版本 → 灌尺寸 → 返回 { box, img }。 */
+  function mountPannable(opts: {
+    box: { w: number; h: number };
+    natural: { w: number; h: number };
+    zoom: number;
+    onZoomChange: (z: number) => void;
+  }) {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(cb: ResizeObserverCallback) {
+          roCallback = cb;
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const { container, rerender } = render(
+      <ZoomableImage
+        src="/a.png"
+        alt="图"
+        zoom={opts.zoom}
+        pannable
+        onZoomChange={opts.onZoomChange}
+      />,
+    );
+    const box = container.firstElementChild as HTMLElement;
+    Object.defineProperty(box, "clientWidth", { value: opts.box.w, configurable: true });
+    Object.defineProperty(box, "clientHeight", { value: opts.box.h, configurable: true });
+    act(() => roCallback?.([], {} as ResizeObserver));
+    const img = container.querySelector("img") as HTMLImageElement;
+    Object.defineProperty(img, "naturalWidth", { value: opts.natural.w, configurable: true });
+    Object.defineProperty(img, "naturalHeight", { value: opts.natural.h, configurable: true });
+    fireEvent.load(img);
+    return { box, img, rerender };
+  }
+
+  it("滚轮向上放大、向下缩小，并把新倍数回写给调用方", () => {
+    const seen: number[] = [];
+    const { box } = mountPannable({ box: { w: 400, h: 400 }, natural: { w: 800, h: 800 }, zoom: 1, onZoomChange: (z) => seen.push(z) });
+    fireEvent.wheel(box, { deltaY: -100 });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBeGreaterThan(1);
+    fireEvent.wheel(box, { deltaY: 100 });
+    expect(seen[1]).toBeLessThan(seen[0]!);
+  });
+
+  // Ctrl + 滚轮是浏览器/系统的捏合缩放：灯箱抢过来就放不大了。
+  it("Ctrl + 滚轮不接管", () => {
+    const seen: number[] = [];
+    const { box } = mountPannable({ box: { w: 400, h: 400 }, natural: { w: 800, h: 800 }, zoom: 1, onZoomChange: (z) => seen.push(z) });
+    fireEvent.wheel(box, { deltaY: -100, ctrlKey: true });
+    expect(seen).toHaveLength(0);
+  });
+
+  it("拖动时按位移平移，拖出边界会被夹住", () => {
+    // zoom=2：800×800 的图在 400×400 的窗口里显示成 800×800，横向/纵向上限都是 ±200。
+    // zoom=1 时它正好贴合窗口，没有可挪的余量（那也是一个要保证的分支，见下一条）。
+    const { box, img } = mountPannable({ box: { w: 400, h: 400 }, natural: { w: 800, h: 800 }, zoom: 2, onZoomChange: () => {} });
+    fireEvent.pointerDown(box, { pointerId: 1, clientX: 200, clientY: 200, button: 0 });
+    fireEvent.pointerMove(box, { pointerId: 1, clientX: 260, clientY: 240 });
+    expect(img.style.transform).toContain("translate(calc(-50% + 60px), calc(-50% + 40px))");
+
+    // 继续拖出窗口：上限是 200。
+    fireEvent.pointerMove(box, { pointerId: 1, clientX: 900, clientY: 900 });
+    expect(img.style.transform).toContain("translate(calc(-50% + 200px), calc(-50% + 200px))");
+
+    fireEvent.pointerUp(box, { pointerId: 1 });
+  });
+
+  it("图正好贴合窗口（zoom=1、比例相同）时拖不动", () => {
+    const { box, img } = mountPannable({ box: { w: 400, h: 400 }, natural: { w: 800, h: 800 }, zoom: 1, onZoomChange: () => {} });
+    fireEvent.pointerDown(box, { pointerId: 1, clientX: 200, clientY: 200, button: 0 });
+    fireEvent.pointerMove(box, { pointerId: 1, clientX: 400, clientY: 400 });
+    expect(img.style.transform).toContain("translate(calc(-50% + 0px), calc(-50% + 0px))");
+    fireEvent.pointerUp(box, { pointerId: 1 });
+  });
+
+  it("拖过之后缩回 1 倍，平移自己归零", () => {
+    const { box, img, rerender } = mountPannable({ box: { w: 400, h: 400 }, natural: { w: 800, h: 800 }, zoom: 2, onZoomChange: () => {} });
+    fireEvent.pointerDown(box, { pointerId: 1, clientX: 200, clientY: 200, button: 0 });
+    fireEvent.pointerMove(box, { pointerId: 1, clientX: 380, clientY: 380 });
+    fireEvent.pointerUp(box, { pointerId: 1 });
+    expect(img.style.transform).toContain("180px");
+
+    rerender(<ZoomableImage src="/a.png" alt="图" zoom={1} pannable onZoomChange={() => {}} />);
+    expect(img.style.transform).toContain("translate(calc(-50% + 0px), calc(-50% + 0px))");
+  });
+
+  it("没开 pannable 时不写 transform（侧栏预览仍靠外层滚动）", () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(cb: ResizeObserverCallback) {
+          roCallback = cb;
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const { container } = render(<ZoomableImage src="/a.png" alt="图" zoom={2} />);
+    const img = container.querySelector("img") as HTMLImageElement;
+    expect(img.style.transform).toBe("");
   });
 });

@@ -73,20 +73,19 @@ export function ImageLightbox({
         </button>
       </div>
 
-      {/* 预览窗口固定 1:1：边长取容器的短边（min(100cqw, 100cqh)）——
-          宽图上下留黑、竖图左右留黑，都比"按图片比例撑开"更容易比较两张图。
-          `container-type: size` 让 cqw/cqh 参考这一层，而不是视口。
-          缩放发生在正方形内部（内层 overflow-auto），所以放大了也还是在这块窗口里滚。 */}
-      <div
-        className="flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black/90"
-        style={{ containerType: "size" }}
-      >
-        <div
-          className="shrink-0 overflow-auto"
-          style={{ width: "min(100cqw, 100cqh)", aspectRatio: "1 / 1" }}
-        >
-          <ZoomableImage src={src} alt={alt} zoom={zoom} />
-        </div>
+      {/* 图片区铺满面板剩下的空间：不再套一个固定 1:1 的正方形。正方形在宽图上
+          上下留一大片黑、竖图上左右留一大片黑，而面板本身已经够宽——把它撑满才
+          看得出「这是个查看器」而不是「一个嵌在黑色里的小窗」。
+          取景（缩放 + 平移）交给 `ZoomableImage` 的 `pannable`：滚轮缩放、拖动平移，
+          图片区这一层 `overflow-hidden`，放大后不出现滚动条。 */}
+      <div className="flex min-h-0 flex-1 overflow-hidden bg-black/90">
+        <ZoomableImage
+          src={src}
+          alt={alt}
+          zoom={zoom}
+          pannable
+          onZoomChange={setZoom}
+        />
       </div>
 
       <ZoomBar zoom={zoom} onChange={setZoom} />

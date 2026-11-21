@@ -67,15 +67,28 @@ describe("ImageLightbox 缩放", () => {
     fireEvent.click(screen.getByRole("button", { name: /重置|Reset/ }));
     expect(screen.getByText("100%")).toBeTruthy();
   });
+
+  // 滚轮缩放与按钮走同一个 zoom 状态：底部百分比要跟着动，不是两套数。
+  it("在图片区滚轮也能缩放，百分比同步更新", () => {
+    const { baseElement } = render(<ImageLightbox src="/a.png" alt="图" onClose={() => {}} />);
+    const box = baseElement.querySelector("img")!.parentElement as HTMLElement;
+    fireEvent.wheel(box, { deltaY: -100 });
+    expect(screen.queryByText("100%")).toBeNull();
+    expect(screen.getByText(/%$/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /重置|Reset/ }));
+    expect(screen.getByText("100%")).toBeTruthy();
+  });
 });
 
 describe("ImageLightbox 预览窗口", () => {
-  it("预览区是固定 1:1 的正方形（边长取容器短边）", () => {
+  // 曾经是固定 1:1 的正方形（边长取容器短边）。宽图上下、竖图左右各留一大片黑，
+  // 图片区只占弹窗中间一小块。现在图片区铺满面板，取景交给缩放 + 平移。
+  it("图片区铺满面板，不再套固定比例的正方形", () => {
     const { baseElement } = render(<ImageLightbox src="/a.png" alt="图" onClose={() => {}} />);
-    const box = baseElement.querySelector("[style*='aspect-ratio']") as HTMLElement;
-    expect(box).toBeTruthy();
-    expect(box.style.aspectRatio).toBe("1 / 1");
-    expect(box.style.width).toBe("min(100cqw, 100cqh)");
+    expect(baseElement.querySelector("[style*='aspect-ratio']")).toBeNull();
+    expect(baseElement.querySelector("[style*='container-type']")).toBeNull();
+    const img = baseElement.querySelector("img") as HTMLElement;
+    expect(img.closest(".overflow-hidden")).toBeTruthy();
   });
 
   it("桌面端尺寸与设置弹窗一致（82vh / 900px）", () => {

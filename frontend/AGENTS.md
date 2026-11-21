@@ -381,13 +381,27 @@ src/
     `object-fit: scale-down` 看着像，但它在 zoom>1 时会把尺寸锁死在原始像素，缩放直接失效；
     `h-full w-full object-contain` 又会把小图拉到窗口大小。所以 `ZoomableImage` 用
     `ResizeObserver` 量窗口、用 `onLoad` 量原图，把结果写进 img 的 `width/height`。
-    根节点固定 `h-full w-full` 供测量，滚动交给调用方（灯箱的正方形、侧栏的 `dsh-scroll`）。
-    **预览窗口固定 1:1**：边长取容器的短边（`width: min(100cqw, 100cqh)` + `aspect-ratio: 1`），
-    图片区那一层挂 `container-type: size`。所以 `panelClassName` 必须把高度定下来
-    （移动 `h-full` 吃 Dialog 的 `max-h-[85dvh]`，桌面 `md:h-[82vh]`）——高度是 auto 时
-    size containment 会让容器塌成 0，正方形直接消失。桌面尺寸与「设置」弹窗对齐
-    （`md:h-[82vh] md:max-w-[900px]`）。缩放发生在正方形**内部**（内层 `overflow-auto`），
-    放大后仍在这块窗口里滚，不会把弹窗撑大。
+    **两种取景方式，由 `pannable` 分**：
+    - 侧栏文件预览不开它：根节点 `h-full w-full` 供测量，滚动交给外层的 `dsh-scroll`。
+    - 灯箱开它：图片区自己 `overflow-hidden`，图片靠 `transform: translate(calc(-50% + Npx))`
+      平移（`left-1/2 top-1/2` 定位），**不再有滚动条**——放大后两个轴都可能溢出，
+      滚动条那套得分别去抠两个角落的滑块，拖动才是这个场景的手势。
+      **滚轮缩放必须用原生 `wheel` 监听 + `{ passive: false }`**：React 17 起 root 上的
+      wheel 是 passive 的，`preventDefault()` 会被忽略，页面会在背后一起滚。
+      倍数用**乘法**（`WHEEL_ZOOM_FACTOR` ≈ 1.1）：触控板一次滑动就是几十个小事件，
+      加法会瞬间冲到上下限。缩放以**光标为锚点**（锚点下的像素缩放前后停在原处），
+      否则想放大看角落时每次都要重新拖回来。
+      **平移量由 `clampPan()` 夹在「图片边缘不离开容器边缘」**，图比容器小时两个上限都是 0、
+      自动居中——松手后小图歪在角落里会像是被甩飞了。`clampPan` 里的 `+ 0` 是把 `-0`
+      归一成 `0`，别删。
+      拖动走 pointer 事件 + `setPointerCapture`（拖出面板也不断），`touchAction: "pinch-zoom"`
+      （关掉单指平移这个「滚页面」语义，但保住两指捏合缩放）；图没超出窗口时**不接管
+      pointerdown**，否则会顺手吃掉文字选中与点击。
+    **灯箱的图片区铺满面板，不再是固定 1:1 的正方形**：正方形在宽图上上下留一大片黑、
+    竖图上左右留一大片黑，而面板本身够宽，撑满才像个查看器。因此 `panelClassName`
+    仍然要把高度定下来（移动 `h-full` 吃 Dialog 的 `max-h-[85dvh]`，桌面 `md:h-[82vh]`），
+    但图片区**不再需要 `container-type: size`**——那个只为算正方形短边而存在。
+    桌面尺寸与「设置」弹窗对齐（`md:h-[82vh] md:max-w-[900px]`）。
 30. **输入框草稿按对话存浏览器本地（`lib/drafts.ts`）**：APP 被杀 / webview 被回收 / 页面
     重载都会把 React 状态清掉，打了半天的提示词不能就这么没了。`Composer` 的 `draftKey`
     由 `draftKeyFor(activeId, currentWorkspace)` 给出（有会话用会话 id，还没有会话就按
