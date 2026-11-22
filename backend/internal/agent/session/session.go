@@ -207,9 +207,16 @@ type Session struct {
 	// permMu/perms 记录「已下发给前端、还没收到决定」的审批请求。
 	// WS 重连时要把它们重放出去：不重放的话刷新页面就再也点不到那个审批，
 	// 而 CLI 仍在 can_use_tool 上挂着（进程与内存一直占着）。
+	//
+	// resolved 记「这个 request_id 已经有过结论」的 id，**只用来挡住第二次回包**：
+	// 审批是群发给所有设备的一条会话级事实，两台设备几乎同时点「允许」时都会走到
+	// ReplyPermission，而 CLI 只认第一份 control_response。只靠 perms 判不出来
+	// ——第一份回包已经把 perms 里那条摘掉了，第二份看起来和「从没挂起过」一样。
+	// 用有界集合（见 noteResolvedPermission）避免它随会话寿命无限增长。
 	permMu    sync.Mutex
 	perms     map[string]json.RawMessage
 	permOrder []string
+	resolved  map[string]struct{}
 
 	// resultAt 是最近一条 result 的到达时间（unix nano，0 表示还没有）。
 	// 只用来判断「result 之后紧跟着的 init 是不是同一批投递」，见 TurnHandoffWindow。
@@ -306,6 +313,7 @@ func New(id, cwd string, tr Transport, emit func(Event)) *Session {
 		send:      make(chan writeReq, 64),
 		pending:   make(map[string]*pendingCall),
 		perms:     make(map[string]json.RawMessage),
+		resolved:  make(map[string]struct{}),
 		tasks:     make(map[string]taskRef),
 		done:      make(chan struct{}),
 		epoch:     newEpoch(),
@@ -684,17 +692,30 @@ type PermissionReply struct {
 }
 
 // ReplyPermission 回写一次工具审批结果。
+//
+// 一条审批**只能回一次**：CLI 拿到第一份 control_response 就继续往下跑，第二份会被
+// 当成另一条请求的回包（或者直接报未知 request_id）。而审批是会话级事实，同一个
+// request_id 会群发给所有设备——两台设备几乎同时点「允许」，两边都会走到这里。
+// 所以先看「这条是不是已经有结论了」：有就拒绝，绝不能再往 stdin 写一条。
+//
+// 判据不能只看 perms 里还在不在：第一份回包已经把那条摘掉了，第二份看起来跟
+// 「从没挂起过」（例如消息流由转录回放、挂起表是空的）一模一样。用 resolved 集合
+// 记「有过结论的 id」，两种情形才分得开。
 func (s *Session) ReplyPermission(requestID string, r PermissionReply) error {
 	if requestID == "" {
 		return errors.New("session: request_id 为空")
 	}
+	if !s.claimPermission(requestID) {
+		return fmt.Errorf("session: 审批 %q 已经处理过（可能在别的设备上）", requestID)
+	}
+	// 结论要广播给其他连接，否则他们那边的卡片永远挂着（同 forgetPermission）。
+	defer s.emitData(KindPermissionResolved, map[string]any{"request_id": requestID})
 	var line []byte
 	if r.Allow {
 		line = protocol.AllowWith(requestID, r.UpdatedInput, r.UpdatedPermissions)
 	} else {
 		line = protocol.Deny(requestID, r.Message)
 	}
-	defer s.forgetPermission(requestID)
 	return s.writeLine(line)
 }
 
@@ -913,6 +934,7 @@ func (s *Session) forgetPermission(requestID string) {
 	if !s.dropPermission(requestID) {
 		return
 	}
+	s.noteResolvedPermission(requestID)
 	s.emitData(KindPermissionResolved, map[string]any{"request_id": requestID})
 }
 
@@ -934,12 +956,65 @@ func (s *Session) dropPermission(requestID string) bool {
 	return true
 }
 
+// permResolvedMax 是「已有结论」集合的上限。
+//
+// 它只用来挡第二次回包，而一条审批的回包窗口只有几秒，留最近这么多条足够。
+// 超了整表清空而不是逐条淘汰：这里没有「最旧」的语义（id 是随机的），
+// 一次清空的代价是极老的 id 上再来一次重复回包能穿过去，那本来就不会发生。
+const permResolvedMax = 1024
+
+// claimPermission 为一次回包占位：返回 false 表示这条审批已经有结论了。
+//
+// 没在挂起表里、也从没结论过（消息流由转录回放时挂起表本来就是空的）要放行：
+// 回包本身写进 stdin 也不会错，缺的只是「重放出来的卡片」那份记录。
+func (s *Session) claimPermission(requestID string) bool {
+	s.permMu.Lock()
+	defer s.permMu.Unlock()
+	if _, done := s.resolved[requestID]; done {
+		return false
+	}
+	if s.resolved == nil || len(s.resolved) >= permResolvedMax {
+		s.resolved = make(map[string]struct{}, 8)
+	}
+	s.resolved[requestID] = struct{}{}
+	// 顺手把挂起表里那条摘掉：回包之后它就不该再出现在快照里。
+	delete(s.perms, requestID)
+	for i, id := range s.permOrder {
+		if id == requestID {
+			s.permOrder = append(s.permOrder[:i], s.permOrder[i+1:]...)
+			break
+		}
+	}
+	return true
+}
+
+// noteResolvedPermission 记下「这条审批已经有结论」，挡住之后的第二次回包。
+//
+// CLI 自己撤回（control_cancel_request）、中断整轮、进程结束时都走这里：那些情形
+// 下卡片已经从所有界面上消失，之后再来的回包只能是迟到的重复。
+func (s *Session) noteResolvedPermission(requestID string) {
+	if requestID == "" {
+		return
+	}
+	s.permMu.Lock()
+	defer s.permMu.Unlock()
+	if s.resolved == nil || len(s.resolved) >= permResolvedMax {
+		s.resolved = make(map[string]struct{}, 8)
+	}
+	s.resolved[requestID] = struct{}{}
+}
+
 // clearPermissions 清空全部挂起审批并逐条广播结论（中断时整轮作废）。
 func (s *Session) clearPermissions() {
 	s.permMu.Lock()
 	ids := append([]string(nil), s.permOrder...)
 	s.perms = make(map[string]json.RawMessage)
 	s.permOrder = nil
+	// 这些 id 也算「有结论了」：整轮作废之后还到达的回包只能是迟到的重复，
+	// 放行的话会往 stdin 写一条 CLI 早已不再等待的回包。
+	for _, id := range ids {
+		s.resolved[id] = struct{}{}
+	}
 	s.permMu.Unlock()
 	for _, id := range ids {
 		s.emitData(KindPermissionResolved, map[string]any{"request_id": id})
@@ -1382,7 +1457,7 @@ func (s *Session) Replay(sinceEpoch string, sinceSeq uint64) ([]Event, bool) {
 	if sinceSeq == s.replaySeq {
 		return nil, true
 	}
-	// 缓冲里最旧的一条必须是 since+1；否则中间那段已经被淘汰，补不齐。
+	// 缓冲里最旧的一条必须不晚于 since+1；否则中间那段已经被淘汰，补不齐。
 	if len(s.replay) == 0 || s.replay[0].Seq > sinceSeq+1 {
 		return nil, false
 	}

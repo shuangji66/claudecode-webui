@@ -1053,6 +1053,58 @@ func TestPermissionReplyBroadcastsResolution(t *testing.T) {
 	}
 }
 
+// 同一条审批被第二次回包时必须被拒，而且**不能再往 stdin 写**。
+//
+// 现实来源是多设备：同一个 request_id 群发给所有连接，两台设备几乎同时点「允许」，
+// 两边都会走到 ReplyPermission。如果第二份照样写进 stdin，CLI 会把它当成另一条
+// 请求的回包（或报未知 request_id），而界面上两张卡片都已经消失，用户无从解释。
+func TestSecondPermissionReplyIsRejected(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	fc.send(map[string]any{
+		"type":       "control_request",
+		"request_id": "pdup",
+		"request": map[string]any{
+			"subtype":   "can_use_tool",
+			"tool_name": "Bash",
+			"input":     map[string]any{"command": "rm -rf /tmp/dup"},
+		},
+	})
+	if _, ok := rec.wait(KindPermission, 2*time.Second); !ok {
+		t.Fatal("未收到 permission 事件")
+	}
+
+	if err := sess.ReplyPermission("pdup", PermissionReply{Allow: true}); err != nil {
+		t.Fatalf("第一次回包应当成功: %v", err)
+	}
+	// 第一份回包确实写到了 stdin。
+	if got := fc.next(); got["type"] != "control_response" {
+		t.Fatalf("第一条写入 = %+v，期望 control_response", got)
+	}
+
+	if err := sess.ReplyPermission("pdup", PermissionReply{Allow: false, Message: "no"}); err == nil {
+		t.Fatal("第二次回包应当被拒（审批已经有了结论）")
+	}
+	// 关键：拒绝之后 stdin 上不能多出第二条回包。等一小会儿，确认没有新行进来
+	// （有的话下一条应该是一次新的 control_request，而不是 control_response）。
+	fc.send(map[string]any{
+		"type":       "control_request",
+		"request_id": "pnext",
+		"request": map[string]any{
+			"subtype":   "can_use_tool",
+			"tool_name": "Bash",
+			"input":     map[string]any{"command": "echo ok"},
+		},
+	})
+	if _, ok := rec.wait(KindPermission, 2*time.Second); !ok {
+		t.Fatal("未收到第二条 permission 事件")
+	}
+	if n := rec.count(KindPermissionResolved); n != 1 {
+		t.Fatalf("结论广播次数 = %d, want 1（第二次回包不该再广播）", n)
+	}
+}
+
 // 中断让整轮作废，挂起审批必须一起清掉并广播：只在本机清的话，
 // 另一台设备会继续显示一批点了也没用的卡片。
 func TestInterruptClearsPendingPermissions(t *testing.T) {
