@@ -1911,3 +1911,41 @@ func TestSessionIDStaysAtCreationValue(t *testing.T) {
 		t.Fatalf("CurrentID = %q，want cleared-id", got)
 	}
 }
+
+// 写 stdin 必须有超时：对端（claude）不读时，这条路径是同步等待的，
+// 而 `/api/session` 的 prompt、审批回包都挂在它上面——没有超时就是请求永久挂住。
+func TestWriteTimesOutWhenPeerStopsReading(t *testing.T) {
+	old := WriteTimeout
+	WriteTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { WriteTimeout = old })
+
+	// 构造一个「永远写不完」的 transport：Write 阻塞到连接被关。
+	blocked := make(chan struct{})
+	tr := &stuckWriter{blocked: blocked}
+	sess := New("s1", "/tmp/work", tr, func(Event) {})
+
+	start := time.Now()
+	err := sess.writeLine([]byte(`{"type":"user"}`))
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("对端不读时写入应当超时失败")
+	}
+	if !strings.Contains(err.Error(), "写入超时") {
+		t.Fatalf("错误原因应说明超时，实际: %v", err)
+	}
+	if elapsed < WriteTimeout {
+		t.Fatalf("提前返回（%v），超时保护没生效", elapsed)
+	}
+	close(blocked)
+}
+
+// stuckWriter 的 Write 一直阻塞（模拟「claude 进程不读 stdin」）。
+type stuckWriter struct{ blocked chan struct{} }
+
+func (w *stuckWriter) Read([]byte) (int, error)  { return 0, io.EOF }
+func (w *stuckWriter) Close() error             { return nil }
+func (w *stuckWriter) Write(b []byte) (int, error) {
+	<-w.blocked
+	return len(b), nil
+}

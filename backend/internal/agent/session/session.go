@@ -1115,14 +1115,44 @@ func (s *Session) writeLoop() {
 	}
 }
 
+// WriteTimeout 是单次写入 stdin 的上限。
+//
+// `tr.Write` 在管道写满时会一直阻塞——只有对端（claude）在持续读时它才会返回。
+// 进程活着但卡住（例如它自己的 stdin 缓冲被某个不退出的事件占满）时，这条路径
+// 会把等 ack 的调用方一起挂死：`/api/session` 的 prompt、审批回包、切模式都走它，
+// 表现为「点发送之后请求永远不返回」，而界面没有任何可解释的状态。
+//
+// 10 秒是「正常写入一定够快」的量级：一条 prompt 最多几百 KB（附件另算，走 base64
+// 也已限 10MB），本机管道几毫秒就能写完。超时按「会话不可用」处理——继续留着
+// 一个写不进 stdin 的进程没有意义，重开会话才能恢复。
+var WriteTimeout = 10 * time.Second
+
+// writeNow 把一行写进 stdin，带超时保护。
+//
+// 写操作本身没有可用的 deadline（Linux 的 pipe 不支持 SetWriteDeadline，
+// Transport 也只是 io.Writer），所以在 goroutine 里写、主流程等结果或超时。
+// 超时后**不能让那个 goroutine 一直占着 wmu**：它自己持锁，而 wmu 是串行化的
+// 依据；这里直接关会话（Close 会关掉底层管道，被阻塞的 Write 随之返回）。
 func (s *Session) writeNow(b []byte) error {
-	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	if _, err := s.tr.Write(b); err != nil {
-		return fmt.Errorf("session: 写入失败: %w", err)
+	done := make(chan error, 1)
+	go func() {
+		s.wmu.Lock()
+		defer s.wmu.Unlock()
+		_, err := s.tr.Write(b)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("session: 写入失败: %w", err)
+		}
+		s.idle.Store(time.Now().UnixNano())
+		return nil
+	case <-s.done:
+		return errors.New("session: 会话已关闭")
+	case <-time.After(WriteTimeout):
+		return fmt.Errorf("session: 写入超时（%s，claude 进程没有读取 stdin）", WriteTimeout)
 	}
-	s.idle.Store(time.Now().UnixNano())
-	return nil
 }
 
 // request 发送一条控制请求并等待其回包。
