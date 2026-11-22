@@ -153,6 +153,45 @@ export function moveStep(
   return next;
 }
 
+/**
+ * 工作区拖动排序：`order` 里出现过的按它排，没出现过的（刚添加的工作区）按原顺序
+ * 排在末尾。与 `applyOrder` 同一套口径，只是键换成工作区路径。
+ */
+export function applyWorkspaceOrder<T extends { path: string }>(
+  list: readonly T[],
+  order: readonly string[],
+): T[] {
+  if (order.length === 0) return [...list];
+  const index = new Map(order.map((path, i) => [path, i]));
+  const known = list
+    .filter((w) => index.has(w.path))
+    .sort((a, b) => (index.get(a.path) ?? 0) - (index.get(b.path) ?? 0));
+  const rest = list.filter((w) => !index.has(w.path));
+  return [...known, ...rest];
+}
+
+/**
+ * 把 `from` 挪到 `to` 的上/下半，返回一份完整的 path 顺序（可直接落盘）。
+ *
+ * `current` 必须是**当前显示顺序**：先摘掉自己再找落点，否则往下拖时要多减一格、
+ * 往上拖时又会少一格（与 `moveTo` 同一条规则）。
+ */
+export function movePath(
+  current: readonly string[],
+  from: string,
+  to: string,
+  half: DropHalf,
+): string[] {
+  const next = [...current];
+  const i = next.indexOf(from);
+  if (i < 0 || from === to) return next;
+  next.splice(i, 1);
+  const j = next.indexOf(to);
+  if (j < 0) return [...current];
+  next.splice(j + (half === "after" ? 1 : 0), 0, from);
+  return next;
+}
+
 /** 工作区按路径包含关系排成「父 → 子」的扁平顺序，depth 用来缩进。 */
 export function flattenWorkspaceTree(workspaces: WorkspaceEntry[]): { workspace: WorkspaceEntry; depth: number }[] {
   const sorted = [...workspaces].sort((a, b) => a.path.localeCompare(b.path));
@@ -176,6 +215,8 @@ export function flattenWorkspaceTree(workspaces: WorkspaceEntry[]): { workspace:
 
 const VIEW_KEY = "ccweb-sidebar-view";
 const ORDER_KEY = "ccweb-session-order";
+/** 工作区拖动排序（每台设备，按 path 存）。 */
+const WORKSPACE_ORDER_KEY = "ccweb-workspace-order";
 
 /** 读视图偏好（localStorage 不可用时回落默认）。 */
 export function loadView(): SidebarView {
@@ -215,6 +256,26 @@ export function loadOrder(): Record<string, string[]> {
 export function saveOrder(order: Record<string, string[]>): void {
   try {
     localStorage.setItem(ORDER_KEY, JSON.stringify(order));
+  } catch {
+    /* 隐私模式 */
+  }
+}
+
+/** 读工作区顺序（每台设备）：拖过才有值，读不出来就当没拖过。 */
+export function loadWorkspaceOrder(): string[] {
+  try {
+    const raw = localStorage.getItem(WORKSPACE_ORDER_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveWorkspaceOrder(paths: readonly string[]): void {
+  try {
+    localStorage.setItem(WORKSPACE_ORDER_KEY, JSON.stringify(paths));
   } catch {
     /* 隐私模式 */
   }

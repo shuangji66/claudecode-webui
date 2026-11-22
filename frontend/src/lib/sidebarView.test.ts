@@ -3,18 +3,22 @@ import {
   DEFAULT_VIEW,
   FLAT_KEY,
   applyOrder,
+  applyWorkspaceOrder,
   canDrop,
   dropHalf,
   flattenWorkspaceTree,
   loadOrder,
   loadView,
+  loadWorkspaceOrder,
   matchArchive,
   moveBefore,
+  movePath,
   moveStep,
   moveTo,
   parseView,
   saveOrder,
   saveView,
+  saveWorkspaceOrder,
 } from "./sidebarView";
 import type { ConversationInfo, WorkspaceEntry } from "../transport/types";
 
@@ -155,5 +159,46 @@ describe("localStorage 持久化", () => {
     expect(loadView()).toEqual(DEFAULT_VIEW);
     localStorage.setItem("ccweb-session-order", JSON.stringify({ x: [1, "a", null] }));
     expect(loadOrder()).toEqual({ x: ["a"] });
+  });
+});
+
+describe("工作区拖动排序", () => {
+  it("保存的顺序优先，没拖过的工作区按原顺序排在后面", () => {
+    const list = [ws("/a"), ws("/b"), ws("/c"), ws("/d")];
+    // 只保存了 a 与 c 的相对顺序（b 是后加的、d 从没出现过）。
+    expect(applyWorkspaceOrder(list, ["/c", "/a"]).map((w) => w.path)).toEqual([
+      "/c",
+      "/a",
+      "/b",
+      "/d",
+    ]);
+  });
+
+  it("没有保存过顺序时保持原样", () => {
+    const list = [ws("/b"), ws("/a")];
+    expect(applyWorkspaceOrder(list, []).map((w) => w.path)).toEqual(["/b", "/a"]);
+  });
+
+  it("往下拖：落在目标行的下半就插到它后面", () => {
+    const order = ["/a", "/b", "/c", "/d"];
+    expect(movePath(order, "/a", "/c", "after")).toEqual(["/b", "/c", "/a", "/d"]);
+    expect(movePath(order, "/a", "/c", "before")).toEqual(["/b", "/a", "/c", "/d"]);
+  });
+
+  it("往上拖：先摘掉自己再找落点，不会多减一格", () => {
+    const order = ["/a", "/b", "/c", "/d"];
+    expect(movePath(order, "/d", "/b", "before")).toEqual(["/a", "/d", "/b", "/c"]);
+    expect(movePath(order, "/d", "/a", "after")).toEqual(["/a", "/d", "/b", "/c"]);
+  });
+
+  it("拖到自己身上 / 目标不存在时原样返回", () => {
+    const order = ["/a", "/b"];
+    expect(movePath(order, "/a", "/a", "after")).toEqual(["/a", "/b"]);
+    expect(movePath(order, "/a", "/missing", "after")).toEqual(["/a", "/b"]);
+  });
+
+  it("顺序存进浏览器本地，读回来还是那一条", () => {
+    saveWorkspaceOrder(["/x", "/y"]);
+    expect(loadWorkspaceOrder()).toEqual(["/x", "/y"]);
   });
 });

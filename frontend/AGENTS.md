@@ -319,6 +319,21 @@ src/
       截图在手机上会被缩小，看起来像把被拖的那行压扁了。我们在视口外挂一块与行同宽的
       不透明替身交给 `setDragImage`，`dragend` 时摘掉；拿不到 `setDragImage` 的 WebView
       静默回落到默认拖影。
+    - **工作区行也能上下拖动排序**（`docs` 见规则 39 之后）：顺序存
+      `ccweb-workspace-order`（每台设备，按 `path`），只在「按工作区分组」下生效——
+      树模式的层级由目录路径决定，拖了也没处放；搜索时列表被过滤，同样不启用。
+    - **工作区拖拽不能用 HTML5 DnD**：iOS/Android 上 `dragstart` 根本不触发，而触屏
+      上「拖动排序」是刚需。这里走 Pointer Events：鼠标按下后移动超过 6px 开始拖；
+      **触摸必须先长按 300ms**（`WS_LONG_PRESS_MS`），长按前手指移动超过 10px 一律按
+      「在滚动」处理，否则侧栏就没法划了。长按成功后给行 `setPointerCapture`，
+      并在 document 上挂 `{ passive: false }` 的 `touchmove` 阻止滚动（React 的 touch
+      监听是 passive 的，拦不住）。
+    - **落点复用会话那一套**：`dropHalf` 判上/下半、`.side-drop-line` 画提示线、
+      `movePath` 算新顺序；被拖行半透明 + `cursor-grabbing`。落点只在本侧栏容器里量
+      （移动端抽屉与桌面侧栏会同时挂载，按 document 查会量到隐藏那一份）。
+    - **松手后补发的那次 click 要吞掉**（行的 `onClickCapture`，`wsSuppressClick`）：
+      不吞的话拖完会把这一组展开/收起，或者弹出「工作区操作」菜单；新的一次
+      `pointerdown` 会复位它，不靠超时精确到毫秒。
 24. **回合进行中的消息走「待发送」队列，不许直接写 stdin 之外的地方**（`lib/queue.ts` +
     `store.queued`）：插话要带 **`priority: "now"`**（`sendPrompt` 的第 4 个参数）——只写裸
     user 帧的话 CLI 按默认的 next 处理，要等本轮工具收尾，看起来跟排队一样（「插话没生效」

@@ -992,3 +992,115 @@ describe("Sidebar 已归档对话", () => {
     expect(useAppStore.getState().openConversation).toHaveBeenCalledWith("c-1");
   });
 });
+
+// 工作区上下拖动调整顺序（鼠标 + 触摸）。触屏上 HTML5 DnD 收不到 dragstart，
+// 所以两条路都走 Pointer Events；触摸必须先长按，否则手指在侧栏上一滑就被当成
+// 拖拽，列表没法滚。
+describe("Sidebar 工作区拖动排序", () => {
+  const paths = ["/w/a", "/w/b", "/w/c"];
+
+  function seed() {
+    localStorage.clear();
+    resetHiddenFeaturesCache();
+    useAppStore.setState({
+      workspaces: paths.map((path) => ({ path, name: path.slice(-1), last_used: "", exists: true })),
+      currentWorkspace: "/w/a",
+      activeId: null,
+      conversations: [],
+    });
+  }
+
+  /** jsdom 没有布局：给每个工作区行摆一个 40px 高的位置，拖拽才量得到落点。 */
+  function sizedRows(container: HTMLElement): HTMLElement[] {
+    return paths.map((path, i) => {
+      const row = container.querySelector<HTMLElement>(`[data-workspace="${path}"]`)!;
+      Object.defineProperty(row, "getBoundingClientRect", {
+        value: () => ({ top: i * 40, bottom: i * 40 + 40, height: 40 } as DOMRect),
+        configurable: true,
+      });
+      return row;
+    });
+  }
+
+  const order = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLElement>("[data-workspace]")).map(
+      (row) => row.dataset.workspace,
+    );
+
+  it("鼠标拖到最后一行的下半：插到末尾", () => {
+    seed();
+    const { container } = renderSidebar();
+    const [a] = sizedRows(container);
+
+    fireEvent.pointerDown(a, { pointerType: "mouse", button: 0, pointerId: 1, clientX: 8, clientY: 20 });
+    fireEvent.pointerMove(a, { pointerType: "mouse", pointerId: 1, clientX: 8, clientY: 115 });
+    fireEvent.pointerUp(a, { pointerType: "mouse", pointerId: 1, clientX: 8, clientY: 115 });
+
+    expect(order(container)).toEqual(["/w/b", "/w/c", "/w/a"]);
+    expect(JSON.parse(localStorage.getItem("ccweb-workspace-order") ?? "[]")).toEqual([
+      "/w/b",
+      "/w/c",
+      "/w/a",
+    ]);
+  });
+
+  it("鼠标往上拖到第二行上半：插到它前面", () => {
+    seed();
+    const { container } = renderSidebar();
+    const [, b] = sizedRows(container);
+    const c = container.querySelector<HTMLElement>('[data-workspace="/w/c"]')!;
+
+    fireEvent.pointerDown(c, { pointerType: "mouse", button: 0, pointerId: 2, clientX: 8, clientY: 100 });
+    fireEvent.pointerMove(c, { pointerType: "mouse", pointerId: 2, clientX: 8, clientY: 45 });
+    fireEvent.pointerUp(c, { pointerType: "mouse", pointerId: 2, clientX: 8, clientY: 45 });
+
+    expect(order(container)).toEqual(["/w/a", "/w/c", "/w/b"]);
+    expect(b).not.toBeNull();
+  });
+
+  it("短按（没拖动）不改变顺序，点击照常展开这一组", () => {
+    seed();
+    const { container } = renderSidebar();
+    // 用非当前工作区：当前那组挂载时就是展开的，点一下反而收起。
+    const b = sizedRows(container)[1];
+    const button = b.querySelector("button")!;
+
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    fireEvent.pointerDown(b, { pointerType: "mouse", button: 0, pointerId: 3, clientX: 8, clientY: 60 });
+    fireEvent.pointerUp(b, { pointerType: "mouse", pointerId: 3, clientX: 8, clientY: 61 });
+    fireEvent.click(button);
+
+    expect(order(container)).toEqual(paths);
+    expect(localStorage.getItem("ccweb-workspace-order")).toBeNull();
+    expect(button).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("触摸：手指先滑动按滚动处理，不起拖拽", () => {
+    seed();
+    const { container } = renderSidebar();
+    const [a] = sizedRows(container);
+
+    fireEvent.pointerDown(a, { pointerType: "touch", pointerId: 4, clientX: 8, clientY: 20 });
+    fireEvent.pointerMove(a, { pointerType: "touch", pointerId: 4, clientX: 8, clientY: 60 });
+    fireEvent.pointerUp(a, { pointerType: "touch", pointerId: 4, clientX: 8, clientY: 60 });
+
+    expect(order(container)).toEqual(paths);
+  });
+
+  it("触摸：长按 300ms 后拖到末尾", async () => {
+    vi.useFakeTimers();
+    seed();
+    const { container } = renderSidebar();
+    const [a] = sizedRows(container);
+
+    fireEvent.pointerDown(a, { pointerType: "touch", pointerId: 5, clientX: 8, clientY: 20 });
+    await act(async () => {
+      vi.advanceTimersByTime(320);
+    });
+    fireEvent.pointerMove(a, { pointerType: "touch", pointerId: 5, clientX: 8, clientY: 115 });
+    fireEvent.pointerUp(a, { pointerType: "touch", pointerId: 5, clientX: 8, clientY: 115 });
+
+    expect(order(container)).toEqual(["/w/b", "/w/c", "/w/a"]);
+    vi.useRealTimers();
+  });
+});

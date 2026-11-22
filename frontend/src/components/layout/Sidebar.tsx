@@ -11,16 +11,20 @@ import {
   OTHER_KEY,
   SESSION_GROUP_LIMIT,
   applyOrder,
+  applyWorkspaceOrder,
   canDrop,
   dropHalf,
   flattenWorkspaceTree,
   loadOrder,
   loadView,
+  loadWorkspaceOrder,
   matchArchive,
+  movePath,
   moveStep,
   moveTo,
   saveOrder,
   saveView,
+  saveWorkspaceOrder,
   type DropHalf,
   type SidebarView,
 } from "../../lib/sidebarView";
@@ -122,6 +126,13 @@ type HoverState = HoverSubject & { anchor: HTMLElement };
  * 要恢复就把开关改成 true（菜单项、`copySessionId` 与它的测试都在）。
  */
 const SHOW_COPY_SESSION_ID = false;
+/**
+ * 触摸拖拽工作区长按多久才激活（毫秒）。
+ *
+ * 不用「按下就拖」：侧栏在手机上主要靠滑动滚动，按下即拖会把手势全吃掉。
+ * 300ms 与系统列表排序的手感接近；期间手指移动超过 10px 就当滚动、放弃长按。
+ */
+const WS_LONG_PRESS_MS = 300;
 
 interface MenuState {
   id: string;
@@ -184,6 +195,29 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const [viewAnchor, setViewAnchor] = useState<HTMLElement | null>(null);
   /** 拖拽中的会话与当前吸附位置：手动排序用（对齐 DSH 的 drag marker）。 */
   const [drag, setDrag] = useState<DragState | null>(null);
+  /**
+   * 工作区拖动排序（每台设备）：保存的是 path 顺序，见 `lib/sidebarView`。
+   *
+   * 只影响「按工作区分组」下的排列；树模式的层级由目录路径决定，换回树模式时
+   * 顺序原样保留，切回来还是拖过的那一份。
+   */
+  const [wsOrder, setWsOrder] = useState<string[]>(loadWorkspaceOrder);
+  const [wsDrag, setWsDrag] = useState<{ path: string; over: { path: string; half: DropHalf } | null } | null>(null);
+  /** 按下后还没激活（鼠标等移动超过阈值 / 触摸等长按到点）。 */
+  const wsPress = useRef<{
+    path: string;
+    x: number;
+    y: number;
+    pointerId: number;
+    el: HTMLElement;
+    timer: number | null;
+    active: boolean;
+    over: { path: string; half: DropHalf } | null;
+  } | null>(null);
+  /** 拖动结束后浏览器还会补一次 click：吞掉它，别把这一组展开/收起。 */
+  const wsSuppressClick = useRef(false);
+  /** 工作区列表容器：落点只在这一份里量（移动端抽屉与桌面侧栏会同时存在）。 */
+  const wsListRef = useRef<HTMLDivElement>(null);
   /** 悬浮概览：鼠标停住一会儿才弹，离开/滚动就收。工作区与会话共用一张卡片位。 */
   const [hover, setHover] = useState<HoverState | null>(null);
   const hoverTimer = useRef<number | null>(null);
@@ -321,7 +355,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     const entries =
       view.group === "tree"
         ? flattenWorkspaceTree(workspaces)
-        : workspaces.map((w) => ({ workspace: w, depth: 0 }));
+        : applyWorkspaceOrder(workspaces, wsOrder).map((w) => ({ workspace: w, depth: 0 }));
     const result: WorkspaceGroup[] = entries.map(({ workspace: w, depth }) => ({
       path: w.path,
       name: w.name || baseName(w.path),
@@ -357,7 +391,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       .filter((g) => g.conversations.length > 0 || g.name.toLowerCase().includes(q));
     // titleSig 是 items 的「标题投影」：只有它变了才需要重算分组。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaces, conversations, view, order, query, titleSig, t]);
+  }, [workspaces, conversations, view, order, wsOrder, query, titleSig, t]);
 
   const endHover = () => {
     if (hoverTimer.current) {
@@ -387,6 +421,143 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     const anchor = event.currentTarget;
     hoverTimer.current = window.setTimeout(() => setHover({ ...state, anchor }), 220);
   };
+
+  /* ------------------------------------------------------------------
+   * 工作区拖动排序
+   *
+   * 用 Pointer Events 而不是 HTML5 DnD：手机上拖拽根本不会触发 dragstart，
+   * 而「上下拖动调整顺序」在触屏上是刚需。两条启动方式：
+   *   - 鼠标：按下后移动超过 6px 就开始拖（不会误伤点击）；
+   *   - 触摸：**先长按 300ms**。不加这一条的话，手指在侧栏上向下滑会被当成
+   *     拖拽，侧栏就没法滚了；长按之前移出 10px 一律按「在滚动」处理。
+   *
+   * 落点规则与 DSH 一致：指针在某行的上半 → 插到它前面，下半 → 插到它后面；
+   * 越过最后一行就落到末尾。提示线复用会话拖拽那条 `.side-drop-line`。
+   * ------------------------------------------------------------------ */
+  const wsReorderable = view.group === "workspace" && query.trim() === "";
+
+  const wsOverAt = (clientY: number): { path: string; half: DropHalf } | null => {
+    const root = wsListRef.current;
+    if (!root) return null;
+    const rows = Array.from(root.querySelectorAll<HTMLElement>("[data-workspace]")).filter(
+      (row) => row.dataset.workspace && row.dataset.workspace !== OTHER_KEY,
+    );
+    if (rows.length === 0) return null;
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect();
+      if (clientY < rect.top + rect.height / 2) {
+        return { path: row.dataset.workspace!, half: "before" };
+      }
+    }
+    return { path: rows[rows.length - 1].dataset.workspace!, half: "after" };
+  };
+
+  const beginWsDrag = () => {
+    const press = wsPress.current;
+    if (!press || press.active) return;
+    press.active = true;
+    if (press.timer !== null) window.clearTimeout(press.timer);
+    press.timer = null;
+    endHover();
+    // 指针移出这一行也要继续收 move：不 capture 的话拖到相邻工作区上就断线了。
+    try {
+      press.el.setPointerCapture(press.pointerId);
+    } catch {
+      /* 老 WebView 没有 pointer capture：落点仍由 move 事件更新。 */
+    }
+    // 拖动中别顺手把标题选中。
+    window.getSelection()?.removeAllRanges();
+    setWsDrag({ path: press.path, over: null });
+  };
+
+  const onWsPointerDown = (e: ReactPointerEvent<HTMLDivElement>, g: WorkspaceGroup) => {
+    if (!wsReorderable || g.path === OTHER_KEY || !g.exists) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    wsSuppressClick.current = false;
+    wsPress.current = {
+      path: g.path,
+      x: e.clientX,
+      y: e.clientY,
+      pointerId: e.pointerId,
+      el: e.currentTarget,
+      active: false,
+      over: null,
+      timer: e.pointerType === "mouse" ? null : window.setTimeout(beginWsDrag, WS_LONG_PRESS_MS),
+    };
+  };
+
+  const onWsPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const press = wsPress.current;
+    if (!press || press.pointerId !== e.pointerId) return;
+    if (!press.active) {
+      const dx = Math.abs(e.clientX - press.x);
+      const dy = Math.abs(e.clientY - press.y);
+      if (press.timer !== null) {
+        // 触摸：手指先动了就按滚动处理，把长按取消（侧栏照常能划）。
+        if (dx > 10 || dy > 10) {
+          window.clearTimeout(press.timer);
+          press.timer = null;
+          wsPress.current = null;
+        }
+        return;
+      }
+      if (dx < 6 && dy < 6) return;
+      beginWsDrag();
+    }
+    const over = wsOverAt(e.clientY);
+    press.over = over;
+    setWsDrag((prev) => {
+      if (!prev) return prev;
+      if (prev.over?.path === over?.path && prev.over?.half === over?.half) return prev;
+      return { ...prev, over };
+    });
+  };
+
+  const endWsPress = (commit: boolean) => {
+    const press = wsPress.current;
+    wsPress.current = null;
+    if (!press) return;
+    if (press.timer !== null) window.clearTimeout(press.timer);
+    try {
+      press.el.releasePointerCapture(press.pointerId);
+    } catch {
+      /* 没有 capture 过 */
+    }
+    if (!press.active) {
+      setWsDrag(null);
+      return;
+    }
+    if (commit && press.over && press.over.path !== press.path) {
+      // `groups` 就是屏幕上此刻的顺序（已应用保存的偏好），直接拿它当基准。
+      const current = groups
+        .filter((g) => g.path !== FLAT_KEY && g.path !== OTHER_KEY)
+        .map((g) => g.path);
+      const next = movePath(current, press.path, press.over.path, press.over.half);
+      setWsOrder(next);
+      saveWorkspaceOrder(next);
+    }
+    setWsDrag(null);
+    // 松手后浏览器还会补一次 click：吞掉它，别把这一组展开/收起。
+    // 新的一次按下会把它复位（见 onWsPointerDown），不必靠超时精确到毫秒。
+    wsSuppressClick.current = true;
+    window.setTimeout(() => {
+      wsSuppressClick.current = false;
+    }, 120);
+  };
+
+  /**
+   * 拖动期间必须在 document 上挡掉 touchmove：长按后手指一移动，浏览器仍会
+   * 试着滚侧栏，落点就跟着跳。`{ passive: false }` 才拦得住（React 的 touch
+   * 监听是 passive 的）。
+   */
+  useEffect(() => {
+    if (!wsDrag) return;
+    const stop = (e: TouchEvent) => {
+      if (e.cancelable) e.preventDefault();
+    };
+    document.addEventListener("touchmove", stop, { passive: false });
+    return () => document.removeEventListener("touchmove", stop);
+  }, [wsDrag]);
 
   /** 手动排序的落盘入口：拖拽和菜单里的上移/下移共用。 */
   const reorder = (key: string, list: ConversationInfo[], fromId: string, toId: string, half: DropHalf) => {
@@ -949,7 +1120,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         </div>
       )}
 
-      <div className="dsh-scroll mt-1 min-h-0 flex-1 overflow-y-auto px-2 pb-3" onScroll={endHover}>
+      <div ref={wsListRef} className="dsh-scroll mt-1 min-h-0 flex-1 overflow-y-auto px-2 pb-3" onScroll={endHover}>
         {groups.length === 0 && (
           <button
             type="button"
@@ -995,11 +1166,34 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                   展开/收起，常亮那个底色会让人以为这里是「已选中的导航项」。
                   悬停高亮画在整行上（含右侧「⋯ / +」），只包住名字时底色会在图标前截断。 */}
               <div
-                className="group side-row gap-1"
+                className={`group side-row relative gap-1 ${
+                  wsReorderable && g.path !== OTHER_KEY ? "cursor-grab" : ""
+                } ${wsDrag?.path === g.path ? "cursor-grabbing select-none opacity-50" : ""} ${
+                  wsDrag?.over?.path === g.path ? "select-none" : ""
+                }`}
                 data-workspace={g.path}
+                onPointerDown={wsReorderable ? (e) => onWsPointerDown(e, g) : undefined}
+                onPointerMove={wsReorderable ? onWsPointerMove : undefined}
+                onPointerUp={wsReorderable ? () => endWsPress(true) : undefined}
+                onPointerCancel={wsReorderable ? () => endWsPress(false) : undefined}
+                onContextMenu={wsDrag ? (e) => e.preventDefault() : undefined}
+                // 拖动结束后补发的那一次 click 会落在行内的按钮上：在捕获阶段吞掉，
+                // 否则松手会把这一组展开/收起，或者弹出「工作区操作」菜单。
+                onClickCapture={(e) => {
+                  if (!wsSuppressClick.current) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
                 onPointerEnter={g.path === OTHER_KEY ? undefined : (e) => armHover(e, { kind: "ws", group: g })}
                 onPointerLeave={endHover}
               >
+                {wsDrag?.over?.path === g.path && wsDrag.path !== g.path && (
+                  <span
+                    className={`side-drop-line ${
+                      wsDrag.over.half === "before" ? "side-drop-line-before" : "side-drop-line-after"
+                    }`}
+                  />
+                )}
                 <button
                   type="button"
                   onClick={() => onWorkspaceClick(g)}
