@@ -60,24 +60,23 @@ describe("草稿跟着对话走", () => {
     expect(readDraft("c1")).toBe("c1 的草稿");
   });
 
-  it("空对话重开（换模型/推理等级会换 id）时草稿跟着新 id 走", async () => {
+  it("空对话重开也用同一个 id，草稿留在原处", async () => {
     useAppStore.setState({
       activeId: "c1",
       conversations: [{ id: "c1", cwd: "/w", title: "", messages: 0, archived: false, live: true }],
       sessions: [{ id: "c1", cwd: "/w", state: "ready" }],
     } as never);
     writeDraft("c1", "还没发出去的字");
-    sessionReply = { id: "c9", cwd: "/w", state: "ready" };
+    // 没有转录的空对话由后端 StartFresh 用同一个 UUID 新建，回包里的 id 不变。
+    sessionReply = { id: "c1", cwd: "/w", state: "ready" };
 
     await useAppStore.getState().restartSession("c1");
 
-    expect(useAppStore.getState().activeId).toBe("c9");
-    expect(readDraft("c9")).toBe("还没发出去的字");
-    expect(readDraft("c1")).toBe("");
+    expect(useAppStore.getState().activeId).toBe("c1");
+    expect(readDraft("c1")).toBe("还没发出去的字");
   });
 
-  // 侧栏的「重启进程」也能对后台的空对话下手：它没有转录，重开要换 id，
-  // 但用户还在看另一条对话，不能被顶到新的空对话上。
+  // 侧栏的「重启进程」也能对后台的空对话下手：id 不变，当前对话也不会被顶掉。
   it("重启后台的空对话不会抢走当前对话", async () => {
     useAppStore.setState({
       activeId: "c2",
@@ -87,7 +86,7 @@ describe("草稿跟着对话走", () => {
       ],
       sessions: [{ id: "c1", cwd: "/w", state: "ready" }],
     } as never);
-    sessionReply = { id: "c9", cwd: "/w", state: "ready" };
+    sessionReply = { id: "c1", cwd: "/w", state: "ready" };
 
     await useAppStore.getState().restartSession("c1");
 

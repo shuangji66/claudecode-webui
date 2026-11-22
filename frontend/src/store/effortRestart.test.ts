@@ -72,7 +72,7 @@ describe("切推理等级后让它生效", () => {
     });
   });
 
-  it("还没发过消息的对话没有转录：重开一个新会话，而不是 --resume", async () => {
+  it("还没发过消息的对话也按同一 id 重起，不新建对话", async () => {
     seed("ready");
     useAppStore.setState({
       conversations: [{ id: "s1", cwd: "/w", title: "", messages: 0 }] as never,
@@ -81,14 +81,41 @@ describe("切推理等级后让它生效", () => {
 
     await useAppStore.getState().selectModel("gw", "m1", "low");
 
-    // 空对话 Resume 一定失败（转录不存在）：必须走「关掉 + 新建」。
+    // 没有转录时后端会用 StartFresh 按同一个 UUID 新建（根 AGENTS 4.4），
+    // 所以前端照样发 resume：**不换 id**，否则每切一次就多一条「新对话」。
     const created = calls.filter((c) => c.url === "/api/session" && c.init?.method === "POST");
     expect(created.length).toBe(1);
-    expect(JSON.parse(String(created[0].init?.body))).not.toHaveProperty("resume");
+    expect(JSON.parse(String(created[0].init?.body))).toEqual({ cwd: "/w", resume: "s1" });
   });
 
   it("档位没变就不重开（换模型时尤其不能白杀一次进程）", async () => {
     await useAppStore.getState().selectModel("gw", "m1", "high");
     expect(calls.some((c) => c.url.startsWith("/api/session?id="))).toBe(false);
+  });
+});
+
+describe("跨提供商切换模型", () => {
+  beforeEach(() => seed("ready"));
+
+  // 地址与密钥在进程启动时固定，只能重启进程；但必须按**同一个对话 id** 重开，
+  // 不能像以前那样 close + create —— 那会把上下文留在旧对话里，还会多出一条「新对话」。
+  it("按同一 id 关掉再 --resume，不新建对话", async () => {
+    await useAppStore.getState().selectModel("other", "m2", "");
+
+    const del = calls.find((c) => c.url.startsWith("/api/session?id="));
+    expect(del?.init?.method).toBe("DELETE");
+    const created = calls.filter((c) => c.url === "/api/session" && c.init?.method === "POST");
+    expect(created.length).toBe(1);
+    expect(JSON.parse(String(created[0].init?.body))).toEqual({ cwd: "/w", resume: "s1" });
+  });
+
+  it("进行中切换也走同一 id 重启（中断这一轮，确认由界面负责）", async () => {
+    seed("busy");
+    await useAppStore.getState().selectModel("other", "m2", "");
+
+    const created = calls.filter((c) => c.url === "/api/session" && c.init?.method === "POST");
+    expect(created.length).toBe(1);
+    expect(JSON.parse(String(created[0].init?.body))).toEqual({ cwd: "/w", resume: "s1" });
+    expect(useAppStore.getState().error).toBeNull();
   });
 });

@@ -182,8 +182,11 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `default_reasoning_effort` 读时忽略、下次写盘即消失。
 - **改档位靠重开会话**：控制协议里没有 `set_effort`，`--effort` 只在启动时固定。
   前端 `applyEffortChange` 判断：空闲就 `DELETE /api/session?id=` + `POST /api/session
-  {cwd, resume:id}`（同一 id，`--resume` 保住上下文），进行中则等 `result` 到达再重开；
-  还没发过消息的对话没有转录，`--resume` 会失败，那种情况直接新建。
+  {cwd, resume:id}`（同一 id，`--resume` 保住上下文），进行中则等 `result` 到达再重开。
+- **跨提供商换模型同理，而且不要新建对话**：`ANTHROPIC_BASE_URL` / 密钥是进程启动时的
+  环境变量，CLI 没有改它们的控制请求，只能重启进程；前端走同一条 `restartSession`。
+  还没发过消息的对话没有转录，`POST {resume}` 由网关改用 `StartFresh` 按**同一个 UUID**
+  `--session-id` 新建（见 5.2），所以**不需要**换 id，前端也不要自己 close + create。
 - 界面偏好 `locale`（zh/en）、`font_size`（12–20）、
   `proxy_url`（**只收 http/https**，空=直连）落在 `settings.json`；
   **主题不在这里**：`theme` 只缓存在浏览器 localStorage（每台设备各看各的），

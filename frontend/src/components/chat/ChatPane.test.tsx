@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatPane, CONN_BAR_DELAY } from "./ChatPane";
 import { useAppStore } from "../../store/useAppStore";
+import { askConfirm } from "../common/SystemDialogs";
 import type { ConversationInfo, SessionInfo } from "../../transport/types";
 import { resetBusyEnterCache, setBusyEnter } from "../../lib/busyEnter";
+
+vi.mock("../common/SystemDialogs", () => ({ askConfirm: vi.fn(), askPrompt: vi.fn() }));
 
 function conv(over: Partial<ConversationInfo> = {}): ConversationInfo {
   return {
@@ -50,6 +53,7 @@ function setup(activeId: string | null, conversations: ConversationInfo[], sessi
 
 beforeEach(() => {
   useAppStore.setState({ settings: null } as never);
+  vi.mocked(askConfirm).mockReset();
   // 「繁忙时的发送行为」是模块级缓存的偏好：每个用例从默认的「排队」开始。
   localStorage.removeItem("ccweb-busy-enter");
   resetBusyEnterCache();
@@ -180,5 +184,58 @@ describe("ChatPane 连接横幅", () => {
       useAppStore.setState({ conns: { c1: { state: "closed" } } } as never);
     });
     expect(screen.getByText(/连接已关闭/)).toBeInTheDocument();
+  });
+});
+
+describe("ChatPane 跨提供商切模型", () => {
+  // 地址与密钥在进程启动时固定：换提供商必须重启进程（同一对话 id），
+  // 而重启会中断正在跑的一轮，所以选择之前要二次确认。
+  const settings = {
+    providers: [
+      { id: "gw-a", name: "网关 A", models: ["deepseek"], model_meta: {} },
+      { id: "gw-b", name: "网关 B", models: ["qwen"], model_meta: {} },
+    ],
+    selected: { provider: "gw-a", model: "deepseek", effort: "" },
+  };
+
+  function setupProviderSwitch(state: "busy" | "ready", answer: boolean) {
+    const selectModel = vi.fn();
+    setup(
+      "c1",
+      [conv({ messages: 2 })],
+      [{ id: "c1", cwd: "/data/ws", state, provider: "gw-a", model: "deepseek" }],
+    );
+    act(() => {
+      useAppStore.setState({ settings: settings as never, selectModel } as never);
+    });
+    // 确认框的答案要在点击之前就绪：点下去就会立刻 await 它。
+    vi.mocked(askConfirm).mockResolvedValue(answer);
+    // 模型菜单是两级：一级「模型」→ 二级里点另一家的模型。
+    fireEvent.click(screen.getByRole("button", { name: "模型与推理等级" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /模型/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /qwen/ }));
+    return selectModel;
+  }
+
+  it("确认前不动会话：取消就不发设置、不重启", async () => {
+    const selectModel = setupProviderSwitch("ready", false);
+
+    await waitFor(() => expect(askConfirm).toHaveBeenCalled());
+    expect(selectModel).not.toHaveBeenCalled();
+  });
+
+  it("确认之后才交给 store（同一 id 重启）", async () => {
+    const selectModel = setupProviderSwitch("ready", true);
+
+    await waitFor(() => expect(selectModel).toHaveBeenCalledWith("gw-b", "qwen", ""));
+  });
+
+  it("正在进行的一轮也照样确认，文案写明会被中断", async () => {
+    setupProviderSwitch("busy", false);
+
+    await waitFor(() => expect(askConfirm).toHaveBeenCalled());
+    const options = vi.mocked(askConfirm).mock.calls[0][0];
+    expect(String(options.message)).toContain("正在进行的一轮会被中断");
+    expect(options.confirmText).toBe("重启并切换");
   });
 });

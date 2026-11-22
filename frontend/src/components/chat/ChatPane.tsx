@@ -21,6 +21,7 @@ import { copyText } from "../../lib/clipboard";
 import { downloadFile, sessionLogName } from "../../lib/download";
 import { useLocale, useT } from "../../lib/i18n";
 import { BrandMark, IconAlert, IconRetry } from "../common/Icons";
+import { askConfirm } from "../common/SystemDialogs";
 import { backgroundTasks, subagentsOnly } from "../../lib/backgroundTasks";
 import { runningTool } from "../../lib/process";
 import { draftKeyFor } from "../../lib/drafts";
@@ -74,6 +75,7 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
   const steerQueued = useAppStore((s) => s.steerQueued);
   const interrupt = useAppStore((s) => s.interrupt);
   const selectModel = useAppStore((s) => s.selectModel);
+  const restartSession = useAppStore((s) => s.restartSession);
   const setPermissionMode = useAppStore((s) => s.setPermissionMode);
   const replyPermission = useAppStore((s) => s.replyPermission);
   const retryConnection = useAppStore((s) => s.retryConnection);
@@ -198,7 +200,49 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
   const selectedKey = selected && selected.provider && selected.model ? `${selected.provider}/${selected.model}` : "";
   const selectedOption = findOption(modelOptions, selected?.provider ?? "", selected?.model ?? "");
   const selectedEffort = effortFor(selectedOption?.spec, selected?.effort);
-  const mismatch = Boolean(session?.provider) && Boolean(selected?.provider) && session!.provider !== selected!.provider;
+  // 只有「进程真的在用某个提供商跑着」时这个差异才需要处理：没有活着的进程时，
+  // 下一次打开/发消息本来就会按当前选择启动。判定不看 conversation 上存的值
+  // （那是上一次进程留下的快照，进程已经结束的话它说明不了什么）。
+  // 正在按新设置重启（starting）时也不提示：那一刻的差异是过渡态，马上就消失。
+  const mismatch =
+    Boolean(liveSession) &&
+    state !== "starting" &&
+    Boolean(selected?.provider) &&
+    (liveSession!.provider ?? "") !== selected!.provider;
+
+  /** 提供商显示名（找不到就用 id）：确认框里要让人认得出是从哪家换到哪家。 */
+  const providerName = (id?: string) => {
+    if (!id) return t("未选择", "None");
+    return modelOptions.find((o) => o.provider === id)?.providerName || id;
+  };
+
+  /**
+   * 跨提供商切换必须重启进程：地址与密钥在进程启动时通过环境变量固定，CLI 没有
+   * 能改它们的控制请求。对话 id 与转录不变（`restartSession` 按同一 id resume），
+   * 但正在进行的一轮会被中断，所以这一步要二次确认。
+   */
+  const confirmProviderRestart = (from: string | undefined, to: string) =>
+    askConfirm({
+      title: t("切换提供商", "Switch provider"),
+      message: busy
+        ? t(
+            `当前会话的进程是用「${providerName(from)}」启动的，切换到「${providerName(to)}」需要重启 claude 进程才能生效。对话记录与上下文都会保留，正在进行的一轮会被中断。`,
+            `This session was started with "${providerName(from)}"; switching to "${providerName(to)}" requires restarting the claude process. The conversation and its context are kept, but a running turn will be interrupted.`,
+          )
+        : t(
+            `当前会话的进程是用「${providerName(from)}」启动的，切换到「${providerName(to)}」需要重启 claude 进程才能生效。对话记录与上下文都会保留。`,
+            `This session was started with "${providerName(from)}"; switching to "${providerName(to)}" requires restarting the claude process. The conversation and its context are kept.`,
+          ),
+      confirmText: t("重启并切换", "Restart and switch"),
+    });
+
+  /** 设置页改了提供商之后的补救入口：重启当前进程让它生效（同样要确认）。 */
+  const restartForProvider = async () => {
+    if (!liveSession) return;
+    if (await confirmProviderRestart(liveSession.provider, selected?.provider ?? "")) {
+      await restartSession(liveSession.id);
+    }
+  };
 
   // 还没开始的新对话（点了「新对话」但一条消息都没发）也用居中布局，
   // 否则新建后立刻掉回贴底布局，工作区选择器也跟着消失。
@@ -388,7 +432,19 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
       {mismatch && (
         <div className="mx-auto flex w-full max-w-[820px] items-start gap-2 px-4 pb-1 text-[11px] text-warn md:px-6">
           <IconAlert size={13} className="mt-0.5 shrink-0" />
-          {t(`当前会话使用的是「${session?.provider}」，与所选模型的提供商不同。切换提供商的模型需要新建会话。`, `This session uses "${session?.provider}", which differs from the selected model's provider. Start a new session to switch providers.`)}
+          <span className="min-w-0 flex-1">
+            {t(
+              `当前会话的进程是用「${providerName(liveSession?.provider)}」启动的，与所选模型的提供商「${providerName(selected?.provider)}」不同。重启会话进程后生效，对话与上下文都会保留。`,
+              `This session was started with "${providerName(liveSession?.provider)}", but the selected model uses "${providerName(selected?.provider)}". Restart the session process to apply it; the conversation and its context are kept.`,
+            )}
+          </span>
+          <button
+            type="button"
+            onClick={() => void restartForProvider()}
+            className="shrink-0 rounded-full border border-current/20 px-2 py-0.5 font-medium hover:bg-black/5"
+          >
+            {t("重启生效", "Restart")}
+          </button>
         </div>
       )}
 
@@ -496,10 +552,32 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
             onSelectModel={(provider, model) => {
               const opt = findOption(modelOptions, provider, model);
               // 新模型也支持当前档位就沿用它；否则回到「默认」（不声明推理等级）。
-              void selectModel(provider, model, effortFor(opt?.spec, selectedEffort));
+              const effort = effortFor(opt?.spec, selectedEffort);
+              // 跨提供商 = 要换进程启动时的地址/密钥，只能重启（同一对话 id）。
+              // 这一步会中断正在跑的一轮，先确认；同一提供商仍然热切换。
+              if (liveSession && (liveSession.provider ?? "") !== provider) {
+                void (async () => {
+                  if (await confirmProviderRestart(liveSession.provider, provider)) {
+                    await selectModel(provider, model, effort);
+                  }
+                })();
+                return;
+              }
+              void selectModel(provider, model, effort);
             }}
             onSelectEffort={(effort) => {
-              if (selected?.provider && selected.model) void selectModel(selected.provider, selected.model, effort);
+              if (!selected?.provider || !selected.model) return;
+              // 设置里的提供商与当前进程不同（多半是之前重启失败了）：改档位同样会
+              // 触发重启，走同一个确认，别让这条路绕过「切提供商要确认」。
+              if (liveSession && (liveSession.provider ?? "") !== selected.provider) {
+                void (async () => {
+                  if (await confirmProviderRestart(liveSession.provider, selected.provider)) {
+                    await selectModel(selected.provider, selected.model, effort);
+                  }
+                })();
+                return;
+              }
+              void selectModel(selected.provider, selected.model, effort);
             }}
             onPermissionMode={(m) => setPermissionMode(m)}
             onSend={(text, attachments, opts) => sendPrompt(text, attachments, t("附件：", "File: "), opts)}

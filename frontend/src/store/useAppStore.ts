@@ -36,7 +36,6 @@ import {
 } from "../lib/usage";
 import { localWorkFrom, NO_LOCAL_WORK, type LocalWork } from "../lib/localWork";
 import { effortApply } from "../lib/providerForm";
-import { isNewChat } from "../lib/newChat";
 import { openFnosFileManager } from "../lib/fnos";
 import { draftKeyFor, dropDraft, moveDraft } from "../lib/drafts";
 import { userBubblePayload } from "../lib/attachments";
@@ -1323,8 +1322,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   // 选中模型 = 动态指定 CLI 的默认模型。
-  // 同一提供商下可以热切换（发 set_model）；跨提供商必须新建会话，
-  // 因为地址与密钥在进程启动时就固定了。
+  // 同一提供商下可以热切换（发 set_model）；跨提供商必须重启进程——地址与密钥是
+  // 进程启动时通过环境变量固定的，CLI 没有能改它们的控制请求。但**不新建对话**：
+  // 按同一 id 关掉再 `--resume`（没发过消息的空对话由后端 StartFresh 同 id 新建），
+  // 转录与上下文都保留。二次确认在 ChatPane 的 onSelectModel 里做（重启会中断
+  // 正在进行的一轮），这里只负责执行。
   selectModel: async (provider, model, effort) => {
     const ok = await get().saveSettings({ selected: { provider, model, effort } });
     if (!ok) return;
@@ -1344,14 +1346,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
 
     // 提供商不同（含「会话创建时还没选模型」这种 provider 为空的情况）：
-    // 地址与密钥在进程启动时就已经固定，改不了。必须重建会话。
-    if ((get().states[id] ?? sess.state) === "busy") {
-      set({ error: "本轮还在运行，无法切换提供商；等这一轮结束再切，或先点中断" });
-      return;
-    }
-    const cwd = sess.cwd;
-    await get().closeSession(id);
-    await get().createSession(cwd);
+    // 重开同一个对话，不在这里另起一条。
+    await get().restartSession(id);
   },
 
   fetchModelsFor: async (form) => {
@@ -2237,43 +2233,34 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const conv = get().conversations.find((c) => c.id === id);
     const cwd = sess?.cwd || conv?.cwd;
     if (!cwd) return false;
-    // 还没发过消息的对话没有转录，`--resume` 会找不到会话：关掉后按新设置新建一个
-    // （它本来就没有上下文可丢）。这里不走 createSession：它的「已经在空对话里就
-    // 不新建」守卫是给「新对话」按钮用的，正好会把这次重开挡掉。
-    if (isNewChat(conv, (get().items[id] ?? []).length)) {
-      get().disconnect(id);
-      try {
-        await apiFetch(`/api/session?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-        const info = await apiFetch<SessionInfo>("/api/session", {
-          method: "POST",
-          body: JSON.stringify({ cwd }),
-        });
-        await Promise.all([get().refreshSessions(), get().refreshConversations()]);
-        // 换 id 但对话还是同一条（本来就没有上下文）：输入框里的草稿跟着过去。
-        moveDraft(id, info.id);
-        // 只有本来就是当前对话才把界面切到新 id：侧栏的「重启进程」也能对**后台**的
-        // 空对话下手，那时用户还在看别的对话，不该被顶到一条新的空对话上。
-        if (get().activeId === id) {
-          get().setActive(info.id);
-          get().connect(info.id);
-        }
-        return true;
-      } catch (e) {
-        set({ error: errText(e) });
-        return false;
-      }
-    }
     // 先断开自己的 WS：重开前旧进程会广播 closed，收下它等于把界面标成已结束。
     // 同时把连接标成 connecting：重开期间发送按钮必须禁用，否则消息会写进旧管道。
+    //
+    // 主动断开之后 **不会** 再收到那条 `closed`（见 applyEvent 的 closed 分支），
+    // 所以这里要自己把「进程没了」的收尾做掉：悬着的流式光标、挂起审批、本回合用量、
+    // 本地「正在压缩 / hook 在跑」的状态。少了这一步，切提供商 / 主动重启时正在跑的
+    // 那一轮会留下一个永远在闪的光标，审批卡片也会一直挂到下次快照。
     get().disconnect(id);
-    set((s) => ({ conns: { ...s.conns, [id]: { state: "connecting" } }, states: { ...s.states, [id]: "starting" } }));
+    const cur = get().items[id];
+    dropAskDrafts(get().perms[id]);
+    localWorkAt.delete(id);
+    set((s) => ({
+      ...(cur ? { items: { ...s.items, [id]: settleStreaming(cur) } } : {}),
+      perms: { ...s.perms, [id]: [] },
+      ...(s.usage[id] ? { usage: { ...s.usage, [id]: settleTurnUsage(s.usage[id])! } } : {}),
+      conns: { ...s.conns, [id]: { state: "connecting" } },
+      states: { ...s.states, [id]: "starting" },
+    }));
     try {
       await apiFetch(`/api/session?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      // **同一个 id** 重新拉起：有转录走 `--resume`；还没发过消息的空对话没有转录，
+      // 后端会改用 `StartFresh` 用同一个 UUID `--session-id` 新建（见根 AGENTS 4.4）。
+      // 不要在这里换成新 id：那会凭空多出一条「新对话」，用户正在看的这条却被丢下。
       const info = await apiFetch<SessionInfo>("/api/session", {
         method: "POST",
         body: JSON.stringify({ cwd, resume: id }),
       });
-      await get().refreshSessions();
+      await Promise.all([get().refreshSessions(), get().refreshConversations()]);
       get().connect(info.id);
       return true;
     } catch (e) {

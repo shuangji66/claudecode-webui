@@ -1387,9 +1387,12 @@ src/
   `selectModel` 保存后调 `applyEffortChange`（判定在 `providerForm.effortApply`）：
   空闲就 `close → POST /api/session {resume:id}` 按同一 id 重开（上下文在转录里），
   进行中只记进 `effortRestarts`，等 `result` 到达再重开——不要在 busy 时直接杀进程。
-  **还没发过消息的对话没有转录，`--resume` 一定失败**：这种情况关掉后新建一个
-  （`restartSession` 里单独一条分支，不能走 `createSession`——它的「已在空对话里就不新建」
-  守卫会把重开挡掉）。
+  **跨提供商切模型也不是热切换**：`ANTHROPIC_BASE_URL` / 密钥是进程启动时的环境变量，
+  CLI 没有改它们的控制请求。`selectModel` 遇到 `sess.provider !== provider` 调
+  `restartSession`（同一 id `--resume`，**不新建对话**）；`ChatPane` 在调用前用
+  `askConfirm` 二次确认（重启会中断正在进行的一轮）。`restartSession` 一律发
+  `{cwd, resume:id}`：还没发过消息的空对话没有转录，后端会改用 `StartFresh` 用同一个
+  UUID `--session-id` 新建——前端**不要**自己换成新 id（那会在侧栏堆出「新对话」并丢上下文）。
 - 右上角「更多」是下拉菜单（复制会话为 Markdown / 下载 Session 日志），不要直接打开设置。
 - **全局禁用浏览器自动填充**：`lib/autofill.ts` 在 `App` 挂载时给所有
   `input/textarea` 补 `autocomplete=off`（密码框用 `new-password`）与主流密码管理器的
