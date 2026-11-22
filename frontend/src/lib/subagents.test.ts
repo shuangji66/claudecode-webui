@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runningSubagents, subagentElapsed, subagentEntries, subagentLabel, type SubagentEntry } from "./subagents";
+import { endedElapsed, runningSubagents, subagentElapsed, subagentEntries, subagentLabel, type SubagentEntry } from "./subagents";
 import type { Item, ToolItem } from "./model";
 
 function tool(over: Partial<ToolItem>): ToolItem {
@@ -145,5 +145,24 @@ describe("subagentEntries 回放兜底", () => {
       },
     ];
     expect(subagentEntries(bare)[0].label).toBe("a10");
+  });
+});
+
+// 工具卡片（`AgentCard`）没有「现在几点」，它只算「已结束的耗时」：同一个口径必须和
+// 页头那个列表一致，否则同一条子代理在两处显示两个数。
+describe("endedElapsed（已结束的耗时，卡片与列表共用）", () => {
+  it("CLI 的 durationMs 优先：那是它自己的计时口径", () => {
+    expect(endedElapsed({ totalTokens: 1, durationMs: 5_000 }, 1_000, 9_000)).toBe(5_000);
+  });
+
+  it("没有 durationMs 时用收尾时刻 - 启动时刻（重启后只有这两个数）", () => {
+    expect(endedElapsed({ totalTokens: 47_200 }, 1_000, 28_000)).toBe(27_000);
+  });
+
+  it("缺一头就不编一个数（0s 是假耗时）", () => {
+    expect(endedElapsed(undefined, 1_000, undefined)).toBeUndefined();
+    expect(endedElapsed({ totalTokens: 1 }, undefined, 28_000)).toBeUndefined();
+    // durationMs 为 0 也不算数（流式中间态上报的 0）。
+    expect(endedElapsed({ totalTokens: 1, durationMs: 0 }, 1_000, undefined)).toBeUndefined();
   });
 });

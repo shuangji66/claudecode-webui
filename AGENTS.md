@@ -982,6 +982,9 @@ hub ── manager ── session ── process ── claude (NDJSON)
   （截图复现过「0s」）；`subagentElapsed` 对 `background` 条目在没有 `endedAt` 时
   宁可不显示。恢复出来的 usage 只有 `totalTokens`，`toolUses` / `durationMs` 可以缺，
   界面不能拿 0 补齐。
+  **恢复出来的 `endedAt` 三个消费方共用**（`lib/subagents.endedElapsed`）：页头列表的
+  运行时间、工具卡片的「N tokens · 02:30」、执行轨迹里那条子代理泳道的收边。
+  漏掉任何一处，同一个子代理就会在两个地方给出不同的说法（轨迹里甚至只剩一根线）。
 - **子代理自己的转录里每一行都是 `isSidechain: true`**：`applyCLI` 默认丢掉 sidechain
   （主消息流要丢），回放子代理对话必须传 `{sidechain:true}`——漏了的话面板显示
   「子代理还没有输出」，重启后才能复现（实时走的是 `subagentItems`，不经过这条过滤）。

@@ -78,25 +78,39 @@ export function runningSubagents(entries: SubagentEntry[]): number {
 }
 
 /**
+ * **已结束**的子代理耗时：CLI 的 `usage.durationMs` 优先，其次「收尾时刻 - 启动时刻」。
+ *
+ * 两个来源的权威性不同：`duration_ms` 来自 CLI 的结束通知（它自己的计时口径）；
+ * `endedAt` 是子代理转录最后一行的时刻，只有重启后从磁盘恢复时才拿得到（见
+ * `history.subagentStates`）。调用方自己决定 `endedAt` 该取哪个字段——列表里
+ * 后台子代理的 `finishedAt` 是**启动回执**到达的时刻（几乎等于启动时刻），拿它算会
+ * 得到「0s」，所以那里传 undefined。
+ */
+export function endedElapsed(
+  usage: SubagentInfo["usage"] | undefined,
+  startedAt: number | undefined,
+  endedAt: number | undefined,
+): number | undefined {
+  const usageMs = usage?.durationMs;
+  if (usageMs !== undefined && usageMs > 0) return usageMs;
+  if (startedAt === undefined || endedAt === undefined) return undefined;
+  return Math.max(0, endedAt - startedAt);
+}
+
+/**
  * 一个子代理跑了多久（毫秒），没数据时返回 undefined。
  *
  * - **运行中**：按墙钟算（`now - startedAt`）。CLI 的 `usage.duration_ms` 只在
  *   `task_progress` 到达时刷新，两个工具调用之间可能几十秒没有新帧——只看它，秒数会停住。
- * - **已结束**：优先用 CLI 的 `usage.durationMs`（结束通知里的权威值，含它自己的计时口径），
- *   没有再退回「收尾时刻 - 启动时刻」（转录回放只有这两个时间戳）。
+ * - **已结束**：见 `endedElapsed`。
  */
 export function subagentElapsed(entry: SubagentEntry, now: number): number | undefined {
-  const usageMs = entry.usage?.durationMs;
   if (entry.status === "running" && entry.startedAt !== undefined) {
     return Math.max(0, now - entry.startedAt);
   }
-  if (usageMs !== undefined && usageMs > 0) return usageMs;
   // 后台子代理的 `finishedAt` 是**启动回执**到达的时刻（几乎等于启动时刻），拿它算会
   // 得到「0s」——那是个假的耗时，宁可不显示。真实收尾时刻只有子代理转录里才有
   // （重启后由 settleSubagents 回填成 endedAt）。
   const end = entry.endedAt ?? (entry.background ? undefined : entry.finishedAt);
-  if (entry.startedAt !== undefined && end !== undefined) {
-    return Math.max(0, end - entry.startedAt);
-  }
-  return undefined;
+  return endedElapsed(entry.usage, entry.startedAt, end);
 }

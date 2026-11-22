@@ -41,6 +41,33 @@ describe("AgentCard", () => {
     expect(screen.getByText("00:03")).toBeInTheDocument();
   });
 
+  // 重启后 CLI 的结束通知已经不在了（它只出现在 stdout 上）：用量只剩 token 数、
+  // 耗时只剩「转录里的收尾时刻 - 启动时刻」。两个都要显示出来，而且工具次数不能拿 0 补
+  // （「0 次工具」是假数据）。
+  it("重启后从转录恢复的用量：token + 耗时，不编工具次数", () => {
+    render(
+      <AgentCard
+        item={agentTool({
+          ts: 1_000,
+          result: "done",
+          subagent: {
+            taskId: "task-1",
+            agentId: "abc123",
+            status: "stopped",
+            background: true,
+            endedAt: 151_000,
+            usage: { totalTokens: 47_200 },
+          },
+        })}
+      />,
+    );
+    // `formatTokens` 按 1024 进制：47200 → 46.1K。
+    expect(screen.getByText(/46\.1K tokens/)).toBeInTheDocument();
+    // 150 秒 → 02:30（`formatDuration` 固定分:秒）。
+    expect(screen.getByText("02:30")).toBeInTheDocument();
+    expect(screen.queryByText(/次工具/)).toBeNull();
+  });
+
   it("点「查看对话」把请求放进 store", () => {
     render(<AgentCard item={agentTool()} />);
     fireEvent.click(screen.getByText("查看对话"));

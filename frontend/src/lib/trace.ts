@@ -227,8 +227,13 @@ export function traceTurns(items: Item[], running = true, now = Date.now()): Tra
         const usageEnd = usageMs > 0 ? ts + usageMs : undefined;
         const doneAt = tool.doneAt;
         const tail = doneAt ?? (live ? now : turnEnd);
-        // 三个边界取最晚：启动时刻、结果落地、task 用量——后台子代理只给得出后者。
-        const spanEnd = Math.max(ts, tail, usageEnd ?? 0);
+        // 重启后那条 task 通知不在了（它只出现在 stdout 上），磁盘上还剩的收尾时刻是
+        // 子代理自己转录的最后一行（`history.subagentStates` 读出来、`settleSubagents`
+        // 回填成 `subagent.endedAt`）。不认它，一个跑了十分钟的后台子代理在泳道上
+        // 就只剩启动回执那么一根线。
+        const recoveredEnd = tool.subagent?.endedAt;
+        // 四个边界取最晚：启动时刻、结果落地、task 用量、转录恢复的收尾时刻。
+        const spanEnd = Math.max(ts, tail, usageEnd ?? 0, recoveredEnd ?? 0);
         const runningNow = live && doneAt === undefined && !subagentSettled(tool);
         /**
          * 并行的任务不占用「主循环的下一步」：后台子代理跑 40 秒期间，主对话照样在发

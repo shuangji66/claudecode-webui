@@ -4,6 +4,7 @@ import { IconChat, IconSpark, IconStop } from "../common/Icons";
 import type { SubagentInfo, ToolItem } from "../../lib/model";
 import { formatTokens } from "../../lib/usage";
 import { formatDuration } from "../../lib/elapsed";
+import { endedElapsed } from "../../lib/subagents";
 import { useT } from "../../lib/i18n";
 import { useAppStore } from "../../store/useAppStore";
 import { ToolImages } from "./ToolImages";
@@ -34,6 +35,9 @@ export function AgentBody({ item }: { item: ToolItem }) {
   const status: SubagentInfo["status"] =
     sub?.status ?? (item.result === undefined ? "running" : item.isError ? "failed" : "completed");
   const usage = sub?.usage;
+  // 重启后 CLI 的结束通知已经不在（只在 stdout 上），耗时只剩「转录里的收尾时刻 -
+  // 启动时刻」。卡片和页头那个子代理列表用同一个口径（`endedElapsed`）。
+  const elapsed = endedElapsed(usage, item.ts, sub?.endedAt);
 
   return (
     <>
@@ -42,18 +46,19 @@ export function AgentBody({ item }: { item: ToolItem }) {
           {usage && (
             <div className="flex flex-wrap items-center gap-2 text-[10.5px] text-muted">
               <span>{formatTokens(usage.totalTokens)} tokens</span>
-              {/* 工具次数与耗时只有 CLI 的进度/结束通知才给：重启后从子代理转录恢复的
-                  那份用量只有 token 数，这里不能拿 0 补齐（「0 次工具 · 00:00」是假数据）。 */}
+              {/* 工具次数只有 CLI 的进度/结束通知才给：重启后从子代理转录恢复的那份用量
+                  只有 token 数，这里不能拿 0 补齐（「0 次工具」是假数据）。耗时能用
+                  `endedAt - ts` 复原，见上面的 `elapsed`。 */}
               {usage.toolUses !== undefined && (
                 <>
                   <span>·</span>
                   <span>{t(`${usage.toolUses} 次工具`, `${usage.toolUses} tool calls`)}</span>
                 </>
               )}
-              {usage.durationMs !== undefined && (
+              {elapsed !== undefined && (
                 <>
                   <span>·</span>
-                  <span>{formatDuration(usage.durationMs)}</span>
+                  <span>{formatDuration(elapsed)}</span>
                 </>
               )}
             </div>

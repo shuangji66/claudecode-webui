@@ -138,6 +138,35 @@ describe("traceTurns", () => {
     expect(turns[0].subagentCount).toBe(1);
   });
 
+  // 重启后 stdout 上那条 task 通知已经不在：CLI 的 duration_ms 没了，磁盘上只剩
+  // 子代理自己转录的收尾时刻。不认 endedAt 的话，跑了十分钟的后台子代理在泳道上
+  // 只占启动回执那么一根线（看起来像「什么也没干」）。
+  it("重启后用转录恢复的收尾时刻收边", () => {
+    const turns = traceTurns(
+      list(
+        user("u1", 1_000),
+        assistant("a1", 2_000, "派一个"),
+        tool("t1", 2_000, 2_100, {
+          name: "Agent",
+          toolUseId: "tu-agent",
+          input: { description: "查依赖" },
+          subagent: {
+            taskId: "task-1",
+            agentId: "agent-1",
+            status: "stopped",
+            background: true,
+            endedAt: 32_000,
+            // 恢复出来的用量只有 token 数：工具次数与耗时不在这里。
+            usage: { totalTokens: 47_200 },
+          },
+        }),
+      ),
+      false,
+    );
+    const span = turns[0].spans.find((s) => s.lane === "subagent")!;
+    expect(span.end).toBe(32_000);
+  });
+
   it("系统事件画成零时长的标记（压缩、报错不会凭空占一段时间）", () => {
     const turns = traceTurns(
       list(
