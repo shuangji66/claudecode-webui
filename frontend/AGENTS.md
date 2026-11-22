@@ -1254,6 +1254,10 @@ src/
     和触发器脱节。菜单高度上限由定位层给出（`panelMaxHeight()`），内部滚动。
     **估算高度必须把分组标题算进去**（`menuHeight()`）：漏算时估算比内容矮，明明下方
     空间够也会被裁出一条滚动条（侧栏「分组 / 排序 / 筛选」菜单就是这么踩的）。
+    **有可展开的详情（`MenuItem.detail`）时不能按折叠态的估算封顶**：那块内容的真实
+    高度只有渲染后才知道（后台操作默认展开态 30px/行，命令原文能有两三行），按估算
+    （再被 `MIN_PANEL_HEIGHT` 抬到 120px）封顶会让「就地展开」变成在一条缝里滚动。
+    面板自身没有固定高度，放宽到 `panelMaxHeight()` 不会留下空白。
     `panelMaxHeight()` 取 80vh / 560px：60vh 在手机竖屏只有 274px，够不着普通菜单。
   - 确认 / 输入走 `askConfirm` / `askPrompt`（`SystemDialogs` 在 `App` 挂一次），
     **禁止 `window.confirm` / `window.prompt` / `window.alert`**。

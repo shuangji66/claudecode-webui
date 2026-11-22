@@ -423,7 +423,18 @@ export function Menu({
   attachTo = null,
 }: MenuProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const height = menuHeight(items);
+  /**
+   * 首选高度：决定向上还是向下展开，同时是 `maxHeight` 的上限。
+   *
+   * 有可展开的详情（`MenuItem.detail`）时不能再用折叠态的估算封顶：那块内容的真实高度
+   * 只有渲染之后才知道（命令原文能有两三行、还可能带进度说明），按 30px/行 估出来的
+   * 值又被 `MIN_PANEL_HEIGHT` 抬到 120px——点开一行就只能在那条 120px 的窗口里滚动，
+   * 详情被裁成一条缝。面板本身没有固定高度（高度由内容决定，`maxHeight` 只是上限），
+   * 所以这里放宽到通用上限不会留下空白。
+   */
+  const height = items.some((it) => it.detail !== undefined)
+    ? Math.max(menuHeight(items), panelMaxHeight())
+    : menuHeight(items);
   // 正在等第二下确认的那一行（`trailing.confirmLabel` 的行尾按钮）。
   const [confirming, setConfirming] = useState<string | null>(null);
   // 两个定位 hook 都调用（hook 不能条件调用），没在用的那个收到 open=false 只返回 null。
