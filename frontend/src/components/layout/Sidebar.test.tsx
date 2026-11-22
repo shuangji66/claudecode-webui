@@ -1032,9 +1032,9 @@ describe("Sidebar 工作区拖动排序", () => {
     const { container } = renderSidebar();
     const [a] = sizedRows(container);
 
-    fireEvent.pointerDown(a, { pointerType: "mouse", button: 0, pointerId: 1, clientX: 8, clientY: 20 });
-    fireEvent.pointerMove(a, { pointerType: "mouse", pointerId: 1, clientX: 8, clientY: 115 });
-    fireEvent.pointerUp(a, { pointerType: "mouse", pointerId: 1, clientX: 8, clientY: 115 });
+    fireEvent.pointerDown(a, { pointerType: "mouse", button: 0, buttons: 1, pointerId: 1, clientX: 8, clientY: 20 });
+    fireEvent.pointerMove(a, { pointerType: "mouse", buttons: 1, pointerId: 1, clientX: 8, clientY: 115 });
+    fireEvent.pointerUp(a, { pointerType: "mouse", buttons: 0, pointerId: 1, clientX: 8, clientY: 115 });
 
     expect(order(container)).toEqual(["/w/b", "/w/c", "/w/a"]);
     expect(JSON.parse(localStorage.getItem("ccweb-workspace-order") ?? "[]")).toEqual([
@@ -1050,9 +1050,9 @@ describe("Sidebar 工作区拖动排序", () => {
     const [, b] = sizedRows(container);
     const c = container.querySelector<HTMLElement>('[data-workspace="/w/c"]')!;
 
-    fireEvent.pointerDown(c, { pointerType: "mouse", button: 0, pointerId: 2, clientX: 8, clientY: 100 });
-    fireEvent.pointerMove(c, { pointerType: "mouse", pointerId: 2, clientX: 8, clientY: 45 });
-    fireEvent.pointerUp(c, { pointerType: "mouse", pointerId: 2, clientX: 8, clientY: 45 });
+    fireEvent.pointerDown(c, { pointerType: "mouse", button: 0, buttons: 1, pointerId: 2, clientX: 8, clientY: 100 });
+    fireEvent.pointerMove(c, { pointerType: "mouse", buttons: 1, pointerId: 2, clientX: 8, clientY: 45 });
+    fireEvent.pointerUp(c, { pointerType: "mouse", buttons: 0, pointerId: 2, clientX: 8, clientY: 45 });
 
     expect(order(container)).toEqual(["/w/a", "/w/c", "/w/b"]);
     expect(b).not.toBeNull();
@@ -1066,8 +1066,8 @@ describe("Sidebar 工作区拖动排序", () => {
     const button = b.querySelector("button")!;
 
     expect(button).toHaveAttribute("aria-expanded", "false");
-    fireEvent.pointerDown(b, { pointerType: "mouse", button: 0, pointerId: 3, clientX: 8, clientY: 60 });
-    fireEvent.pointerUp(b, { pointerType: "mouse", pointerId: 3, clientX: 8, clientY: 61 });
+    fireEvent.pointerDown(b, { pointerType: "mouse", button: 0, buttons: 1, pointerId: 3, clientX: 8, clientY: 60 });
+    fireEvent.pointerUp(b, { pointerType: "mouse", buttons: 0, pointerId: 3, clientX: 8, clientY: 61 });
     fireEvent.click(button);
 
     expect(order(container)).toEqual(paths);
@@ -1080,9 +1080,9 @@ describe("Sidebar 工作区拖动排序", () => {
     const { container } = renderSidebar();
     const [a] = sizedRows(container);
 
-    fireEvent.pointerDown(a, { pointerType: "touch", pointerId: 4, clientX: 8, clientY: 20 });
-    fireEvent.pointerMove(a, { pointerType: "touch", pointerId: 4, clientX: 8, clientY: 60 });
-    fireEvent.pointerUp(a, { pointerType: "touch", pointerId: 4, clientX: 8, clientY: 60 });
+    fireEvent.pointerDown(a, { pointerType: "touch", buttons: 1, pointerId: 4, clientX: 8, clientY: 20 });
+    fireEvent.pointerMove(a, { pointerType: "touch", buttons: 1, pointerId: 4, clientX: 8, clientY: 60 });
+    fireEvent.pointerUp(a, { pointerType: "touch", buttons: 0, pointerId: 4, clientX: 8, clientY: 60 });
 
     expect(order(container)).toEqual(paths);
   });
@@ -1093,15 +1093,103 @@ describe("Sidebar 工作区拖动排序", () => {
     const { container } = renderSidebar();
     const [a] = sizedRows(container);
 
-    fireEvent.pointerDown(a, { pointerType: "touch", pointerId: 5, clientX: 8, clientY: 20 });
+    fireEvent.pointerDown(a, { pointerType: "touch", buttons: 1, pointerId: 5, clientX: 8, clientY: 20 });
     await act(async () => {
       vi.advanceTimersByTime(320);
     });
-    fireEvent.pointerMove(a, { pointerType: "touch", pointerId: 5, clientX: 8, clientY: 115 });
-    fireEvent.pointerUp(a, { pointerType: "touch", pointerId: 5, clientX: 8, clientY: 115 });
+    fireEvent.pointerMove(a, { pointerType: "touch", buttons: 1, pointerId: 5, clientX: 8, clientY: 115 });
+    fireEvent.pointerUp(a, { pointerType: "touch", buttons: 0, pointerId: 5, clientX: 8, clientY: 115 });
 
     expect(order(container)).toEqual(["/w/b", "/w/c", "/w/a"]);
     vi.useRealTimers();
+  });
+
+  // 上一次拖动的 pointerup 丢了（拖出窗口 / Ctrl+点击弹原生菜单 / 元素重挂）时，
+  // 残留的 press 会让之后**只是划过**行的鼠标被当成拖拽。鼠标的 pointerId 恒定，
+  // 光比 pointerId 是拦不住的，必须看 buttons。
+  it("没按键的划过不会起拖拽（pointerup 丢了也不粘手）", () => {
+    seed();
+    const { container } = renderSidebar();
+    const [a, b] = sizedRows(container);
+
+    fireEvent.pointerDown(a, { pointerType: "mouse", button: 0, buttons: 1, pointerId: 1, clientX: 8, clientY: 20 });
+    // 这一次 move 只有「划过」的语义：没有按键（buttons: 0）。
+    fireEvent.pointerMove(b, { pointerType: "mouse", buttons: 0, pointerId: 1, clientX: 8, clientY: 100 });
+
+    expect(container.querySelector(".opacity-50")).toBeNull();
+    expect(order(container)).toEqual(paths);
+    expect(localStorage.getItem("ccweb-workspace-order")).toBeNull();
+  });
+
+  it("拖动中 pointerup 落在窗口上也能收尾（行收不到 up 的兜底）", () => {
+    seed();
+    const { container } = renderSidebar();
+    const [a] = sizedRows(container);
+
+    fireEvent.pointerDown(a, { pointerType: "mouse", button: 0, buttons: 1, pointerId: 1, clientX: 8, clientY: 20 });
+    fireEvent.pointerMove(a, { pointerType: "mouse", buttons: 1, pointerId: 1, clientX: 8, clientY: 115 });
+    fireEvent.pointerUp(window, { pointerType: "mouse", buttons: 0, pointerId: 1, clientX: 8, clientY: 115 });
+
+    // 兜底路径是「取消」，不改顺序，但拖拽状态必须收干净。
+    expect(container.querySelector(".opacity-50")).toBeNull();
+    expect(order(container)).toEqual(paths);
+  });
+
+  it("落点与原来一样时不写 localStorage（不把原始顺序钉死）", () => {
+    seed();
+    const { container } = renderSidebar();
+    const [a] = sizedRows(container);
+
+    // 把第一行拖到第二行的上半：结果与现在完全相同。
+    fireEvent.pointerDown(a, { pointerType: "mouse", button: 0, buttons: 1, pointerId: 1, clientX: 8, clientY: 20 });
+    fireEvent.pointerMove(a, { pointerType: "mouse", buttons: 1, pointerId: 1, clientX: 8, clientY: 50 });
+    fireEvent.pointerUp(a, { pointerType: "mouse", buttons: 0, pointerId: 1, clientX: 8, clientY: 50 });
+
+    expect(order(container)).toEqual(paths);
+    expect(localStorage.getItem("ccweb-workspace-order")).toBeNull();
+  });
+
+  // 长按到点但没挪过：那仍是一次点击。按「激活了就吞 click」处理的话，
+  // 用户点工作区行（尤其触屏上那颗 ⋯ / ＋）会毫无反应。
+  it("长按后不移动就松手：点击照常展开这一组，不被当成拖拽吞掉", async () => {
+    vi.useFakeTimers();
+    seed();
+    const { container } = renderSidebar();
+    const b = sizedRows(container)[1];
+    const button = b.querySelector("button")!;
+
+    fireEvent.pointerDown(b, { pointerType: "touch", buttons: 1, pointerId: 6, clientX: 8, clientY: 60 });
+    await act(async () => {
+      vi.advanceTimersByTime(320);
+    });
+    fireEvent.pointerUp(b, { pointerType: "touch", buttons: 0, pointerId: 6, clientX: 8, clientY: 60 });
+    fireEvent.click(button);
+
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(order(container)).toEqual(paths);
+    vi.useRealTimers();
+  });
+
+  // 触屏上拖拽要长按、键盘根本拿不到落点：菜单里的上移/下移是第二条通道，
+  // 与会话排序的入口保持一致。
+  it("工作区菜单的上移/下移也改顺序（拖拽之外的第二条路）", () => {
+    seed();
+    const { container } = renderSidebar();
+
+    fireEvent.click(screen.getByRole("button", { name: "工作区操作 /w/b" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "上移" }));
+
+    expect(order(container)).toEqual(["/w/b", "/w/a", "/w/c"]);
+    expect(JSON.parse(localStorage.getItem("ccweb-workspace-order") ?? "[]")).toEqual(["/w/b", "/w/a", "/w/c"]);
+  });
+
+  it("首行的「上移」与末行的「下移」不可用", () => {
+    seed();
+    renderSidebar();
+
+    fireEvent.click(screen.getByRole("button", { name: "工作区操作 /w/a" }));
+    expect(screen.getByRole("menuitem", { name: "上移" })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "下移" })).not.toBeDisabled();
   });
 });
 

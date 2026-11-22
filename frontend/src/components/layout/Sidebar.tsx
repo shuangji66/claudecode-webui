@@ -212,8 +212,19 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     el: HTMLElement;
     timer: number | null;
     active: boolean;
+    /**
+     * 活跃之后**真的动过**没有。
+     *
+     * 长按 300ms 已经激活、但手指没移动就松手，那仍是一次点击：`beginWsDrag` 只是
+     * 把行调暗、清了选区，落点还是空的。按「激活了就吞掉这次 click」处理的话，
+     * 用户点了一下工作区行（尤其那颗只在悬停才露出的 ⋯ / ＋）会毫无反应——
+     * 不展开、不出菜单，看起来像界面卡了。
+     */
+    moved: boolean;
     over: { path: string; half: DropHalf } | null;
   } | null>(null);
+  /** 拖动中指针的纵坐标：边缘自动滚动要用（move 可能停在容器外）。 */
+  const wsPointerY = useRef(0);
   /** 拖动结束后浏览器还会补一次 click：吞掉它，别把这一组展开/收起。 */
   const wsSuppressClick = useRef(false);
   /** 工作区列表容器：落点只在这一份里量（移动端抽屉与桌面侧栏会同时存在）。 */
@@ -442,20 +453,58 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
    * ------------------------------------------------------------------ */
   const wsReorderable = view.group === "workspace" && query.trim() === "";
 
-  const wsOverAt = (clientY: number): { path: string; half: DropHalf } | null => {
+  /** 工作区行（排除「其他」）：落点只在这一组里算。 */
+  const wsRows = (): HTMLElement[] => {
     const root = wsListRef.current;
-    if (!root) return null;
-    const rows = Array.from(root.querySelectorAll<HTMLElement>("[data-workspace]")).filter(
+    if (!root) return [];
+    return Array.from(root.querySelectorAll<HTMLElement>("[data-workspace]")).filter(
       (row) => row.dataset.workspace && row.dataset.workspace !== OTHER_KEY,
     );
+  };
+
+  const wsOverAt = (clientY: number): { path: string; half: DropHalf } | null => {
+    const rows = wsRows();
     if (rows.length === 0) return null;
     for (const row of rows) {
-      const rect = row.getBoundingClientRect();
-      if (clientY < rect.top + rect.height / 2) {
+      // 落点的上/下半与提示线用同一份判定（`dropHalf`），别在这里再写一次中线。
+      if (dropHalf(clientY, row.getBoundingClientRect()) === "before") {
         return { path: row.dataset.workspace!, half: "before" };
       }
     }
     return { path: rows[rows.length - 1].dataset.workspace!, half: "after" };
+  };
+
+  /** 屏幕此刻的工作区顺序（已应用保存的偏好）：拖拽与菜单的上移/下移共用基准。 */
+  const wsCurrentOrder = () =>
+    groups.filter((g) => g.path !== FLAT_KEY && g.path !== OTHER_KEY).map((g) => g.path);
+
+  /**
+   * 落盘一份新顺序。**顺序没变就什么都不写**：拖到相邻行的「等价位置」
+   * （把第 1 行拖到第 2 行上半）算出来的数组与原来一模一样，写进去只会让
+   * 整列重渲染 + 多一次同步 localStorage 写入，还会在用户根本没改过顺序时
+   * 把后端的原始排序永久钉死（之后新增的工作区只能落末尾）。
+   */
+  const commitWsOrder = (next: string[]) => {
+    const current = wsCurrentOrder();
+    if (next.length === current.length && next.every((p, i) => p === current[i])) return;
+    setWsOrder(next);
+    saveWorkspaceOrder(next);
+  };
+
+  /** 菜单里的上移/下移：触屏没有拖拽习惯、键盘也拿不到落点，总得有第二条通道。 */
+  const stepWsOrder = (path: string, delta: -1 | 1) => {
+    const current = wsCurrentOrder();
+    const i = current.indexOf(path);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= current.length) return;
+    commitWsOrder(movePath(current, path, current[j], delta < 0 ? "before" : "after"));
+  };
+
+  /** 这一行还能不能往那个方向挪（首/末行的菜单项置灰）。 */
+  const wsCanStep = (path: string, delta: -1 | 1) => {
+    const current = wsCurrentOrder();
+    const i = current.indexOf(path);
+    return i >= 0 && i + delta >= 0 && i + delta < current.length;
   };
 
   const beginWsDrag = () => {
@@ -473,13 +522,19 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     }
     // 拖动中别顺手把标题选中。
     window.getSelection()?.removeAllRanges();
+    wsPointerY.current = press.y;
     setWsDrag({ path: press.path, over: null });
   };
 
   const onWsPointerDown = (e: ReactPointerEvent<HTMLDivElement>, g: WorkspaceGroup) => {
     if (!wsReorderable || g.path === OTHER_KEY || !g.exists) return;
-    if (e.pointerType === "mouse" && e.button !== 0) return;
+    // 鼠标/手写笔只认主键；`button` 对触摸恒为 0。
+    if (e.pointerType !== "touch" && e.button !== 0) return;
+    // 已经有别的指针在拖（多指）：不要顶掉那一个，否则第一根手指松手时
+    // 会按第二个 press 的落点提交。
+    if (wsPress.current?.active) return;
     wsSuppressClick.current = false;
+    const mouseLike = e.pointerType !== "touch";
     wsPress.current = {
       path: g.path,
       x: e.clientX,
@@ -487,8 +542,10 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       pointerId: e.pointerId,
       el: e.currentTarget,
       active: false,
+      moved: false,
       over: null,
-      timer: e.pointerType === "mouse" ? null : window.setTimeout(beginWsDrag, WS_LONG_PRESS_MS),
+      // 手写笔按鼠标处理：它在触屏上没法「按住不动 300ms」。
+      timer: mouseLike ? null : window.setTimeout(beginWsDrag, WS_LONG_PRESS_MS),
     };
   };
 
@@ -496,6 +553,18 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     const press = wsPress.current;
     if (!press || press.pointerId !== e.pointerId) return;
     if (!press.active) {
+      /**
+       * 没按键还收到 move = 上一次的 `pointerup` 丢了（拖出窗口、Ctrl+点击弹原生
+       * 菜单、元素重挂）。鼠标的 `pointerId` 是恒定的，残留下来的 press 会让之后
+       * **只是划过**任意工作区行的鼠标被当成拖拽：被拖行一直半透明、document 上
+       * 挡 touchmove 的监听还挂着（触摸屏笔记本上整页划不动）。
+       * 与右侧栏分隔线同一条规则（`RightSidebar` 的 `onResizeMove`）。
+       */
+      if (e.buttons === 0) {
+        if (press.timer !== null) window.clearTimeout(press.timer);
+        wsPress.current = null;
+        return;
+      }
       const dx = Math.abs(e.clientX - press.x);
       const dy = Math.abs(e.clientY - press.y);
       if (press.timer !== null) {
@@ -510,13 +579,23 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       if (dx < 6 && dy < 6) return;
       beginWsDrag();
     }
+    wsPointerY.current = e.clientY;
     const over = wsOverAt(e.clientY);
     press.over = over;
+    // 「动过」按与按下点的位移判，不按「收到过 move」：触摸长按期间手指会抖几像素，
+    // 那仍是一次点击（松手要能展开这一组）。
+    if (Math.abs(e.clientX - press.x) > 6 || Math.abs(e.clientY - press.y) > 6) press.moved = true;
     setWsDrag((prev) => {
       if (!prev) return prev;
       if (prev.over?.path === over?.path && prev.over?.half === over?.half) return prev;
       return { ...prev, over };
     });
+  };
+
+  /** 只有发起拖拽的那个指针才能结束它（多指时第二根手指的 up 不算）。 */
+  const guardWsPointer = (pointerId: number, fn: () => void) => {
+    if (wsPress.current?.pointerId !== pointerId) return;
+    fn();
   };
 
   const endWsPress = (commit: boolean) => {
@@ -533,14 +612,13 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       setWsDrag(null);
       return;
     }
+    if (!press.moved) {
+      // 长按到点但一步没挪就松手：这仍是一次点击，别把展开/菜单吞掉。
+      setWsDrag(null);
+      return;
+    }
     if (commit && press.over && press.over.path !== press.path) {
-      // `groups` 就是屏幕上此刻的顺序（已应用保存的偏好），直接拿它当基准。
-      const current = groups
-        .filter((g) => g.path !== FLAT_KEY && g.path !== OTHER_KEY)
-        .map((g) => g.path);
-      const next = movePath(current, press.path, press.over.path, press.over.half);
-      setWsOrder(next);
-      saveWorkspaceOrder(next);
+      commitWsOrder(movePath(wsCurrentOrder(), press.path, press.over.path, press.over.half));
     }
     setWsDrag(null);
     // 松手后浏览器还会补一次 click：吞掉它，别把这一组展开/收起。
@@ -550,6 +628,38 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       wsSuppressClick.current = false;
     }, 120);
   };
+
+  /**
+   * 松手可能落在这五行之外：`setPointerCapture` 失败的老 WebView、拖动中元素重挂、
+   * 系统收回指针（`pointercancel`）都拿不到行上的 `pointerup`。**必须挂到 window 上
+   * 兜底**：漏一次 `wsDrag` 就永远不为 null，document 上那条挡 `touchmove` 的监听
+   * 会让整页划不动，直到下一次点击。
+   */
+  useEffect(() => {
+    const release = () => {
+      if (wsPress.current !== null) endWsPress(false);
+    };
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+      window.removeEventListener("blur", release);
+    };
+    // 只挂一次：`endWsPress` 每次都读最新的 ref 与 `groups`（经 `endWsPress` 的
+    // 闭包），依赖它会让监听反复重挂。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /** 组件卸载时把「等长按到点」的定时器收掉，别让它在已卸载的 Sidebar 上 setState。 */
+  useEffect(() => {
+    return () => {
+      const press = wsPress.current;
+      if (press?.timer != null) window.clearTimeout(press.timer);
+      wsPress.current = null;
+    };
+  }, []);
 
   /**
    * 拖动期间必须在 document 上挡掉 touchmove：长按后手指一移动，浏览器仍会
@@ -564,6 +674,50 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     document.addEventListener("touchmove", stop, { passive: false });
     return () => document.removeEventListener("touchmove", stop);
   }, [wsDrag]);
+
+  /**
+   * 拖到列表上下沿时自动滚动。
+   *
+   * 没有它，一次手势只能在一屏之内换位：工作区一多，远处两个之间根本换不了
+   * （会话那套走原生 HTML5 DnD，浏览器会在容器边缘自己滚）。而且指针停在容器
+   * 下沿时 `wsOverAt` 会命中**视口下方看不见的那一行**，提示线画在屏幕外，
+   * 松手落在用户没看到的地方。
+   *
+   * 依赖只取「在不在拖」：状态每帧都会重写 `wsDrag`，按对象依赖会让这个循环
+   * 每帧重建一次。
+   */
+  const wsDragging = wsDrag !== null;
+  useEffect(() => {
+    if (!wsDragging) return;
+    let raf = 0;
+    const step = () => {
+      raf = window.requestAnimationFrame(step);
+      const root = wsListRef.current;
+      const press = wsPress.current;
+      if (!root || !press?.active) return;
+      const max = root.scrollHeight - root.clientHeight;
+      if (max <= 0) return;
+      const rect = root.getBoundingClientRect();
+      const y = wsPointerY.current;
+      const EDGE = 28;
+      const delta =
+        y < rect.top + EDGE
+          ? -Math.ceil((rect.top + EDGE - y) / 3)
+          : y > rect.bottom - EDGE
+            ? Math.ceil((y - (rect.bottom - EDGE)) / 3)
+            : 0;
+      if (delta === 0) return;
+      const before = root.scrollTop;
+      root.scrollTop = Math.max(0, Math.min(max, before + delta));
+      if (root.scrollTop === before) return;
+      // 指针没动、行在动：落点要跟着重算，否则提示线与松手的位置对不上。
+      press.over = wsOverAt(y);
+      setWsDrag((prev) => (prev ? { ...prev, over: press.over } : prev));
+    };
+    raf = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wsDragging]);
 
   /** 手动排序的落盘入口：拖拽和菜单里的上移/下移共用。 */
   const reorder = (key: string, list: ConversationInfo[], fromId: string, toId: string, half: DropHalf) => {
@@ -1198,8 +1352,11 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                 data-workspace={g.path}
                 onPointerDown={wsReorderable ? (e) => onWsPointerDown(e, g) : undefined}
                 onPointerMove={wsReorderable ? onWsPointerMove : undefined}
-                onPointerUp={wsReorderable ? () => endWsPress(true) : undefined}
-                onPointerCancel={wsReorderable ? () => endWsPress(false) : undefined}
+                // 只认发起拖拽的那个指针：第二根手指在任意行抬起不能结束这一次拖拽。
+                onPointerUp={wsReorderable ? (e) => guardWsPointer(e.pointerId, () => endWsPress(true)) : undefined}
+                onPointerCancel={wsReorderable ? (e) => guardWsPointer(e.pointerId, () => endWsPress(false)) : undefined}
+                // 指针捕获被系统收回（元素重挂、拖出窗口）：当作取消，别留下半截状态。
+                onLostPointerCapture={wsReorderable ? () => endWsPress(false) : undefined}
                 onContextMenu={wsDrag ? (e) => e.preventDefault() : undefined}
                 // 拖动结束后补发的那一次 click 会落在行内的按钮上：在捕获阶段吞掉，
                 // 否则松手会把这一组展开/收起，或者弹出「工作区操作」菜单。
@@ -1352,6 +1509,27 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         items={
           wsMenu
             ? ([
+                // 上移/下移与拖拽是**两条并列的入口**（会话排序也是这么分的）：
+                // 触屏上拖拽要长按，键盘与读屏根本拿不到落点，没有这一对就等于
+                // 「只有鼠标能改顺序」。顺序只在本设备生效，见 lib/sidebarView。
+                ...(wsReorderable && wsMenu.path !== FLAT_KEY
+                  ? [
+                      {
+                        id: "move-up",
+                        label: t("上移", "Move up"),
+                        icon: <IconChevronUp size={13} className="text-muted" />,
+                        disabled: !wsCanStep(wsMenu.path, -1),
+                        onSelect: () => stepWsOrder(wsMenu.path, -1),
+                      },
+                      {
+                        id: "move-down",
+                        label: t("下移", "Move down"),
+                        icon: <IconChevronDown size={13} className="text-muted" />,
+                        disabled: !wsCanStep(wsMenu.path, 1),
+                        onSelect: () => stepWsOrder(wsMenu.path, 1),
+                      },
+                    ]
+                  : []),
                 { id: "rename", label: t("重命名", "Rename"), icon: <IconPencil size={13} className="text-muted" />, onSelect: () => void askRenameWorkspace(wsMenu) },
                 { id: "reveal", label: t("在文件夹显示", "Show in files"), icon: <IconFolder size={13} className="text-muted" />, onSelect: () => revealWorkspace(wsMenu) },
                 { id: "remove", label: t("删除工作区", "Delete workspace"), icon: <IconTrash size={13} />, danger: true, onSelect: () => void askRemove(wsMenu.path) },
