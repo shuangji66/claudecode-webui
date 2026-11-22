@@ -141,8 +141,8 @@ export function CliSettings() {
       </div>
       <p className="mt-1 text-[11px] leading-relaxed text-muted">
         {t(
-          "子代理的两项以环境变量的形式交给 claude 子进程，只在会话启动时读取：改完对新建的会话生效，已经在跑的会话保持原样。常驻会话数与空闲回收由本应用自己执行：前者对下一次新建会话生效，后者在下一分钟扫描时生效。",
-          "The subagent limits are passed to the claude subprocess as environment variables and read only at session start: changes apply to new sessions. The resident-session cap and idle recycle are enforced by the app itself: the cap applies to the next new session, recycle at the next minute scan.",
+          "子代理的两项以环境变量的形式交给 claude 子进程，只在会话启动时读取：改完对新建的会话生效，已经在跑的会话保持原样。",
+          "The subagent limits are passed to the claude subprocess as environment variables and read only at session start: changes apply to new sessions.",
         )}
       </p>
 

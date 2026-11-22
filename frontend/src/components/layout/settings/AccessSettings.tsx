@@ -214,8 +214,8 @@ export function AccessSettings() {
       <Section
         title={t("登录有效期", "Login validity")}
         desc={t(
-          `登录一次可以保持多久（${LOGIN_TTL_MIN}–${LOGIN_TTL_MAX} 小时，默认 24）。登录状态保存在服务端，重启进程或升级应用不会掉登录；到期、改密码，或把有效期缩短到已登录设备的签发时长以内，都需要重新输入访问密码。`,
-          `How long a sign-in lasts (${LOGIN_TTL_MIN}–${LOGIN_TTL_MAX} hours, default 24). Sessions are stored on the server, so restarting or upgrading the app does not sign you out; you sign in again after it expires, the password changes, or you shorten the validity below how long a device has been signed in.`,
+          `登录一次可以保持多久（${LOGIN_TTL_MIN}–${LOGIN_TTL_MAX} 小时，默认 24）。`,
+          `How long a sign-in lasts (${LOGIN_TTL_MIN}–${LOGIN_TTL_MAX} hours, default 24).`,
         )}
       >
         <div className="flex items-center gap-1.5">

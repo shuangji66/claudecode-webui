@@ -116,8 +116,8 @@ export function BrowserSettings() {
       >
         <p className="mb-2 text-[11px] leading-relaxed text-muted">
           {t(
-            "让模型用真实浏览器打开页面：JS 渲染、登录态、点击翻页、截图确认布局。运行时与内核都装在本应用的数据目录里（不进系统），版本固定。模型在给出最终答复前应调用 browser_close，忘了也会在空闲后自动回收。",
-            "Lets the model drive a real browser: JS-rendered pages, login state, clicking, screenshots. The runtime and browser live under this app's data directory with pinned versions. The model closes the browser before its final answer; idle browsers are also reaped.",
+            "让模型用真实浏览器打开页面：JS 渲染、登录态、点击翻页、截图确认布局。",
+            "Lets the model drive a real browser: JS-rendered pages, login state, clicking, screenshots.",
           )}
         </p>
 
@@ -210,9 +210,6 @@ export function BrowserSettings() {
 
         {status && (
           <div className="mt-2 space-y-0.5 font-mono text-[10px] text-faint">
-            <div className="truncate" title={status.root}>
-              {status.root}
-            </div>
             <div className="truncate">
               playwright {status.playwright}
               {status.node_version ? ` · node ${status.node_version}` : ""}
