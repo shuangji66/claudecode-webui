@@ -68,16 +68,15 @@ describe("切推理等级后让它生效", () => {
     expect(useAppStore.getState().connect).toHaveBeenCalledWith("s1");
   });
 
-  it("进行中不杀进程：等这一轮 result 到了再重开", async () => {
+  // 进行中也立刻重开：延迟到「这一轮结束」会把档位变成逐会话的待办状态，
+  // 而档位是全局设置——别的对话也会跟着挂上「将在重开会话后生效」（截图复现过）。
+  // 打断这一轮由 ChatPane 在调用前二次确认。
+  it("进行中也立刻按同一 id 重开，不等 result", async () => {
     seed("busy");
     await useAppStore.getState().selectModel("gw", "m1", "low");
-    expect(calls.some((c) => c.url.startsWith("/api/session?id="))).toBe(false);
-
-    // 这一轮结束（result）之后才重开。
-    useAppStore.getState().applyEvent("s1", { kind: "cli", data: { type: "result" } } as never);
-    await vi.waitFor(() => {
-      expect(calls.some((c) => c.url.startsWith("/api/session?id="))).toBe(true);
-    });
+    expect(calls.some((c) => c.url.startsWith("/api/session?id="))).toBe(true);
+    const resume = calls.find((c) => c.url === "/api/session" && c.init?.method === "POST");
+    expect(JSON.parse(String(resume?.init?.body))).toEqual({ cwd: "/w", resume: "s1" });
   });
 
   it("还没发过消息的对话也按同一 id 重起，不新建对话", async () => {

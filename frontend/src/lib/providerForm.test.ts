@@ -212,16 +212,18 @@ describe("模型能力元数据", () => {
     expect(effortFor({}, "high")).toBe("");
   });
 
-  it("切档位后：进行中等这一轮结束、空闲立刻重开、没有进程就什么都不做", () => {
-    // 档位没变：不动（进行中也不该白等一次重开）。
+  it("切档位后：有进程就按同一 id 重开、没有进程就什么都不做", () => {
+    // 档位没变：不动（白杀一次进程没有意义）。
     expect(effortApply("ready", "high", "high")).toBe("none");
     expect(effortApply("busy", "high", "high")).toBe("none");
-    // 空闲（含「默认」空串）→ 立刻按同一 id 重开。
+    // 空闲（含「默认」空串）→ 按同一 id 重开。
     expect(effortApply("ready", "high", "low")).toBe("restart");
     expect(effortApply("ready", "high", "")).toBe("restart");
     expect(effortApply("starting", "", "high")).toBe("restart");
-    // 进行中不能杀进程。
-    expect(effortApply("busy", "high", "low")).toBe("afterTurn");
+    // 进行中同样立刻重开：延迟重开会把「等这一轮结束」变成逐会话状态，
+    // 而档位是全局设置，别的对话也会跟着挂上提示（见 effortApply 的注释）。
+    // 打断这一轮由界面在调用前二次确认。
+    expect(effortApply("busy", "high", "low")).toBe("restart");
     // 没有活着的进程：下次打开对话自然按新档位起。
     expect(effortApply("closed", "high", "low")).toBe("none");
     expect(effortApply(undefined, undefined, "low")).toBe("none");

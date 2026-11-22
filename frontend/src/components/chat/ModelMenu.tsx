@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { effortChoices, type ModelOption } from "../../lib/providerForm";
+import { effortChoices, effortName, type ModelOption } from "../../lib/providerForm";
 import { useT } from "../../lib/i18n";
 import { POPUP_PANEL, PORTAL_ATTR, useAnchoredPanel, useDismiss } from "../common/Menu";
 import { IconCheck, IconChevronDown, IconChevronLeft, IconChevronRight, IconSpark } from "../common/Icons";
@@ -32,13 +32,6 @@ interface ProviderGroup {
   id: string;
   name: string;
   models: ModelOption[];
-}
-
-/** 档位值保持小写传给后端，展示时首字母大写；xhigh 写成可读的 Extra high。 */
-function effortName(effort: string): string {
-  if (!effort) return effort;
-  if (effort === "xhigh") return "Extra high";
-  return effort[0].toUpperCase() + effort.slice(1);
 }
 
 /** 按提供商分组，保持设置里的提供商顺序。 */

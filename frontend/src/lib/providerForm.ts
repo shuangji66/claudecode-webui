@@ -277,13 +277,29 @@ export function effortFor(spec: ModelSpec | undefined, selected: string | undefi
 }
 
 /**
+ * 档位的显示名：空串是「默认」（不向 API 声明推理等级），其余首字母大写，
+ * `xhigh` 写成可读的 Extra high。
+ *
+ * 空串返回空串，由调用方补「默认 / Default」——它是界面自己的词，不是设置里的值。
+ */
+export function effortName(effort: string): string {
+  if (!effort) return "";
+  if (effort === "xhigh") return "Extra high";
+  return effort[0].toUpperCase() + effort.slice(1);
+}
+
+/**
  * 切档位后怎么让已在跑的会话生效。
  *
- * claude 的 `--effort` 只在进程启动时固定（控制协议里没有 set_effort），
- * 所以要么按同一 id 重开进程（`--resume` 保住上下文），要么等这一轮结束再重开。
+ * claude 的 `--effort` 只在进程启动时固定（控制协议里没有 set_effort），所以只能按
+ * 同一 id 重开进程（`--resume` 保住上下文）。**不做「等这一轮结束再重开」**：
+ * 那样档位设置是全局的、而重开是延迟的，别的对话也会跟着挂上一条「将在重开会话后
+ * 生效」的提示（曾经就是这个症状）。界面在切之前二次确认（重启会中断正在进行的一轮），
+ * 确认即重开。
+ *
  * "none" = 没有活着的进程，下次打开对话自然按新档位起。
  */
-export type EffortApply = "none" | "restart" | "afterTurn";
+export type EffortApply = "none" | "restart";
 
 export function effortApply(
   state: string | undefined,
@@ -292,7 +308,5 @@ export function effortApply(
 ): EffortApply {
   if (!state || state === "closed") return "none";
   if ((sessionEffort ?? "") === (nextEffort ?? "")) return "none";
-  // 进行中不能直接杀进程：等这一轮 result 到达后再重开，别把正在跑的回合丢掉。
-  if (state === "busy") return "afterTurn";
   return "restart";
 }

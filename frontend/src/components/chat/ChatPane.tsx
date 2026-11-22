@@ -15,7 +15,7 @@ import { conversationTitle } from "../../lib/labels";
 import { workspaceFor } from "../../lib/conversations";
 import { canRevealInFnos, fnosHostAvailable } from "../../lib/fnos";
 import { isNewChat } from "../../lib/newChat";
-import { effortFor, findOption, modelOptionsFromSettings } from "../../lib/providerForm";
+import { effortApply, effortFor, effortName, findOption, modelOptionsFromSettings } from "../../lib/providerForm";
 import { sessionToMarkdown } from "../../lib/sessionExport";
 import { copyText } from "../../lib/clipboard";
 import { downloadFile, sessionLogName } from "../../lib/download";
@@ -216,6 +216,9 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
     return modelOptions.find((o) => o.provider === id)?.providerName || id;
   };
 
+  /** 档位显示名（空串是「默认」）。 */
+  const effortLabel = (effort: string) => effortName(effort) || t("默认", "Default");
+
   /**
    * 跨提供商切换必须重启进程：地址与密钥在进程启动时通过环境变量固定，CLI 没有
    * 能改它们的控制请求。对话 id 与转录不变（`restartSession` 按同一 id resume），
@@ -244,6 +247,28 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
     }
   };
 
+  /**
+   * 推理等级同样只在进程启动时固定（CLI 没有 `set_effort`），要生效只能重启进程。
+   *
+   * **不能像以前那样「等这一轮结束自动重开」**：档位是全局设置，延迟重开是逐会话的
+   * 状态，两者一叠加，在 A 里改完档位之后 B 的底栏也会挂上一条「将在重开会话后生效」
+   * 的提示（截图复现过）。所以和切提供商一样：确认就立刻重开，不确认就什么都不改。
+   */
+  const confirmEffortRestart = (from: string, to: string) =>
+    askConfirm({
+      title: t("切换推理等级", "Switch reasoning level"),
+      message: busy
+        ? t(
+            `推理等级从「${effortLabel(from)}」改到「${effortLabel(to)}」需要重启 claude 进程才能生效。对话记录与上下文都会保留，正在进行的一轮会被中断。`,
+            `Changing the reasoning level from "${effortLabel(from)}" to "${effortLabel(to)}" requires restarting the claude process. The conversation and its context are kept, but a running turn will be interrupted.`,
+          )
+        : t(
+            `推理等级从「${effortLabel(from)}」改到「${effortLabel(to)}」需要重启 claude 进程才能生效。对话记录与上下文都会保留。`,
+            `Changing the reasoning level from "${effortLabel(from)}" to "${effortLabel(to)}" requires restarting the claude process. The conversation and its context are kept.`,
+          ),
+      confirmText: t("重启并切换", "Restart and switch"),
+    });
+
   // 还没开始的新对话（点了「新对话」但一条消息都没发）也用居中布局，
   // 否则新建后立刻掉回贴底布局，工作区选择器也跟着消失。
   const newChat = isNewChat(conversation, itemList.length);
@@ -264,11 +289,6 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
           : undefined;
 
   const tools = itemList.filter((i) => i.kind === "tool").length;
-  // 推理等级在进程启动时固定（CLI 没有 set_effort），store 会按同一 id 重开会话让它生效；
-  // 进行中不能杀进程，所以这时只剩「等这一轮结束再重开」的过渡态需要提示。
-  const effortMismatch = Boolean(liveSession && (liveSession.effort ?? "") !== selectedEffort);
-  // 进行中切换只能等这一轮结束再重开；重开期间的「正在启动」由下面的 starting 分支说。
-  const effortPending = effortMismatch && busy;
 
   // 用量只显示 CLI 真的给出的数字（换算与文案见 UsageStats / lib/usage）。
   // 转录回放时 store 里没有实时快照，就退回最后一条 result 上挂的那份。
@@ -308,10 +328,7 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
           flex 子项按内容宽度撑开，右侧用量行（窄屏也不再折叠）会被挤出屏幕。 */}
       <span className="min-w-0 flex-1 truncate">
         {starting ? t("正在启动 Claude…", "Starting Claude…")
-          : effortPending
-            ? t("本轮结束后按新的推理等级重开（上下文保留）", "Reopening with the new reasoning level after this turn")
-            : effortMismatch ? t("推理等级将在重开会话后生效", "Reasoning level applies after the session reopens")
-            : busy ? (
+          : busy ? (
               // 「Claude 正在工作」不写：这一行左边是操作提示、右边是用量，而「在不在跑」
               // 已经由上面的计时行（少女祈祷中）和发送键的形态说清楚了，再挂一遍只是噪音。
               <>
@@ -563,13 +580,30 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
                 })();
                 return;
               }
+              // 同一提供商，但新模型不支持当前档位 → effort 回落到「默认」，这同样要
+              // 重启进程（`--effort` 启动时固定）。别让这条路绕过确认：模型热切换是
+              // 无感的，档位变了却是打断这一轮。
+              if (liveSession && effortApply(state, liveSession.effort, effort) !== "none") {
+                void (async () => {
+                  if (await confirmEffortRestart(liveSession.effort ?? "", effort)) {
+                    await selectModel(provider, model, effort);
+                  }
+                })();
+                return;
+              }
               void selectModel(provider, model, effort);
             }}
             onSelectEffort={(effort) => {
               if (!selected?.provider || !selected.model) return;
-              // 设置里的提供商与当前进程不同（多半是之前重启失败了）：改档位同样会
-              // 触发重启，走同一个确认，别让这条路绕过「切提供商要确认」。
-              if (liveSession && (liveSession.provider ?? "") !== selected.provider) {
+              // 没有活着的进程（或档位没变）时不用重启：下次打开对话自然按新档位起，
+              // 也没必要为一件不会发生的事弹确认框。
+              if (!liveSession || effortApply(state, liveSession.effort, effort) === "none") {
+                void selectModel(selected.provider, selected.model, effort);
+                return;
+              }
+              // 提供商也变了时，重启本来就会发生：一条确认里说清楚两件事，
+              // 不必连弹两个框。
+              if ((liveSession.provider ?? "") !== selected.provider) {
                 void (async () => {
                   if (await confirmProviderRestart(liveSession.provider, selected.provider)) {
                     await selectModel(selected.provider, selected.model, effort);
@@ -577,7 +611,11 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
                 })();
                 return;
               }
-              void selectModel(selected.provider, selected.model, effort);
+              void (async () => {
+                if (await confirmEffortRestart(liveSession.effort ?? "", effort)) {
+                  await selectModel(selected.provider, selected.model, effort);
+                }
+              })();
             }}
             onPermissionMode={(m) => setPermissionMode(m)}
             onSend={(text, attachments, opts) => sendPrompt(text, attachments, t("附件：", "File: "), opts)}

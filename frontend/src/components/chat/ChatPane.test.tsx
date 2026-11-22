@@ -265,3 +265,120 @@ describe("ChatPane 跨提供商切模型", () => {
     expect(askConfirm).not.toHaveBeenCalled();
   });
 });
+
+describe("ChatPane 切推理等级", () => {
+  // `--effort` 只在进程启动时固定，切档位必须重启进程；重启会中断正在进行的一轮，
+  // 所以和切提供商一样要二次确认。**不做「等这一轮结束自动重开」**：档位是全局设置，
+  // 延迟重开是逐会话状态，两者一叠加，别的对话也会挂上「将在重开会话后生效」。
+  const withEfforts = {
+    providers: [
+      {
+        id: "gw-a",
+        name: "网关 A",
+        models: ["deepseek"],
+        model_meta: { deepseek: { name: "DeepSeek", reasoning_efforts: ["low", "high"], supports_image: false } },
+      },
+    ],
+    selected: { provider: "gw-a", model: "deepseek", effort: "high" },
+  };
+
+  function setupEffort(state: "busy" | "ready", answer: boolean, effort = "high") {
+    const selectModel = vi.fn();
+    setup(
+      "c1",
+      [conv({ messages: 2 })],
+      [{ id: "c1", cwd: "/data/ws", state, provider: "gw-a", model: "deepseek", effort }],
+    );
+    act(() => {
+      useAppStore.setState({ settings: withEfforts as never, selectModel } as never);
+    });
+    vi.mocked(askConfirm).mockResolvedValue(answer);
+    fireEvent.click(screen.getByRole("button", { name: "模型与推理等级" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /推理等级/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+    return selectModel;
+  }
+
+  it("取消就不改设置、不重启", async () => {
+    const selectModel = setupEffort("ready", false);
+
+    await waitFor(() => expect(askConfirm).toHaveBeenCalled());
+    expect(selectModel).not.toHaveBeenCalled();
+  });
+
+  it("确认之后才交给 store", async () => {
+    const selectModel = setupEffort("ready", true);
+
+    await waitFor(() => expect(selectModel).toHaveBeenCalledWith("gw-a", "deepseek", "low"));
+  });
+
+  it("进行中也照样确认，文案写明会被中断", async () => {
+    setupEffort("busy", false);
+
+    await waitFor(() => expect(askConfirm).toHaveBeenCalled());
+    const options = vi.mocked(askConfirm).mock.calls[0][0];
+    expect(options.title).toBe("切换推理等级");
+    expect(String(options.message)).toContain("正在进行的一轮会被中断");
+    expect(options.confirmText).toBe("重启并切换");
+  });
+
+  // 档位没变时不重启也不弹框：白杀一次进程没有任何收益。
+  it("档位没变就不弹确认", async () => {
+    const selectModel = setupEffort("ready", false, "low");
+
+    await waitFor(() => expect(selectModel).toHaveBeenCalledWith("gw-a", "deepseek", "low"));
+    expect(askConfirm).not.toHaveBeenCalled();
+  });
+
+  // 同一提供商，但新模型不支持当前档位 → effort 回落到「默认」，这同样要重启进程。
+  // 模型热切换是无感的，档位变了却会打断这一轮，不能让这条路绕过确认。
+  it("同提供商换到不支持当前档位的模型也要确认", async () => {
+    const selectModel = vi.fn();
+    const mixed = {
+      providers: [
+        {
+          id: "gw-a",
+          name: "网关 A",
+          models: ["deepseek", "plain"],
+          model_meta: {
+            deepseek: { name: "DeepSeek", reasoning_efforts: ["low", "high"], supports_image: false },
+            plain: { name: "Plain", reasoning_efforts: [], supports_image: false },
+          },
+        },
+      ],
+      selected: { provider: "gw-a", model: "deepseek", effort: "high" },
+    };
+    setup(
+      "c1",
+      [conv({ messages: 2 })],
+      [{ id: "c1", cwd: "/data/ws", state: "ready", provider: "gw-a", model: "deepseek", effort: "high" }],
+    );
+    act(() => {
+      useAppStore.setState({ settings: mixed as never, selectModel } as never);
+    });
+    vi.mocked(askConfirm).mockResolvedValue(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "模型与推理等级" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /模型/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /plain/i }));
+
+    await waitFor(() => expect(askConfirm).toHaveBeenCalled());
+    expect(vi.mocked(askConfirm).mock.calls[0][0].title).toBe("切换推理等级");
+    expect(selectModel).not.toHaveBeenCalled();
+  });
+
+  // 跨对话的「将在重开会话后生效」提示必须彻底消失：档位是全局设置，别的对话里
+  // 那条提示说的是「这条对话的进程不是在这个档位下起的」，而它根本不是。
+  it("底栏不再显示跨对话的档位提示", () => {
+    setup(
+      "c1",
+      [conv({ messages: 2 })],
+      [{ id: "c1", cwd: "/data/ws", state: "ready", provider: "gw-a", model: "deepseek", effort: "low" }],
+    );
+    act(() => {
+      useAppStore.setState({ settings: withEfforts as never } as never);
+    });
+    expect(screen.queryByText(/推理等级将在重开会话后生效/)).toBeNull();
+    expect(screen.queryByText(/本轮结束后按新的推理等级重开/)).toBeNull();
+  });
+});

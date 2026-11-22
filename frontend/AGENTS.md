@@ -1384,9 +1384,14 @@ src/
   模型声明的档位；没有声明档位的模型不出现这一行。`effortFor` 遇到无效值一律回落到「默认」，
   别再回落到「模型的第一个档位」——那等于替用户向 API 声明了一个推理等级。
   **改档位不是热切换**：CLI 没有 `set_effort`，`--effort` 只在进程启动时固定，
-  `selectModel` 保存后调 `applyEffortChange`（判定在 `providerForm.effortApply`）：
-  空闲就 `close → POST /api/session {resume:id}` 按同一 id 重开（上下文在转录里），
-  进行中只记进 `effortRestarts`，等 `result` 到达再重开——不要在 busy 时直接杀进程。
+  `selectModel` 保存后调 `applyEffortChange`（判定在 `providerForm.effortApply`），
+  它只回答「要不要重开」（`none` / `restart`），重开一律 `close → POST /api/session
+  {resume:id}` 按同一 id 来（上下文在转录里）。**没有「等这一轮结束再重开」这一档**：
+  档位是全局设置、延迟重开是逐会话状态，两者一叠加，在 A 里改完档位之后 B 的底栏也会挂上
+  「推理等级将在重开会话后生效」——而 B 的进程根本不是在那个档位下起的，那条提示对它是
+  假的（截图复现过）。所以 `ChatPane` 的 `onSelectEffort` 在真正改之前 `askConfirm`
+  （重启会中断正在进行的一轮），确认就立刻重开，取消则什么都不改；档位没变、或没有活着的
+  进程时不弹框（后者下次打开自然按新档位起）。
   **跨提供商切模型也不是热切换**：`ANTHROPIC_BASE_URL` / 密钥是进程启动时的环境变量，
   CLI 没有改它们的控制请求。`selectModel` 遇到 `sess.provider !== provider` 调
   `restartSession`（同一 id `--resume`，**不新建对话**）；`ChatPane` 在调用前用

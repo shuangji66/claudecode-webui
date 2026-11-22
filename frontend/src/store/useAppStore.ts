@@ -610,8 +610,6 @@ function flushLive(sid: string): void {
 const resumePromises = new Map<string, Promise<boolean>>();
 /** 正在重开的会话：连点两次模型菜单、或档位重开与手动重启撞在一起时只做一次。 */
 const restartPromises = new Map<string, Promise<boolean>>();
-/** 等这一轮结束后要按新档位重开的会话（`--effort` 只在进程启动时固定）。 */
-const effortRestarts = new Set<string>();
 /** 正在发待发送队首的会话：结果事件与 ready 事件可能挨着到，不加锁会连发两条。 */
 const flushing = new Set<string>();
 /** 正在编辑的那条待发送（只可能有一条：输入框上方的面板同一时刻只展开一个编辑框）。 */
@@ -2212,21 +2210,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   // 切档位之后让它在**当前**会话生效：claude 的控制协议里没有 set_effort，
   // `--effort` 只在进程启动时固定，所以按同一 id 关掉进程再 --resume 拉起来
-  // （上下文在转录里，对话 id 不变）。进行中不杀进程，等这一轮 result 再重开。
+  // （上下文在转录里，对话 id 不变）。
+  //
+  // **不延迟到「这一轮结束」**：档位是全局设置，而延迟重开是逐会话的状态——两者
+  // 一叠加，别的对话也会挂上一条「将在重开会话后生效」的提示（曾经就是这个症状）。
+  // 是否打断正在进行的一轮由界面在调用前二次确认（ChatPane 的 onSelectEffort）。
   applyEffortChange: async (id, effort) => {
     const sess = get().sessions.find((s) => s.id === id);
     if (!sess) return;
     const state = get().states[id] ?? sess.state;
-    const plan = effortApply(state, sess.effort, effort);
-    if (plan === "none") {
-      effortRestarts.delete(id);
-      return;
-    }
-    if (plan === "afterTurn") {
-      effortRestarts.add(id);
-      return;
-    }
-    effortRestarts.delete(id);
+    if (effortApply(state, sess.effort, effort) === "none") return;
     await get().restartSession(id);
   },
 
@@ -2947,12 +2940,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
         }));
         // 一回合结束就把用量写进对话元数据：页面重开 / 换设备打开时底部统计不丢。
         if (usage && isTurnResult(ev.data)) void persistUsage(sid, usage);
-        // 本轮开始前切过的档位：等 result 到了再重开，别把正在跑的回合丢掉。
-        if (isTurnResult(ev.data) && effortRestarts.delete(sid)) {
-          const next = get().settings?.selected?.effort ?? "";
-          const cur = get().sessions.find((x) => x.id === sid);
-          if (cur && (cur.effort ?? "") !== next) void get().restartSession(sid);
-        }
         // 这一轮正常结束：把待发送的队首发出去。被中断 / 出错时留在队列里
         // （shouldFlushAfter 的判定与理由见 lib/queue.ts）。
         if (shouldFlushAfter(ev.data)) void get().flushQueued(sid);

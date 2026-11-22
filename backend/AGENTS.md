@@ -181,8 +181,10 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `DefaultEffort()` 不再回落到 `reasoning_efforts[0]`，旧配置里的
   `default_reasoning_effort` 读时忽略、下次写盘即消失。
 - **改档位靠重开会话**：控制协议里没有 `set_effort`，`--effort` 只在启动时固定。
-  前端 `applyEffortChange` 判断：空闲就 `DELETE /api/session?id=` + `POST /api/session
-  {cwd, resume:id}`（同一 id，`--resume` 保住上下文），进行中则等 `result` 到达再重开。
+  前端 `applyEffortChange` 判断要不要重开，要就 `DELETE /api/session?id=` + `POST /api/session
+  {cwd, resume:id}`（同一 id，`--resume` 保住上下文）。**进行中也是立刻重开**，由界面在
+  调用前二次确认——不做「等 result 到达再重开」：那是逐会话的待办状态，而档位是全局设置，
+  叠在一起会让别的对话也挂上一条并不成立的「将在重开会话后生效」。
 - **跨提供商换模型同理，而且不要新建对话**：`ANTHROPIC_BASE_URL` / 密钥是进程启动时的
   环境变量，CLI 没有改它们的控制请求，只能重启进程；前端走同一条 `restartSession`。
   还没发过消息的对话没有转录，`POST {resume}` 由网关改用 `StartFresh` 按**同一个 UUID**
