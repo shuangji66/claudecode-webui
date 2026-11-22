@@ -758,7 +758,7 @@ func TestApplyProxyPersistsAndRestartsSessions(t *testing.T) {
 	writeTranscript(t, srv.d.HistoryDir, id, srv.d.ProjectsRoot)
 	mgr.listed = []manager.Info{{ID: id, Cwd: srv.d.ProjectsRoot, State: "ready"}}
 	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/settings/proxy", strings.NewReader(`{"proxy_url":"socks5://127.0.0.1:1080"}`)))
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/settings/proxy", strings.NewReader(`{"proxy_url":"http://127.0.0.1:7890"}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -771,7 +771,7 @@ func TestApplyProxyPersistsAndRestartsSessions(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Settings.ProxyURL != "socks5://127.0.0.1:1080" {
+	if body.Settings.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("proxy_url = %q", body.Settings.ProxyURL)
 	}
 	if len(mgr.closed) != 1 || mgr.closed[0] != id {

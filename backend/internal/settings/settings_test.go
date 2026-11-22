@@ -866,28 +866,30 @@ func TestSubagentLimitsDefaultsAndEnv(t *testing.T) {
 
 func TestProxyURLPersistAndEnv(t *testing.T) {
 	s, path := openTemp(t)
-	if _, err := s.Apply(Patch{ProxyURL: strPtr("socks5://127.0.0.1:1080")}); err != nil {
+	if _, err := s.Apply(Patch{ProxyURL: strPtr("http://127.0.0.1:7890")}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	reopened, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := reopened.Get().ProxyURL; got != "socks5://127.0.0.1:1080" {
+	if got := reopened.Get().ProxyURL; got != "http://127.0.0.1:7890" {
 		t.Fatalf("ProxyURL = %q", got)
 	}
 	env := strings.Join(reopened.Get().Env(), ",")
 	for _, want := range []string{
-		"HTTPS_PROXY=socks5://127.0.0.1:1080",
-		"ALL_PROXY=socks5://127.0.0.1:1080",
+		"HTTPS_PROXY=http://127.0.0.1:7890",
+		"ALL_PROXY=http://127.0.0.1:7890",
 		"NO_PROXY=localhost,127.0.0.1,::1",
+		"NODE_USE_ENV_PROXY=1",
 	} {
 		if !strings.Contains(env, want) {
 			t.Fatalf("Env 缺少 %q: %v", want, env)
 		}
 	}
-	if strings.Contains(env, "NODE_USE_ENV_PROXY") {
-		t.Fatalf("socks5 不应设置 Node 内置代理开关: %v", env)
+	// SOCKS 变量不再注入：设置层只接受 HTTP 代理，留一份 SOCKS_PROXY 只会误导。
+	if strings.Contains(env, "SOCKS_PROXY") {
+		t.Fatalf("不应注入 SOCKS_PROXY: %v", env)
 	}
 	// 清空代理后不应再注入代理变量。
 	if _, err := s.Apply(Patch{ProxyURL: strPtr("")}); err != nil {
@@ -898,11 +900,23 @@ func TestProxyURLPersistAndEnv(t *testing.T) {
 	}
 }
 
-func TestHTTPProxyEnablesNodeEnvProxy(t *testing.T) {
-	v := Settings{ProxyURL: "http://127.0.0.1:7890"}
-	env := strings.Join(v.Env(), ",")
-	if !strings.Contains(env, "NODE_USE_ENV_PROXY=1") {
-		t.Fatalf("HTTP 代理应启用 Node 内置代理: %v", env)
+// 手改配置留下的 socks5:// 必须在 Open 时丢掉：claude 拿到它每一轮都报
+// `Unable to connect to API (UnsupportedProxyProtocol)`，比直连更糟。
+func TestSocksProxyDroppedOnOpen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte(`{"proxy_url":"socks5://127.0.0.1:1080"}`), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Get().ProxyURL; got != "" {
+		t.Fatalf("socks5 应被丢弃，得到 %q", got)
+	}
+	if env := strings.Join(s.Get().Env(), ","); strings.Contains(env, "PROXY=") {
+		t.Fatalf("丢弃后不应注入代理变量: %v", env)
 	}
 }
 
@@ -910,19 +924,21 @@ func TestProxyURLValidation(t *testing.T) {
 	if got, err := NormalizeProxyURL(""); err != nil || got != "" {
 		t.Fatalf("空串 = %q, %v", got, err)
 	}
-	for _, ok := range []string{"http://127.0.0.1:7890", "https://proxy.example:443", "socks5://127.0.0.1:1080", "socks5h://proxy.example:1080"} {
+	for _, ok := range []string{"http://127.0.0.1:7890", "https://proxy.example:443", "http://user:pass@127.0.0.1:7890"} {
 		if _, err := NormalizeProxyURL(ok); err != nil {
 			t.Fatalf("%q 应合法: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"127.0.0.1:1080", "ftp://x:1", "socks5://", "http://"} {
+	// SOCKS 与其它协议一律拒绝（claude 只认 HTTP 代理）。
+	for _, bad := range []string{"127.0.0.1:1080", "ftp://x:1", "socks5://", "http://",
+		"socks5://127.0.0.1:1080", "socks5h://proxy.example:1080", "socks4://x:1"} {
 		if _, err := NormalizeProxyURL(bad); err == nil {
 			t.Fatalf("%q 应被拒绝", bad)
 		}
 	}
 	s, _ := openTemp(t)
-	if _, err := s.Apply(Patch{ProxyURL: strPtr("socks4://x:1")}); err == nil {
-		t.Fatal("不支持的协议应报错")
+	if _, err := s.Apply(Patch{ProxyURL: strPtr("socks5://127.0.0.1:1080")}); err == nil {
+		t.Fatal("SOCKS 代理应报错")
 	}
 }
 

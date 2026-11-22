@@ -276,12 +276,12 @@ func TestGitEnvProxy(t *testing.T) {
 		}
 	}
 
-	SetProxySource(func() string { return "socks5h://127.0.0.1:1080" })
+	SetProxySource(func() string { return "http://127.0.0.1:7890" })
 	env = gitEnv()
 	joined := strings.Join(env, "\n")
 	for _, want := range []string{
-		"https_proxy=socks5h://127.0.0.1:1080",
-		"HTTPS_PROXY=socks5h://127.0.0.1:1080",
+		"https_proxy=http://127.0.0.1:7890",
+		"HTTPS_PROXY=http://127.0.0.1:7890",
 		"no_proxy=localhost,127.0.0.1,::1",
 		"LC_ALL=C",
 	} {

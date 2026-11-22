@@ -280,7 +280,8 @@ type Settings struct {
 	Locale   string `json:"locale"`
 	FontSize int    `json:"font_size"`
 
-	// ProxyURL 是派给 claude 子进程的 HTTP/HTTPS/SOCKS5 代理；空表示直连。
+	// ProxyURL 是派给 claude 子进程的 HTTP/HTTPS 代理；空表示直连。
+	// 不收 SOCKS：claude 是 Bun 打包的，它的 fetch 只认 HTTP 代理（见 NormalizeProxyURL）。
 	ProxyURL string `json:"proxy_url"`
 
 	// IdleMinutes 是空闲会话的回收阈值（分钟），0 表示用默认值。
@@ -516,6 +517,8 @@ func normalizePreferences(v *Settings) {
 		v.SearchCount = DefaultSearchCount
 	}
 	if v.ProxyURL != "" {
+		// 校验不过一律丢弃：手改配置留下的 `socks5://…` 会让 claude 每一轮都报
+		// `UnsupportedProxyProtocol`（见 NormalizeProxyURL），比直连更糟。
 		proxy, err := NormalizeProxyURL(v.ProxyURL)
 		if err != nil {
 			v.ProxyURL = ""
@@ -542,7 +545,11 @@ func normalizePreferences(v *Settings) {
 }
 
 // NormalizeProxyURL 校验并归一化代理地址；空串表示直连。
-// 只接受 http/https/socks5/socks5h，避免把任意字符串塞给 CLI 的环境变量。
+//
+// **只接受 http/https**。claude 二进制是 Bun 打包的，它的 fetch 只认 HTTP 代理：
+// 拿到 `socks5://` 时既不握手也不直连，而是把整个请求判成
+// `API Error: Unable to connect to API (UnsupportedProxyProtocol)`，会话一个字都跑不出来。
+// 所以 SOCKS 在这里就挡掉，让用户去填代理客户端提供的 HTTP 端口——那个端口同样能出去。
 func NormalizeProxyURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -553,9 +560,12 @@ func NormalizeProxyURL(raw string) (string, error) {
 		return "", fmt.Errorf("settings: 代理地址无法解析: %w", err)
 	}
 	switch strings.ToLower(u.Scheme) {
-	case "http", "https", "socks5", "socks5h":
+	case "http", "https":
+	case "socks5", "socks5h", "socks", "socks4", "socks4a":
+		return "", fmt.Errorf("settings: 不支持 SOCKS 代理（%q）：claude 只认 HTTP 代理，"+
+			"请改用代理客户端提供的 HTTP 端口，例如 http://127.0.0.1:7890", u.Scheme)
 	default:
-		return "", fmt.Errorf("settings: 不支持的代理协议 %q（支持 http/https/socks5/socks5h）", u.Scheme)
+		return "", fmt.Errorf("settings: 不支持的代理协议 %q（支持 http/https）", u.Scheme)
 	}
 	if u.Host == "" {
 		return "", errors.New("settings: 代理地址缺少主机")
@@ -868,20 +878,19 @@ func (v Settings) Env() []string {
 	)
 	if proxy := strings.TrimSpace(v.ProxyURL); proxy != "" {
 		// 大小写都写：Node / curl / 各家 CLI 读的变量名不完全一致。
+		// 只写 HTTP 代理相关的那几个——设置层已经把 SOCKS 挡在门外（见
+		// NormalizeProxyURL），留一份 SOCKS_PROXY 只会让人以为这里支持 SOCKS。
 		for _, key := range []string{
-			"HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "SOCKS_PROXY",
-			"https_proxy", "http_proxy", "all_proxy", "socks_proxy",
+			"HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY",
+			"https_proxy", "http_proxy", "all_proxy",
 		} {
 			out = append(out, key+"="+proxy)
 		}
 		// 本地中继（ANTHROPIC_BASE_URL=127.0.0.1）不能绕到外部代理。
 		out = append(out, "NO_PROXY=localhost,127.0.0.1,::1")
 		out = append(out, "no_proxy=localhost,127.0.0.1,::1")
-		// Node 内置 fetch 只认 HTTP 代理；socks5 交给 CLI 自己的 proxy-agent。
-		scheme := strings.ToLower(strings.SplitN(proxy, ":", 2)[0])
-		if scheme == "http" || scheme == "https" {
-			out = append(out, "NODE_USE_ENV_PROXY=1")
-		}
+		// Node 内置 fetch 默认不读 *_PROXY，要显式打开。
+		out = append(out, "NODE_USE_ENV_PROXY=1")
 	}
 	return out
 }

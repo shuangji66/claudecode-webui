@@ -185,15 +185,25 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   {cwd, resume:id}`（同一 id，`--resume` 保住上下文），进行中则等 `result` 到达再重开；
   还没发过消息的对话没有转录，`--resume` 会失败，那种情况直接新建。
 - 界面偏好 `locale`（zh/en）、`font_size`（12–20）、
-  `proxy_url`（http/https/socks5/socks5h，空=直连）落在 `settings.json`；
+  `proxy_url`（**只收 http/https**，空=直连）落在 `settings.json`；
   **主题不在这里**：`theme` 只缓存在浏览器 localStorage（每台设备各看各的），
   `Settings`/`Public`/`Patch` 都没有这个字段，旧配置里的 `theme` 读时忽略、下次写盘即消失。
   `Open` 时补默认值，`Apply` 时校验，非法值直接报错。
+- **SOCKS 代理不支持，而且必须在设置层挡掉**：claude 二进制是 **Bun 打包**的（`strings` 里
+  全是 `oven-sh/bun` 与 `Bun.` 内建），Bun 的 fetch 只支持 `http://` / `https://` 代理——
+  拿到 `socks5://` 时它既不握手也不回落直连，而是把每个请求判成
+  `API Error: Unable to connect to API (UnsupportedProxyProtocol)`（二进制里的
+  `UnsupportedProxyProtocol` 来自 Bun 的 HTTP 错误码表，与 undici 的 `ERR_*` 不是一套）。
+  症状是「配了 socks 之后一句话都跑不出来」，而不是「不走代理」。
+  所以 `NormalizeProxyURL` 只放行 http/https，SOCKS 一律 400 并提示改用代理客户端的 HTTP 端口；
+  `Open` 时把配置文件里残留的 socks 值**丢弃**（回落直连，比每轮报错好），
+  `netproxy.Env` / `netproxy.Func` 再各挡一道（手改配置、旧值残留都不该把会话打成不可用）。
+  前端 `lib/proxy.ts` 是同一规则的镜像，只做即时反馈。
 - **代理变量必须大小写都写**（实测 2.1.325）：这个 CLI 只认小写 `https_proxy`/`http_proxy`，
   只给大写 `HTTPS_PROXY` 时它一个字节都不走代理（连 `NODE_USE_ENV_PROXY=1` 也救不回来）。
   `Settings.Env()` 因此两套都注入，`process.CleanEnv` 两套都先剔除继承值。
-  `socks5://` 的 URL 它也不做 SOCKS 握手，而是当成 HTTP 代理发 `CONNECT`——配 socks 时
-  代理端看到的是普通 CONNECT，不是 SOCKS5 greeting。
+  只注入 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY` 三个（大小写各一份）——`SOCKS_PROXY` 不再写，
+  留着只会让人以为这里支持 SOCKS。
 - **代理要覆盖三类出站**：① claude 子进程（`Settings.Env()` → `process.CleanEnv` 后追加）；
   ② 面板自己的 HTTP（拉模型列表 / 探测端点 / 验证模型 / 下载 claude）；③ 右侧栏的 git 子进程。
   后两者**不会**自动读设置：Go 的 `http.ProxyFromEnvironment` 只读进程启动时的环境变量，

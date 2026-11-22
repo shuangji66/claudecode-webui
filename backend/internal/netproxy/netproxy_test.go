@@ -9,20 +9,30 @@ func TestEnv(t *testing.T) {
 	if got := Env(""); got != nil {
 		t.Fatalf("空代理应返回 nil，得到 %v", got)
 	}
-	got := Env("  socks5h://user:pass@127.0.0.1:1080 ")
+	got := Env("  http://user:pass@127.0.0.1:7890 ")
 	want := map[string]bool{
-		"HTTPS_PROXY=socks5h://user:pass@127.0.0.1:1080": true,
-		"https_proxy=socks5h://user:pass@127.0.0.1:1080": true,
-		"ALL_PROXY=socks5h://user:pass@127.0.0.1:1080":   true,
-		"all_proxy=socks5h://user:pass@127.0.0.1:1080":   true,
-		"NO_PROXY=localhost,127.0.0.1,::1":               true,
-		"no_proxy=localhost,127.0.0.1,::1":               true,
+		"HTTPS_PROXY=http://user:pass@127.0.0.1:7890": true,
+		"https_proxy=http://user:pass@127.0.0.1:7890": true,
+		"ALL_PROXY=http://user:pass@127.0.0.1:7890":   true,
+		"all_proxy=http://user:pass@127.0.0.1:7890":   true,
+		"NO_PROXY=localhost,127.0.0.1,::1":            true,
+		"no_proxy=localhost,127.0.0.1,::1":            true,
 	}
 	for _, kv := range got {
 		delete(want, kv)
 	}
 	if len(want) != 0 {
 		t.Fatalf("缺少 %v（得到 %v）", want, got)
+	}
+}
+
+// SOCKS 地址必须当作「没配代理」：claude 是 Bun 打包的，收到 socks5:// 只会
+// 每一轮都失败为 UnsupportedProxyProtocol，直连至少还有可能通。
+func TestEnvDropsSocks(t *testing.T) {
+	for _, addr := range []string{"socks5://127.0.0.1:1080", "socks5h://proxy.example:1080", "socks4://x:1"} {
+		if got := Env(addr); got != nil {
+			t.Fatalf("%q 应被丢弃，得到 %v", addr, got)
+		}
 	}
 }
 
@@ -45,6 +55,13 @@ func TestFunc(t *testing.T) {
 	}
 	if u, _ := Func("::::")(req); u != nil {
 		t.Fatalf("非法地址应直连，得到 %v", u)
+	}
+	// SOCKS 与子进程环境一样被丢弃：Go 的 Transport 虽然能走 socks5，但面板
+	// 与 claude 必须用同一条代理，否则「设置页能拉列表、会话却连不上」。
+	for _, addr := range []string{"socks5://127.0.0.1:1080", "socks5h://proxy.example:1080"} {
+		if u, _ := Func(addr)(req); u != nil {
+			t.Fatalf("%q 应直连，得到 %v", addr, u)
+		}
 	}
 }
 

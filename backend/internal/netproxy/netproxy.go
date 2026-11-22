@@ -33,17 +33,34 @@ func isLoopback(host string) bool {
 	return false
 }
 
+// parseHTTPProxy 解析代理地址，只认 http/https；其余（含 socks5）返回 nil。
+//
+// claude 二进制是 Bun 打包的，它的 fetch 只支持 HTTP 代理：给 `socks5://` 时
+// 整个请求直接失败为 `UnsupportedProxyProtocol`。设置层已经在入口挡掉了 SOCKS，
+// 这里再挡一次是防御——手改配置文件或旧值残留都不该把会话打成不可用。
+func parseHTTPProxy(proxy string) *url.URL {
+	proxy = strings.TrimSpace(proxy)
+	if proxy == "" {
+		return nil
+	}
+	u, err := url.Parse(proxy)
+	if err != nil || u.Host == "" {
+		return nil
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https":
+		return u
+	}
+	return nil
+}
+
 // Func 返回 http.Transport.Proxy 需要的回调；代理为空表示直连。
 //
 // 地址非法时按直连处理：设置层已经校验过协议，这里只是防御性兜底，
 // 不能因为一个坏地址让所有请求都抛错。
 func Func(proxy string) func(*http.Request) (*url.URL, error) {
-	proxy = strings.TrimSpace(proxy)
-	if proxy == "" {
-		return func(*http.Request) (*url.URL, error) { return nil, nil }
-	}
-	u, err := url.Parse(proxy)
-	if err != nil || u.Host == "" {
+	u := parseHTTPProxy(proxy)
+	if u == nil {
 		return func(*http.Request) (*url.URL, error) { return nil, nil }
 	}
 	// 回环地址直连，与 Env 注入的 NO_PROXY 保持一致：否则「配了代理」之后
@@ -57,15 +74,18 @@ func Func(proxy string) func(*http.Request) (*url.URL, error) {
 	}
 }
 
-// Env 返回给子进程用的代理环境变量；代理为空时返回 nil（直连）。
+// Env 返回给子进程用的代理环境变量；代理为空或不是 HTTP 代理时返回 nil（直连）。
 //
 // 大小写两套都写：git 走的 libcurl 两套都认，而有些工具只认其中一套
 // （claude CLI 只认小写 https_proxy，见 backend/AGENTS.md）。
+// SOCKS 地址在这里被丢弃而不是照抄进变量：claude 收到它只会每一轮都报
+// `UnsupportedProxyProtocol`，直连至少还有可能通。
 func Env(proxy string) []string {
-	proxy = strings.TrimSpace(proxy)
-	if proxy == "" {
+	u := parseHTTPProxy(proxy)
+	if u == nil {
 		return nil
 	}
+	proxy = u.String()
 	out := make([]string, 0, 10)
 	for _, key := range []string{
 		"HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY",

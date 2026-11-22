@@ -186,11 +186,15 @@ id 会复用进程，重复调用不会多起 claude。没有历史对话时后�
 
 - **通用**：新建会话的默认权限模式（置顶）、主题（浅色 / 深色 / 跟随系统）、
   界面语言（简体中文 / English）、会话字号（12–20px）；修改写入 `settings.json`。
-- **代理**：为 claude 子进程设置 HTTP/HTTPS/SOCKS5 代理，留空直连。保存后
+- **代理**：为 claude 子进程设置 HTTP / HTTPS 代理（**只支持 http:// 与 https://**），留空直连。保存后
   `POST /api/settings/proxy` 会重启所有运行中的 claude 会话，使代理变量立即生效；
   重启用 `--resume` 恢复同一对话 id，对话记录不会丢；
-  代理同时写入 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `SOCKS_PROXY`（大小写都有），
+  代理写入 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`（大小写都有）与 `NODE_USE_ENV_PROXY=1`，
   `localhost` 与 `127.0.0.1` 自动走 `NO_PROXY`。
+  **SOCKS 不可用**：claude 二进制由 Bun 打包，它的 fetch 只认 HTTP 代理，填 `socks5://`
+  会让每一轮都报 `Unable to connect to API (UnsupportedProxyProtocol)`；要经 SOCKS 出去，
+  请让代理客户端（Clash / sing-box 等）开一个 HTTP 端口并填那个地址。
+  配置文件里残留的 SOCKS 地址在启动时会被丢弃（回落直连）。
 - **模型**（左侧栏功能区第一项）：管理提供商。新建提供商时可以先从**预置提供商**里选（Anthropic、DeepSeek、
   Z.AI、Kimi、Qwen、MiniMax、小米、OpenRouter 等 20+ 家），自动填 ID 与 Base URL；
   也可以选「自定义」手动填写 ID。预置只收录 **Anthropic 兼容端点**——原生 API 是
