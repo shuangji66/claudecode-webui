@@ -696,8 +696,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     const ok = await askConfirm({
       title: t("重启进程", "Restart process"),
       message: t(
-        `重启「${titleOf(c)}」的 claude 进程？对话记录与上下文都会保留（按同一 id 恢复），正在进行的一轮会被中断。`,
-        `Restart the claude process for "${titleOf(c)}"? The conversation and its context are kept (it resumes with the same id); a running turn is interrupted.`,
+        `重启「${titleOf(c)}」的 claude 进程？对话记录与上下文都会保留，正在进行的一轮会被中断。`,
+        `Restart the claude process for "${titleOf(c)}"? The conversation and its context are kept; a running turn is interrupted.`,
       ),
       confirmText: t("重启进程", "Restart"),
     });
