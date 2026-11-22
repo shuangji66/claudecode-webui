@@ -555,14 +555,21 @@ func (s *Server) watchFirstTranscript(id string) {
 	}
 	s.transcriptProbes[id] = true
 	s.transcriptProbeMu.Unlock()
+	// 间隔在**起协程之前**读一次：这个变量是给测试调小的，探针跑起来之后就不再
+	// 读全局——否则 goroutine 与测试收尾时那次写回会撞成数据竞争。
+	every := firstTranscriptProbeInterval
 	go func() {
 		defer func() {
 			s.transcriptProbeMu.Lock()
 			delete(s.transcriptProbes, id)
 			s.transcriptProbeMu.Unlock()
 		}()
-		for i := 0; i < firstTranscriptProbeTries; i++ {
-			time.Sleep(firstTranscriptProbeInterval)
+		for i := 0; i <= firstTranscriptProbeTries; i++ {
+			// 先查再睡：转录常常在 prompt 之后几十毫秒就有了，第一轮再等 500ms
+			// 等于把「首条消息落盘」这件事人为推迟半秒。
+			if i > 0 {
+				time.Sleep(every)
+			}
 			if s.hasTranscript(id) {
 				s.BroadcastConversationsChanged()
 				return
