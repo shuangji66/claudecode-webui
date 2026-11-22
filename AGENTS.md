@@ -136,6 +136,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
    入队就返回，不等 ack（队列满直接 `Close`，绝不把读 stdin 卡死在写不进去上）。
    串行化由独立的 `writeLoop` 保证（`writeNow` 里 `wmu` 加锁）。`writeLine` 是
    「要拿到写入结果」的版本，只能用在读循环**之外**的地方。
+   **写本身有 10 秒超时**（`session.WriteTimeout`）：`tr.Write` 在管道写满时会一直阻塞，
+   而 `writeLine` 的调用方是 HTTP 处理器（prompt / 审批回包 / 切模式），没有超时就是
+   「点发送之后请求永远不返回」。Linux 的 pipe 不支持 `SetWriteDeadline`，所以在
+   goroutine 里写、主流程等结果或超时；超时按「会话不可用」处理。
 7. **未实现的控制请求子类型必须回 `unsupported_request`**，不能让 CLI 干等。
 8. **鉴权按通道区分，且端口访问默认关闭**。新增 HTTP 路由要挂 `s.authed`；WS 必须校验 token。
    环境变量 `CCWEB_AUTH_TOKEN` 两条通道都校验；端口访问开启后，TCP 通道必须登录
@@ -450,8 +454,13 @@ hub ── manager ── session ── process ── claude (NDJSON)
   看不见时把 `visible=false` 传下去，让 Git 面板退订（`git.unwatch`），别在没人看的屏幕上
   每 3 秒跑一次 git。首次打开前仍然不挂载（懒加载 chunk 不该为没开过的侧栏下载）。
   想彻底结束终端，关那个标签就行。
-- **终端可多开**：每个终端一条 WS、一个 PTY；后端上限 8（`maxTerminals`），
-  换工作区时全部结束（旧 shell 的 cwd 已经不成立）。
+- **终端可多开**：每个终端一条 WS、一个 PTY；后端上限 32（`maxTerminals`），
+  换工作区时全部结束（旧 shell 的 cwd 已经不成立）。32 是「正常使用根本碰不到」的量级，
+  单个 shell 常驻几 MB，仍在 NAS 能接受的范围内。
+  **浏览器拿不到 WS 握手失败的响应体**（`onerror`/`onclose` 只有通用失败），所以前端在
+  建连**之前**先查 `GET /api/terminal/slots`（挂 `s.authed`），满了直接给出
+  「已达上限 N，请先关闭不再使用的终端」，并且不发起那条注定被拒的连接；
+  查不到（老后端 / 网络抖动）时放行，交给 WS 自己报错。
 - **Git 支持工作区内的多个仓库与嵌套仓库**：`GET /api/git/repos` 分两遍扫（对齐
   dsh-better-sidebar 的 `repoRoots`）：先按深度 3 从**授权的工作区**往下找仓库（命中即停），
   再对每个仓库浅扫 3 层，把子模块 / 独立检出这类**仓库里的仓库**单独列出来（`nested`）。
@@ -1422,6 +1431,14 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **`CloseTCP` 要连活动连接一起断**：换端口只关旧 listener（页面不被踢），但关闭端口访问
   是安全动作，必须 `http.Server.Close()` 掉当前与所有 retired server（含 WebSocket）。
   只关 listener 的话，已经打开的页面会继续可用，直到自己断开。
+- **登录失败要限流**（`authz.LoginLimiter`）：同一来源累计失败 5 次就锁 1 分钟，
+  期间**连密码都不校验**（不消耗 PBKDF2），登录成功立即清零，15 分钟窗口过后重新计数。
+  为什么必须有：每次尝试都要跑 21 万轮 PBKDF2（几十毫秒 CPU），而端口访问对局域网开放
+  ——没有限流时，拿到端口的人可以用几十个并发请求把 NAS 的 CPU 打满，连密码都不用猜对。
+  按**来源**而不是全局计数（全局会把所有人一起锁在门外）。来源只认 TCP 的 `RemoteAddr`，
+  **不看 `X-Forwarded-For` 之类**：这条接口只在 TCP 通道上有意义，而那条路上客户端随手就能
+  伪造那个头，认了等于限流形同虚设。「端口访问未开启 / 没设密码」不算猜密码，不计入失败。
+  限流只在内存里（进程重启即清零）——它挡的是在线爆破，不是长期记账。
 - **密码复杂度在 `authz.ValidatePassword`**：≥8 位、同时含字母与数字、不含控制字符；
   前端 `lib/password.ts` 是同一规则的镜像，只做即时反馈，后端仍然独立校验。
 - **端口 = 设置项，不是环境变量**：默认 3141（`settings.DefaultTCPPort`），
@@ -1729,6 +1746,12 @@ hub ── manager ── session ── process ── claude (NDJSON)
   浏览器的是随二进制释放的 `runner.mjs`（node + playwright）。**不要改成纯 Go 的 CDP**：
   内核的版本、下载、启动参数、无头 profile 都在 playwright 手里，自己维护一套 CDP 客户端
   等于把「换内核 / 升版本」变成两套实现。
+- **node 只查 PATH，不写死任何落点**（`browserbin.Manager.NodePath`）：飞牛把依赖应用
+  （nodejs_v24 等）的 bin 目录注入到 PATH 里，那就是唯一需要的来源。写死
+  `/var/apps/nodejs_vNN/...` 既是多余的第二套判定，也会在升级到 nodejs_v26 之后失效
+  ——旧路径不存在、界面报「找不到 node」，而环境里明明有一个能用的。这也符合第 3 节
+  第 2 条「禁止硬编码 `/var/apps`」。找不到就是真的没有：安装按钮会直接报错，
+  而不是下载完才失败。
 - **版本是钉死的**：`browserbin.PlaywrightVersion` 决定内核 build（1.63.0 → chromium 1243），
   `Kernels` 里的 `Version` 是给界面看的内核版本号。升级只改这两个常量，
   `browserbin_test.go` 会钉住它们——它们是产品承诺，不是「跟着 npm latest 走」。
