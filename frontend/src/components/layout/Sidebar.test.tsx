@@ -423,6 +423,60 @@ describe("Sidebar 会话行的管理入口", () => {
   });
 });
 
+describe("Sidebar 新建的空对话（对齐 DSH 的 blank 行）", () => {
+  const cwd = "/w/demo";
+
+  beforeEach(() => {
+    localStorage.clear();
+    resetHiddenFeaturesCache();
+    useAppStore.setState({
+      workspaces: [{ path: cwd, name: "demo", last_used: "", exists: true }],
+      currentWorkspace: cwd,
+      activeId: "c-new",
+      items: {},
+      conversations: [
+        {
+          id: "c-new",
+          cwd,
+          // 后端在首条消息落盘前不写标题，对话区与侧栏都显示「新对话」。
+          title: "",
+          created_at: "",
+          last_active: "2026-01-02T00:00:00Z",
+          messages: 0,
+          archived: false,
+          live: true,
+        },
+      ],
+    });
+  });
+
+  // DSH 的 blank 行只有标题：没有第一条消息，归档 / 置顶 / 重命名 / 分叉 / 删除
+  // 都还没有对象，摆出来只是几个点了没意义的图标。
+  it("还没发过消息：不摆归档 / 置顶 / 更多按钮，右键也不弹管理菜单", () => {
+    const { container } = renderSidebar();
+    for (const name of [/归档/, /置顶/, /管理对话/]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    // 没有 preventDefault：右键交回浏览器原生菜单，不弹「管理对话」。
+    const row = container.querySelector('[data-active="true"]') as HTMLElement;
+    expect(fireEvent.contextMenu(row)).toBe(true);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  // 判定复用 `isNewChat` 的实时信号：发送后 items 立刻非空，不必等 600ms 后那次列表刷新。
+  it("发出第一条消息后恢复操作组", () => {
+    act(() => {
+      useAppStore.setState({
+        items: { "c-new": [{ id: "u1", seq: 1, ts: Date.now(), kind: "user", text: "第一条消息" }] },
+      });
+    });
+    renderSidebar();
+    expect(screen.getByRole("button", { name: "管理对话 第一条消息" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "归档 第一条消息" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "置顶 第一条消息" })).toBeInTheDocument();
+  });
+});
+
 describe("Sidebar 新建对话后关闭移动端抽屉", () => {
   const path = "/w/demo";
 
