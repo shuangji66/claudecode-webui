@@ -354,9 +354,10 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
   `POST /api/plugins/refresh|install|enabled|update|uninstall|marketplace`、
   `GET /api/plugins/details`。变更动作是**单槽后台任务**（并发回 409），project 作用域先过
   `authorizedCwd`；`plugin details` 只认已安装插件，未安装时回 `inspect`（清单文件）。细节见根 AGENTS.md 4.13。
-- 内置搜索路由：`GET /api/search`、`POST /api/search/config|test|attach|detach`。配置走
-  `settings.Patch`（校验与密钥语义不重复实现）；`attach` 只写用户级 MCP 配置，命令用
-  `os.Executable()` 的绝对路径。细节见根 AGENTS.md 4.12。
+- 内置搜索路由：`GET /api/search`、`POST /api/search/config|test`。配置走
+  `settings.Patch`（校验与密钥语义不重复实现）。**没有 attach/detach**：注册由
+  `EnsureSearchMCP` 维护（启动时与保存配置后各同步一次，命令用 `os.Executable()` 的
+  绝对路径），与另外两条内置服务同一套；细节见根 AGENTS.md 4.12。
 - 飞牛授权目录路由：`GET /api/dirs`（列表）、`POST /api/dirs/remove`（撤销）。uid **只认 unix
   socket 通道上网关注入的 `X-Trim-Userid`**（不信客户端）：TCP 通道一律拒收这个头（那条路上
   没有网关，浏览器可以随便写，认它就能查/撤销别人的授权），拿不到就回空列表 + 原因；

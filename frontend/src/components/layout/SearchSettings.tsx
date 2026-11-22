@@ -1,15 +1,19 @@
-// 「设置 → MCP → 内置搜索」：DeepSeek Search / Fetch API 的配置与注册。
+// 「设置 → MCP → 内置搜索」：DeepSeek Search / Fetch API 的配置。
 //
 // 它和下面那些 MCP server 不是一回事：这里配的是本应用自带的
 // `ccweb mcp-web` 子命令，由它去调网关的 /search 与 /fetch。
 // 一次搜索是一次 HTTP 请求，不额外花模型回合；密钥与对话用的分开填。
+//
+// **这一块没有「注册 / 移除」按钮**：这条服务与自动化任务、内置浏览器一样由后端维护
+// （`EnsureSearchMCP`），启用开关就是它的开关。以前那两个按钮让同一份用户级配置有了
+// 两个入口——MCP 页能删、这里能注册，删完设置里还写着「已启用」，工具却没了。
 import { useEffect, useState } from "react";
 import { NO_AUTOFILL } from "../../lib/autofill";
 import { useT } from "../../lib/i18n";
 import { useSearchStore } from "../../store/useSearchStore";
 import { Button } from "../common/Button";
 import { Collapsible } from "../common/Collapsible";
-import { IconAlert, IconGlobe, IconPlus, IconRefresh, IconTrash } from "../common/Icons";
+import { IconAlert, IconGlobe, IconTrash } from "../common/Icons";
 
 const inputClass =
   "w-full rounded-lg border border-line-strong bg-canvas px-2.5 py-1.5 text-[12.5px] text-ink outline-none placeholder:text-faint focus-visible:border-brand/60";
@@ -24,8 +28,6 @@ export function SearchSettings() {
   const load = useSearchStore((s) => s.load);
   const save = useSearchStore((s) => s.save);
   const runTest = useSearchStore((s) => s.runTest);
-  const attach = useSearchStore((s) => s.attach);
-  const detach = useSearchStore((s) => s.detach);
 
   const [base, setBase] = useState("");
   const [count, setCount] = useState("10");
@@ -166,48 +168,37 @@ export function SearchSettings() {
           )}
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-2 text-[11px] text-muted">
+        <div className="mt-3 border-t border-line pt-2 text-[11px] leading-relaxed text-muted">
           {!status?.mcp_supported ? (
             <span>{t("这套部署没有启用 MCP 管理，无法注册到 Claude。", "MCP management is not enabled in this deployment.")}</span>
           ) : status.attached ? (
-            <>
-              <span className="min-w-0">
-                {t("已注册到用户级 MCP 配置（所有项目可用）", "Registered in user-scope MCP config (all projects)")}
-                <span className="ml-1 font-mono text-[10px] text-faint">{status.server_name}</span>
-              </span>
-              {!status.always_load && (
-                // 老版本注册的条目没有 alwaysLoad：工具被延迟到 ToolSearch 后面，
-                // 模型只看到名字。重新注册一次就补上了。
-                <span className="min-w-0 text-warn">
-                  {t("这条注册来自旧版本，工具没有常驻工具表，模型可能想不到用它。", "This registration predates always-load, so the tools may stay hidden from the model.")}
-                </span>
+            <span className="min-w-0">
+              {t("已注册到用户级 MCP 配置（所有项目可用）", "Registered in user-scope MCP config (all projects)")}
+              <span className="ml-1 font-mono text-[10px] text-faint">{status.server_name}</span>
+              {t("；要临时关掉，就在下面的用户级列表里「停用」。", "; use Disable in the user-scope list below to switch it off for now.")}
+            </span>
+          ) : enabled && status.search_api_key_set ? (
+            // 启用且有密钥却不在配置里：正常路径上不会停在这（保存即同步）。
+            // 说清楚怎么补，而不是留一句「正在注册」永远转下去。
+            <span className="text-warn">
+              {t(
+                "已启用，但这条服务还不在 MCP 配置里——再保存一次即可补上。",
+                "Enabled, but the server is not in the MCP config yet — save once more to add it.",
               )}
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy}
-                onClick={() => void attach()}
-                icon={<IconRefresh size={12} />}
-              >
-                {status.always_load ? t("重新注册", "Re-register") : t("补上常驻", "Enable always-load")}
-              </Button>
-              <Button size="sm" variant="ghost" disabled={busy} onClick={() => void detach()} icon={<IconTrash size={12} />}>
-                {t("移除", "Remove")}
-              </Button>
-            </>
+            </span>
           ) : (
-            <>
-              <span>{t("还没注册到 Claude——注册后会多出 web_search / web_fetch 两个工具。", "Not registered yet — registering adds the web_search and web_fetch tools.")}</span>
-              <Button size="sm" variant="secondary" disabled={busy || !enabled || !status.search_api_key_set} onClick={() => void attach()} icon={<IconPlus size={12} />}>
-                {t("注册到 Claude", "Register with Claude")}
-              </Button>
-            </>
+            <span>
+              {t(
+                "启用并保存密钥后，会自动注册成 ccweb-web（下面用户级列表里能看到它）。",
+                "Enabling it with a saved key registers ccweb-web automatically (it then shows up in the user-scope list below).",
+              )}
+            </span>
           )}
         </div>
         <p className="mt-1 text-[10.5px] leading-relaxed text-faint">
           {t(
-            "注册/移除后要重开会话才生效（MCP server 在会话启动时连接）。",
-            "Reopen the conversation after registering or removing (MCP servers connect at session start).",
+            "启用 / 停用后要重开会话才生效（MCP server 在会话启动时连接）。",
+            "Reopen the conversation after enabling or disabling (MCP servers connect at session start).",
           )}
         </p>
       </Collapsible>

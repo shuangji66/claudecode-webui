@@ -9,8 +9,8 @@
 //   3. 探测只针对已保存的服务，命令写错了（PATH 里没有 npx 之类）会在这里报出来。
 //
 // 这一页**自己渲染 `PageShell`**（与模型页同一套）：页头右侧是「添加」——它是这一页
-// 唯一的整体动作，而正文里的分组（内置搜索 / 用户级 / 项目级）都可以长到一屏以外，
-// 钉在正文顶部等于滚下去之后要一路翻回来才能加一条。
+// 唯一的整体动作，而正文里的分组（内置搜索 / 内置浏览器 / 自动化任务 / 用户级 /
+// 项目级）都可以长到一屏以外，钉在正文顶部等于滚下去之后要一路翻回来才能加一条。
 
 import { useEffect, useRef, useState } from "react";
 import { NO_AUTOFILL } from "../../lib/autofill";
@@ -24,7 +24,8 @@ import { Button } from "../common/Button";
 import { Dialog } from "../common/Dialog";
 import { Select } from "../common/Select";
 import { askConfirm } from "../common/SystemDialogs";
-import { IconAlert, IconPlus, IconRefresh, IconTrash } from "../common/Icons";
+import { IconAlert, IconClock, IconPlus, IconRefresh, IconTrash } from "../common/Icons";
+import { Collapsible } from "../common/Collapsible";
 import { PageShell } from "./FeaturePage";
 import { SETTINGS_PANE_FLEX } from "./settings/SettingsSurface";
 import { SearchSettings } from "./SearchSettings";
@@ -300,6 +301,25 @@ export function McpSettings({
 
         <SearchSettings />
         <BrowserSettings />
+        {/* 自动化任务：与上面两块同一排「内置能力」，也是一块默认收起的折叠块——
+            这一排的样子必须一致（一行标题 + 摘要，点开才看内容），否则第三块像
+            贴错了位置。但它只有说明：任务在侧栏的「自动化任务」页里建、在用户级
+            列表里停用，所以没有 actions、没有表单。 */}
+        <div className="mb-5" data-mcp-card="schedule">
+          <Collapsible
+            title={t("自动化任务", "Scheduled tasks")}
+            icon={<IconClock size={13} />}
+            summary="ccweb-schedule"
+            tone="muted"
+          >
+            <p className="text-[11px] leading-relaxed text-muted">
+              {t(
+                "让模型按时间办事：说一句「每天早上 9 点提醒我」，它就落成一条任务，到点由本应用把消息发进指定的对话（新建一条，或接着某条聊）。任务在左侧栏的「自动化任务」里查看和修改，这一页不需要配。",
+                "Runs work on a schedule: “remind me every day at 9” becomes a task, and the app delivers the message into a conversation when it is due (new or resumed). Tasks are managed under Scheduled tasks on the left; nothing to set up here.",
+              )}
+            </p>
+          </Collapsible>
+        </div>
 
         <section className="mb-4">
           <div className="mb-1.5 flex items-baseline justify-between gap-2">

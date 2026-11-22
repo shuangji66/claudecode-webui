@@ -271,8 +271,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/search", s.authed(s.handleGetSearch))
 	s.mux.HandleFunc("POST /api/search/config", s.authed(s.handleSaveSearch))
 	s.mux.HandleFunc("POST /api/search/test", s.authed(s.handleTestSearch))
-	s.mux.HandleFunc("POST /api/search/attach", s.authed(s.handleAttachSearch))
-	s.mux.HandleFunc("POST /api/search/detach", s.authed(s.handleDetachSearch))
 	s.mux.HandleFunc("GET /api/claude/status", s.authed(s.handleClaudeStatus))
 	s.mux.HandleFunc("POST /api/claude/check", s.authed(s.handleClaudeCheck))
 	s.mux.HandleFunc("POST /api/claude/install", s.authed(s.handleClaudeInstall))

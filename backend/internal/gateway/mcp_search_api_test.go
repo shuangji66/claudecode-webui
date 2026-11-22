@@ -1,9 +1,12 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -32,11 +35,13 @@ func mcpReq(t *testing.T, srv *Server, method, target, token, body string) *http
 	return rec
 }
 
-// withMcp 给测试服务器装上 MCP 管理（配置文件都在临时目录里）。
-func withMcp(t *testing.T, srv *Server) {
+// withMcp 给测试服务器装上 MCP 管理（配置文件都在临时目录里），返回用户级配置路径。
+func withMcp(t *testing.T, srv *Server) string {
 	t.Helper()
 	dir := t.TempDir()
-	srv.d.Mcp = mcp.New(filepath.Join(dir, "home", ".claude.json"), filepath.Join(dir, "mcp-disabled.json"))
+	user := filepath.Join(dir, "home", ".claude.json")
+	srv.d.Mcp = mcp.New(user, filepath.Join(dir, "mcp-disabled.json"))
+	return user
 }
 
 func TestMcpAndSearchRequireAuth(t *testing.T) {
@@ -51,8 +56,6 @@ func TestMcpAndSearchRequireAuth(t *testing.T) {
 		{http.MethodGet, "/api/search"},
 		{http.MethodPost, "/api/search/config"},
 		{http.MethodPost, "/api/search/test"},
-		{http.MethodPost, "/api/search/attach"},
-		{http.MethodPost, "/api/search/detach"},
 	}
 	for _, c := range cases {
 		if rec := mcpReq(t, srv, c.method, c.target, "", "{}"); rec.Code != http.StatusUnauthorized {
@@ -67,8 +70,9 @@ func TestMcpRoutesReturn503WithoutManager(t *testing.T) {
 	if rec := mcpReq(t, srv, http.MethodGet, "/api/mcp", "secret", ""); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("/api/mcp 应 503，实际 %d", rec.Code)
 	}
-	if rec := mcpReq(t, srv, http.MethodPost, "/api/search/attach", "secret", "{}"); rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("/api/search/attach 应 503，实际 %d", rec.Code)
+	// 没有 MCP 管理时同步注册是空操作（不是错误）：搜索本身照样能用。
+	if err := srv.EnsureSearchMCP(); err != nil {
+		t.Fatalf("没有 MCP 管理时 EnsureSearchMCP 应空转: %v", err)
 	}
 	// 搜索状态本身不依赖 MCP，但必须明说这套部署不支持注册。
 	rec := mcpReq(t, srv, http.MethodGet, "/api/search", "secret", "")
@@ -150,16 +154,17 @@ func TestProbeOnlyAcceptsSavedServers(t *testing.T) {
 
 // 注册内置搜索时要一并落到配置里的是「工具常驻工具表」：不然 claude 会把这两个
 // 工具藏到 ToolSearch 后面，模型只看到名字、看不到描述，最终又得靠 CLAUDE.md 硬记。
-func TestAttachSearchSetsAlwaysLoad(t *testing.T) {
+//
+// 注册动作现在归后端（`EnsureSearchMCP`），界面不再有「注册到 Claude」按钮。
+func TestEnsureSearchMCPRegistersWhenEnabled(t *testing.T) {
 	srv, _ := newTestServer(t, "secret")
 	withMcp(t, srv)
 	key, enabled := "sk-search-key", true
 	if _, err := srv.d.Settings.Apply(settings.Patch{SearchAPIKey: &key, SearchEnabled: &enabled}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	rec := mcpReq(t, srv, http.MethodPost, "/api/search/attach", "secret", "{}")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("attach 应 200，实际 %d: %s", rec.Code, rec.Body.String())
+	if err := srv.EnsureSearchMCP(); err != nil {
+		t.Fatalf("EnsureSearchMCP: %v", err)
 	}
 	payload, err := srv.d.Mcp.List("")
 	if err != nil {
@@ -181,18 +186,146 @@ func TestAttachSearchSetsAlwaysLoad(t *testing.T) {
 		t.Fatalf("注册形态不对: %+v", found)
 	}
 
-	// 状态里要能看出这一条带没带 alwaysLoad：老版本注册的条目没有它，
-	// 前端据此提示「补上常驻」，而不是让用户以为已经生效了。
-	rec = mcpReq(t, srv, http.MethodGet, "/api/search", "secret", "")
+	// 状态里仍然回 attached：界面用它说一句「已注册 / 未注册」，但不再给按钮。
+	rec := mcpReq(t, srv, http.MethodGet, "/api/search", "secret", "")
 	var status struct {
-		Attached   bool `json:"attached"`
-		AlwaysLoad bool `json:"always_load"`
+		Attached bool `json:"attached"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
-	if !status.Attached || !status.AlwaysLoad {
+	if !status.Attached {
 		t.Fatalf("状态不对: %+v", status)
+	}
+}
+
+// 老版本注册的条目没有 alwaysLoad。以前靠界面那颗「重新注册」按钮补救，
+// 现在由 Ensure 逐字段比对顺手改掉——否则那颗按钮一删，这些部署永远修不回来。
+func TestEnsureSearchMCPRepairsLegacyEntry(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	withMcp(t, srv)
+	key, enabled := "sk-search-key", true
+	if _, err := srv.d.Settings.Apply(settings.Patch{SearchAPIKey: &key, SearchEnabled: &enabled}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, err := srv.d.Mcp.Save("", mcp.Server{
+		Name:    mcpSearchServer,
+		Scope:   mcp.ScopeUser,
+		Type:    mcp.TypeStdio,
+		Command: "/old/ccweb",
+		Args:    []string{"mcp-web"},
+	}); err != nil {
+		t.Fatalf("写入老条目: %v", err)
+	}
+	if err := srv.EnsureSearchMCP(); err != nil {
+		t.Fatalf("EnsureSearchMCP: %v", err)
+	}
+	cur, err := srv.d.Mcp.Find("", mcp.ScopeUser, mcpSearchServer)
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	if !cur.AlwaysLoad {
+		t.Fatal("ensure 应该把老条目的 alwaysLoad 补上")
+	}
+	if cur.Command == "/old/ccweb" {
+		t.Fatal("ensure 应该把命令改成当前二进制的绝对路径")
+	}
+}
+
+// 关掉搜索就要把这条服务摘掉：留着它，模型照样看得见两个工具，
+// 点进去只会得到「内置搜索未启用」，等于把开关做成了半成品。
+func TestEnsureSearchMCPRemovesWhenDisabled(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	withMcp(t, srv)
+	key, enabled := "sk-search-key", true
+	if _, err := srv.d.Settings.Apply(settings.Patch{SearchAPIKey: &key, SearchEnabled: &enabled}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if err := srv.EnsureSearchMCP(); err != nil {
+		t.Fatalf("EnsureSearchMCP: %v", err)
+	}
+	off := false
+	if _, err := srv.d.Settings.Apply(settings.Patch{SearchEnabled: &off}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if err := srv.EnsureSearchMCP(); err != nil {
+		t.Fatalf("EnsureSearchMCP: %v", err)
+	}
+	if _, err := srv.d.Mcp.Find("", mcp.ScopeUser, mcpSearchServer); !errors.Is(err, mcp.ErrNotFound) {
+		t.Fatalf("关掉之后不该还在配置里: %v", err)
+	}
+	// 再关一次不能报错（启动时幂等调用）。
+	if err := srv.EnsureSearchMCP(); err != nil {
+		t.Fatalf("重复 EnsureSearchMCP: %v", err)
+	}
+}
+
+// 配置一致时不要重写 .claude.json：那是 claude 自己的状态文件，
+// 每次启动都动一遍只会多一份写坏的风险。
+func TestEnsureSearchMCPLeavesFreshEntryAlone(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	userConfig := withMcp(t, srv)
+	key, enabled := "sk-search-key", true
+	if _, err := srv.d.Settings.Apply(settings.Patch{SearchAPIKey: &key, SearchEnabled: &enabled}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if err := srv.EnsureSearchMCP(); err != nil {
+		t.Fatalf("EnsureSearchMCP: %v", err)
+	}
+	before, err := os.ReadFile(userConfig)
+	if err != nil {
+		t.Fatalf("读配置: %v", err)
+	}
+	if err := srv.EnsureSearchMCP(); err != nil {
+		t.Fatalf("EnsureSearchMCP: %v", err)
+	}
+	after, err := os.ReadFile(userConfig)
+	if err != nil {
+		t.Fatalf("读配置: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("配置没变时不该重写 .claude.json")
+	}
+}
+
+// 内置搜索也是「由 ccweb 维护」的一条：MCP 页面只留探测与停用，
+// 编辑/删除一律 409（否则删完搜索面板还写着「已启用」，工具却没了）。
+func TestBuiltinSearchMcpCannotBeEditedOrDeleted(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	withMcp(t, srv)
+	key, enabled := "sk-search-key", true
+	if _, err := srv.d.Settings.Apply(settings.Patch{SearchAPIKey: &key, SearchEnabled: &enabled}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if err := srv.EnsureSearchMCP(); err != nil {
+		t.Fatalf("EnsureSearchMCP: %v", err)
+	}
+
+	rec := mcpReq(t, srv, http.MethodGet, "/api/mcp", "secret", "")
+	var payload mcp.Payload
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	var found *mcp.Server
+	for i := range payload.User {
+		if payload.User[i].Name == mcpSearchServer {
+			found = &payload.User[i]
+		}
+	}
+	if found == nil || !found.Builtin {
+		t.Fatalf("%s 应带 builtin 标记: %+v", mcpSearchServer, payload.User)
+	}
+
+	edited := `{"server":{"name":"` + mcpSearchServer + `","scope":"user","type":"stdio","command":"/bin/sh","args":["-c","x"]}}`
+	if rec := mcpReq(t, srv, http.MethodPost, "/api/mcp", "secret", edited); rec.Code != http.StatusConflict {
+		t.Fatalf("编辑内置搜索应 409，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	del := "/api/mcp?scope=user&name=" + mcpSearchServer
+	if rec := mcpReq(t, srv, http.MethodDelete, del, "secret", ""); rec.Code != http.StatusConflict {
+		t.Fatalf("删除内置搜索应 409，实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, err := srv.d.Mcp.Find("", mcp.ScopeUser, mcpSearchServer); err != nil {
+		t.Fatalf("被拒的删除不能真删掉配置: %v", err)
 	}
 }
 

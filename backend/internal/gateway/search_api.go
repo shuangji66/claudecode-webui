@@ -18,12 +18,17 @@ import (
 // 为什么不是 Claude Code 的 plugin：plugin 要走 marketplace 与 `claude plugin`
 // 安装，本项目没有那条链路；MCP 反而是它已经管起来的东西。
 //
-// 这里的四个接口分工：
+// 这里的接口分工：
 //   - GET  /api/search          读配置 + 是否已注册（不返回密钥明文）
-//   - POST /api/search/config   保存基地址/密钥/条数/开关（复用 settings 的校验）
+//   - POST /api/search/config   保存基地址/密钥/条数/开关（复用 settings 的校验），
+//     保存后立刻 EnsureSearchMCP 同步一次注册状态
 //   - POST /api/search/test     用已保存的配置真打一次，验证网关到底支不支持
-//   - POST /api/search/attach   注册到**用户级** MCP 配置（全局生效）
-//   - POST /api/search/detach   从用户级配置里移除
+//
+// **没有 attach / detach**：这条服务与自动化任务、内置浏览器一样由本应用维护
+// （`EnsureSearchMCP`），界面上只剩「启用」与 MCP 页的「停用」两个开关。
+// 曾经有手工的「注册到 Claude / 移除」两颗按钮，于是同一份用户级配置有了两个入口：
+// MCP 页能删、面板能注册，删掉之后 search_enabled 还是 true、会话规则还放行那两个工具，
+// 但服务不存在——表现就是「搜索莫名其妙不能用」。
 
 // mcpSearchServer 是写进 claude 的 mcpServers 的键名。
 const mcpSearchServer = "ccweb-web"
@@ -63,12 +68,9 @@ type searchStatus struct {
 	Enabled   bool   `json:"search_enabled"`
 	KeySet    bool   `json:"search_api_key_set"`
 	KeyMasked string `json:"search_api_key_masked"`
-	// Attached 表示用户级 MCP 配置里已经有这条内置服务。
+	// Attached 表示用户级 MCP 配置里已经有这条内置服务。界面只用它说一句状态，
+	// 注册/移除不再由用户点（见 EnsureSearchMCP）。
 	Attached bool `json:"attached"`
-	// AlwaysLoad 表示已注册的那条配置带 alwaysLoad（工具常驻工具表）。
-	// false 只可能是「本版本之前注册的」：那时面板还不会写这个键，
-	// 模型看不到工具描述，前端据此提示重新注册一次。
-	AlwaysLoad bool `json:"always_load"`
 	// ServerName / Command 供界面显示「注册成了什么、用的哪个二进制」。
 	ServerName string `json:"server_name"`
 	Command    string `json:"command"`
@@ -108,7 +110,6 @@ func (s *Server) searchStatus() searchStatus {
 	for _, srv := range payload.User {
 		if srv.Name == mcpSearchServer {
 			out.Attached = true
-			out.AlwaysLoad = srv.AlwaysLoad
 		}
 	}
 	return out
@@ -142,6 +143,13 @@ func (s *Server) handleSaveSearch(w http.ResponseWriter, r *http.Request) {
 		SearchEnabled:  body.Enabled,
 	}); err != nil {
 		writeErr(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// 启用/改密钥/关掉都要立刻同步注册状态：否则要么等到下次重启才生效（用户以为
+	// 开关没用），要么服务还在、密钥已经换了（工具照旧失败）。
+	if err := s.EnsureSearchMCP(); err != nil {
+		// 配置已经落盘了，这里必须说清楚是哪一步失败，不能让人以为保存没生效。
+		writeErr(w, "配置已保存，但同步 MCP 注册失败: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, s.searchStatus())
@@ -183,27 +191,36 @@ func (s *Server) handleTestSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "latency_ms": latency, "count": len(results), "results": preview})
 }
 
-// handleAttachSearch 把内置搜索注册成用户级 MCP 服务（全局生效）。
-func (s *Server) handleAttachSearch(w http.ResponseWriter, r *http.Request) {
+// EnsureSearchMCP 把内置搜索同步成用户级 MCP 服务（幂等）。
+//
+// 与自动化任务 / 内置浏览器同一套：这条配置归本应用所有，启动时与每次保存设置后
+// 都对齐一次，界面上只剩「启用」与 MCP 页的「停用」两个开关。
+//
+// 启用且填了密钥 → 写进配置（带 alwaysLoad，见下）；否则从配置里删掉。
+// 判定「要不要写」不看配置里有没有，而是逐字段比对——老版本注册的条目没有
+// alwaysLoad，只有比对才会被这次启动顺手修好，而不是永远留一颗「重新注册」按钮。
+func (s *Server) EnsureSearchMCP() error {
 	if s.d.Mcp == nil {
-		writeErr(w, "MCP 管理未启用", http.StatusServiceUnavailable)
-		return
+		return nil
+	}
+	cur := s.d.Settings.Get()
+	if !cur.SearchEnabled || cur.SearchAPIKey == "" {
+		// 不存在也算成功（Delete 对 ErrNotFound 之外才报错）。
+		if err := s.d.Mcp.Delete("", mcp.ScopeUser, mcpSearchServer); err != nil && !errors.Is(err, mcp.ErrNotFound) {
+			return err
+		}
+		return nil
 	}
 	exe := selfPath()
 	if exe == "" {
-		writeErr(w, "无法确定 ccweb 可执行文件路径", http.StatusInternalServerError)
-		return
-	}
-	if cur := s.d.Settings.Get(); !cur.SearchEnabled || cur.SearchAPIKey == "" {
-		writeErr(w, "先启用内置搜索并填写密钥，再注册到 Claude", http.StatusBadRequest)
-		return
+		return errors.New("无法确定 ccweb 可执行文件路径")
 	}
 	// env 让子命令读同一份设置：数据目录用于兜底定位，配置文件路径优先。
 	env := map[string]string{"CCWEB_DATA_DIR": s.d.Cfg.DataDir}
 	if s.d.Cfg.SettingsFile != "" {
 		env["CCWEB_SETTINGS_FILE"] = s.d.Cfg.SettingsFile
 	}
-	if _, err := s.d.Mcp.Save("", mcp.Server{
+	want := mcp.Server{
 		Name:    mcpSearchServer,
 		Scope:   mcp.ScopeUser,
 		Type:    mcp.TypeStdio,
@@ -213,22 +230,15 @@ func (s *Server) handleAttachSearch(w http.ResponseWriter, r *http.Request) {
 		// 必须常驻工具表：默认的延迟加载只把工具名发给模型、不带描述，
 		// 模型不会意识到这个 MCP 服务是「联网搜索」，只能靠用户在 CLAUDE.md 里硬写。
 		AlwaysLoad: true,
-	}); err != nil {
-		writeMcpError(w, err)
-		return
 	}
-	writeJSON(w, s.searchStatus())
-}
-
-// handleDetachSearch 把内置搜索从用户级配置里移除（不存在也算成功）。
-func (s *Server) handleDetachSearch(w http.ResponseWriter, r *http.Request) {
-	if s.d.Mcp == nil {
-		writeErr(w, "MCP 管理未启用", http.StatusServiceUnavailable)
-		return
+	// Find 会连「停用暂存」一起看：停用中的条目不等于不存在，Save 会改暂存副本、
+	// 不会把它顺手启用（这是「停用」能在重启后保持的原因）。
+	if cur2, err := s.d.Mcp.Find("", mcp.ScopeUser, mcpSearchServer); err == nil {
+		if cur2.Type == want.Type && cur2.Command == want.Command &&
+			sameStrings(cur2.Args, want.Args) && sameEnv(cur2.Env, want.Env) && cur2.AlwaysLoad {
+			return nil
+		}
 	}
-	if err := s.d.Mcp.Delete("", mcp.ScopeUser, mcpSearchServer); err != nil && !errors.Is(err, mcp.ErrNotFound) {
-		writeMcpError(w, err)
-		return
-	}
-	writeJSON(w, s.searchStatus())
+	_, err := s.d.Mcp.Save("", want)
+	return err
 }

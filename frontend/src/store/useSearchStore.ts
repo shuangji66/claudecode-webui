@@ -1,7 +1,8 @@
 // 「设置 → MCP → 内置搜索」的数据层。
 //
 // 内置搜索 = DeepSeek 的 Search / Fetch API，通过本二进制的 `mcp-web` 子命令
-// 暴露成 MCP 工具。这里只管三件事：读状态、存配置、注册/移除。
+// 暴露成 MCP 工具。这里只管两件事：读状态、存配置（注册状态由后端 Maintain，
+// 保存配置时会一并同步，界面只显示「已注册 / 未注册」）。
 // 密钥不在前端落盘也不回显明文，只回脱敏值；空输入 = 沿用旧值。
 import { create } from "zustand";
 import { apiFetch } from "../lib/runtime";
@@ -29,8 +30,6 @@ interface SearchState {
   load: () => Promise<void>;
   save: (patch: SearchPatch) => Promise<boolean>;
   runTest: () => Promise<void>;
-  attach: () => Promise<boolean>;
-  detach: () => Promise<boolean>;
   setError: (msg: string | null) => void;
 }
 
@@ -72,28 +71,6 @@ export const useSearchStore = create<SearchState>((set) => ({
       set({ test: await apiFetch<SearchTestResult>("/api/search/test", { method: "POST", body: "{}" }), testing: false });
     } catch (e) {
       set({ error: errText(e), testing: false });
-    }
-  },
-
-  attach: async () => {
-    set({ busy: true, error: null });
-    try {
-      set({ status: await apiFetch<SearchStatus>("/api/search/attach", { method: "POST", body: "{}" }), busy: false });
-      return true;
-    } catch (e) {
-      set({ error: errText(e), busy: false });
-      return false;
-    }
-  },
-
-  detach: async () => {
-    set({ busy: true, error: null });
-    try {
-      set({ status: await apiFetch<SearchStatus>("/api/search/detach", { method: "POST", body: "{}" }), busy: false });
-      return true;
-    } catch (e) {
-      set({ error: errText(e), busy: false });
-      return false;
     }
   },
 

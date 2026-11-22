@@ -31,13 +31,17 @@ const ScheduleMCPServer = mcpScheduleServer
 
 // builtinUserMcpServers 是本应用自己注册、由启动流程维护的用户级 MCP 服务。
 //
-// 它们的配置由 Ensure*MCP 在每次启动时写回（自动化任务 / 内置浏览器），所以「删除」
-// 是一件自相矛盾的事：接口上删掉之后模型立刻看不到那些工具，下次启动又被原样写回来。
+// 它们的配置由 Ensure*MCP 在每次启动（以及开关变化）时写回，所以「删除」是一件
+// 自相矛盾的事：接口上删掉之后模型立刻看不到那些工具，下次启动又被原样写回来。
 // 界面不给删除按钮，DELETE /api/mcp 也拒绝（理由见 mcp_api.go）。
-// 只收这两条：内置搜索的「解除」本来就要靠删配置（search_api.go 的 Detach）。
+//
+// 三条都归这里：内置搜索以前是「用户点『注册到 Claude』才写」的，于是同一份配置有了
+// 两个入口——MCP 页能删、搜索面板能注册，删完 search_enabled 还是 true、会话规则还放行
+// 那两个工具，服务却不存在。现在统一由 EnsureSearchMCP 接管。
 var builtinUserMcpServers = map[string]bool{
 	mcpScheduleServer: true,
 	BrowserMCPServer:  true,
+	mcpSearchServer:   true,
 }
 
 // isBuiltinMcp 报告某条服务是否由 ccweb 自己维护（只有用户级的这几条）。

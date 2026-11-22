@@ -274,6 +274,10 @@ func main() {
 	if err := srv.EnsureBrowserMCP(); err != nil {
 		logger.Printf("注册内置浏览器 MCP 失败: %v", err)
 	}
+	// 内置搜索：启用且填了密钥才注册，否则删掉（界面上的「启用」就是这条服务的开关）。
+	if err := srv.EnsureSearchMCP(); err != nil {
+		logger.Printf("同步内置搜索 MCP 失败: %v", err)
+	}
 
 	// 自动化任务的调度循环：到期投递由 gateway 实现（它才有 manager / 对话元数据 /
 	// 工作区围栏）。启动时先跑一次，补投停机期间到期的一次性任务。

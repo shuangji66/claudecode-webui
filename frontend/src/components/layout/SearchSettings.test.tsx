@@ -16,7 +16,6 @@ const STATUS: SearchStatus = {
   search_api_key_set: true,
   search_api_key_masked: "****abcd",
   attached: false,
-  always_load: false,
   server_name: "ccweb-web",
   command: "/bin/ccweb",
   mcp_supported: true,
@@ -27,7 +26,6 @@ function mount(status: SearchStatus = STATUS) {
     if (path === "/api/search") return Promise.resolve(status);
     if (path === "/api/search/config") return Promise.resolve({ ...status, search_count: 5 });
     if (path === "/api/search/test") return Promise.resolve({ ok: true, latency_ms: 240, count: 3, results: [] });
-    if (path === "/api/search/attach") return Promise.resolve({ ...status, attached: true });
     return Promise.resolve(status);
   });
   useSearchStore.setState({ status: null, error: null, busy: false, testing: false, test: null });
@@ -35,10 +33,10 @@ function mount(status: SearchStatus = STATUS) {
 }
 
 /** 这块默认折叠成一行，表单要展开才在 DOM 里（省空间就是这个功能的目的）。 */
-async function expand() {
+async function expand(expectSummary: RegExp | string = "未注册") {
   const header = screen.getByRole("button", { name: /内置搜索/ });
   // 先等状态回来（摘要里出现注册状态），再展开；否则展开的是一个还没回填的表单。
-  await waitFor(() => expect(header).toHaveTextContent("未注册"));
+  await waitFor(() => expect(header).toHaveTextContent(expectSummary));
   fireEvent.click(header);
   await screen.findByDisplayValue("https://api.deepseek.com/v1/tools");
 }
@@ -90,20 +88,29 @@ describe("SearchSettings 内置搜索", () => {
     expect(await screen.findByText(/连接正常 · 3 条结果 · 240ms/)).toBeInTheDocument();
   });
 
-  it("启用且有密钥时可以注册，注册后变成「已注册 + 移除」", async () => {
+  // 注册由后端维护（`EnsureSearchMCP`）：保存配置即同步，界面不再给手工的
+  // 「注册到 Claude / 重新注册 / 移除」——同一份配置两个入口会让「菜单里删了、
+  // 设置里还写着已启用」这种状态自相矛盾。
+  it("不给手工注册/移除按钮，只说明现在注册成什么", async () => {
     mount();
     await expand();
-    fireEvent.click(screen.getByRole("button", { name: "注册到 Claude" }));
-    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith("/api/search/attach", expect.anything()));
-    expect(await screen.findByRole("button", { name: /移除/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "注册到 Claude" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /重新注册|移除/ })).toBeNull();
+    expect(screen.getByText(/再保存一次即可补上/)).toBeInTheDocument();
+  });
+
+  it("已注册时说明去用户级列表里停用，不在这一块另开一颗按钮", async () => {
+    mount({ ...STATUS, attached: true });
+    await expand("已注册");
     expect(screen.getByText(/已注册到用户级 MCP 配置/)).toBeInTheDocument();
-    // 收起后那一行也跟着变，不用点开就能看到注册状态。
+    expect(screen.getByText(/在下面的用户级列表里「停用」/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /移除|重新注册/ })).toBeNull();
     expect(screen.getByRole("button", { name: /内置搜索/ })).toHaveTextContent("已注册");
   });
 
-  it("未启用或没有密钥时注册按钮不可点", async () => {
+  it("未启用时说明启用后会自动注册", async () => {
     mount({ ...STATUS, search_enabled: false, search_api_key_set: false });
     await expand();
-    expect(screen.getByRole("button", { name: "注册到 Claude" })).toBeDisabled();
+    expect(screen.getByText(/会自动注册成 ccweb-web/)).toBeInTheDocument();
   });
 });

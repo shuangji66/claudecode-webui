@@ -220,7 +220,7 @@ id 会复用进程，重复调用不会多起 claude。没有历史对话时后�
 - **MCP**（左侧栏功能区）：管理 claude 的两份 MCP 配置（用户级 `$CCWEB_CLAUDE_HOME/.claude.json`、
   项目级 `<工作区>/.mcp.json`），可探测连通性、临时停用；改完重开会话生效。
   这一页还有两块内置能力：
-  - **内置搜索**（可选配密钥）：注册成用户级 `ccweb-web`，给模型 `web_search` / `web_fetch`；
+  - **内置搜索**（可选配密钥）：启用后自动注册成用户级 `ccweb-web`，给模型 `web_search` / `web_fetch`；
   - **内置浏览器**：注册成用户级 `ccweb-browser`，模型可以打开网页、取正文、点按填表、
     截图、执行页面脚本。运行时（固定 Playwright 1.63.0 + Chromium 153 / Firefox 155 内核）
     由本应用下载到 `CCWEB_DATA_DIR/browser`，不装进系统；点「安装」即可，装完会自检内核

@@ -90,6 +90,28 @@ describe("McpSettings", () => {
     expect(screen.getByRole("dialog", { name: "MCP 服务" })).toBeInTheDocument();
   });
 
+  // 自动化任务这一块只回答「这是个啥」：任务在侧栏那页建、在用户级列表里停用，
+  // 所以它没有启停/编辑，也没有表单。折叠形态与上面两块内置能力保持一致（默认收起），
+  // 否则这一排里第三块的样子像是贴错了位置。
+  it("自动化任务是同款折叠块：默认收起，只有说明", async () => {
+    setup();
+    await screen.findByText("github");
+    const card = document.querySelector('[data-mcp-card="schedule"]') as HTMLElement;
+    expect(card).not.toBeNull();
+    const header = within(card).getByRole("button", { name: /自动化任务/ });
+    // 收起态：一行标题 + 摘要，正文不渲染（与内置搜索、内置浏览器一致）。
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(header).toHaveTextContent("ccweb-schedule");
+    expect(card).not.toHaveTextContent(/到点由本应用把消息发进指定的对话/);
+
+    fireEvent.click(header);
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(card).toHaveTextContent(/到点由本应用把消息发进指定的对话/);
+    // 展开后也只有那颗折叠按钮：没有启停、探测、编辑、删除。
+    expect(within(card).getAllByRole("button")).toHaveLength(1);
+    expect(within(card).queryByRole("button", { name: /启用|停用|探测|编辑|删除/ })).toBeNull();
+  });
+
   it("按作用域列出服务，停用项标注并禁止探测", async () => {
     setup();
     expect(await screen.findByText("github")).toBeInTheDocument();
@@ -137,10 +159,11 @@ describe("McpSettings", () => {
     });
     setup();
 
-    await screen.findByText("ccweb-schedule");
+    await screen.findByText("/bin/ccweb mcp-schedule");
     expect(screen.getByText("内置")).toBeInTheDocument();
     // 按行断言：内置那一行只有探测与停用，没有编辑/删除。
-    const row = screen.getByText("ccweb-schedule").closest(".rounded-xl") as HTMLElement;
+    // 用命令行定位而不是服务名——页面顶部那张自动化任务说明卡片里也有 `ccweb-schedule`。
+    const row = screen.getByText("/bin/ccweb mcp-schedule").closest(".rounded-xl") as HTMLElement;
     expect(within(row).getByRole("button", { name: "探测" })).toBeInTheDocument();
     expect(within(row).getByRole("button", { name: "停用" })).toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: "编辑" })).toBeNull();

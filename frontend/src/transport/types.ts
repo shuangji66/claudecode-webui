@@ -250,10 +250,8 @@ export interface SearchStatus {
   search_enabled: boolean;
   search_api_key_set: boolean;
   search_api_key_masked: string;
-  /** 用户级 MCP 配置里是否已经有这条内置服务。 */
+  /** 用户级 MCP 配置里是否已经有这条内置服务（由后端 EnsureSearchMCP 维护）。 */
   attached: boolean;
-  /** 已注册的那条配置是否带 alwaysLoad（工具常驻工具表）。 */
-  always_load: boolean;
   server_name: string;
   command: string;
   /** false 表示这套部署没装 MCP 管理（后端 Deps.Mcp 为 nil）。 */
