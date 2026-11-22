@@ -76,6 +76,24 @@ describe("草稿跟着对话走", () => {
     expect(readDraft("c1")).toBe("");
   });
 
+  // 侧栏的「重启进程」也能对后台的空对话下手：它没有转录，重开要换 id，
+  // 但用户还在看另一条对话，不能被顶到新的空对话上。
+  it("重启后台的空对话不会抢走当前对话", async () => {
+    useAppStore.setState({
+      activeId: "c2",
+      conversations: [
+        { id: "c1", cwd: "/w", title: "", messages: 0, archived: false, live: true },
+        { id: "c2", cwd: "/w", title: "正在看的那条", messages: 3, archived: false, live: true },
+      ],
+      sessions: [{ id: "c1", cwd: "/w", state: "ready" }],
+    } as never);
+    sessionReply = { id: "c9", cwd: "/w", state: "ready" };
+
+    await useAppStore.getState().restartSession("c1");
+
+    expect(useAppStore.getState().activeId).toBe("c2");
+  });
+
   it("删对话时把它的草稿一并清掉", async () => {
     writeDraft("c1", "留着也没用了");
     await useAppStore.getState().deleteConversation("c1");

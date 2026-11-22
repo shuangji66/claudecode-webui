@@ -352,6 +352,11 @@ export interface MenuItem {
    */
   checked?: boolean;
   danger?: boolean;
+  /**
+   * 用主题色（陶土色）画标题与悬停底色：会话生命周期这类「对正在跑的进程动手」的项
+   * 靠它从一堆灰条目里跳出来（重启 / 结束进程）。
+   */
+  brand?: boolean;
   disabled?: boolean;
   /**
    * 行尾的一颗独立图标按钮（例如「更多」里把功能固定回侧栏）。
@@ -500,7 +505,11 @@ export function Menu({
                   // 留窄了标题会钻到它下面。
                   item.trailing ? (confirming === item.id ? "pr-[86px]" : "pr-7") : ""
                 } ${
-                  item.danger ? "text-danger hover:bg-danger/[0.06]" : "text-ink hover:bg-panel-strong"
+                  item.danger
+                    ? "text-danger hover:bg-danger/[0.06]"
+                    : item.brand
+                      ? "text-brand hover:bg-brand/10"
+                      : "text-ink hover:bg-panel-strong"
                 }`}
               >
                 {item.icon}

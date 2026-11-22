@@ -2136,8 +2136,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
         await Promise.all([get().refreshSessions(), get().refreshConversations()]);
         // 换 id 但对话还是同一条（本来就没有上下文）：输入框里的草稿跟着过去。
         moveDraft(id, info.id);
-        get().setActive(info.id);
-        get().connect(info.id);
+        // 只有本来就是当前对话才把界面切到新 id：侧栏的「重启进程」也能对**后台**的
+        // 空对话下手，那时用户还在看别的对话，不该被顶到一条新的空对话上。
+        if (get().activeId === id) {
+          get().setActive(info.id);
+          get().connect(info.id);
+        }
         return true;
       } catch (e) {
         set({ error: errText(e) });

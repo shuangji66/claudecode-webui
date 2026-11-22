@@ -3,6 +3,11 @@ import { act, createEvent, fireEvent, render, screen } from "@testing-library/re
 import { Sidebar } from "./Sidebar";
 import { useAppStore } from "../../store/useAppStore";
 import { resetHiddenFeaturesCache } from "../../lib/sidebarFeatures";
+import { askConfirm } from "../common/SystemDialogs";
+
+// 二次确认统一走 askConfirm：这里只关心「有没有先问、确认后才动手」，
+// 弹窗本身的渲染由 SystemDialogs.test 覆盖。
+vi.mock("../common/SystemDialogs", () => ({ askConfirm: vi.fn(), askPrompt: vi.fn() }));
 
 function renderSidebar(over: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
   return render(
@@ -366,6 +371,55 @@ describe("Sidebar 会话行的管理入口", () => {
     fireEvent.click(screen.getByRole("button", { name: "管理对话 会话甲" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "置顶" }));
     expect(pinConversation).toHaveBeenCalledWith("c-menu", true);
+  });
+
+  // 「重启进程」只对已经起了进程的对话成立：没有进程时「重开」等于新建，那是另一件事。
+  it("没有进程的对话不显示重启进程", () => {
+    renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "管理对话 会话甲" }));
+    expect(screen.queryByRole("menuitem", { name: "重启进程" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "结束进程" })).toBeNull();
+  });
+
+  // 重启会中断正在进行的一轮：先二次确认，确认后才按同一 id 重开（上下文不丢）。
+  it("重启进程先二次确认，确认后才重开", async () => {
+    const restartSession = vi.fn(async () => true);
+    useAppStore.setState({
+      restartSession,
+      conversations: [
+        {
+          id: "c-menu",
+          cwd: "/w/demo",
+          title: "会话甲",
+          created_at: "",
+          last_active: "2026-01-02T00:00:00Z",
+          messages: 2,
+          archived: false,
+          live: true,
+        },
+      ],
+    });
+    const confirm = vi.mocked(askConfirm);
+
+    confirm.mockResolvedValueOnce(false);
+    renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "管理对话 会话甲" }));
+    // 两条都是「对正在跑的进程动手」：用主题色与灰条目区分开。
+    for (const name of ["重启进程", "结束进程"]) {
+      expect(screen.getByRole("menuitem", { name }).className).toContain("text-brand");
+    }
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "重启进程" }));
+    });
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: "重启进程" }));
+    expect(restartSession).not.toHaveBeenCalled();
+
+    confirm.mockResolvedValueOnce(true);
+    fireEvent.click(screen.getByRole("button", { name: "管理对话 会话甲" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "重启进程" }));
+    });
+    expect(restartSession).toHaveBeenCalledWith("c-menu");
   });
 });
 

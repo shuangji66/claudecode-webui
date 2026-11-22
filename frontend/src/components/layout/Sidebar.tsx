@@ -53,6 +53,7 @@ import {
   IconPin,
   IconPlugin,
   IconPlus,
+  IconRetry,
   IconSearch,
   IconLogout,
   IconSettings,
@@ -163,6 +164,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   const openConversation = useAppStore((s) => s.openConversation);
   const createSession = useAppStore((s) => s.createSession);
   const closeSession = useAppStore((s) => s.closeSession);
+  const restartSession = useAppStore((s) => s.restartSession);
   const removeWorkspace = useAppStore((s) => s.removeWorkspace);
   const renameWorkspace = useAppStore((s) => s.renameWorkspace);
   const startConversationIn = useAppStore((s) => s.startConversationIn);
@@ -681,6 +683,25 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       confirmText: t("删除", "Delete"),
     });
     if (ok) void deleteConversation(c.id);
+  };
+
+  /**
+   * 重启 = 关掉进程再按同一 id `--resume` 拉起来（`store.restartSession`）。
+   *
+   * 与切推理等级时的重开不同：那条会等这一轮 result 再动手（不在 busy 时杀进程），
+   * 这里是用户主动叫的，按确认就立刻重开——所以确认文案必须写明正在进行的一轮会被中断。
+   * 对话 id 与转录都不变，上下文不会丢。
+   */
+  const askRestart = async (c: ConversationInfo) => {
+    const ok = await askConfirm({
+      title: t("重启进程", "Restart process"),
+      message: t(
+        `重启「${titleOf(c)}」的 claude 进程？对话记录与上下文都会保留（按同一 id 恢复），正在进行的一轮会被中断。`,
+        `Restart the claude process for "${titleOf(c)}"? The conversation and its context are kept (it resumes with the same id); a running turn is interrupted.`,
+      ),
+      confirmText: t("重启进程", "Restart"),
+    });
+    if (ok) void restartSession(c.id);
   };
 
   const askStop = async (c: ConversationInfo) => {
@@ -1283,7 +1304,11 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
                     ]
                   : []),
                 ...(menuConv.live
-                  ? [{ id: "stop", label: t("结束进程", "Stop process"), icon: <IconStop size={13} className="text-muted" />, onSelect: () => void askStop(menuConv) }]
+                  ? [
+                      // 两条都是对正在跑的进程动手：用主题色从一堆灰条目里跳出来。
+                      { id: "restart", brand: true, label: t("重启进程", "Restart process"), icon: <IconRetry size={13} className="text-brand" />, onSelect: () => void askRestart(menuConv) },
+                      { id: "stop", brand: true, label: t("结束进程", "Stop process"), icon: <IconStop size={13} className="text-brand" />, onSelect: () => void askStop(menuConv) },
+                    ]
                   : []),
                 { id: "delete", label: t("删除", "Delete"), icon: <IconTrash size={13} />, danger: true, onSelect: () => void askDelete(menuConv) },
               ] satisfies MenuItem[])

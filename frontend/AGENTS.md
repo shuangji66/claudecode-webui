@@ -763,6 +763,15 @@ src/
   返回值**必须**是 `openConversation` 的结果（拿不到 `res.id` 直接算失败并写 error）：
   后端没给 id、或新对话打不开（cwd 未授权 / 会话起不来）都算分叉没成，
   报成功只会在界面上留下一条打不开的对话。
+- **重启进程**：会话「更多 / 右键」菜单里，**只在 `live` 时出现**（没有进程时「重开」
+  等于新建，是另一件事），排在「结束进程」之上。**重启与结束这两项都用主题色**
+  （`MenuItem.brand`，图标 `text-brand`）：它们动的是正在跑的进程，跟上面一堆改列表属性的
+  灰条目不是一类。走 `store.restartSession(id)`：按同一 id
+  `close → POST /api/session {resume:id}`，转录与上下文都不丢；还没发过消息的空对话走新建
+  分支（`restartSession` 自己判断；换 id 时不抢焦点，见下）。**必须 `askConfirm` 二次确认**，文案写明「正在进行的一轮
+  会被中断」——这里和切推理等级不同：那条会等这一轮 `result` 再重开（不在 busy 时杀进程），
+  这里是用户主动叫的重启，确认就立刻动手。空对话重开必然换 id，`setActive`/`connect` 只在
+  `activeId === id` 时才做：从侧栏重启一条**后台**的空对话，不该把正在看的那条顶掉。
 - **侧栏状态标记**（`lib/conversations.conversationStatus`，优先级从高到低）：待审批 →
   强调色圆点；进程 `busy`/`starting` → 进度环；完成但没看过 → 绿点；活跃但空闲 → 不画点；
   没有常驻进程 → 灰点。「完成未看」由 `applyEvent` 在 `result` 到达且该对话不是当前打开的
