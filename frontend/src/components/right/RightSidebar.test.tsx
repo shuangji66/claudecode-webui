@@ -9,7 +9,16 @@ vi.mock("./FilesPanel", () => ({ FilesPanel: () => <div>FILES</div> }));
 vi.mock("./GitPanel", () => ({ GitPanel: () => <div>GIT</div> }));
 vi.mock("./TerminalView", () => ({ default: () => <div>TERM</div> }));
 vi.mock("./SubagentPanel", () => ({ SubagentPanel: () => <div>SUB</div> }));
-vi.mock("./TracePanel", () => ({ TracePanel: () => <div>TRACE</div> }));
+vi.mock("./TracePanel", () => ({
+  TracePanel: ({ onJump }: { onJump?: () => void }) => (
+    <div>
+      TRACE
+      <button type="button" onClick={() => onJump?.()}>
+        JUMP
+      </button>
+    </div>
+  ),
+}));
 
 beforeEach(() => {
   localStorage.clear();
@@ -399,5 +408,44 @@ describe("RightSidebar 桌面全屏与分栏", () => {
     setup();
     expect(screen.queryByRole("button", { name: "分栏" })).toBeNull();
     expect(screen.queryByRole("button", { name: "全屏" })).toBeNull();
+  });
+});
+
+// 轨迹里点一步的意义是「带我去看那一条」：对话区在后面滚过去了，但面板还盖着。
+describe("RightSidebar 轨迹跳转后收起遮挡层", () => {
+  function setViewport(width: number) {
+    Object.defineProperty(window, "innerWidth", { value: width, configurable: true, writable: true });
+  }
+
+  const jump = () => fireEvent.click(screen.getByRole("button", { name: "JUMP" }));
+
+  it("移动端抽屉里点一步会关掉侧栏", () => {
+    setViewport(900);
+    const onClose = vi.fn();
+    render(<RightSidebar cwd="/w" onClose={onClose} />);
+    openTrace();
+    jump();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("桌面全屏下点一步也会退出遮挡", () => {
+    setViewport(1400);
+    const onClose = vi.fn();
+    render(<RightSidebar cwd="/w" onClose={onClose} />);
+    fireEvent.click(screen.getByRole("button", { name: "全屏" }));
+    openTrace();
+    jump();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // 停靠时侧栏不遮挡对话区：收起来反而把用户正在看的轨迹藏掉，
+  // 而对话区那边已经滚过去了，谁也说不清「刚才点的那一步在哪」。
+  it("桌面停靠时不关（不遮挡对话区）", () => {
+    setViewport(1400);
+    const onClose = vi.fn();
+    render(<RightSidebar cwd="/w" onClose={onClose} />);
+    openTrace();
+    jump();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

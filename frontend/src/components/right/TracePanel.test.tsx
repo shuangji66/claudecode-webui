@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { TracePanel } from "./TracePanel";
 import { useAppStore } from "../../store/useAppStore";
@@ -70,6 +70,23 @@ describe("TracePanel", () => {
     render(<TracePanel />);
     fireEvent.click(screen.getByText("Bash"));
     expect(useAppStore.getState().scrollRequest?.itemId).toBe("t1");
+  });
+
+  // 侧栏可能是盖在对话区上面的抽屉/全屏：只滚不说话的话，用户看到的就是「点了没反应」。
+  it("点某一步之后通知调用方收起遮挡层", () => {
+    const onJump = vi.fn();
+    render(<TracePanel onJump={onJump} />);
+    fireEvent.click(screen.getByText("Bash"));
+    expect(onJump).toHaveBeenCalledTimes(1);
+  });
+
+  // 轮次切换、子代理「对话」入口都不离开这一页，别顺手把侧栏关了。
+  it("切轮次与打开子代理不触发 onJump", () => {
+    const onJump = vi.fn();
+    render(<TracePanel onJump={onJump} />);
+    fireEvent.click(screen.getByRole("button", { name: "下一轮" }));
+    fireEvent.click(screen.getByText("对话"));
+    expect(onJump).not.toHaveBeenCalled();
   });
 
   it("子代理那一行给「对话」入口，点了打开子代理标签", () => {

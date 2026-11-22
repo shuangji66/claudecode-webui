@@ -325,6 +325,17 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     });
   };
 
+  /**
+   * 轨迹里点「模型请求 / 工具 / 步骤」之后：把挡住对话区的那层收掉。
+   *
+   * 那次点击的全部意义是「带我去看那一条」——对话区在后面已经滚过去了，
+   * 但移动端（抽屉）与桌面全屏下整块面板盖在对话上面，用户看到的只是「点了没反应」。
+   * 停靠模式下侧栏本来就不遮挡对话区，收起来反而把用户正在看的东西藏掉，所以不动它。
+   */
+  const closeOnJump = () => {
+    if (!docked || fullActive) onClose();
+  };
+
   const onResizeStart = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     drag.current = { startX: event.clientX, startWidth: width };
@@ -864,7 +875,7 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
                     />
                   )}
                   {tab.kind === "git" && <GitPanel cwd={cwd} active={on} />}
-                  {tab.kind === "trace" && <TracePanel active={on} />}
+                  {tab.kind === "trace" && <TracePanel active={on} onJump={closeOnJump} />}
                   {tab.kind === "subagent" && tab.agentId && (
                     <SubagentPanel sessionId={tab.sessionId ?? ""} agentId={tab.agentId} />
                   )}

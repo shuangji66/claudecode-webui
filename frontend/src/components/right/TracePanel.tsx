@@ -115,7 +115,7 @@ function spanTitle(span: TraceSpan, lane: string, t: (zh: string, en?: string) =
   return [lane, spanText(span, t), span.detail, dur].filter(Boolean).join(" · ");
 }
 
-export function TracePanel({ active = true }: { active?: boolean }) {
+export function TracePanel({ active = true, onJump }: { active?: boolean; onJump?: () => void }) {
   const t = useT();
   const sid = useAppStore((s) => s.activeId);
   // **看不见时不要跟着每一条流式帧重算**：标签只是 hidden 不卸载（终端里挂着 PTY），
@@ -153,8 +153,17 @@ export function TracePanel({ active = true }: { active?: boolean }) {
     );
   }
 
+  /**
+   * 点一步就跳到对话里的那一条。
+   *
+   * `onJump` 只负责「让挡住对话区的侧栏让开」（移动端抽屉 / 桌面全屏），停靠模式下
+   * 调用方不会真的关。**没有 `itemId` 的段也要通知**：那几段（还在跑的请求、纯系统
+   * 事件）点了本来就不会滚，但用户的手势仍然是想回对话区，此时什么都不做读起来
+   * 就是「点空了」。
+   */
   const jump = (span: TraceSpan) => {
     if (span.itemId) requestScrollToItem(span.itemId);
+    onJump?.();
   };
 
   const totalMs = Math.max(1, turn.end - turn.start);
