@@ -7,7 +7,7 @@
 //
 // 组件只与这个类交互，不直接 new WebSocket。
 
-import { terminalWsUrl } from "../lib/runtime";
+import { apiFetch, terminalWsUrl } from "../lib/runtime";
 
 export type TerminalPhase = "connecting" | "open" | "exited" | "closed" | "error" | "unsupported";
 
@@ -26,6 +26,30 @@ export interface TerminalHandlers {
 
 /** 连续这么久没收到任何帧（含 pong）就判连接已死，走 onclose 重连/重启。 */
 const TERMINAL_STALE_MS = 70_000;
+
+/** `/api/terminal/slots` 的响应。 */
+interface TerminalSlots {
+  used: number;
+  limit: number;
+  full: boolean;
+}
+
+/**
+ * 建连前查一次名额，满了就直接报可读原因。
+ *
+ * 浏览器在 WebSocket 握手被拒（429）时拿不到响应体：`onerror` / `onclose` 只有
+ * 通用失败，界面上就是一句「终端错误」，没人知道是名额满了。所以先问这条普通
+ * HTTP 接口——查不到（老后端 / 网络抖动）就放行，让 WS 自己给出结论，不为这条
+ * 辅助检查挡住正常的终端。
+ */
+async function terminalSlotsFull(): Promise<TerminalSlots | null> {
+  try {
+    const s = await apiFetch<TerminalSlots>("/api/terminal/slots");
+    return s?.full ? s : null;
+  } catch {
+    return null;
+  }
+}
 
 export class TerminalConnection {
   private ws: WebSocket | null = null;
@@ -52,6 +76,26 @@ export class TerminalConnection {
   connect(): void {
     this.closedByUs = false;
     this.emit({ phase: "connecting" });
+    void this.openSocket();
+  }
+
+  /**
+   * 先查名额，再开 WebSocket。
+   *
+   * 名额满时**不开连接**：那条一定会被 429 拒掉，而失败的握手在浏览器侧只给
+   * 「终端错误」，用户看不出该怎么处理。这里直接给出「已达上限 N，请关掉一些」。
+   * 检查本身失败（老后端没有这条接口、网络抖动）时放行，交给 WS 自己报错。
+   */
+  private async openSocket(): Promise<void> {
+    const full = await terminalSlotsFull();
+    if (this.closedByUs) return; // 查的过程中用户已经关掉了这个终端
+    if (full) {
+      this.emit({
+        phase: "error",
+        message: `内置终端已达上限（${full.limit} 个），请先关闭不再使用的终端`,
+      });
+      return;
+    }
     let ws: WebSocket;
     try {
       ws = new WebSocket(terminalWsUrl(this.cwd, this.cols, this.rows, this.token));

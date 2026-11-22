@@ -287,6 +287,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/claude/source", s.authed(s.handleClaudeSource))
 	s.mux.HandleFunc("GET /ws", s.handleWS)
 	s.mux.HandleFunc("GET /ws/terminal", s.handleTerminalWS)
+	// 内置终端的占用情况：前端建连前先查，满了就给出可读提示（WS 握手失败的
+	// 响应体浏览器拿不到，见 handleTerminalSlots 的注释）。
+	s.mux.HandleFunc("GET /api/terminal/slots", s.authed(s.handleTerminalSlots))
 	s.mux.HandleFunc("/", s.handleSPA)
 }
 

@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -13,7 +14,11 @@ import (
 
 // maxTerminals 是同一进程内最多同时存在的内置终端数。
 // 每个终端是一个真实 shell，必须给上限，避免一个页面开几十个把机器拖垮。
-const maxTerminals = 8
+//
+// 32 是「正常使用根本碰不到」的量级：多设备、分栏、每栏各开几个也远用不满，
+// 而单个 shell 常驻内存约几 MB，32 个仍在 NAS 能接受的范围内。真碰到了
+// 由前端读 `/api/terminal/slots` 给出「关掉一些」的提示，而不是一个静默的失败。
+const maxTerminals = 32
 
 // termClientCmd 是终端 WebSocket 的上行命令。
 type termClientCmd struct {
@@ -67,7 +72,10 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 	case s.termSlots <- struct{}{}:
 		defer func() { <-s.termSlots }()
 	default:
-		http.Error(w, "内置终端数量已达上限，请先关闭其它终端", http.StatusTooManyRequests)
+		// 浏览器拿不到 WS 握手失败的响应体（onerror/onclose 只有通用失败），
+		// 所以前端在连接前先查 `/api/terminal/slots`；这条兜底文案仍然写清原因，
+		// 直接 curl 或别的客户端能读到。
+		http.Error(w, fmt.Sprintf("内置终端数量已达上限（%d），请先关闭其它终端", maxTerminals), http.StatusTooManyRequests)
 		return
 	}
 
@@ -172,4 +180,19 @@ func (s *Server) handleTerminalWS(w http.ResponseWriter, r *http.Request) {
 		_ = sess.Wait()
 		_ = c.SendJSON(termEvent{Type: "exit", Code: sess.ExitCode()})
 	}
+}
+
+// handleTerminalSlots 返回内置终端的占用情况。
+//
+// 为什么要这一条接口：终端是一条 WebSocket，而浏览器在握手被拒（429）时拿不到
+// 响应体——`onerror` / `onclose` 只有通用失败，用户看到的就是「终端错误」，完全
+// 不知道是名额满了。前端因此在建连**之前**先问一次这里，满了就直接给出可读提示，
+// 不为它去开一条注定失败的连接（那条还会在服务端多打一行 429）。
+func (s *Server) handleTerminalSlots(w http.ResponseWriter, r *http.Request) {
+	used := len(s.termSlots)
+	writeJSON(w, map[string]any{
+		"used":  used,
+		"limit": maxTerminals,
+		"full":  used >= maxTerminals,
+	})
 }

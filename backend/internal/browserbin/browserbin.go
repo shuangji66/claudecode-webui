@@ -275,21 +275,16 @@ func (m *Manager) RunnerPath() string {
 // mcp-browser 是 claude 的子进程，环境来自 process.CleanEnv（只补 PATH 兜底，
 // 不含启动器额外注入的目录）。这里先按 envpath 的规则确认 PATH，再找 node；
 // 找不到就是真的没有——界面上的安装按钮会直接报错，而不是下载完才失败。
+//
+// **只查 PATH，不写死任何落点**：飞牛把依赖应用（nodejs_v24 等）的 bin 目录注入
+// 到 PATH 里，靠的就是这一份；写死 `/var/apps/nodejs_vNN/...` 既是多余的第二套
+// 判定，也会在升级到 nodejs_v26 之后失效（那时旧路径不存在，界面报「找不到 node」，
+// 而环境里明明有一个能用的）。同理不列 `/usr/bin/node` 之类：它们本来就在默认
+// PATH 里，列出来只是把「PATH 里没有」这件事说成「有」。
 func (m *Manager) NodePath() (string, error) {
 	envpath.Apply()
 	if p, err := exec.LookPath("node"); err == nil {
 		return p, nil
-	}
-	// 飞牛上 nodejs 应用的固定落点（manifest 里的 install_dep_apps = nodejs_v24）。
-	for _, p := range []string{
-		"/var/apps/nodejs_v24/target/bin/node",
-		"/var/apps/nodejs_v22/target/bin/node",
-		"/usr/local/bin/node",
-		"/usr/bin/node",
-	} {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() && st.Mode().Perm()&0o111 != 0 {
-			return p, nil
-		}
 	}
 	return "", ErrNoNode
 }
