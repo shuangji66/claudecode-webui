@@ -724,6 +724,28 @@ describe("Composer 繁忙时的发送行为", () => {
     expect(onQueue).not.toHaveBeenCalled();
   });
 
+  // 被中断后暂停的队列：普通 Enter 排在队尾（顺序不变），Ctrl/⌘+Enter 仍然立刻发——
+  // 那是用户明说「现在就发」，把它也塞进队尾等于又押后一次。
+  it("不忙且队列里有暂停的消息：Enter 排队尾，Ctrl+Enter 仍然立刻发", async () => {
+    const onSend = vi.fn().mockResolvedValue(true);
+    const onQueue = vi.fn(() => true);
+    const paused = [{ id: "q1", text: "旧的", attachments: [], label: "附件：", ts: 1 }];
+    setup({ onSend, onQueue, busy: false, queued: paused });
+
+    fireEvent.change(textarea(), { target: { value: "新的" } });
+    await act(async () => {
+      fireEvent.keyDown(textarea(), { key: "Enter" });
+    });
+    expect(onQueue).toHaveBeenCalledWith("新的", []);
+    expect(onSend).not.toHaveBeenCalled();
+
+    fireEvent.change(textarea(), { target: { value: "立刻发" } });
+    await act(async () => {
+      fireEvent.keyDown(textarea(), { key: "Enter", ctrlKey: true });
+    });
+    expect(onSend).toHaveBeenCalledWith("立刻发", [], undefined);
+  });
+
   it("不忙时两档都直接发：偏好不改变首条消息的投递", async () => {
     setBusyEnter("steer");
     const onSend = vi.fn().mockResolvedValue(true);

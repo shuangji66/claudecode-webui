@@ -36,19 +36,20 @@ export type BusySubmitMode = "send" | "queue" | "steer";
 /**
  * 解析一次提交的投递方式。
  *
+ * - 加速手势（`Ctrl/⌘+Enter`）永远是「现在就发」：忙时它是偏好之外的另一档，空闲时
+ *   它越过待发送队列直接发——队列里压着被中断后暂停的消息时，用户明说要立刻发，
+ *   还往队尾塞就等于把这条也一起押后。
  * - 不忙：直接发（首条消息没有「本轮」可并入）；**但队列里还压着消息时照旧排队尾**，
- *   否则新消息会插到前面那条之前。加速手势（`Ctrl/⌘+Enter`）不参与这条判断——
- *   那是用户明确要「现在就发」。
- * - 忙：主手势走偏好，加速手势走另一档。
+ *   否则新消息会插到前面那条之前（store 随后会立刻把队首发出去，顺序不变）。
+ * - 忙：主手势走偏好。
  */
 export function resolveBusySubmit(
   behavior: BusyEnterBehavior,
   opts: { busy: boolean; accelerated: boolean; queued: number },
 ): BusySubmitMode {
-  const mode = opts.accelerated ? otherBusyEnter(behavior) : behavior;
-  if (opts.busy && mode === "steer") return "steer";
-  if (opts.busy || opts.queued > 0) return "queue";
-  return "send";
+  if (opts.accelerated) return opts.busy ? otherBusyEnter(behavior) : "send";
+  if (opts.busy) return behavior;
+  return opts.queued > 0 ? "queue" : "send";
 }
 
 let cached: BusyEnterBehavior | null = null;

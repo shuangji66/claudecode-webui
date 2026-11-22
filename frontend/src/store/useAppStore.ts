@@ -213,9 +213,10 @@ interface AppState {
    */
   liveTasks: Record<string, LiveTask[]>;
   /**
-   * 「待发送」队列：`queued[sid]`。回合进行中按 Enter 只入队（可编辑、可删），
-   * 本轮结束后自动发队首；`Ctrl+Enter` 才立刻写进 stdin 并进本轮。
-   * 见 lib/queue.ts 与 store.flushQueued。
+   * 「待发送」队列：`queued[sid]`。回合进行中主手势（Enter / 发送按钮）投递哪一档由
+   * 「繁忙时的发送行为」决定（`lib/busyEnter`）：默认只入队（可编辑、可删），本轮正常
+   * 结束后自动发队首；选「插话发送」才立刻写进 stdin 并进本轮。`Ctrl/⌘+Enter` 永远用
+   * 另一档。见 lib/queue.ts 与 store.flushQueued。
    */
   queued: Record<string, QueuedPrompt[]>;
   conns: Record<string, ConnInfo>;

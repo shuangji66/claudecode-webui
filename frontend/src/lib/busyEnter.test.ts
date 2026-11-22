@@ -71,9 +71,14 @@ describe("resolveBusySubmit", () => {
     expect(resolveBusySubmit("steer", { busy: false, accelerated: false, queued: 0 })).toBe("send");
   });
 
-  it("不忙但队列里压着消息：排队尾，不插到前面那条之前", () => {
+  it("不忙但队列里压着消息：主手势排队尾，不插到前面那条之前", () => {
     expect(resolveBusySubmit("queue", { busy: false, accelerated: false, queued: 1 })).toBe("queue");
     expect(resolveBusySubmit("steer", { busy: false, accelerated: false, queued: 1 })).toBe("queue");
+  });
+
+  it("不忙时加速手势越过队列直接发（它明说「现在就发」）", () => {
+    expect(resolveBusySubmit("queue", { busy: false, accelerated: true, queued: 1 })).toBe("send");
+    expect(resolveBusySubmit("steer", { busy: false, accelerated: true, queued: 1 })).toBe("send");
   });
 
   it("偏好排队：Enter 入队，Ctrl/⌘+Enter 立刻插话", () => {

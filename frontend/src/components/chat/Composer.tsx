@@ -797,7 +797,8 @@ export function Composer({
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               // 主手势（Enter / 发送按钮）与 Ctrl/⌘+Enter 各用一档发送行为
-              // （设置 → 通用「繁忙时的发送行为」，非繁忙时两者都直接发）。
+              // （设置 → 通用「繁忙时的发送行为」；空闲时两者都是「现在就发」，只有
+              // 队列里压着暂停的消息时主手势排在队尾，免得插到前面那条之前）。
               void submit(e.ctrlKey || e.metaKey);
             }
           }}
