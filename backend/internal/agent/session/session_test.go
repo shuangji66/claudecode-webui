@@ -1105,6 +1105,25 @@ func TestSecondPermissionReplyIsRejected(t *testing.T) {
 	}
 }
 
+// 回包没送出去（会话已关闭）时不能把这条记成「已处理」：
+// 记了的话重连之后卡片彻底点不动，而 CLI 那边还在等这条审批。
+func TestPermissionReplyFailureDoesNotBurnTheRequest(t *testing.T) {
+	sess, _, _ := startSession(t)
+	_ = sess.Close()
+
+	if err := sess.ReplyPermission("pdead", PermissionReply{Allow: true}); err == nil {
+		t.Fatal("会话已关闭时回包应当失败")
+	}
+	// 抢占必须已经还回去：同样的 request_id 再试一次不能报「已经处理过」。
+	err := sess.ReplyPermission("pdead", PermissionReply{Allow: true})
+	if err == nil {
+		t.Fatal("会话已关闭时回包仍然应当失败")
+	}
+	if strings.Contains(err.Error(), "已经处理过") {
+		t.Fatalf("失败的回包被判成重复回包：%v", err)
+	}
+}
+
 // 中断让整轮作废，挂起审批必须一起清掉并广播：只在本机清的话，
 // 另一台设备会继续显示一批点了也没用的卡片。
 func TestInterruptClearsPendingPermissions(t *testing.T) {

@@ -696,11 +696,11 @@ type PermissionReply struct {
 // 一条审批**只能回一次**：CLI 拿到第一份 control_response 就继续往下跑，第二份会被
 // 当成另一条请求的回包（或者直接报未知 request_id）。而审批是会话级事实，同一个
 // request_id 会群发给所有设备——两台设备几乎同时点「允许」，两边都会走到这里。
-// 所以先看「这条是不是已经有结论了」：有就拒绝，绝不能再往 stdin 写一条。
+// 所以先抢占：抢到的人写 stdin 并广播结论，没抢到的直接回「已经处理过」。
 //
-// 判据不能只看 perms 里还在不在：第一份回包已经把那条摘掉了，第二份看起来跟
-// 「从没挂起过」（例如消息流由转录回放、挂起表是空的）一模一样。用 resolved 集合
-// 记「有过结论的 id」，两种情形才分得开。
+// 抢占在写之前（两个并发调用同时检查才可能都通过），但 **resolved 只在写成功之后
+// 才记**：写失败说明回包根本没送出去（会话正好关了），此时登记成「已处理」会让
+// 重连后的卡片彻底点不动——那条审批在 CLI 那边还在等。
 func (s *Session) ReplyPermission(requestID string, r PermissionReply) error {
 	if requestID == "" {
 		return errors.New("session: request_id 为空")
@@ -708,15 +708,21 @@ func (s *Session) ReplyPermission(requestID string, r PermissionReply) error {
 	if !s.claimPermission(requestID) {
 		return fmt.Errorf("session: 审批 %q 已经处理过（可能在别的设备上）", requestID)
 	}
-	// 结论要广播给其他连接，否则他们那边的卡片永远挂着（同 forgetPermission）。
-	defer s.emitData(KindPermissionResolved, map[string]any{"request_id": requestID})
 	var line []byte
 	if r.Allow {
 		line = protocol.AllowWith(requestID, r.UpdatedInput, r.UpdatedPermissions)
 	} else {
 		line = protocol.Deny(requestID, r.Message)
 	}
-	return s.writeLine(line)
+	if err := s.writeLine(line); err != nil {
+		// 没送出去就把抢占还回去，让重试还能成功。
+		s.unclaimPermission(requestID)
+		return err
+	}
+	s.noteResolvedPermission(requestID)
+	// 结论要广播给其他连接，否则他们那边的卡片永远挂着（同 forgetPermission）。
+	s.emitData(KindPermissionResolved, map[string]any{"request_id": requestID})
+	return nil
 }
 
 // PendingPermissions 返回仍在等待用户决定的审批请求（原始载荷，按到达顺序）。
@@ -973,10 +979,6 @@ func (s *Session) claimPermission(requestID string) bool {
 	if _, done := s.resolved[requestID]; done {
 		return false
 	}
-	if s.resolved == nil || len(s.resolved) >= permResolvedMax {
-		s.resolved = make(map[string]struct{}, 8)
-	}
-	s.resolved[requestID] = struct{}{}
 	// 顺手把挂起表里那条摘掉：回包之后它就不该再出现在快照里。
 	delete(s.perms, requestID)
 	for i, id := range s.permOrder {
@@ -986,6 +988,13 @@ func (s *Session) claimPermission(requestID string) bool {
 		}
 	}
 	return true
+}
+
+// unclaimPermission 在回包没能送出去时把占位还回去（见 ReplyPermission）。
+func (s *Session) unclaimPermission(requestID string) {
+	s.permMu.Lock()
+	delete(s.resolved, requestID)
+	s.permMu.Unlock()
 }
 
 // noteResolvedPermission 记下「这条审批已经有结论」，挡住之后的第二次回包。
@@ -998,6 +1007,11 @@ func (s *Session) noteResolvedPermission(requestID string) {
 	}
 	s.permMu.Lock()
 	defer s.permMu.Unlock()
+	s.markResolvedLocked(requestID)
+}
+
+// markResolvedLocked 记一条「已有结论」；调用方必须持 permMu。
+func (s *Session) markResolvedLocked(requestID string) {
 	if s.resolved == nil || len(s.resolved) >= permResolvedMax {
 		s.resolved = make(map[string]struct{}, 8)
 	}
@@ -1013,7 +1027,7 @@ func (s *Session) clearPermissions() {
 	// 这些 id 也算「有结论了」：整轮作废之后还到达的回包只能是迟到的重复，
 	// 放行的话会往 stdin 写一条 CLI 早已不再等待的回包。
 	for _, id := range ids {
-		s.resolved[id] = struct{}{}
+		s.markResolvedLocked(id)
 	}
 	s.permMu.Unlock()
 	for _, id := range ids {
