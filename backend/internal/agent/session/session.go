@@ -170,6 +170,13 @@ type Session struct {
 	state atomic.Value // string
 	idle  atomic.Int64 // unix nano，最近一次活动时间
 
+	// fresh 表示「这个进程是用 `--session-id` 新开的、CLI 那边还没有转录」。
+	// 由 manager 在 create 时按 `resumeID == ""` 置位（见 MarkFresh），之后不再变。
+	fresh atomic.Bool
+	// prompted 表示「这条进程收到过用户消息」。首条消息写成功就置位，之后不再变。
+	// 它与 fresh 一起构成「新对话」：见 IsBlank。
+	prompted atomic.Bool
+
 	initMu      sync.RWMutex
 	initPayload json.RawMessage
 
@@ -381,6 +388,37 @@ func (s *Session) LastActive() time.Time {
 	return time.Unix(0, s.idle.Load())
 }
 
+// MarkFresh 标记这条会话是用 `--session-id` 新开的（CLI 那边还没有转录）。
+//
+// 只由 manager 在启动参数里没有 `--resume` 时调用一次。
+func (s *Session) MarkFresh() { s.fresh.Store(true) }
+
+// IsBlank 表示「新建之后还没发过第一条消息的对话」。
+//
+// 两个条件都要：进程是 `--session-id` 新开的（fresh）、且我们还没往 stdin 写过
+// 任何用户消息（prompted）。`--resume` 起来的会话即使这一程还没收到新消息，也
+// 早就带着一整段历史，重开确实接得上——所以不能只看 prompted。
+func (s *Session) IsBlank() bool { return s.fresh.Load() && !s.prompted.Load() }
+
+// Reclaimable 判断这条会话现在能不能被空闲回收。
+//
+// 三条缺一不可：ready（busy / starting 一律不动）、确实闲置超过阈值、
+// **不是新对话**。新对话在 CLI 那边没有转录也没有上下文，「下次打开重新接上」
+// 对它根本不成立——收掉之后用户回到那一页只会看到「连接已关闭」，而他马上要
+// 打字的就是这一页。首条消息一写进 stdin，它就恢复成普通会话（prompted）。
+func (s *Session) Reclaimable(now time.Time, timeout time.Duration) bool {
+	if timeout <= 0 {
+		return false
+	}
+	if s.IsBlank() {
+		return false
+	}
+	if s.State() != StateReady {
+		return false
+	}
+	return s.LastActive().Before(now.Add(-timeout))
+}
+
 // setMode 记录 CLI 报上来的权限模式。
 func (s *Session) setMode(mode string) {
 	s.modeMu.Lock()
@@ -506,6 +544,9 @@ func (s *Session) prompt(text string, attachments []protocol.Attachment, opt pro
 	if err := s.writeLine(protocol.UserMessageWith(text, attachments, opt)); err != nil {
 		return err
 	}
+	// 首条消息一发出，这条进程就不再是「新对话」：空闲回收从这一刻起适用
+	// （见 IsBlank / Reclaimable）。写在写成功之后：写失败等于这条消息没发出去。
+	s.prompted.Store(true)
 	// 插话之后紧跟的 result 是交棒（CLI 把它留到下一轮），不该把状态标回 ready。
 	//
 	// **只有插话才动这个标记**：普通 prompt 也在这里无条件赋值的话，用户「插一句、
@@ -1017,6 +1058,15 @@ func (s *Session) readLoop() {
 	// Scan 返回 false 也可能是「行太长」而不是 EOF。不检查 Err 的话会话会
 	// 无声无息地 close，前端只看到一条 closed，根本不知道发生了什么。
 	if err := sc.Err(); err != nil {
+		// 我们自己关掉的会话不算「读取中断」：Close 会先关掉管道，Scanner 拿到的是
+		// `file already closed`。空闲回收、用户点「结束进程」、切换 claude 版本都会
+		// 走到这里——报出去只会在「连接已关闭」旁边多一条吓人的红字。
+		// 真正的故障（进程崩了、单行超限）此时 done 还没关，照常报。
+		select {
+		case <-s.done:
+			return
+		default:
+		}
 		s.emitData(KindError, map[string]any{
 			"message": fmt.Sprintf("读取 claude 输出中断：%v（单行上限 %d 字节）", err, maxLineBytes),
 		})

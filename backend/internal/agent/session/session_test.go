@@ -228,6 +228,66 @@ func TestStartHandshakeThenReady(t *testing.T) {
 	}
 }
 
+// 新建后还没发过消息的对话不能进空闲回收：它在 CLI 那边没有转录，
+// 「下次打开重新接上」根本不成立，收掉之后用户回来只会看到「连接已关闭」。
+func TestBlankSessionNotReclaimable(t *testing.T) {
+	sess, _, _ := startSession(t)
+	defer sess.Close()
+
+	// 没 MarkFresh = `--resume` 起来的（带着历史）：闲置就该回收。
+	if sess.IsBlank() {
+		t.Fatal("没有 MarkFresh 的会话不应算新对话")
+	}
+	if !sess.Reclaimable(time.Now().Add(time.Hour), time.Minute) {
+		t.Fatal("resume 的会话闲置超过阈值应当可回收")
+	}
+
+	sess.MarkFresh()
+	if !sess.IsBlank() {
+		t.Fatal("fresh 且没发过消息应当算新对话")
+	}
+	if sess.Reclaimable(time.Now().Add(time.Hour), time.Minute) {
+		t.Fatal("新对话不能被空闲回收")
+	}
+
+	// 阈值 <= 0 是「不回收」的老语义，不能因为新判定被绕成「全都可收」。
+	if sess.Reclaimable(time.Now().Add(time.Hour), 0) {
+		t.Fatal("回收阈值 <= 0 时不应回收任何会话")
+	}
+}
+
+// 首条消息写进 stdin 之后，新对话就恢复成普通会话（空闲回收到点照收）。
+func TestPromptEndsBlankState(t *testing.T) {
+	sess, _, _ := startSession(t)
+	defer sess.Close()
+	sess.MarkFresh()
+	if !sess.IsBlank() {
+		t.Fatal("fresh 且没发过消息应当算新对话")
+	}
+	if err := sess.Prompt("你好"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if sess.IsBlank() {
+		t.Fatal("发过消息之后不应再算新对话")
+	}
+}
+
+// 我们自己关掉的会话（空闲回收 / 结束进程 / 切换版本）不算「读取输出中断」：
+// Close 先关管道，Scanner 拿到的是 file already closed。报成 error 只会在
+// 「连接已关闭」旁边多一条吓人的红字；真正的故障（进程崩了 / 单行超限）照常报。
+func TestIntentionalCloseDoesNotReportReadError(t *testing.T) {
+	sess, _, rec := startSession(t)
+
+	if err := sess.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	// 读循环是在另一个 goroutine 里拿到管道错误的，给它一点时间。
+	time.Sleep(200 * time.Millisecond)
+	if n := rec.count(KindError); n != 0 {
+		t.Fatalf("主动关闭不应报读取错误，实际 %d 条", n)
+	}
+}
+
 func TestPromptSendsUserMessageAndMarksBusy(t *testing.T) {
 	sess, fc, _ := startSession(t)
 	defer sess.Close()

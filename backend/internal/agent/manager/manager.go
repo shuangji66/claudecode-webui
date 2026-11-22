@@ -542,6 +542,13 @@ func (m *Manager) createWith(abs, sessionID, resumeID, model, permissionMode str
 		m.emit(topic, ev)
 	})
 
+	// 没有 `--resume` 的进程在 CLI 那边还没有转录：记成「新对话」，空闲回收不碰它，
+	// 直到第一条消息写进 stdin（见 session.IsBlank / Reclaimable）。fork 除外——
+	// 它虽然也是新 id，但历史已经复制过去了。
+	if resumeID == "" && !fork {
+		sess.MarkFresh()
+	}
+
 	m.mu.Lock()
 	m.sessions[id] = sess
 	m.procs[id] = proc
@@ -755,16 +762,20 @@ func (m *Manager) idleTimeout() time.Duration {
 }
 
 // reapIdle 回收空闲超时的会话。
+//
+// 判定整个交给 `session.Reclaimable`：状态、闲置时间，以及「新对话不回收」。
+// 后者不能漏——新建的对话在 CLI 那边没有转录，收掉之后没有「下次打开重新接上」
+// 这回事，用户回来只会看到「连接已关闭」，而那一页正是他马上要打字的地方。
 func (m *Manager) reapIdle() {
 	timeout := m.idleTimeout()
 	if timeout <= 0 {
 		return
 	}
-	deadline := time.Now().Add(-timeout)
+	now := time.Now()
 	var victims []string
 	m.mu.Lock()
 	for id, s := range m.sessions {
-		if s.State() == session.StateReady && s.LastActive().Before(deadline) {
+		if s.Reclaimable(now, timeout) {
 			victims = append(victims, id)
 		}
 	}

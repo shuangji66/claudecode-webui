@@ -1590,6 +1590,18 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **扫描周期固定 1 分钟**（`manager.reapLoop`），所以实际回收发生在「阈值 ~ 阈值+1min」之间。
 - **只回收 `StateReady` 的会话**：`busy`（正在跑，含审批挂起）与 `starting`（握手中）一律不动——
   审批挂起时状态是 `busy`，即使 `LastActive` 过去几小时也不会被回收（见 4.2 的内存占用那条）。
+- **新建的空对话不参与回收**（`session.IsBlank`）：`--session-id` 新开的进程在 CLI 那边
+  没有转录、也没有上下文，回收之后「下次打开重新接上」根本不成立——用户回到那一页只会
+  看到「连接已关闭」，而那一页正是他马上要打字的地方（截过图：停留在「新对话」十几分钟，
+  回来就是一条 `读取 claude 输出中断`）。判定是 `fresh`（启动参数里没有 `--resume`，
+  由 `manager.createWith` 调 `MarkFresh`）**且** `!prompted`（首条消息写进 stdin 时置位）：
+  首条消息一发，它就恢复成普通会话；`--resume` 起来的会话即使这一程还没收到新消息也
+  不豁免——它带着整段历史，重开确实接得上。判定集中在 `session.Reclaimable(now, timeout)`，
+  `manager.reapIdle` 只负责收集与关闭。
+- **主动关闭不再报「读取输出中断」**：`readLoop` 在 `sc.Err()` 非空时先看 `done`——自己关掉的
+  会话（空闲回收 / 结束进程 / 切版本）管道是被我们关的，`file already closed` 不是故障，
+  报出去只会在「连接已关闭」旁边多一条红字。真正的故障（进程崩了、单行超限）那时 `done`
+  还没关，照常报。
 - `LastActive`（`session.Session.LastActive`，底层是 `idle` 原子时间戳）在三处刷新：
   创建时、每次往 claude 写（`writeNow`）、每次读到 claude 的一行输出（含 `keep_alive`）。
 - 回收走 `Manager.Close` → `Session.Close` → `KindClosed` → `NoteSessionClosed`，

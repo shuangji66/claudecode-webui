@@ -77,7 +77,13 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - `handleLine` 中遇到 `control_request` 且非 `can_use_tool` → 立刻回 `Unsupported`。
 - **读循环结束必须看 `sc.Err()`**：`bufio.Scanner` 返回 false 也可能是单行超过
   `maxLineBytes`（8MB），不检查就会静默 close——前端只看到一条 `closed`，不知道原因。
-  现在会先抛一条 `error` 事件再关会话。
+  现在会先抛一条 `error` 事件再关会话。**但「我们自己关的」不算**：`Close` 先关管道，
+  Scanner 拿到的是 `file already closed`，`done` 已经关了——先看它，命中就直接 return，
+  否则空闲回收 / 结束进程 / 切版本都会在「连接已关闭」旁边多报一条红字。
+- **新建后没发过消息的对话不进空闲回收**（`Session.IsBlank` = `fresh && !prompted`）：
+  `--session-id` 新开时 manager 调 `MarkFresh`，首条消息写成功时置 `prompted`。
+  它在 CLI 那边没有转录，回收后没有「下次打开重新接上」可言。判定收在
+  `Session.Reclaimable(now, timeout)`（状态 + 闲置 + 非新对话），manager 只收集与关闭。
 - **stdout 上的非 JSON 行转成 `system/stdout` 文本**，不要原样塞进 `cli` 事件：
   `json.RawMessage` 遇到非法 JSON 会让 `json.Marshal` 失败，最后变成一条
   「json: error calling MarshalJSON」的错误提示，原文反而丢了。
