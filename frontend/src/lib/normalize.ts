@@ -1599,6 +1599,64 @@ export function appendPromptEcho(
 }
 
 /**
+ * 交界处按内容去重的时间窗。
+ *
+ * 同一条消息在「CLI 写进转录」与「实时帧到达浏览器」之间只差几十毫秒，5 秒足够
+ * 容下 NAS 上的抖动；而模型隔了一会儿又原样说了同一句话（「好的」）时，两边的
+ * `ts` 差得远，不能被当成同一条吞掉。
+ */
+const REPLAY_ECHO_WINDOW_MS = 5000;
+
+/**
+ * 转录尾部的这一条与本地新增的头部这一条，是不是同一段内容。
+ *
+ * 只认三种能**确定**是同一件事的情形（用户气泡与 result 不参与，见下方的原因）：
+ *   - `tool`：`tool_use_id` 是 CLI 给的，同一条调用只有一个 id；
+ *   - `assistant` / `thinking`：正文逐字相同 + 时间接近（同一条消息的写盘时刻与
+ *     到达时刻只差几十毫秒）。
+ */
+function sameReplayed(a: Item, b: Item): boolean {
+  switch (a.kind) {
+    case "tool":
+      return b.kind === "tool" && a.toolUseId !== "" && a.toolUseId === b.toolUseId;
+    case "assistant":
+    case "thinking":
+      // 正文为空的不比：那种条目没有可辨识的内容，比下去只会吞掉真正的新消息。
+      return (
+        b.kind === a.kind &&
+        a.text.trim() !== "" &&
+        a.text === b.text &&
+        Math.abs(a.ts - b.ts) <= REPLAY_ECHO_WINDOW_MS
+      );
+    default:
+      // user：本机的乐观气泡不能在这里被吞（`applyCLI` 的 `echoAlreadyShown` 管它）；
+      // result / system / interrupt / error：转录里压根没有 result 行，其余几条
+      // 重复出现都是合理内容，按内容比只会误删。
+      return false;
+  }
+}
+
+/**
+ * 丢掉「实时帧已经落过、转录里也有」的那几条。
+ *
+ * 打开一条正在跑的对话时，回放读的是磁盘快照，而快照读完之后、读之前到达的实时帧
+ * 会先落进 `items`：同一条助手消息/同一张工具卡片于是两边各有一份。原本只按 `ts`
+ * 切（`ts` 晚于转录最后一条就接在后面），而实时帧的 `ts` 是**到达时刻**、永远晚于
+ * 转录里的写盘时刻——它一定会被当成「转录取到之后的新条目」接上去，界面上就是
+ * 同一段回答出现两遍。
+ *
+ * 从交界处**逆序**对齐：转录的最后一条对本地新增的第一条、依次往前比。命中几条
+ * 丢几条，遇到第一处不同就停——本地新增里真正的新内容因此不会被牵连。
+ */
+function dropReplayedEcho(history: Item[], tail: Item[]): Item[] {
+  let n = 0;
+  while (n < tail.length && n < history.length && sameReplayed(tail[n], history[history.length - 1 - n])) {
+    n += 1;
+  }
+  return n === 0 ? tail : tail.slice(n);
+}
+
+/**
  * 把「整份转录回放」的结果与本地已有的消息流合并。
  *
  * 用在重连补不齐（`session.resync`）的时候：断开期间产生的事件要么已从后端缓冲里
@@ -1611,6 +1669,9 @@ export function appendPromptEcho(
  * 转录最后一条的条目接在后面。这条界线天然把「转录已经收录的乐观条目」和「断线
  * 时的半截流式气泡」都排除掉——它们的 ts 都早于转录的最后一条。
  *
+ * 交界处还要再比一次内容（`dropReplayedEcho`）：接线两侧很可能是同一条消息的两份
+ * （实时帧先落了地，转录随后才被读到），光比 `ts` 挡不住。
+ *
  * `settle` 为真时顺手收掉本地残留的流式光标：整份重建意味着那一轮早就结束了
  * （它的 result 在断线期间就产生过、转录里也有完整回答），光标不该继续闪。
  */
@@ -1619,7 +1680,7 @@ export function mergeReplayed(history: Item[], local: Item[], settle = false): I
   if (local.length === 0) return history;
   const base = settle ? settleStreaming(local) : local;
   const cut = history[history.length - 1].ts;
-  const tail = base.filter((it) => it.ts > cut);
+  const tail = dropReplayedEcho(history, base.filter((it) => it.ts > cut));
   if (tail.length === 0) return history;
   // 两边的 seq 都是从 0 起算的独立计数：接上去之前要重排，否则轮次刻度的
   // seq 会出现重复值（`lib/turns.ts` 拿它当稳定标识）。起点取转录里的最大 seq + 1。

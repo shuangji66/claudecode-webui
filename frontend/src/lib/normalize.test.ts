@@ -1899,6 +1899,61 @@ describe("mergeReplayed", () => {
     const merged = mergeReplayed(history, local, true);
     expect(merged.some((i) => i.kind === "assistant" && i.streaming)).toBe(false);
   });
+
+  // 打开一条正在跑的对话时，实时帧可能先落地、转录随后才读到：同一条消息在两边
+  // 各有一份。只按 ts 切挡不住——实时帧的 ts 是到达时刻，永远晚于转录里的写盘时刻。
+  it("交界处的同一条回答只留一份（实时帧 + 转录都有它）", () => {
+    const now = Date.now();
+    const history = [user("问题", now - 1000), asst("回放之后才有的", now)];
+    // 本地那份就是这条回答的实时帧副本（ts 是到达时刻，比写盘晚几毫秒）。
+    const local = [asst("回放之后才有的", now + 8)];
+    const merged = mergeReplayed(history, local);
+    expect(merged.map((i) => (i.kind === "assistant" ? i.text : ""))).toEqual(["", "回放之后才有的"]);
+    expect(merged).toHaveLength(2);
+  });
+
+  it("交界处连续几条重复都能丢掉，真正的新内容留着", () => {
+    const now = Date.now();
+    const history = [
+      user("问题", now - 5000),
+      asst("第一段", now - 4000),
+      asst("第二段", now),
+    ];
+    const local = [asst("第二段", now + 5), asst("第一段", now + 9), asst("真正的新内容", now + 20)];
+    const texts = mergeReplayed(history, local).map((i) => ("text" in i ? i.text : ""));
+    expect(texts).toEqual(["问题", "第一段", "第二段", "真正的新内容"]);
+  });
+
+  it("时间差得远的同一句话不当成重复（模型隔一会儿又说了「好的」）", () => {
+    const now = Date.now();
+    const history = [user("问题", now - 60000), asst("好的", now - 30000)];
+    const local = [asst("好的", now)];
+    expect(mergeReplayed(history, local)).toHaveLength(3);
+  });
+
+  it("同一张工具卡片不会因为回放多出一张（tool_use_id 相同）", () => {
+    const now = Date.now();
+    const tool = (ts: number): Item => ({
+      id: `t${ts}`,
+      seq: 0,
+      ts,
+      kind: "tool",
+      toolUseId: "toolu_1",
+      name: "Bash",
+      input: { command: "ls" },
+    });
+    const history = [user("问题", now - 1000), tool(now)];
+    const merged = mergeReplayed(history, [tool(now + 4)]);
+    expect(merged.filter((i) => i.kind === "tool")).toHaveLength(1);
+  });
+
+  it("交界处是用户气泡时不吞（本机乐观插入的那条不算重复）", () => {
+    const now = Date.now();
+    const history = [user("继续", now - 1000), asst("在跑", now)];
+    const local = [user("继续", now + 3)];
+    // 转录最后一条是 assistant，与本地那条 user 对不上，逆序对齐在第一步就停。
+    expect(mergeReplayed(history, local)).toHaveLength(3);
+  });
 });
 
 function thinkingDelta(text: string) {

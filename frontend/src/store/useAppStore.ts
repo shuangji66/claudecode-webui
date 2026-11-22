@@ -959,6 +959,19 @@ async function replayTranscript(id: string, get: () => AppState): Promise<void> 
  * 只在本次打开确实回放过转录（`hydrated`）时才走这条路——没回放过的会话（例如
  * 子代理标签直接连）本地消息流就是全部，重读反而会盖掉它。
  */
+/**
+ * 收掉重读窗口：只放行 `seq > floor` 的实时事件（`seq <= floor` 的内容已经在快照 /
+ * 转录里），正在等补发帧则交给 replay 的收尾路径按序号统一应用。
+ */
+function settleBuffered(id: string, floor: number): void {
+  const buffered = (pendingLive.get(id) ?? []).filter(
+    (ev) => typeof ev.seq !== "number" || ev.seq > floor,
+  );
+  if (buffered.length > 0) pendingLive.set(id, buffered);
+  else pendingLive.delete(id);
+  if (!awaitingReplay.has(id)) flushLive(id);
+}
+
 async function refreshHistoryAfterAttach(id: string, floor: number): Promise<void> {
   if (historyRefresh.has(id)) return;
   historyRefresh.set(id, floor);
@@ -966,12 +979,26 @@ async function refreshHistoryAfterAttach(id: string, floor: number): Promise<voi
     const tr = await apiFetch<TranscriptPayload>(`/api/history/transcript?id=${encodeURIComponent(id)}`);
     const next = itemsFromTranscript(tr);
     if (next.length > 0) {
+      /**
+       * **先把重读窗口里压着的实时帧落到本地，再和转录合并。**
+       *
+       * 顺序反过来（先合并、再把缓冲冲进 store）两边就没有交汇点：同一段内容在
+       * 转录里一份、在冲进来的实时帧里又是一份，而 `applyCLI` 只按内容块重建、
+       * 不跟已有历史比——界面上就是同一条回答出现两遍。压着它们的这段时间正好
+       * 提供了交汇点，交给 `mergeReplayed` 在交界处按内容去重。
+       *
+       * 正在等补发帧时自己收窗口：那条路径会按序号统一应用，两边同时冲会把顺序
+       * 打乱；此时也跳过合并之外的额外动作（补发帧之后紧跟的 resync 会整份重放）。
+       */
+      historyRefresh.delete(id);
+      settleBuffered(id, floor);
       const conv = useAppStore.getState().conversations.find((c) => c.id === id);
       const snap = mergeUsage(conv?.usage, usageFromTranscript(tr.lines ?? []));
       useAppStore.setState((s) => ({
-        // `mergeReplayed` 以转录为主，只接本地 `ts` 比转录更晚的条目（窗口期间压住的
-        // 事件还没落地，所以这里不会把同一段正文接成两份）。
-        items: { ...s.items, [id]: mergeReplayed(next, s.items[id] ?? [], true) },
+        // `settle` 必须是 false：这条会话**还在跑**，此刻的流式气泡是正在进行的那条
+        // 消息，不是「上一轮留下的光标」。收掉它的话，同一段正文被转录里的完整版本
+        // 顶掉之前会先闪一下空白。
+        items: { ...s.items, [id]: mergeReplayed(next, s.items[id] ?? []) },
         // 磁盘那份为主，本回合刚量到的速度样本保留（与 `replayTranscript` 同一口径）。
         ...(snap
           ? { usage: { ...s.usage, [id]: mergeUsage(snap, s.usage[id]) as UsageSnapshot } }
@@ -982,12 +1009,9 @@ async function refreshHistoryAfterAttach(id: string, floor: number): Promise<voi
     // 读不到（转录还没落盘 / 被删）：保持现有消息流，别让界面空掉。
   } finally {
     historyRefresh.delete(id);
-    const buffered = (pendingLive.get(id) ?? []).filter(
-      (ev) => typeof ev.seq !== "number" || ev.seq > floor,
-    );
-    pendingLive.set(id, buffered);
-    // 正在等补发帧时不要抢着 flush：交给 replay 的收尾路径按序号统一应用。
-    if (!awaitingReplay.has(id)) flushLive(id);
+    // 走到这里还压着事件，只可能是上面没走到合并（转录读不到 / 为空）：按同一口径
+    // 放行一次，别让消息流停在那里。
+    settleBuffered(id, floor);
   }
 }
 
@@ -1030,16 +1054,16 @@ function syncMissedEvents(
     // 「正在跑」一定要补；已经跑完但握手超过 300ms（冷启动 spawn + initialize 要几秒）
     // 的也要补——回放读完之后转录可能又写进去了几行。本机热打开握手只有几十毫秒，
     // 不值得为它再多解析一遍 jsonl。
-    const stale = hydratedAt !== undefined && Date.now() - hydratedAt > 300;
-    if (hydratedAt !== undefined && (busy || stale)) void refreshHistoryAfterAttach(sid, seq);
+    const staleAttach = hydratedAt !== undefined && Date.now() - hydratedAt > 300;
+    if (hydratedAt !== undefined && (busy || staleAttach)) void refreshHistoryAfterAttach(sid, seq);
     return;
   }
   if (seq <= knownSeq) return;
   // 对齐窗口：补发帧到达前，实时事件先压着（见 awaitingReplay 的注释）。
   // 上一次窗口的计时器要先撤掉：它会看到 awaitingReplay 里还有这个 sid
   // （新窗口的），提前把缓冲冲掉。
-  const stale = syncTimers.get(sid);
-  if (stale !== undefined) window.clearTimeout(stale);
+  const previousTimer = syncTimers.get(sid);
+  if (previousTimer !== undefined) window.clearTimeout(previousTimer);
   awaitingReplay.add(sid);
   // 兜底：后端没回补发帧（连接又断了 / 版本不匹配）时，1 秒后自己把缓冲的实时事件
   // 应用掉，别让界面一直卡在「已经连上但消息不动」。
@@ -2518,12 +2542,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // 对齐窗口里到达的实时事件先压着：它可能比正在补发的那一段还晚，先落地就会
     // 让消息流顺序颠倒（result 抢在它对应的正文前面）。补发帧到达后一并按序号应用。
     // 补发帧 / resync 自己不受这条限制（它们是这个窗口的收尾者）。
-    if (
-      sid &&
-      ((awaitingReplay.has(sid) && ev.kind !== "session.replay" && ev.kind !== "session.resync") ||
-        (historyRefresh.has(sid) && ev.kind !== "session.replay" && ev.kind !== "session.resync")) &&
-      typeof ev.seq === "number"
-    ) {
+    // 重读转录（`historyRefresh`）走的是同一套：读盘期间到达的实时帧要先和转录
+    // 合并成一份，不能抢在转录前面各自落地。
+    const closing = ev.kind === "session.replay" || ev.kind === "session.resync";
+    if (sid && !closing && typeof ev.seq === "number" && (awaitingReplay.has(sid) || historyRefresh.has(sid))) {
       const buffered = pendingLive.get(sid) ?? [];
       buffered.push(ev);
       pendingLive.set(sid, buffered);

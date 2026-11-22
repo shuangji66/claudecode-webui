@@ -146,4 +146,39 @@ describe("首次连上正在跑的会话：补掉回放与订阅之间的空隙"
     await Promise.resolve();
     expect(transcriptCalls).toBe(1);
   });
+
+  // 窗口里到达的实时帧很可能**已经写进了转录**（CLI 写盘与吐 stdout 只差几毫秒）：
+  // 先合并转录、再把缓冲冲进 store 的话，同一条回答会在界面上出现两遍。
+  it("窗口里的实时帧已经写进转录时只显示一遍", async () => {
+    await useAppStore.getState().openConversation("c1");
+    expect(kinds()).toEqual(["user", "assistant"]);
+
+    lines = [
+      ...baseLines,
+      {
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "两边都有" }], model: "m" },
+        // 时间取「现在」：同一条消息的写盘时刻与实时帧到达时刻只差几十毫秒。
+        timestamp: new Date().toISOString(),
+      },
+    ];
+    gate = deferred();
+
+    useAppStore.getState().applyEvent("c1", {
+      kind: "session.snapshot",
+      data: { info: { state: "busy" }, seq: 5, epoch: "e1" },
+    });
+    useAppStore.getState().applyEvent("c1", {
+      kind: "cli",
+      seq: 6,
+      data: { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "两边都有" }] } },
+    });
+    gate.resolve();
+    await vi.waitFor(() => {
+      const texts = (useAppStore.getState().items.c1 ?? []).map((i) => ("text" in i ? i.text : ""));
+      expect(texts).toContain("两边都有");
+    });
+    const texts = (useAppStore.getState().items.c1 ?? []).map((i) => ("text" in i ? i.text : ""));
+    expect(texts.filter((t) => t === "两边都有")).toHaveLength(1);
+  });
 });
