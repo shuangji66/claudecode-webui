@@ -26,6 +26,7 @@ src/
   lib/providerCatalog.ts 预置第三方提供商目录（对齐 DSH 的 pi-ai catalog）
   lib/attachments.ts   附件类型/大小/读取
   lib/queue.ts         待发送（插话）队列：入队/删除/编辑/队首、何时能自动发
+  lib/busyEnter.ts     「繁忙时的发送行为」偏好：Enter／发送按钮与 Ctrl/⌘+Enter 各用一档（只存本机）
   lib/autofill.ts      全局禁用浏览器/密码管理器自动填充（App 挂载时补属性）
   lib/clipboard.ts     复制文本（Clipboard API → execCommand 回退）
   lib/password.ts      访问密码复杂度判定（与后端 authz.ValidatePassword 同一规则）
@@ -299,14 +300,21 @@ src/
 24. **回合进行中的消息走「待发送」队列，不许直接写 stdin 之外的地方**（`lib/queue.ts` +
     `store.queued`）：插话要带 **`priority: "now"`**（`sendPrompt` 的第 4 个参数）——只写裸
     user 帧的话 CLI 按默认的 next 处理，要等本轮工具收尾，看起来跟排队一样（「插话没生效」
-    就是这么来的）。`Composer` 在 `busy` 时按 Enter 只调 `onQueue`（草稿清空，消息进输入框
-    **上方**的待发送面板），`Ctrl/⌘+Enter` 才是 `onSend`（立刻插话）。面板每条**点正文就地展开
+    就是这么来的）。**忙时 Enter / 发送按钮投递哪一档由「繁忙时的发送行为」决定**
+    （`lib/busyEnter.resolveBusySubmit`，设置 → 通用里那一行，对齐 DSH 的 composer-enter）：
+    Enter 与右下角发送按钮**共用偏好那一档**，`Ctrl/⌘+Enter` 永远用**另一档**。默认
+    「排队发送」＝按 Enter 只调 `onQueue`（草稿清空，消息进输入框**上方**的待发送面板）、
+    `Ctrl/⌘+Enter` 才是 `onSend`（立刻插话）；切到「插话发送」后两个手势互换。偏好只存本机
+    （`ccweb-busy-enter`，`lib/busyEnter.ts`），不进 `settings.json`；**不忙时两档都直接发**，
+    只有「队列里还压着消息」时才照旧排队尾（否则新消息会插到前面那条之前）。面板每条**点正文就地展开
     编辑框**（Enter 保存 / Shift+Enter 换行 / Esc 取消，`lib/queue.updatePrompt` 保持位置；正文与
     附件都清空等于删掉，附件可逐个移除）、右侧垃圾桶直接删（编辑态里也有「删除」）、可用右侧箭头立即发。编辑态要调
     `onEditingQueued(qid|null)`：store 会**按住自动发送**（`editingQueuedId`），编辑结束后补发——
     不按住的话这一轮结束时会把改到一半的旧文本发出去。
-    **进行中且有草稿（`hasDraft` = 正文或附件非空）时，右下角主按钮必须是「发送（排队）」，中断缩成
+    **进行中且有草稿（`hasDraft` = 正文或附件非空）时，右下角主按钮必须是「发送」，中断缩成
     旁边的 28px 小圆钮**：手机键盘的回车是换行，只给中断就等于没法插话；草稿清空后再换回单一中断。
+    主按钮的 `aria-label` / 悬停说明跟着偏好走（「发送并排队」/「发送并插话」），点它等同于
+    按 Enter——两处走同一个 `resolveBusySubmit`，不要各判一套。ChatPane 底栏那行操作提示同理。
     投递时机由 store 决定：**只有「本轮正常结束的 `result`」发队首**（判定在
     `lib/queue.shouldFlushAfter`），被中断/出错时留在队列里；`session.state ready`、切对话、
     重连都**不**触发——那会在用户按 Esc 之后偷偷把消息发出去。队列跟着对话走（`queued[sid]`），

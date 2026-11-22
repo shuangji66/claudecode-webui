@@ -9,6 +9,7 @@ import { MentionMenu } from "./MentionMenu";
 import { CommandMenu } from "./CommandMenu";
 import { useMention, type MentionKeyEvent } from "./useMention";
 import { readDraft, writeDraft } from "../../lib/drafts";
+import { resolveBusySubmit, useBusyEnter } from "../../lib/busyEnter";
 import { useLocale, useT } from "../../lib/i18n";
 import type { ModelOption } from "../../lib/providerForm";
 import {
@@ -112,6 +113,8 @@ export function Composer({
 }: Props) {
   const t = useT();
   const locale = useLocale();
+  // 回合进行中 Enter / 发送按钮是排队还是插话（设置 → 通用的「繁忙时的发送行为」）。
+  const busyEnter = useBusyEnter();
   // 当前模式的显示名：窄屏下触发器只留图标，这个字符串还要给 aria-label 用。
   const modeLabel = permissionLabel(permissionMode || "default", locale);
   const [text, setText] = useState("");
@@ -254,7 +257,7 @@ export function Composer({
   /** 输入框里有没有东西（正文或附件）：决定进行中时主按钮是「发送」还是「中断」。 */
   const hasDraft = Boolean(text.trim()) || files.length > 0;
 
-  const submit = async (immediate = false) => {
+  const submit = async (accelerated = false) => {
     const value = text.trim();
     // 发送期间用户可能切到别的对话：草稿要清的永远是「发出这条」的对话，
     // 输入框要不要清则要看它是否还是当前这条（否则会抹掉别人刚恢复的草稿）。
@@ -263,12 +266,13 @@ export function Composer({
     // 但 Enter 直接走 submit，不在这里拦一道就会出现「按了没反应还把草稿清了」。
     if ((!value && files.length === 0) || disabled || sendBlocked) return;
     const wire = files.map(toWireAttachment);
-    // 回合进行中 Enter 只入队（可改、可删），Ctrl+Enter 才是立刻插话；
-    // 队列里还压着消息时新消息也一律排队尾，否则会插到前面那条之前。
-    const queuedSend = !immediate && (busy || queued.length > 0);
-    if (queuedSend) {
+    // 投递方式由「繁忙时的发送行为」决定（`lib/busyEnter.resolveBusySubmit`）：
+    // 回合进行中 Enter / 主按钮走偏好那一档、Ctrl/⌘+Enter 走另一档；队列里还压着
+    // 消息时新消息一律排队尾，否则会插到前面那条之前。
+    const mode = resolveBusySubmit(busyEnter, { busy, accelerated, queued: queued.length });
+    if (mode === "queue") {
       if (!onQueue(value, wire)) return;
-    } else if (!(await onSend(value, wire, immediate && busy ? { priority: "now" } : undefined))) {
+    } else if (!(await onSend(value, wire, mode === "steer" ? { priority: "now" } : undefined))) {
       return; // 失败：草稿与已读入内存的附件原样保留
     }
     // 发送期间草稿的格子可能已经换了：新对话页的第一条消息会让 store 在 `onSend` 里
@@ -792,7 +796,8 @@ export function Composer({
             }
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
-              // Ctrl/⌘+Enter = 立刻插话（回合进行中直接写 stdin），Enter = 排队。
+              // 主手势（Enter / 发送按钮）与 Ctrl/⌘+Enter 各用一档发送行为
+              // （设置 → 通用「繁忙时的发送行为」，非繁忙时两者都直接发）。
               void submit(e.ctrlKey || e.metaKey);
             }
           }}
@@ -859,9 +864,10 @@ export function Composer({
           </span>
 
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
-            {/* 回合进行中：草稿一有内容，主按钮就从「中断」换成「发送（排队）」——
-                手机键盘上的回车是换行，没有这个按钮就没法插话；中断退成左边的小圆钮，
-                输入框里打着字也照样能停。 */}
+            {/* 回合进行中：草稿一有内容，主按钮就从「中断」换成「发送」——手机键盘上的回车
+                是换行，没有这个按钮就没法插话；中断退成左边的小圆钮，输入框里打着字也照样
+                能停。主按钮投递成排队还是插话跟 Enter 一致（设置 → 通用），文案与悬停说明
+                都跟着那一档走。 */}
             {busy && (
               <button
                 type="button"
@@ -880,13 +886,24 @@ export function Composer({
                 onClick={() => void submit()}
                 disabled={disabled || sendBlocked || !hasDraft}
                 className="send-button"
-                aria-label={busy ? t("发送并排队", "Send, queued for this turn") : t("发送", "Send")}
+                aria-label={
+                  busy
+                    ? busyEnter === "steer"
+                      ? t("发送并插话", "Send and steer")
+                      : t("发送并排队", "Send, queued for this turn")
+                    : t("发送", "Send")
+                }
                 title={
                   busy
-                    ? t(
-                        "发送：本轮结束后自动发出（Ctrl/⌘+Enter 立即插话）",
-                        "Send: delivered when this turn ends (Ctrl/⌘+Enter interjects now)",
-                      )
+                    ? busyEnter === "steer"
+                      ? t(
+                          "发送：立刻插话，本轮在下一个工具边界接住（Ctrl/⌘+Enter 排队）",
+                          "Send: interjects now, merged at the next tool boundary (Ctrl/⌘+Enter queues)",
+                        )
+                      : t(
+                          "发送：本轮结束后自动发出（Ctrl/⌘+Enter 立即插话）",
+                          "Send: delivered when this turn ends (Ctrl/⌘+Enter interjects now)",
+                        )
                     : t("发送（Enter）", "Send (Enter)")
                 }
               >

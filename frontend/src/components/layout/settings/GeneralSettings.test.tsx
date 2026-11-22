@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { GeneralSettings } from "./GeneralSettings";
 import { resetWaitLabelCache, setWaitLabel, waitLabel } from "../../../lib/waitLabel";
+import { resetBusyEnterCache } from "../../../lib/busyEnter";
 import { useAppStore } from "../../../store/useAppStore";
 
 // 通用设置现在是「一行一项」的清单（对齐 DSH 的 Setting-Cell）：左边标题 + 说明、
@@ -13,6 +14,7 @@ describe("设置 → 通用", () => {
   beforeEach(() => {
     localStorage.clear();
     resetWaitLabelCache();
+    resetBusyEnterCache();
     saveSettings.mockClear();
     useAppStore.setState({
       settings: {
@@ -33,7 +35,7 @@ describe("设置 → 通用", () => {
     render(<GeneralSettings />);
     // 「自定义」那一行的简短说明：换的是哪句话 + 长度口径，一句说完。
     expect(screen.getByText("计时行的那句等待文案；6–12 个字符，汉字算 2 个。")).toBeInTheDocument();
-    for (const title of ["默认权限", "外观", "语言", "字号", "过程展示", "收起时机", "收起后的回复", "自定义"]) {
+    for (const title of ["默认权限", "外观", "语言", "字号", "过程展示", "收起时机", "收起后的回复", "繁忙时的发送行为", "自定义"]) {
       expect(screen.getByText(title)).toBeInTheDocument();
     }
     // 说明跟着当前值走：默认「标准」档的说明文字。
@@ -50,6 +52,23 @@ describe("设置 → 通用", () => {
     });
     expect(localStorage.getItem("ccweb-process-view")).toBe("concise");
     expect(screen.getByText("连续的过程折成一行摘要（已读取文件并运行了命令），点开才看每一步。")).toBeInTheDocument();
+  });
+
+  // 回合进行中的发送行为（对齐 DSH 的 composer-enter 那一行）：两档只存本机偏好，
+  // 说明跟着选中值换（写清另一档由 Ctrl/⌘+Enter 承担）。
+  it("繁忙时的发送行为走下拉：选中插话发送写本机偏好，说明跟着换", async () => {
+    render(<GeneralSettings />);
+    expect(screen.getByText(/回合进行中发送＝排队/)).toBeInTheDocument();
+
+    await act(async () => {
+      screen.getByRole("button", { name: "繁忙时的发送行为" }).click();
+    });
+    await act(async () => {
+      screen.getByRole("option", { name: "插话发送" }).click();
+    });
+
+    expect(localStorage.getItem("ccweb-busy-enter")).toBe("steer");
+    expect(screen.getByText(/回合进行中发送＝立刻并入本轮/)).toBeInTheDocument();
   });
 
   it("字号用 ± 按钮，落的是 font_size 补丁", async () => {

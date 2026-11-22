@@ -24,6 +24,7 @@ import { BrandMark, IconAlert, IconRetry } from "../common/Icons";
 import { backgroundTasks, subagentsOnly } from "../../lib/backgroundTasks";
 import { runningTool } from "../../lib/process";
 import { draftKeyFor } from "../../lib/drafts";
+import { useBusyEnter } from "../../lib/busyEnter";
 import { MarkdownMediaContext, type MarkdownMedia } from "../common/Markdown";
 import { ImageLightbox } from "./ImageLightbox";
 
@@ -45,6 +46,9 @@ export const CONN_BAR_DELAY = 600;
 export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleRight }: Props) {
   const t = useT();
   const locale = useLocale();
+  // 底栏那行操作提示跟着「繁忙时的发送行为」（设置 → 通用）走：Enter 与发送按钮一档、
+  // Ctrl/⌘+Enter 另一档，提示必须与 Composer 里真的会发生的投递一致。
+  const busyEnter = useBusyEnter();
   const activeId = useAppStore((s) => s.activeId);
   const sessions = useAppStore((s) => s.sessions);
   const conversations = useAppStore((s) => s.conversations);
@@ -238,6 +242,22 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
   // 它并进当前回合，算进去的话底栏写着「2 轮」、右侧刻度却只有一格。
   const turns = itemList.filter((i) => i.kind === "user" && !i.interjected).length;
 
+  // 繁忙时那行提示的措辞：Enter 与 Ctrl/⌘+Enter 各用一档（哪一档在 `busyEnter` 里）。
+  const busyHint =
+    busyEnter === "steer"
+      ? {
+          chord: "Enter 插话 · Ctrl+Enter 排队",
+          chordEn: "Enter steers · Ctrl+Enter queues",
+          send: "发送＝立即插话并入本轮",
+          sendEn: "send steers into this turn",
+        }
+      : {
+          chord: "Enter 排队 · Ctrl+Enter 立即插话",
+          chordEn: "Enter queues · Ctrl+Enter interjects",
+          send: "发送＝排队等本轮结束",
+          sendEn: "send queues for this turn",
+        };
+
   const footer = (
     <>
       {/* 左边这行是操作提示：`min-w-0` + truncate 才有收缩的余地——没有 `min-w-0` 时
@@ -253,19 +273,15 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
               <>
                 <span className="hidden sm:inline">
                   {t(
-                    queued.length > 0
-                      ? `${queued.length} 条待发送 · Enter 排队 · Ctrl+Enter 立即插话`
-                      : "Enter 排队 · Ctrl+Enter 立即插话",
-                    queued.length > 0
-                      ? `${queued.length} queued · Enter queues · Ctrl+Enter interjects`
-                      : "Enter queues · Ctrl+Enter interjects",
+                    queued.length > 0 ? `${queued.length} 条待发送 · ${busyHint.chord}` : busyHint.chord,
+                    queued.length > 0 ? `${queued.length} queued · ${busyHint.chordEn}` : busyHint.chordEn,
                   )}
                 </span>
                 {/* 手机键盘的回车是换行，只能点按钮：提示写清楚按钮的作用。 */}
                 <span className="sm:hidden">
                   {t(
-                    queued.length > 0 ? `${queued.length} 条待发送` : "发送＝排队等本轮结束",
-                    queued.length > 0 ? `${queued.length} queued` : "send queues for this turn",
+                    queued.length > 0 ? `${queued.length} 条待发送` : busyHint.send,
+                    queued.length > 0 ? `${queued.length} queued` : busyHint.sendEn,
                   )}
                 </span>
               </>

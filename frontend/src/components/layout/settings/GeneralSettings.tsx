@@ -18,6 +18,7 @@ import {
 } from "../../../lib/viewMode";
 import { isDangerousPermissionMode, permissionModeWarning } from "../../../lib/permissionModes";
 import { isValidWaitLabel, setWaitLabel, useWaitLabel, waitLabelWidth, WAIT_LABEL_MAX } from "../../../lib/waitLabel";
+import { BUSY_ENTER_BEHAVIORS, setBusyEnter, useBusyEnter, type BusyEnterBehavior } from "../../../lib/busyEnter";
 import { Select } from "../../common/Select";
 import { askConfirm } from "../../common/SystemDialogs";
 import { SettingRow, SettingRows } from "./Section";
@@ -95,6 +96,9 @@ export function GeneralSettings() {
   const view = useProcessView();
   const timing = useCollapseTiming();
   const replies = useFoldedReplies();
+  // 回合进行中的发送行为（对齐 DSH 的「繁忙时的发送行为」）：Enter 与发送按钮共用一档，
+  // Ctrl/⌘+Enter 永远用另一档。只存本机，和过程展示同理。
+  const busyEnter = useBusyEnter();
   // 计时行文案同样只存本设备：输入框里的草稿与「已生效」的值要分开，
   // 不合法的中间态（打了两个字母）不能进 localStorage。
   const waitLabel = useWaitLabel();
@@ -162,6 +166,16 @@ export function GeneralSettings() {
     replies === "all"
       ? t("阶段回复与最终答案都保留，只收起过程。", "Intermediate replies and the final answer both stay; only the process folds.")
       : t("被折叠的轮次只留最后一条回答，阶段回复随过程一起收起。", "Folded turns keep only their last reply; intermediate replies hide with the process.");
+  const busyEnterHint =
+    busyEnter === "steer"
+      ? t(
+          "回合进行中发送＝立刻并入本轮，在下一个工具边界接住；Ctrl/⌘+Enter 改为排队。",
+          "While a turn runs, sending interjects right away and is merged at the next tool boundary; Ctrl/⌘+Enter queues instead.",
+        )
+      : t(
+          "回合进行中发送＝排队，等本轮结束后自动发出；Ctrl/⌘+Enter 改为立刻插话。",
+          "While a turn runs, sending queues and is delivered when the turn ends; Ctrl/⌘+Enter interjects right away.",
+        );
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -329,6 +343,23 @@ export function GeneralSettings() {
             </div>
           </SettingRow>
         )}
+
+        {/* 回合进行中的发送行为（对齐 DSH 的「繁忙时的发送行为」）：Enter 与右下角发送
+            按钮共用一档、Ctrl/⌘+Enter 永远用另一档。它换的是输入手感，不是会话行为，
+            所以只存本机（`lib/busyEnter.ts`），不进 settings.json。 */}
+        <SettingRow title={t("繁忙时的发送行为", "Send behavior while busy")} desc={busyEnterHint}>
+          <Select
+            variant="pill"
+            ariaLabel={t("繁忙时的发送行为", "Send behavior while busy")}
+            value={busyEnter}
+            onChange={(next) => setBusyEnter(next as BusyEnterBehavior)}
+            options={BUSY_ENTER_BEHAVIORS.map((behavior) => ({
+              value: behavior,
+              label: behavior === "queue" ? t("排队发送", "Queue") : t("插话发送", "Steer"),
+            }))}
+            menuWidth={140}
+          />
+        </SettingRow>
 
         {/* 计时行那句「少女祈祷中」的自定义文案（`lib/waitLabel`）：一行说明写清「换的是
             哪句话 + 口径」，再凑第二条解释就是噪音。不合法时边框变红、失焦后退回上次

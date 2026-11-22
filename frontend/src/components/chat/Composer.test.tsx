@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Composer } from "./Composer";
 import { moveDraft, readDraft, writeDraft } from "../../lib/drafts";
+import { resetBusyEnterCache, setBusyEnter } from "../../lib/busyEnter";
 import { useAppStore } from "../../store/useAppStore";
 import { SystemDialogs } from "../common/SystemDialogs";
 
@@ -68,6 +69,9 @@ beforeEach(() => {
   // 默认在飞牛宿主里（unix 通道）：`@` 菜单里才会出现「从飞牛选择」。
   canPickFnos.mockReturnValue(true);
   useAppStore.setState({ readHostFile });
+  // 「繁忙时的发送行为」是模块级缓存的偏好：每个用例都从默认的「排队」开始。
+  localStorage.removeItem("ccweb-busy-enter");
+  resetBusyEnterCache();
 });
 
 describe("Composer 添加菜单", () => {
@@ -669,6 +673,68 @@ describe("Composer 待发送队列", () => {
     expect(screen.getByText(/空闲中，点右侧箭头逐条发送/)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("发送这条"));
     expect(onSteerQueued).toHaveBeenCalledWith("q1");
+  });
+});
+
+// 「繁忙时的发送行为」（设置 → 通用的那一行）：Enter 与右下角发送按钮共用一档，
+// Ctrl/⌘+Enter 永远用另一档。默认排队（与加入这条偏好之前一致），切到插话后两个手势互换。
+describe("Composer 繁忙时的发送行为", () => {
+  const textarea = () => screen.getByLabelText("消息输入框") as HTMLTextAreaElement;
+
+  it("偏好插话：Enter 直接写 stdin（priority=now），不经过队列", async () => {
+    setBusyEnter("steer");
+    const onSend = vi.fn().mockResolvedValue(true);
+    const onQueue = vi.fn(() => true);
+    setup({ onSend, onQueue, busy: true });
+
+    fireEvent.change(textarea(), { target: { value: "先别改测试" } });
+    await act(async () => {
+      fireEvent.keyDown(textarea(), { key: "Enter" });
+    });
+
+    expect(onSend).toHaveBeenCalledWith("先别改测试", [], { priority: "now" });
+    expect(onQueue).not.toHaveBeenCalled();
+  });
+
+  it("偏好插话：Ctrl+Enter 改为排队，等本轮结束再发", () => {
+    setBusyEnter("steer");
+    const onSend = vi.fn().mockResolvedValue(true);
+    const onQueue = vi.fn(() => true);
+    setup({ onSend, onQueue, busy: true });
+
+    fireEvent.change(textarea(), { target: { value: "改成不用 lodash" } });
+    fireEvent.keyDown(textarea(), { key: "Enter", ctrlKey: true });
+
+    expect(onQueue).toHaveBeenCalledWith("改成不用 lodash", []);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("偏好插话：进行中主按钮写成「发送并插话」，点它就是插话", async () => {
+    setBusyEnter("steer");
+    const onSend = vi.fn().mockResolvedValue(true);
+    const onQueue = vi.fn(() => true);
+    setup({ onSend, onQueue, busy: true });
+
+    fireEvent.change(textarea(), { target: { value: "哈喽" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "发送并插话" }));
+    });
+
+    expect(onSend).toHaveBeenCalledWith("哈喽", [], { priority: "now" });
+    expect(onQueue).not.toHaveBeenCalled();
+  });
+
+  it("不忙时两档都直接发：偏好不改变首条消息的投递", async () => {
+    setBusyEnter("steer");
+    const onSend = vi.fn().mockResolvedValue(true);
+    setup({ onSend, busy: false });
+
+    fireEvent.change(textarea(), { target: { value: "第一句" } });
+    await act(async () => {
+      fireEvent.keyDown(textarea(), { key: "Enter" });
+    });
+
+    expect(onSend).toHaveBeenCalledWith("第一句", [], undefined);
   });
 });
 
