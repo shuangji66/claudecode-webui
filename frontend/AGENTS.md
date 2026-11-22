@@ -205,8 +205,16 @@ src/
     `POST /api/session {resume:id}`，不能用 ensure/create 顶替。localStorage 的
     `ccweb-active-session` 存的就是这个 id。
 17. **打开对话先回放 transcript 再连 WS**：`--resume` 不会回放历史；`openConversation`
-    会读 `/api/history/transcript` 并用 `applyCLI(items,line,timestamp)` 折叠。切换对话时
-    如果 `items[id]` 已有内容就不要再回放，避免重复。
+    会读 `/api/history/transcript` 并用 `applyCLI(items,line,timestamp)` 折叠。
+    **「要不要回放」只认 `hydrated`（本次页面生命周期里这个 id 回放过没有），不要看
+    `items[id]` 是否为空，也不要用对话元数据（`messages` / `title`）预判**：
+    - 另一台设备上正在跑的对话，本机列表可能还是旧的（`messages: 0`、`title: ""`）；
+      用户点开它时 WS 的几条实时帧又能让 `items` 立刻非空。两种短路都会把**整段更早
+      的历史**跳过去——界面上只剩进入之后的内容，标题也退回「新对话」（标题是从
+      `items` 的首条用户消息推出来的），只有刷新整页才恢复（store 重建 → 重新回放）。
+    - 合并用 `mergeReplayed(next, items[id])`（转录为主、本地更晚的条目接在后面），
+      所以「重复回放会叠成两份」的前提已经不存在了；真没有转录时后端回 404，
+      一次请求的代价远小于丢一段对话。
     **转录与 `POST /api/session` 并行，不等 claude 拉起**：`--resume` 要 spawn 子进程再等
     `initialize` 握手，冷启动几秒里只回放历史会让人盯着「正在启动 Claude…」看空屏；转录是
     磁盘上的 jsonl，跟进程无关（会话起不来的 catch 分支早就是这么做的）。顺序仍是
@@ -214,12 +222,26 @@ src/
     回放中间。`openConversation` 的第三个参数 `onHistory` 在历史铺好（含「本地已有 items」
     与「没有转录」两种立即返回）时触发一次——历史记录页靠它先收起自己，让用户在对话区
     看历史、子进程在后台继续握手。
+    **首次连上「正在跑」的会话要重读一次转录**（`refreshHistoryAfterAttach`）：
+    回放读的是 t0 的磁盘快照，`connect` 是握手之后（t1）才建立的，t0..t1 之间 CLI
+    产生的内容既不在快照里、也没有水位可补（第一次连上只对齐序号）。表现就是
+    「少了几条思考 / 工具」。只在 `info.state === "busy"`（或快照带 `busy`）且本次
+    确实回放过（`hydrated`）时做：空闲会话的转录早就写完了，重读是浪费。
+    重读窗口期间到达的实时事件先压进 `pendingLive`，读完后只放行 `seq > floor`
+    的那些——`seq <= floor` 的内容已经在刚读到的转录里，再应用一遍就是重复。
     **同理，顶部那条「正在连接…」横幅要延迟出现**（`ChatPane` 的 `CONN_BAR_DELAY`）：
     它是 `flex` 列里 `shrink-0` 的一行，插进去会把 `flex-1` 的消息区压短、消失时又长回来。
     历史已经先上屏的情况下，握手那几十毫秒里闪一下横幅就是「claude 一起来界面闪一下」
     的来源。`closed` 是终态，立刻显示；`connecting` / `reconnecting` 要过阈值仍没连上才显示。
 18. **列表标题**走 `conversationTitle(自定义标题, items, locale)`：自定义 > 首条用户消息 >
     “新对话”。不要用目录名当空对话标题。
+    **但标题的权威来源在列表接口里，不在本机的 `items`**：`/api/conversations` 的 `title`
+    由后端 `history.List` 现算（转录里的 CLI 标题行 > 首条 user 消息 > 文件名），所以
+    另一台设备即使从没打开过这条对话，侧栏也能显示标题。前端只在 `c.title` 为空时才
+    看 `items`。
+    后端在**首条消息落盘**时就会广播一次 `conversations.changed`（`watchFirstTranscript`
+    的探针），不等回合结束——长任务跑几分钟，那期间别的设备不能一直停在「新对话」；
+    回合结束那次（`pendingTurn`）只是兜底。
 19. **归档/删除后**要刷新对话列表；删除是软删除，前端不要把转录当作可删除文件。
     当前对话被归档时**回到「新对话」页**（`setActive(null)`，localStorage 的
     `ccweb-active-session` 一并清掉），**不要**自动打开同工作区的下一条：那个「下一条」只是
@@ -655,6 +677,38 @@ src/
   之后才回来的那份列表会把 `archived:false` 写回来，「隐藏已归档」下那一行重新冒出来。
   归档还要顺手把 `live` 改掉（后端会结束进程），否则那一行会按 `conversationStatus`
   继续画「进行中」绿点，直到后台刷新回来。
+
+39. **对话区的滚动与底部跟随：归因，不是方向**
+- 跟随意图在 `lib/scrollFollow.ts` 的 `ScrollFollow` 里（`MessageList` 持有一个实例）。
+  判据是「相对**上一次确认过的位置**有没有动」：
+  `movedByReader = |top - min(observed, floor)| > 0.5`。那个 `min(observed, floor)` 不能删：
+  内容变短（收起一轮的过程、折叠卡片、图片换成真实尺寸）时浏览器把 `scrollTop` 夹到
+  新的底部，`min` 让差值为 0，于是不会把这次 clamp 读成「读者往上滚」。**不要退回
+  「top 比上一次小就是上滚」**——踩过，表现是「一轮跑完过程一收起，右下角突然冒出
+  『回到底部』，之后的回复再也不跟」。
+- **程序化写入一律走 `follow.pin` / `follow.jump`**：它们会把落点登记成归因基准。
+  裸写 `el.scrollTop = …` 会让下一次 scroll 事件拿旧基准去比，位移被算成读者移动。
+- **贴底的写入都在 layout 阶段**：首次挂载、切对话（`resetKey`）在绘制前就 `pin`；
+  每次 commit 的「跟随 / 保位」也在 `useLayoutEffect`。用 `useEffect + rAF` 会先画出
+  中段再跳到底（长对话闪一帧），流式输出也慢一帧。
+- **不贴底时按语义锚点保位**：`anchor` 记「视口顶部第一行 `data-item-id` + 它的偏移」，
+  在「内容变短」和「加载更早」之后按它还原。不要用「距底部距离」——它把上方变高与
+  下方变短混成一个数，历史里有图片/代码块延迟撑高时会漂。
+  `captureAnchor` 用二分读 rect（行按文档序、底边单调），只在结构变化或内容变短时刷新；
+  流式纯内容增长不刷新（否则每帧一次全树查询 + 二分读几何）。
+- **「加载更早」是「我要往上读」**：展开后 `follow.release()` + 按锚点还原，不能钉到底部
+  （刚展开的内容全在视口上方）。判据是 `limit` 变大，不是 `hidden` 变大——`hidden`
+  是「被截掉的条数」，加载更早会让它变小。
+- **按住滚动区期间暂停跟随**（`press`）：长按选文本时内容还在流式增长，推着走会让选中
+  跑掉。松手时手指没动过就恢复跟随并贴底（轻点一下不该从此不跟随），动过就按落点重新
+  判断。滚轮往上滚立即 `release()`，但**嵌套滚动区**（`pre` / `.code-scroll` /
+  `.dsh-scroll`）里的滚轮不算——那里滚的是卡片自己。
+- **跳转（轨迹 / 刻度）后解除跟随**：落点离底部超过容差就 `release()`，否则下一帧
+  流式内容会把视口拽回底部（「点了闪一下又弹回最新」）。
+- 「回到底部」用即时定位（`pin`），不写 `smooth`：它可能跨几百条消息，动画期间跟随会
+  直接改写 `scrollTop`，打断成瞬移。
+- 新增任何滚动写入前先回答三件事：这次位移是谁造成的？程序化写入登记基准了吗？
+  它在 layout 阶段还是 effect 阶段？
 
 ## 3. 状态管理（zustand）
 
