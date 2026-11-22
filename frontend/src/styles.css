@@ -260,8 +260,14 @@ pre {
     transform 120ms ease;
 }
 
-.send-button:hover:not(:disabled) {
-  background: var(--c-brand-hover);
+/* `@media (hover: hover)` 不能省（规则见 `.side-row:hover`）：触摸屏点一下之后
+   `:hover` 会一直挂着，而这条的优先级 `(0,3,0)` 压过 `.send-button.is-stop`
+   `(0,2,0)`——按过「停止」之后那颗按钮会停在陶土色（品牌色）上，整整一轮都
+   看不出它现在是停止键。 */
+@media (hover: hover) {
+  .send-button:hover:not(:disabled) {
+    background: var(--c-brand-hover);
+  }
 }
 
 .send-button:disabled {

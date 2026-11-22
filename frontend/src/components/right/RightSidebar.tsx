@@ -643,7 +643,9 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
             <button
               type="button"
               onClick={() => setActiveFor(pane, "")}
-              className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+              // 与同排的分栏 / 全屏 / 关闭同一个圆角：挪进固定动作区之后它就成了
+              // 这一排里的一颗，圆角跟邻居不一致会看着像从别处掉进来的。
+              className="rounded-lg p-1.5 text-muted hover:bg-black/5 hover:text-ink"
               aria-label={t("回到开始页", "Back to start")}
               title={t("回到开始页", "Back to start")}
             >
