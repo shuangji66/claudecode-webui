@@ -4,7 +4,13 @@ import { TerminalConnection, type TerminalStatusDetail } from "./terminal";
 /** 记录所有 onStatus 回调，供断言。 */
 function recorder() {
   const seen: TerminalStatusDetail[] = [];
-  return { seen, onStatus: (d: TerminalStatusDetail) => seen.push(d) };
+  return {
+    seen,
+    onStatus: (d: TerminalStatusDetail) => {
+      seen.push(d);
+    },
+    onOutput: () => {},
+  };
 }
 
 describe("TerminalConnection 建连前的名额检查", () => {
