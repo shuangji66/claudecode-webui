@@ -238,4 +238,30 @@ describe("ChatPane 跨提供商切模型", () => {
     expect(String(options.message)).toContain("正在进行的一轮会被中断");
     expect(options.confirmText).toBe("重启并切换");
   });
+
+  // 同一提供商内换模型是热切换（`set_model` 控制请求），不重启、不打断这一轮，
+  // 所以不该弹确认框——多一次点击只会让人以为又要中断。
+  it("同提供商换模型不弹确认，直接交给 store", async () => {
+    const selectModel = vi.fn();
+    const sameProvider = {
+      providers: [{ id: "gw-a", name: "网关 A", models: ["deepseek", "deepseek-lite"], model_meta: {} }],
+      selected: { provider: "gw-a", model: "deepseek", effort: "" },
+    };
+    setup(
+      "c1",
+      [conv({ messages: 2 })],
+      [{ id: "c1", cwd: "/data/ws", state: "ready", provider: "gw-a", model: "deepseek" }],
+    );
+    act(() => {
+      useAppStore.setState({ settings: sameProvider as never, selectModel } as never);
+    });
+    vi.mocked(askConfirm).mockResolvedValue(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "模型与推理等级" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /模型/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /deepseek-lite/ }));
+
+    await waitFor(() => expect(selectModel).toHaveBeenCalledWith("gw-a", "deepseek-lite", ""));
+    expect(askConfirm).not.toHaveBeenCalled();
+  });
 });

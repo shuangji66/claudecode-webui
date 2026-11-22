@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /** 记录 apiFetch 的调用，按 URL 给不同响应。 */
 const calls: Array<{ url: string; init?: RequestInit }> = [];
+/** 让某一次 POST /api/session 失败（测试「起不来」的收尾）。 */
+let sessionPostFails = false;
+/** 让 DELETE /api/session 回 404（进程已被空闲回收 / 别的设备关掉）。 */
+let sessionDeleteFails = false;
 
 vi.mock("../lib/runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/runtime")>();
@@ -15,7 +19,11 @@ vi.mock("../lib/runtime", async (importOriginal) => {
       if (url === "/api/sessions") {
         return { sessions: [{ id: "s1", cwd: "/w", provider: "gw", model: "m1", effort: "high", state: "ready" }] };
       }
-      if (url === "/api/session") {
+      if (url.startsWith("/api/session?id=") && sessionDeleteFails) {
+        throw new Error("manager: 会话 s1 不存在");
+      }
+      if (url === "/api/session" && init?.method === "POST") {
+        if (sessionPostFails) throw new Error("manager: 会话池已满");
         return { id: "s1", cwd: "/w", provider: "gw", model: "m1", effort: "low", state: "starting" };
       }
       return {};
@@ -117,5 +125,47 @@ describe("跨提供商切换模型", () => {
     expect(created.length).toBe(1);
     expect(JSON.parse(String(created[0].init?.body))).toEqual({ cwd: "/w", resume: "s1" });
     expect(useAppStore.getState().error).toBeNull();
+  });
+
+  // 连点两次模型菜单 / 切档位与切提供商撞在一起：只该有一次 DELETE + POST，
+  // 否则后一次会把前一次刚拉起来的进程再关掉。
+  it("同一 id 同时重开只跑一份", async () => {
+    const [a, b] = await Promise.all([
+      useAppStore.getState().restartSession("s1"),
+      useAppStore.getState().restartSession("s1"),
+    ]);
+    expect(a).toBe(true);
+    expect(b).toBe(true);
+    expect(calls.filter((c) => c.url.startsWith("/api/session?id=")).length).toBe(1);
+    expect(calls.filter((c) => c.url === "/api/session" && c.init?.method === "POST").length).toBe(1);
+  });
+
+  // 进程已经被空闲回收 / 别的设备关掉时 DELETE 会 404：那不算失败，照样要把它拉起来。
+  it("DELETE 失败不影响重开", async () => {
+    sessionDeleteFails = true;
+    try {
+      const ok = await useAppStore.getState().restartSession("s1");
+      expect(ok).toBe(true);
+      expect(calls.filter((c) => c.url === "/api/session" && c.init?.method === "POST").length).toBe(1);
+      expect(useAppStore.getState().error).toBeNull();
+    } finally {
+      sessionDeleteFails = false;
+    }
+  });
+
+  // 新进程起不来时必须把界面从「正在启动」放下来：那个状态只由新的 connect 收掉，
+  // 而这次根本没连上——不放下来输入框会一直禁用、连接横幅一直转。
+  it("重开失败要把状态放回 closed 并给出原因", async () => {
+    sessionPostFails = true;
+    try {
+      const ok = await useAppStore.getState().restartSession("s1");
+      expect(ok).toBe(false);
+      const s = useAppStore.getState();
+      expect(s.states.s1).toBe("closed");
+      expect(s.conns.s1?.state).toBe("closed");
+      expect(s.error).toContain("会话池已满");
+    } finally {
+      sessionPostFails = false;
+    }
   });
 });

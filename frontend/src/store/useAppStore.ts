@@ -608,6 +608,8 @@ function flushLive(sid: string): void {
 }
 
 const resumePromises = new Map<string, Promise<boolean>>();
+/** 正在重开的会话：连点两次模型菜单、或档位重开与手动重启撞在一起时只做一次。 */
+const restartPromises = new Map<string, Promise<boolean>>();
 /** 等这一轮结束后要按新档位重开的会话（`--effort` 只在进程启动时固定）。 */
 const effortRestarts = new Set<string>();
 /** 正在发待发送队首的会话：结果事件与 ready 事件可能挨着到，不加锁会连发两条。 */
@@ -2229,43 +2231,69 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   restartSession: async (id) => {
-    const sess = get().sessions.find((s) => s.id === id);
-    const conv = get().conversations.find((c) => c.id === id);
-    const cwd = sess?.cwd || conv?.cwd;
-    if (!cwd) return false;
-    // 先断开自己的 WS：重开前旧进程会广播 closed，收下它等于把界面标成已结束。
-    // 同时把连接标成 connecting：重开期间发送按钮必须禁用，否则消息会写进旧管道。
-    //
-    // 主动断开之后 **不会** 再收到那条 `closed`（见 applyEvent 的 closed 分支），
-    // 所以这里要自己把「进程没了」的收尾做掉：悬着的流式光标、挂起审批、本回合用量、
-    // 本地「正在压缩 / hook 在跑」的状态。少了这一步，切提供商 / 主动重启时正在跑的
-    // 那一轮会留下一个永远在闪的光标，审批卡片也会一直挂到下次快照。
-    get().disconnect(id);
-    const cur = get().items[id];
-    dropAskDrafts(get().perms[id]);
-    localWorkAt.delete(id);
-    set((s) => ({
-      ...(cur ? { items: { ...s.items, [id]: settleStreaming(cur) } } : {}),
-      perms: { ...s.perms, [id]: [] },
-      ...(s.usage[id] ? { usage: { ...s.usage, [id]: settleTurnUsage(s.usage[id])! } } : {}),
-      conns: { ...s.conns, [id]: { state: "connecting" } },
-      states: { ...s.states, [id]: "starting" },
-    }));
+    // 同一 id 只跑一份：切提供商与切档位都会走到这里，连点两次模型菜单时
+    // 两次 DELETE + POST 会互相把对方刚起的进程关掉。
+    const running = restartPromises.get(id);
+    if (running) return running;
+    const task = (async (): Promise<boolean> => {
+      const sess = get().sessions.find((s) => s.id === id);
+      const conv = get().conversations.find((c) => c.id === id);
+      const cwd = sess?.cwd || conv?.cwd;
+      if (!cwd) return false;
+      // 先断开自己的 WS：重开前旧进程会广播 closed，收下它等于把界面标成已结束。
+      // 同时把连接标成 connecting：重开期间发送按钮必须禁用，否则消息会写进旧管道。
+      //
+      // 主动断开之后 **不会** 再收到那条 `closed`（见 applyEvent 的 closed 分支），
+      // 所以这里要自己把「进程没了」的收尾做掉：悬着的流式光标、挂起审批、本回合用量、
+      // 本地「正在压缩 / hook 在跑」的状态。少了这一步，切提供商 / 主动重启时正在跑的
+      // 那一轮会留下一个永远在闪的光标，审批卡片也会一直挂到下次快照。
+      get().disconnect(id);
+      const cur = get().items[id];
+      dropAskDrafts(get().perms[id]);
+      // 沉默计时与「本地在干什么」一起清掉：新进程还没出声，留着上一轮的旧时刻会让
+      // 计时行一上来就报「上游 Ns 没有响应」（沉默取「本轮起点」与「最后有声」的更晚者）。
+      forgetSilence(id);
+      set((s) => ({
+        ...(cur ? { items: { ...s.items, [id]: settleStreaming(cur) } } : {}),
+        perms: { ...s.perms, [id]: [] },
+        ...(s.usage[id] ? { usage: { ...s.usage, [id]: settleTurnUsage(s.usage[id])! } } : {}),
+        conns: { ...s.conns, [id]: { state: "connecting" } },
+        states: { ...s.states, [id]: "starting" },
+      }));
+      // DELETE 的「会话不存在」不是错误：进程可能已经被空闲回收 / 别的设备关掉了，
+      // 那时我们要做的仍然是把它按同一 id 拉起来。只有真的失败才中止。
+      try {
+        await apiFetch(`/api/session?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      } catch {
+        /* 进程已经不在了：继续重开 */
+      }
+      try {
+        // **同一个 id** 重新拉起：有转录走 `--resume`；还没发过消息的空对话没有转录，
+        // 后端会改用 `StartFresh` 用同一个 UUID `--session-id` 新建（见根 AGENTS 4.4）。
+        // 不要在这里换成新 id：那会凭空多出一条「新对话」，用户正在看的这条却被丢下。
+        const info = await apiFetch<SessionInfo>("/api/session", {
+          method: "POST",
+          body: JSON.stringify({ cwd, resume: id }),
+        });
+        await Promise.all([get().refreshSessions(), get().refreshConversations()]);
+        get().connect(info.id);
+        return true;
+      } catch (e) {
+        // 起不来就把界面从「正在启动」放下来，否则输入框会一直禁用、连接横幅一直转：
+        // 那个状态只由新的 connect 收掉，而这次根本没连上。
+        set((s) => ({
+          error: errText(e),
+          states: { ...s.states, [id]: "closed" },
+          conns: { ...s.conns, [id]: { state: "closed" } },
+        }));
+        return false;
+      }
+    })();
+    restartPromises.set(id, task);
     try {
-      await apiFetch(`/api/session?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-      // **同一个 id** 重新拉起：有转录走 `--resume`；还没发过消息的空对话没有转录，
-      // 后端会改用 `StartFresh` 用同一个 UUID `--session-id` 新建（见根 AGENTS 4.4）。
-      // 不要在这里换成新 id：那会凭空多出一条「新对话」，用户正在看的这条却被丢下。
-      const info = await apiFetch<SessionInfo>("/api/session", {
-        method: "POST",
-        body: JSON.stringify({ cwd, resume: id }),
-      });
-      await Promise.all([get().refreshSessions(), get().refreshConversations()]);
-      get().connect(info.id);
-      return true;
-    } catch (e) {
-      set({ error: errText(e) });
-      return false;
+      return await task;
+    } finally {
+      if (restartPromises.get(id) === task) restartPromises.delete(id);
     }
   },
 
@@ -2961,4 +2989,5 @@ export function __resetSyncState(): void {
   hydrated.clear();
   lastSoundAt.clear();
   localWorkAt.clear();
+  restartPromises.clear();
 }

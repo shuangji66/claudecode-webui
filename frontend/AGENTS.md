@@ -1393,6 +1393,11 @@ src/
   `askConfirm` 二次确认（重启会中断正在进行的一轮）。`restartSession` 一律发
   `{cwd, resume:id}`：还没发过消息的空对话没有转录，后端会改用 `StartFresh` 用同一个
   UUID `--session-id` 新建——前端**不要**自己换成新 id（那会在侧栏堆出「新对话」并丢上下文）。
+  它还有三条必须守住的性质：① **同一 id 只跑一份**（`restartPromises`，连点两次模型菜单
+  时两次 DELETE+POST 会互相关掉对方刚起的进程）；② **DELETE 的 404 不算失败**（进程可能
+  已被空闲回收或别的设备关掉，照样要按同一 id 拉起来）；③ **起不来要把状态放回 `closed`**
+  （`starting` 只由新的 `connect` 收掉，不放下来输入框会一直禁用、连接横幅一直转）。
+  动手前顺手 `forgetSilence(id)`：沉默计时不清的话，新进程一上来就报「上游 Ns 没有响应」。
 - 右上角「更多」是下拉菜单（复制会话为 Markdown / 下载 Session 日志），不要直接打开设置。
 - **全局禁用浏览器自动填充**：`lib/autofill.ts` 在 `App` 挂载时给所有
   `input/textarea` 补 `autocomplete=off`（密码框用 `new-password`）与主流密码管理器的
