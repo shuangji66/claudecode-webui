@@ -205,33 +205,15 @@ func main() {
 	mgrRef.Store(mgr)
 	defer mgr.CloseAll()
 
-	// 内置搜索的会话规则：只有「用户启用了搜索」且「这条 MCP 服务真的注册了」才生效。
-	// 否则会把内置 WebSearch/WebFetch 挡掉却换不上任何搜索工具——比原来更糟。
+	// 三条内置服务（搜索 / 自动化任务 / 浏览器）的会话工具规则：只有「配置里真有这条
+	// 服务」才放行它的工具、才禁会被它抢选择的原生工具。判定收在
+	// `gateway.SessionToolRules` 里（含「停用暂存」不算数，见那里的注释）。
 	mgr.SetToolRules(func() (allow, deny []string) {
 		payload, err := mcpMgr.List("")
 		if err != nil {
 			return nil, nil
 		}
-		for _, srv := range payload.User {
-			switch srv.Name {
-			case gateway.SearchMCPServer:
-				// 只有用户真的启用了搜索才放行、才禁内置的两个：否则会把
-				// WebSearch/WebFetch 挡掉却换不上任何东西。
-				if store.Get().SearchEnabled {
-					a, d := gateway.SearchToolRules()
-					allow = append(allow, a...)
-					deny = append(deny, d...)
-				}
-			case gateway.ScheduleMCPServer:
-				// 自动化任务的三个工具：注册了才放行（同样是为了不每建一条弹一次审批）。
-				allow = append(allow, gateway.ScheduleToolRules()...)
-			case gateway.BrowserMCPServer:
-				// 内置浏览器的十个工具：每一步点击都弹审批的话，用户只会去切「跳过权限」，
-				// 那等于把所有工具一起放开。收尾靠工具描述里的 browser_close 契约。
-				allow = append(allow, gateway.BrowserToolRules()...)
-			}
-		}
-		return allow, deny
+		return gateway.SessionToolRules(payload.User, store.Get().SearchEnabled)
 	})
 
 	historyDir := filepath.Join(cfg.ClaudeHome, ".claude", "projects")

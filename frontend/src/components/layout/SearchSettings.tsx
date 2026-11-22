@@ -53,9 +53,12 @@ export function SearchSettings() {
   // 也看不出有没有注册到 Claude，用户还得点开确认一遍，省空间的代价就白付了。
   // 启停状态不重复写一遍——右边那颗按钮的文案（启用 / 已启用）已经说明了这件事。
   // 状态还没读到时不写「未注册」——那是把「不知道」说成了「没配」。
+  // 停用与已注册是两个不同的答案：前者在 MCP 页被摘进了本应用的暂存，会话连不上。
   const summary = status
     ? [
-        ...(status.mcp_supported ? [status.attached ? t("已注册", "Registered") : t("未注册", "Not registered")] : []),
+        ...(status.mcp_supported
+          ? [status.attached ? t("已注册", "Registered") : status.disabled ? t("已停用", "Disabled") : t("未注册", "Not registered")]
+          : []),
         ...(error ? [t("出错", "Error")] : []),
       ].join(" · ")
     : "";
@@ -176,6 +179,15 @@ export function SearchSettings() {
               {t("已注册到用户级 MCP 配置（所有项目可用）", "Registered in user-scope MCP config (all projects)")}
               <span className="ml-1 font-mono text-[10px] text-faint">{status.server_name}</span>
               {t("；要临时关掉，就在下面的用户级列表里「停用」。", "; use Disable in the user-scope list below to switch it off for now.")}
+            </span>
+          ) : status.disabled ? (
+            // 用户在 MCP 页点过「停用」：配置已经摘进本应用的暂存，会话连不上。
+            // 这一行不能写「已注册」——那会让「搜索为什么用不了」变成一个谜。
+            <span className="text-warn">
+              {t(
+                "已停用——下面的用户级列表里「启用」它，搜索工具才会重新接上。",
+                "Disabled — use Enable on it in the user-scope list below to bring the search tools back.",
+              )}
             </span>
           ) : enabled && status.search_api_key_set ? (
             // 启用且有密钥却不在配置里：正常路径上不会停在这（保存即同步）。

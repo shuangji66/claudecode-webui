@@ -16,6 +16,7 @@ const STATUS: SearchStatus = {
   search_api_key_set: true,
   search_api_key_masked: "****abcd",
   attached: false,
+  disabled: false,
   server_name: "ccweb-web",
   command: "/bin/ccweb",
   mcp_supported: true,
@@ -106,6 +107,17 @@ describe("SearchSettings 内置搜索", () => {
     expect(screen.getByText(/在下面的用户级列表里「停用」/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /移除|重新注册/ })).toBeNull();
     expect(screen.getByRole("button", { name: /内置搜索/ })).toHaveTextContent("已注册");
+  });
+
+  // 停用与已注册是两回事：`List` 会把停用暂存里的条目一起列出来，只按「列表里有这一条」
+  // 判的话面板会写着「已注册，要关就点停用」——而它早就关了，用户根本查不到搜索为什么没了。
+  it("在 MCP 页停用之后说「已停用」，不再说已注册", async () => {
+    mount({ ...STATUS, attached: false, disabled: true });
+    const header = await screen.findByRole("button", { name: /内置搜索/ });
+    await waitFor(() => expect(header).toHaveTextContent("已停用"));
+    await expand("已停用");
+    expect(screen.getByText(/下面的用户级列表里「启用」它/)).toBeInTheDocument();
+    expect(screen.queryByText(/已注册到用户级 MCP 配置/)).toBeNull();
   });
 
   it("未启用时说明启用后会自动注册", async () => {

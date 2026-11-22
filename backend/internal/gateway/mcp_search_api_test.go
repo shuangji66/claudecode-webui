@@ -407,3 +407,60 @@ func TestBuiltinScheduleMcpCannotBeEditedOrDeleted(t *testing.T) {
 		t.Fatalf("删除普通服务应 200，实际 %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// 在 MCP 页把 `ccweb-web` 停用之后，搜索面板不能再写「已注册」。
+//
+// `List` 会把停用暂存里的条目一起列出来（界面要能看到并重新启用），所以「列表里有这一条」
+// 不等于「claude 连得上」。判错的两个后果都很直接：面板上写着「已注册，要关就点停用」，
+// 而它早就关了；会话工具规则还会照旧禁掉 WebSearch/WebFetch，模型一条联网工具都不剩。
+func TestSearchStatusDistinguishesDisabled(t *testing.T) {
+	srv, _ := newTestServer(t, "secret")
+	withMcp(t, srv)
+	key, enabled := "sk-search-key", true
+	if _, err := srv.d.Settings.Apply(settings.Patch{SearchAPIKey: &key, SearchEnabled: &enabled}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if err := srv.EnsureSearchMCP(); err != nil {
+		t.Fatalf("EnsureSearchMCP: %v", err)
+	}
+	read := func() searchStatus {
+		t.Helper()
+		rec := mcpReq(t, srv, http.MethodGet, "/api/search", "secret", "")
+		var st searchStatus
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	if st := read(); !st.Attached || st.Disabled {
+		t.Fatalf("刚注册时应 attached 且未停用: %+v", st)
+	}
+
+	if err := srv.d.Mcp.SetEnabled("", mcp.ScopeUser, mcpSearchServer, false); err != nil {
+		t.Fatalf("停用: %v", err)
+	}
+	if st := read(); st.Attached || !st.Disabled {
+		t.Fatalf("停用之后应 disabled 且不算 attached: %+v", st)
+	}
+
+	// 停用状态要能被会话规则看见：列表里仍有这一条，但它不在配置里。
+	payload, err := srv.d.Mcp.List("")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	found := false
+	for _, s := range payload.User {
+		if s.Name == mcpSearchServer {
+			if !s.Disabled {
+				t.Fatalf("停用后列表里的这一条应带 disabled: %+v", s)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("停用暂存里的服务仍要出现在列表里（界面靠它重新启用）: %+v", payload.User)
+	}
+	if _, deny := SessionToolRules(payload.User, true); len(deny) != 0 {
+		t.Fatalf("停用之后不能继续禁内置搜索工具: %v", deny)
+	}
+}

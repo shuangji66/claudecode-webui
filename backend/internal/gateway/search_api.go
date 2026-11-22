@@ -68,9 +68,12 @@ type searchStatus struct {
 	Enabled   bool   `json:"search_enabled"`
 	KeySet    bool   `json:"search_api_key_set"`
 	KeyMasked string `json:"search_api_key_masked"`
-	// Attached 表示用户级 MCP 配置里已经有这条内置服务。界面只用它说一句状态，
-	// 注册/移除不再由用户点（见 EnsureSearchMCP）。
+	// Attached 表示用户级配置里**真的有**这条服务（claude 能连上）。界面只用它说一句
+	// 状态，注册/移除不再由用户点（见 EnsureSearchMCP）。
 	Attached bool `json:"attached"`
+	// Disabled 表示这条服务被「停用」摘进了本应用的暂存（不在 claude 的配置里）。
+	// 它和 Attached 互斥，界面据此说「已停用（去用户级列表里启用）」而不是「已注册」。
+	Disabled bool `json:"disabled"`
 	// ServerName / Command 供界面显示「注册成了什么、用的哪个二进制」。
 	ServerName string `json:"server_name"`
 	Command    string `json:"command"`
@@ -108,7 +111,16 @@ func (s *Server) searchStatus() searchStatus {
 		return out
 	}
 	for _, srv := range payload.User {
-		if srv.Name == mcpSearchServer {
+		if srv.Name != mcpSearchServer {
+			continue
+		}
+		// `List` 会把「停用暂存」里的条目一起列出来（界面要能看到并重新启用），
+		// 但那一条已经不在 claude 的配置里、会话根本连不上——停用的服务算「已注册」
+		// 的话，面板上就会写「已注册，要关就点停用」，而它其实早就关了。
+		// 两者互斥：同一时刻只可能是其中一种（配置里已有的同名条目会盖掉暂存那条）。
+		if srv.Disabled {
+			out.Disabled = true
+		} else {
 			out.Attached = true
 		}
 	}

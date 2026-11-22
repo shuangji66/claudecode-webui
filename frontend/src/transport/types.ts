@@ -250,8 +250,15 @@ export interface SearchStatus {
   search_enabled: boolean;
   search_api_key_set: boolean;
   search_api_key_masked: string;
-  /** 用户级 MCP 配置里是否已经有这条内置服务（由后端 EnsureSearchMCP 维护）。 */
+  /** 用户级 MCP 配置里**真的有**这条内置服务（由后端 EnsureSearchMCP 维护）。 */
   attached: boolean;
+  /**
+   * 这条服务被「停用」摘进了本应用的暂存（不在 claude 的配置里，会话连不上）。
+   *
+   * 与 `attached` 互斥：`mcp` 列表里两者都会出现，只按「列表里有这一条」判会把它算成
+   * 已注册，面板上就会写着「已注册，要关就点停用」——而它早就关了。
+   */
+  disabled: boolean;
   server_name: string;
   command: string;
   /** false 表示这套部署没装 MCP 管理（后端 Deps.Mcp 为 nil）。 */

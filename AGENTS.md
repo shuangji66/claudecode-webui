@@ -1244,12 +1244,21 @@ hub ── manager ── session ── process ── claude (NDJSON)
   WebSearch,WebFetch`（内置那两个在自建中转下走服务端工具通常调不通，却会和 MCP 那条抢
   选择；实测连延迟名单里都会一并消失）+ `--allowedTools mcp__ccweb-web__web_search,…`
   （MCP 工具默认要过 `can_use_tool`，每搜一次弹一次审批之后模型就学会不用它了；代价是
-  它会自己花搜索费）。注入口是 `manager.SetToolRules`，**条件必须是「搜索已启用」且
-  「这条 MCP 真的注册了」**——否则等于把内置搜索挡掉却换不上任何东西，比原来更糟。
+  它会自己花搜索费）。注入口是 `manager.SetToolRules`，规则本身算在
+  `gateway.SessionToolRules` 里，**条件必须是「搜索已启用」且「这条 MCP 真的在配置里」**
+  ——否则等于把内置搜索挡掉却换不上任何东西，比原来更糟。
+  **「在配置里」不等于「出现在 `mcp.Manager.List` 里」**：那个列表把「停用暂存」的条目
+  也带出来了（界面要能看到并重新启用），停用的服务已经摘出 claude 的配置、会话根本连不上。
+  只按名字匹配的话，用户在 MCP 页停用内置搜索之后就变成「搜索没了、内置 WebSearch/WebFetch
+  也被挡了」——一条联网工具都不剩。判定要看 `Server.Disabled`（项目级同名条目也不算：
+  `.mcp.json` 里可以有一个命令完全不同的 `ccweb-web`）。
 - **`always_load` 只写 true、不写 false**（false 是默认语义）。老版本注册的条目没有这个键，
   现在由 `EnsureSearchMCP` 的逐字段比对在启动/保存时顺手补上——**不要再让用户点一颗
   「重新注册」**：那是把一次性的迁移成本永久留在界面上。`GET /api/search` 因此不再回
-  `always_load`（只回 `attached` 供摘要显示「已注册 / 未注册」）。
+  `always_load`（只回 `attached` / `disabled` 供摘要显示「已注册 / 已停用 / 未注册」：
+  用户在 MCP 页点过「停用」之后，这条服务被摘进暂存，`attached` 必须是 false——
+  `mcp.Manager.List` 会把暂存条目一起列出来，按「列表里有这一条」判会显示成已注册，
+  用户就再也查不到「搜索为什么没了」）。
 - **这条服务由本应用维护，界面只有开关**：`ccweb-web` 与 `ccweb-schedule`、`ccweb-browser`
   同在 `builtinUserMcpServers` 里——`EnsureSearchMCP` 在启动时与每次
   `POST /api/search/config` 之后各同步一次（启用且有密钥就写配置，否则删掉），
