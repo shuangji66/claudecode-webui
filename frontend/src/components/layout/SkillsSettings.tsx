@@ -189,8 +189,14 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
     // 右栏又跟在它下面，而 `SETTINGS_PANE_FLEX` 是不带滚动的满高 flex，**根节点不滚就
     // 谁也滚不动**（技能列表那一层 `shrink-0` 高度等于内容、永远没有溢出，手指划它
     // 等于划在一张静态图上）。所以移动端把整页交给根节点滚、桌面再把这条关掉。
-    <div className="dsh-scroll flex h-full min-h-0 flex-col overflow-y-auto pb-[calc(env(safe-area-inset-bottom,0px)+16px)] md:overflow-hidden md:pb-5">
-      <div className="flex items-center gap-2">
+    // `pr-2` 不能省（与 MCP / 模型页同一条）：移动端浏览器画的是**浮在内容上**的
+    // 滚动条（iOS/Android 都是 overlay），它压在右侧那 8px 上，正好盖住工具条最右
+    // 那颗「新建」与每行说明文字的结尾。桌面把滚动条换成占位式（`::-webkit-scrollbar`
+    // 在 styles.css 里定过宽度）后不再需要，但这里 `md:overflow-hidden` 本来就不滚，
+    // 留着也不碍事。
+    <div className="dsh-scroll flex h-full min-h-0 flex-col overflow-y-auto pr-2 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] md:overflow-hidden md:pb-5">
+      {/* 工具条允许换行：360px 上下三颗按钮已经贴边，再窄一点就会被裁掉半颗。 */}
+      <div className="flex flex-wrap items-center gap-2 gap-y-1.5">
         <h3 className="text-[15px] font-semibold text-ink">{t("技能", "Skills")}</h3>
         <span className="text-[10.5px] text-faint">{data.personal.length + data.project.length + data.synced.length}</span>
         <div className="ml-auto flex items-center gap-1.5">
