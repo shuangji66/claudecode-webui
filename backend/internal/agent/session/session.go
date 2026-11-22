@@ -43,9 +43,13 @@ var ModeTimeout = 10 * time.Second
 // 毫秒），又不至于把「空闲很久之后模型自己起的一轮」也算进来。
 var TurnHandoffWindow = 15 * time.Second
 
-// maxLineBytes 是单行 NDJSON 的上限（工具结果可能很长）。
-// 变量而非常量：测试要把它调小来验证超长行的行为。
-var maxLineBytes = 8 << 20
+// defaultMaxLineBytes 是单行 NDJSON 的默认上限（工具结果可能很长）。
+//
+// **每个会话各自持有一份**（Session.maxLine），不是包级变量：包级可变量在
+// `go test ./...` 下会被同包内的其他测试同时改写——一个测超长行的用例把它调成
+// 64KB，另一个测「真故障要报错」的用例就按 64KB 去写 8MB 的行，对端早已关闭，
+// 于是拿到 EPIPE 而不是预期的 error 事件（实测偶发失败约 1/5）。
+const defaultMaxLineBytes = 8 << 20
 
 // Transport 是与会话后端通信的双工通道。
 // 真实实现是子进程管道，测试用 net.Pipe 即可，无需真的拉起 claude。
@@ -166,6 +170,11 @@ type Session struct {
 
 	closeOnce sync.Once
 	done      chan struct{}
+
+	// maxLine 是这条会话单行 NDJSON 的上限（默认 defaultMaxLineBytes）。
+	// 挂在实例上而不是包级变量：测试要把它调小来验证超长行，包级的话会同包内
+	// 其他测试互相干扰（见 defaultMaxLineBytes 的注释）。
+	maxLine int64
 
 	state atomic.Value // string
 	idle  atomic.Int64 // unix nano，最近一次活动时间
@@ -310,6 +319,7 @@ func New(id, cwd string, tr Transport, emit func(Event)) *Session {
 		CreatedAt: time.Now(),
 		tr:        tr,
 		emit:      emit,
+		maxLine:   defaultMaxLineBytes,
 		send:      make(chan writeReq, 64),
 		pending:   make(map[string]*pendingCall),
 		perms:     make(map[string]json.RawMessage),
@@ -1156,7 +1166,7 @@ func (s *Session) readLoop() {
 	}()
 
 	sc := bufio.NewScanner(s.tr)
-	sc.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
+	sc.Buffer(make([]byte, 0, 64*1024), int(s.lineLimit()))
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
@@ -1178,7 +1188,7 @@ func (s *Session) readLoop() {
 		default:
 		}
 		s.emitData(KindError, map[string]any{
-			"message": fmt.Sprintf("读取 claude 输出中断：%v（单行上限 %d 字节）", err, maxLineBytes),
+			"message": fmt.Sprintf("读取 claude 输出中断：%v（单行上限 %d 字节）", err, s.lineLimit()),
 		})
 	}
 }
@@ -1452,6 +1462,23 @@ var epochSeed atomic.Uint64
 
 // Epoch 返回这条会话对象的身份串（见 Session.epoch）。
 func (s *Session) Epoch() string { return s.epoch }
+
+// lineLimit 返回这条会话的单行上限；未设置时回落到默认值。
+func (s *Session) lineLimit() int64 {
+	if s.maxLine > 0 {
+		return s.maxLine
+	}
+	return defaultMaxLineBytes
+}
+
+// SetLineLimit 调小单行上限（只给测试用：生产上一直用默认值）。
+//
+// 必须在 Start 之前调用——readLoop 一启动就把这个值读进 Scanner 了。
+func (s *Session) SetLineLimit(n int64) {
+	if n > 0 {
+		s.maxLine = n
+	}
+}
 
 // Replay 从 sinceSeq 之后开始补发事件。
 //

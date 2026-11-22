@@ -189,6 +189,16 @@ func (f *fakeCLI) handshake() {
 // startSession 建立 net.Pipe 会话并完成握手。
 func startSession(t *testing.T) (*Session, *fakeCLI, *recorder) {
 	t.Helper()
+	return startSessionWith(t, nil)
+}
+
+// startSessionWith 允许在 Start 之前配置会话（例如调小单行上限）。
+//
+// 单行上限现在挂在**会话实例**上而不是包级变量：包级的话，同包内并行执行的
+// 其他测试会被这里改过的值影响（曾经导致 `TestReadErrorStillReported` 偶发
+// EPIPE——它按被改小的上限去写 8MB 的行，对端早就关了）。
+func startSessionWith(t *testing.T, configure func(*Session)) (*Session, *fakeCLI, *recorder) {
+	t.Helper()
 	old := InitTimeout
 	InitTimeout = 2 * time.Second
 	t.Cleanup(func() { InitTimeout = old })
@@ -197,6 +207,9 @@ func startSession(t *testing.T) (*Session, *fakeCLI, *recorder) {
 	server := sessSide
 	rec := &recorder{}
 	sess := New("s1", "/tmp/work", server, rec.emit)
+	if configure != nil {
+		configure(sess)
+	}
 	fc := newFakeCLI(t, cliSide)
 
 	done := make(chan error, 1)
@@ -325,11 +338,16 @@ func TestReadErrorStillReported(t *testing.T) {
 	sess, fc, rec := startSession(t)
 	defer sess.Close()
 
-	// 行长按生产上限 +1：Scanner 的初始缓冲是 64KB，只有超过 maxLineBytes 才会
+	// 行长按这条会话的上限 +1：Scanner 的初始缓冲是 64KB，只有超过上限才会
 	// 走到 ErrTooLong（见 readLoop 的 sc.Buffer）。
-	if _, err := fc.conn.Write([]byte(strings.Repeat("x", maxLineBytes+1) + "\n")); err != nil {
-		t.Fatalf("写超长行: %v", err)
-	}
+	//
+	// **写失败是预期路径，不是测试失败**：管道只有 64KB 内核缓冲，读循环读到
+	// 上限就关掉连接、不再消费剩下的字节，这里随即拿到 EPIPE（实测约 1/3 概率）。
+	// 要断言的是「读循环把超限报成了 error 事件」，不是「这 8MB 一定写得进去」。
+	limit := sess.lineLimit()
+	payload := strings.Repeat("x", int(limit)+1) + "\n"
+	go func() { _, _ = fc.conn.Write([]byte(payload)) }()
+
 	ev, ok := rec.wait(KindError, 5*time.Second)
 	if !ok {
 		t.Fatal("单行超限是真故障，必须报 error 事件")
@@ -798,11 +816,8 @@ func TestNonJSONStdoutBecomesSystemText(t *testing.T) {
 // 会话会静默 close，前端只看到「已关闭」，完全不知道发生了什么。
 func TestOversizedLineReportsError(t *testing.T) {
 	// Scanner 的初始缓冲就是 64KB，上限必须不小于它才会真正触发 ErrTooLong。
-	old := maxLineBytes
-	maxLineBytes = 64 << 10
-	t.Cleanup(func() { maxLineBytes = old })
-
-	sess, fc, rec := startSession(t)
+	// 用会话实例上的上限，别改包级变量（会污染同包并行执行的其他测试）。
+	sess, fc, rec := startSessionWith(t, func(s *Session) { s.SetLineLimit(64 << 10) })
 	defer sess.Close()
 
 	// 写端会在读端关闭后拿到 EPIPE，放到 goroutine 里避免测试阻塞。
