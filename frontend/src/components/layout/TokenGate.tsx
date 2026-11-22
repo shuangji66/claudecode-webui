@@ -38,6 +38,15 @@ export function TokenGate({ onSaved, stale = false }: { onSaved: () => void; sta
     } catch (e) {
       if (e instanceof AccessError && e.status === 401) {
         setError(t("密码不正确，请重试。", "Wrong password. Try again."));
+      } else if (e instanceof AccessError && e.status === 429) {
+        // 连续输错被锁：后端回的是中文文案，这里按状态码给本地化版本
+        // （英文界面下混一句中文比不给提示更糟）。
+        setError(
+          t(
+            "尝试次数过多，请稍后再试。",
+            "Too many attempts. Wait a moment and try again.",
+          ),
+        );
       } else if (e instanceof AccessError) {
         setError(t(`登录失败：${e.message}`, `Sign-in failed: ${e.message}`));
       } else {

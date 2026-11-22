@@ -555,3 +555,34 @@ func TestLogoutDoesNotRevokeEnvToken(t *testing.T) {
 		t.Fatalf("注销后环境变量令牌 = %d, want 200", rec.Code)
 	}
 }
+
+// 登录失败 5 次后按来源锁定：返回 429 并且**不再校验密码**。
+//
+// 为什么必须锁在这一层而不是只靠「密码错就 401」：每次尝试都要跑 21 万轮
+// PBKDF2（几十毫秒 CPU）。端口访问对局域网开放，拿到端口的人可以用几十个并发
+// 请求把这个 CPU 打满——那连密码都不用猜对。
+func TestLoginLockedAfterFiveFailures(t *testing.T) {
+	srv, _ := newTestServer(t, "")
+	setTCP(t, srv, true, testTCPPassword, 3141)
+	h := srv.TCPHandler()
+
+	// httptest.NewRequest 的 RemoteAddr 固定是 192.0.2.1:1234，五次都算同一来源。
+	for i := 1; i < 5; i++ {
+		if code, _ := login(t, h, "wrong-pass-x"); code != http.StatusUnauthorized {
+			t.Fatalf("第 %d 次失败 = %d, want 401", i, code)
+		}
+	}
+	// 第 5 次失败：就地返回 429（这一次已经跑过 PBKDF2 了，但之后不会再有）。
+	if code, _ := login(t, h, "wrong-pass-x"); code != http.StatusTooManyRequests {
+		t.Fatalf("第 5 次失败 = %d, want 429", code)
+	}
+	// 锁定期间**即使密码正确**也必须被拒：否则「先爆破再登录」就绕过了限流，
+	// 而且每次正确密码都要跑一次 PBKDF2。
+	code, token := login(t, h, testTCPPassword)
+	if code != http.StatusTooManyRequests {
+		t.Fatalf("锁定期间正确密码 = %d, want 429", code)
+	}
+	if token != "" {
+		t.Fatal("锁定期间不该签发令牌")
+	}
+}

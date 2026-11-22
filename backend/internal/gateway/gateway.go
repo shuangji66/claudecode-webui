@@ -111,6 +111,12 @@ type Server struct {
 	log *log.Logger
 	// termSlots 限制同时存在的内置终端数量；每个终端是一个真实 shell。
 	termSlots chan struct{}
+	// logins 是访问密码的登录失败限流（按来源 IP）。
+	//
+	// 没有它时，`POST /api/auth/login` 每次尝试都跑一次 21 万轮 PBKDF2（几十毫秒
+	// CPU）：拿到端口的人既可以爆破密码，也可以用几十个并发请求把 NAS 打满，
+	// 后者甚至不需要猜对密码。见 authz.LoginLimiter。
+	logins *authz.LoginLimiter
 	// notifiedMu/notifiedLatest 记录已推送过的最新版本号，避免每小时把同一条
 	// 「有更新」重复推给所有标签页（每次推送前端都会再拉一次 /api/claude/status）。
 	notifiedMu     sync.Mutex
@@ -162,6 +168,7 @@ func New(d Deps, logger *log.Logger) *Server {
 		mux:          http.NewServeMux(),
 		log:          logger,
 		termSlots:        make(chan struct{}, maxTerminals),
+		logins:           authz.NewLoginLimiter(0, 0, 0),
 		pendingTurns:     make(map[string]pendingTurn),
 		transcriptProbes: make(map[string]bool),
 	}

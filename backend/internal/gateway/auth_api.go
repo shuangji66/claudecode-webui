@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 
 	"ccweb/backend/internal/authz"
@@ -30,7 +32,33 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 //
 // 会话表落盘，重启进程/升级应用不会把已登录的设备踢下线；它的唯一边界是
 // 「签发时刻 + 「设置 → 访问」里的登录有效期」（默认 24 小时）。
+// loginSource 取限流用的来源标识。
+//
+// **只认 TCP 连接的 RemoteAddr**，不看 `X-Forwarded-For` / `X-Real-IP` 之类：
+// 这个接口只在 TCP 通道上有意义（unix 通道免密），而 TCP 是浏览器直连本进程，
+// 头是客户端随手写的——认了它，攻击者每次换一个头就是一条新记录，限流形同虚设。
+//
+// 端口被前置代理挡住时所有请求都来自同一个 127.0.0.1，于是它们共享一份配额；
+// 那是**安全的一侧**（宁可多锁一个人，也不要谁都能绕过），而且这种部署本就不该
+// 把访问密码暴露在代理之外。
+func loginSource(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil || host == "" {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	// 先过限流，**在读请求体之前**：被锁的来源连解析都不做，更不会跑 PBKDF2
+	// （那正是「几十个并发把 CPU 打满」的杠杆）。
+	source := loginSource(r)
+	if ok, wait := s.logins.Allowed(source); !ok {
+		secs := int(wait.Seconds()) + 1
+		writeErr(w, fmt.Sprintf("尝试次数过多，请 %d 秒后再试", secs), http.StatusTooManyRequests)
+		return
+	}
+
 	var req struct {
 		Password string `json:"password"`
 	}
@@ -41,6 +69,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// 旧的 CCWEB_AUTH_TOKEN 部署也要能从鉴权页登录：令牌本身就是凭据，
 	// 这里原样发回给前端存进 localStorage（它仍按 Bearer 校验）。
 	if s.d.Guard.EnvTokenMatches(req.Password) {
+		s.logins.Succeed(source)
 		writeJSON(w, map[string]any{"token": req.Password})
 		return
 	}
@@ -48,6 +77,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	enabled, hash := s.d.Settings.TCPAccess()
 	if !enabled || hash == "" {
 		// 配置了令牌时，输错是「凭据不对」；没配置任何鉴权时才是「没开端口」。
+		// 这两种都不是「猜密码」，**不计入失败次数**：否则一个没开端口访问的部署
+		// 被脚本扫几次就锁住了，用户改完设置也进不来。
 		if s.d.Guard.TokenConfigured() {
 			writeErr(w, "凭据不正确", http.StatusUnauthorized)
 			return
@@ -56,9 +87,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !authz.VerifyPassword(hash, req.Password) {
+		locked := s.logins.Fail(source)
+		if locked {
+			secs := int(s.logins.LockoutDuration().Seconds()) + 1
+			writeErr(w, fmt.Sprintf("密码错误次数过多，请 %d 秒后再试", secs), http.StatusTooManyRequests)
+			return
+		}
 		writeErr(w, "密码不正确", http.StatusUnauthorized)
 		return
 	}
+	s.logins.Succeed(source)
 	token, expires, err := s.d.Guard.NewSession(hash)
 	if token == "" {
 		writeErr(w, "无法创建登录会话", http.StatusInternalServerError)
