@@ -90,6 +90,24 @@ describe("SkillsSettings", () => {
     expect(load).toHaveBeenCalledWith("/work");
   });
 
+  // 移动端是单列：技能列表长过一屏、编辑区又跟在它下面，而功能区的页面容器
+  // （`SETTINGS_PANE_FLEX`）本身不带滚动。滚动必须落在这一页的根节点上，
+  // 否则手指划在列表上什么都不会动（截图复现过）。
+  it("根节点是移动端的滚动容器，桌面才把滚动交还给两栏各自", () => {
+    const { container } = render(<SkillsSettings cwd="/work" />);
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.className.split(/\s+/)).toContain("overflow-y-auto");
+    expect(root.className.split(/\s+/)).toContain("md:overflow-hidden");
+    // 列表那一列在移动端不再自成一个滚动容器（高度等于内容，划它不会有反应），
+    // 桌面才需要它自己滚。
+    const column = screen.getByText("个人").closest(".dsh-scroll") as HTMLElement;
+    expect(column).not.toBeNull();
+    // 按整词比：`md:overflow-y-auto` 里也含 `overflow-y-auto` 这几个字母。
+    const listClasses = column.className.split(/\s+/);
+    expect(listClasses).not.toContain("overflow-y-auto");
+    expect(listClasses).toContain("md:overflow-y-auto");
+  });
+
   it("选中技能后加载正文并可保存", async () => {
     render(<SkillsSettings cwd="/work" />);
     fireEvent.click(screen.getByText("summarize"));

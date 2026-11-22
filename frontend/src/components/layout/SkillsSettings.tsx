@@ -182,8 +182,14 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
   );
 
   return (
-    // pb 给底部按钮留出呼吸空间与安全区：这一页是满高 flex，按钮行原本紧贴弹窗下沿
-    <div className="flex h-full min-h-0 flex-col pb-[calc(env(safe-area-inset-bottom,0px)+16px)] md:pb-5">
+    // pb 给底部按钮留出呼吸空间与安全区：这一页是满高 flex，按钮行原本紧贴弹窗下沿。
+    //
+    // **滚动归谁**：桌面是两栏，左栏自己滚（`overflow-y-auto`）、右栏的 textarea 自己滚，
+    // 所以根节点必须 `md:overflow-hidden`；移动端是单列——左边那一整列技能长过一屏，
+    // 右栏又跟在它下面，而 `SETTINGS_PANE_FLEX` 是不带滚动的满高 flex，**根节点不滚就
+    // 谁也滚不动**（技能列表那一层 `shrink-0` 高度等于内容、永远没有溢出，手指划它
+    // 等于划在一张静态图上）。所以移动端把整页交给根节点滚、桌面再把这条关掉。
+    <div className="dsh-scroll flex h-full min-h-0 flex-col overflow-y-auto pb-[calc(env(safe-area-inset-bottom,0px)+16px)] md:overflow-hidden md:pb-5">
       <div className="flex items-center gap-2">
         <h3 className="text-[15px] font-semibold text-ink">{t("技能", "Skills")}</h3>
         <span className="text-[10.5px] text-faint">{data.personal.length + data.project.length + data.synced.length}</span>
@@ -251,15 +257,20 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
         </div>
       )}
 
-      <div className="mt-3 flex min-h-0 flex-1 flex-col gap-3 md:flex-row">
-        <div className="dsh-scroll shrink-0 overflow-y-auto pb-4 md:w-[218px] md:border-r md:border-line md:pr-3">
+      {/* 移动端这一层不参与「填满剩余高度」：根节点在滚，给它 flex-1 等于让下面
+          那栏被压成 0 高、再把内容溢出到滚动区外面。桌面（md）才恢复两栏的满高布局。 */}
+      <div className="mt-3 flex flex-col gap-3 md:min-h-0 md:flex-1 md:flex-row">
+        {/* 移动端这一列不设自己的滚动（高度等于内容，永远不溢出）；桌面那栏才有固定
+            高度、才需要 `overflow-y-auto`。留一个空的滚动容器在 iOS 上只会让人以为
+            「划了没反应」。 */}
+        <div className="dsh-scroll shrink-0 pb-4 md:w-[218px] md:overflow-y-auto md:border-r md:border-line md:pr-3">
           {group(t("个人", "Personal"), t("所有会话可见，存在数据目录里", "All sessions, stored in the data dir"), data.personal, "personal")}
           {group(t("项目", "Project"), t("跟着仓库走，可提交共享", "Shipped with the repo, commit to share"), data.project, "project")}
           {data.synced.length > 0 &&
             group(t("claude.ai 同步", "Synced from claude.ai"), t("只读，在 claude.ai 上改", "Read-only, edit on claude.ai"), data.synced, "synced")}
         </div>
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="flex min-w-0 flex-col md:min-h-0 md:flex-1">
           {creating ? (
             <>
               <div className="flex flex-wrap items-center gap-2">
