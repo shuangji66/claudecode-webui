@@ -261,6 +261,25 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     setQuery("");
   };
 
+  /**
+   * 搜索收起后把焦点还给那颗搜索按钮。
+   *
+   * 输入框在收起时被卸载，焦点会掉到 `body` 上：键盘用户下一次 Tab 要从页面开头
+   * （品牌、收起、功能区……）重新数一遍。**不能在 `closeSearch` 里直接 focus**——
+   * 那颗按钮要到下一次 commit 才存在，只能在 effect 里等它挂上。
+   */
+  const searchButton = useRef<HTMLButtonElement>(null);
+  const wasSearching = useRef(false);
+  useEffect(() => {
+    if (searchOpen) {
+      wasSearching.current = true;
+      return;
+    }
+    if (!wasSearching.current) return;
+    wasSearching.current = false;
+    searchButton.current?.focus();
+  }, [searchOpen]);
+
   useEffect(() => {
     saveOrder(order);
   }, [order]);
@@ -1237,6 +1256,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             <div className="ml-auto flex items-center gap-0.5">
               <button
                 type="button"
+                ref={searchButton}
                 onClick={() => setSearchOpen(true)}
                 className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
                 aria-label={t("搜索对话", "Search conversations")}
@@ -1271,26 +1291,32 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             </div>
           </>
         ) : (
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-line-strong bg-canvas px-2 py-1 focus-within:border-brand/60">
+          <div
+            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-line-strong bg-canvas px-2 py-1 focus-within:border-brand/60"
+            // Esc 挂在包住输入框与「取消」的这一层：焦点 Tab 到「取消」上时用户仍然
+            // 期待 Esc 能退出搜索。`isComposing` 必须判——中文输入法用 Esc 取消候选时
+            // 也会走到这里，那一刻不该顺手把搜索关掉、把已输入的内容清空。
+            onKeyDown={(e) => {
+              if (e.key !== "Escape" || e.nativeEvent.isComposing) return;
+              e.stopPropagation();
+              closeSearch();
+            }}
+          >
             <IconSearch size={13} className="shrink-0 text-faint" />
             <input
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key !== "Escape") return;
-                e.stopPropagation();
-                closeSearch();
-              }}
               placeholder={t("搜索工作区或对话", "Search workspaces or conversations")}
               aria-label={t("搜索工作区或对话", "Search workspaces or conversations")}
               className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-faint"
             />
+            {/* 按钮上有可见文字「取消」就不再挂 `aria-label`：可访问名要包含可见文本
+                （WCAG 2.5.3），覆盖成「关闭搜索」会让语音控制念不出屏幕上那个词。 */}
             <button
               type="button"
               onClick={closeSearch}
               className="shrink-0 rounded px-1 text-[11px] text-muted transition hover:bg-black/5 hover:text-ink"
-              aria-label={t("关闭搜索", "Close search")}
             >
               {t("取消", "Cancel")}
             </button>
@@ -1299,17 +1325,24 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       </div>
 
       <div ref={wsListRef} className="dsh-scroll mt-1 min-h-0 flex-1 overflow-y-auto px-2 pb-3" onScroll={endHover}>
-        {groups.length === 0 && (
-          <button
-            type="button"
-            onClick={onAddWorkspace}
-            className="mt-6 flex w-full flex-col items-center gap-2 rounded-xl border border-dashed border-line-strong px-4 py-6 text-center hover:bg-black/[0.02]"
-          >
-            <IconFolder size={22} className="text-faint" />
-            <span className="text-[12px] font-medium text-ink">{t("添加授权目录", "Add authorized directory")}</span>
-            <span className="text-[11px] leading-relaxed text-muted">{t("授权一个目录后，Claude 就能在其中工作。", "Authorize a directory and Claude can work there.")}</span>
-          </button>
-        )}
+        {/* 空列表有两种意思，别都给「添加授权目录」那张卡：搜索没有命中时摆一颗
+            加号会让人以为「这个搜索还得先加个工作区」。 */}
+        {groups.length === 0 &&
+          (query.trim() ? (
+            <p className="mt-6 px-2 text-center text-[11.5px] leading-relaxed text-faint">
+              {t("没有匹配的工作区或对话", "No matching workspaces or conversations")}
+            </p>
+          ) : (
+            <button
+              type="button"
+              onClick={onAddWorkspace}
+              className="mt-6 flex w-full flex-col items-center gap-2 rounded-xl border border-dashed border-line-strong px-4 py-6 text-center hover:bg-black/[0.02]"
+            >
+              <IconFolder size={22} className="text-faint" />
+              <span className="text-[12px] font-medium text-ink">{t("添加授权目录", "Add authorized directory")}</span>
+              <span className="text-[11px] leading-relaxed text-muted">{t("授权一个目录后，Claude 就能在其中工作。", "Authorize a directory and Claude can work there.")}</span>
+            </button>
+          ))}
 
         {groups.map((g) => {
           // 单列表：没有工作区分组标题，行首标出所属工作区。

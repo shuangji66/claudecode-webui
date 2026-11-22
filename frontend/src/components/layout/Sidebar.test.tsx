@@ -1232,16 +1232,56 @@ describe("Sidebar 搜索工具条", () => {
     expect(container.querySelector('[data-workspace="/w/other"]')).not.toBeNull();
   });
 
-  it("「取消」同样收起并清空查询", () => {
+  it("「取消」同样收起并清空查询，焦点还给搜索按钮", () => {
     seed();
     const { container } = renderSidebar();
     fireEvent.click(screen.getByRole("button", { name: "搜索对话" }));
     fireEvent.change(screen.getByRole("textbox", { name: "搜索工作区或对话" }), {
       target: { value: "demo" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "关闭搜索" }));
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
 
     expect(screen.getByText("工作区")).toBeInTheDocument();
     expect(container.querySelector('[data-workspace="/w/other"]')).not.toBeNull();
+    // 输入框卸载后焦点掉到 body 的话，键盘用户下一次 Tab 要从页面开头重数。
+    // 重新查一次：搜索按钮在展开时也被卸载了，旧节点已经脱离文档。
+    expect(screen.getByRole("button", { name: "搜索对话" })).toHaveFocus();
+  });
+
+  it("搜索没有命中时给一句「没有匹配」，不是「添加授权目录」", () => {
+    seed();
+    const { container } = renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "搜索对话" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索工作区或对话" }), {
+      target: { value: "zzz" },
+    });
+
+    expect(screen.queryByText("添加授权目录")).toBeNull();
+    expect(screen.getByText("没有匹配的工作区或对话")).toBeInTheDocument();
+    expect(container.querySelector("[data-workspace]")).toBeNull();
+  });
+
+  it("焦点在「取消」上时 Esc 也能退出搜索（不必回到输入框）", () => {
+    seed();
+    renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "搜索对话" }));
+    const cancel = screen.getByRole("button", { name: "取消" });
+    cancel.focus();
+
+    fireEvent.keyDown(cancel, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "搜索工作区或对话" })).toBeNull();
+  });
+
+  // 中文输入法用 Esc 取消候选时 keydown 也会冒上来（isComposing=true）：
+  // 那一刻不能顺手关掉搜索、把已经敲进去的字清空。
+  it("输入法正在组合时按 Esc 不关搜索", () => {
+    seed();
+    renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "搜索对话" }));
+    const input = screen.getByRole("textbox", { name: "搜索工作区或对话" });
+    fireEvent.change(input, { target: { value: "de" } });
+
+    fireEvent.keyDown(input, { key: "Escape", isComposing: true });
+    expect(screen.getByRole("textbox", { name: "搜索工作区或对话" })).toHaveValue("de");
   });
 });
