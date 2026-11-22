@@ -244,6 +244,12 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     saveView(view);
   }, [view]);
 
+  /** 收起搜索：查询一并清空，列表立刻回到完整状态（Esc 与「取消」共用）。 */
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setQuery("");
+  };
+
   useEffect(() => {
     saveOrder(order);
   }, [order]);
@@ -1066,59 +1072,77 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         )}
       </div>
 
-      <div className="mt-4 flex items-center gap-1 px-3">
-        <span className="text-[12px] font-medium text-muted">{t("工作区", "Workspaces")}</span>
-        <div className="ml-auto flex items-center gap-0.5">
-          <button
-            type="button"
-            onClick={() => {
-              setSearchOpen((v) => !v);
-              if (searchOpen) setQuery("");
-            }}
-            className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
-            aria-label={t("搜索对话", "Search conversations")}
-            title={t("搜索", "Search")}
-          >
-            <IconSearch size={15} />
-          </button>
-          <button
-            type="button"
-            onClick={(e) => setViewAnchor((prev) => (prev ? null : e.currentTarget))}
-            className={`rounded-md p-1.5 hover:bg-black/5 ${
-              view.group !== "workspace" || view.sort !== "recent" || view.archive !== "hide"
-                ? "text-brand"
-                : "text-muted hover:text-ink"
-            }`}
-            aria-label={t("分组、排序与筛选", "Grouping, sorting and filtering")}
-            aria-haspopup="menu"
-            aria-expanded={viewAnchor !== null}
-            title={t("分组、排序与筛选", "Grouping, sorting and filtering")}
-          >
-            <IconSliders size={15} />
-          </button>
-          <button
-            type="button"
-            onClick={onAddWorkspace}
-            className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
-            aria-label={t("添加授权目录", "Add authorized directory")}
-            title={t("添加授权目录", "Add authorized directory")}
-          >
-            <IconFolderPlus size={15} />
-          </button>
-        </div>
+      {/* 工具条：标题 + 三个动作；点搜索时**在工具条里就地展开输入框**（对齐 DSH 的
+          section 头），不再另起一行把下面的列表整体顶下去——搜索的瞬间正读到哪一条
+          不该跟着跳。高度固定 36px（DSH 的 --workspace-toolbar-height），展开与收起
+          都不改变列表的起点。 */}
+      <div className="mt-4 flex h-9 items-center gap-1 px-3">
+        {!searchOpen ? (
+          <>
+            <span className="text-[12px] font-medium text-muted">{t("工作区", "Workspaces")}</span>
+            <div className="ml-auto flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => setSearchOpen(true)}
+                className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+                aria-label={t("搜索对话", "Search conversations")}
+                title={t("搜索", "Search")}
+              >
+                <IconSearch size={15} />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => setViewAnchor((prev) => (prev ? null : e.currentTarget))}
+                className={`rounded-md p-1.5 hover:bg-black/5 ${
+                  view.group !== "workspace" || view.sort !== "recent" || view.archive !== "hide"
+                    ? "text-brand"
+                    : "text-muted hover:text-ink"
+                }`}
+                aria-label={t("分组、排序与筛选", "Grouping, sorting and filtering")}
+                aria-haspopup="menu"
+                aria-expanded={viewAnchor !== null}
+                title={t("分组、排序与筛选", "Grouping, sorting and filtering")}
+              >
+                <IconSliders size={15} />
+              </button>
+              <button
+                type="button"
+                onClick={onAddWorkspace}
+                className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
+                aria-label={t("添加授权目录", "Add authorized directory")}
+                title={t("添加授权目录", "Add authorized directory")}
+              >
+                <IconFolderPlus size={15} />
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-line-strong bg-canvas px-2 py-1 focus-within:border-brand/60">
+            <IconSearch size={13} className="shrink-0 text-faint" />
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "Escape") return;
+                e.stopPropagation();
+                closeSearch();
+              }}
+              placeholder={t("搜索工作区或对话", "Search workspaces or conversations")}
+              aria-label={t("搜索工作区或对话", "Search workspaces or conversations")}
+              className="min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-faint"
+            />
+            <button
+              type="button"
+              onClick={closeSearch}
+              className="shrink-0 rounded px-1 text-[11px] text-muted transition hover:bg-black/5 hover:text-ink"
+              aria-label={t("关闭搜索", "Close search")}
+            >
+              {t("取消", "Cancel")}
+            </button>
+          </div>
+        )}
       </div>
-
-      {searchOpen && (
-        <div className="px-3 pb-1 pt-1.5">
-          <input
-            autoFocus
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={t("搜索工作区或对话", "Search workspaces or conversations")}
-            className="w-full rounded-lg border border-line-strong bg-canvas px-2.5 py-1.5 text-[12px] outline-none placeholder:text-faint focus:border-brand/60"
-          />
-        </div>
-      )}
 
       <div ref={wsListRef} className="dsh-scroll mt-1 min-h-0 flex-1 overflow-y-auto px-2 pb-3" onScroll={endHover}>
         {groups.length === 0 && (

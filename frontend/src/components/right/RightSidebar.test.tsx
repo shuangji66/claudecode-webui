@@ -126,6 +126,15 @@ describe("RightSidebar 标签页", () => {
     expect(screen.getByRole("button", { name: "回到开始页" })).toBeInTheDocument();
   });
 
+  // 终端一多，标签条会横向滚出去：`+` 跟着滚走就再也回不到开始页了，
+  // 所以它必须在滚动容器**外面**（对齐 DSH 的 panel chrome）。
+  it("+ 固定在标签滚动区之外", () => {
+    setup();
+    openFiles();
+    const plus = screen.getByRole("button", { name: "回到开始页" });
+    expect(plus.closest(".overflow-x-auto")).toBeNull();
+  });
+
   it("+ 直接回到开始页，不弹下拉菜单；标签只隐藏不卸载", () => {
     setup();
     openFiles();

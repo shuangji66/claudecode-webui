@@ -632,21 +632,24 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
               </span>
             );
           })}
-          {/* `+` = 回到开始页，不是下拉菜单：四个入口（轨迹 / 文件 / Git / 终端）已经在那四张
-              卡片上，再摆一份菜单等于同一件事两个入口。这一栏已经在开始页时不显示它。 */}
+        </div>
+        {/* 固定动作区（不跟着标签横向滚动）。
+            `+` = 回到开始页，不是下拉菜单：四个入口已经在那四张卡片上，再摆一份
+            菜单等于同一件事两个入口；这一栏已经在开始页时不显示它。
+            **它必须在滚动容器外面**（对齐 DSH 的 panel chrome）：终端一多，标签条
+            横向滚出去之后，`+` 跟着消失就再也回不到开始页了。 */}
+        <div className="flex shrink-0 items-center gap-0.5 pr-1">
           {current !== "" && (
             <button
               type="button"
               onClick={() => setActiveFor(pane, "")}
-              className="ml-0.5 shrink-0 rounded-md p-1 text-muted hover:bg-black/5 hover:text-ink"
+              className="rounded-md p-1.5 text-muted hover:bg-black/5 hover:text-ink"
               aria-label={t("回到开始页", "Back to start")}
               title={t("回到开始页", "Back to start")}
             >
               <IconPlus size={15} />
             </button>
           )}
-        </div>
-        <div className="flex shrink-0 items-center gap-0.5 pr-1">
           {pane === "a" && canSplit && !splitActive && (
             <button
               type="button"

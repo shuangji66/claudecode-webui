@@ -294,8 +294,14 @@ pre {
     transition: background 100ms ease;
   }
 
-  .side-row:hover {
-    background: color-mix(in srgb, var(--c-ink) 5%, transparent);
+  /* **只在真有悬停能力的设备上生效**（对齐 DSH）：触摸屏点一下之后 `:hover`
+     会一直挂在那一行上，背景停在「悬停」态，直到点别处才消——看起来像选中了。
+     Tailwind 的 `hover:` 变体在 v4 里默认已经包了 `@media (hover: hover)`，
+     这条自定义规则要自己补。 */
+  @media (hover: hover) {
+    .side-row:hover {
+      background: color-mix(in srgb, var(--c-ink) 5%, transparent);
+    }
   }
 
   .side-row[data-active="true"] {

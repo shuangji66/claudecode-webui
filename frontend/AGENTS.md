@@ -117,6 +117,11 @@ src/
    一个在本应用同源里执行脚本的机会（能读走 localStorage 里的 token）。
 7. 用户可见文案走 `useT()`：`t("中文", "English")`；默认中文，测试未挂 Provider 时也是中文。
    新增文案不要只写中文。
+7.1 **自定义的 `:hover` 规则要包 `@media (hover: hover)`**（`styles.css` 的 `.side-row:hover`
+    已经这么做）：触摸屏点一下之后 `:hover` 会一直挂在那一行上，背景停在「悬停」态，
+    直到点别处才消——看起来像选中了。Tailwind v4 的 `hover:` 变体默认已经包了这个媒体
+    查询，手写的 CSS 不会，新增时自己补。
+
 8. 主题由 `<html data-theme="light|dark">` 决定，Tailwind 的 `dark:` 已绑定该属性；
    禁止再用 `@media (prefers-color-scheme: dark)` 覆盖设计令牌。
    **主题偏好只存浏览器**（`ccweb-theme-pref`，`lib/theme.ts` 的 `themePreference` /
@@ -177,7 +182,8 @@ src/
     `tool_use` 算进去、工具耗时认 `ToolItem.doneAt`（不是 `ts`）、段间空隙**不填**。
     时间轴的分段用 `layoutLane` 排行：顺序的工具挤一行，只有真正并行的调用才另起一行。
     顶部 `+` **直接回到开始页、不弹菜单**（`active === ""` 就是开始页；开始页里自己不显示
-    这颗按钮）。开始页是盖在标签面板上面的一层，**标签面板照旧只隐藏不卸载**：
+    这颗按钮）。**它必须待在标签横向滚动区的外面**（固定动作区，与分栏 / 全屏并列）：
+    终端一多标签条会滚出去，`+` 跟着滚走就再也回不到开始页了。开始页是盖在标签面板上面的一层，**标签面板照旧只隐藏不卸载**：
     终端里挂着 PTY，卸载等于杀 shell；关标签才结束进程。
     不要再加「启动页 + 返回」式的切换。Git 只拉不推（`/api/git/pull`，`pull --ff-only`），
     拉取**直接执行、不弹确认**（成功安静刷新，失败由面板顶部错误条说明原因）。
@@ -306,6 +312,11 @@ src/
     localStorage（`ccweb-sidebar-view`），手动顺序存在 `ccweb-session-order`
     （按工作区路径分键，单列表用 `__flat__`）。手动排序的入口有两个：桌面拖拽 +
     会话「更多」菜单里的上移/下移（触屏没有拖拽）。视图偏好是**每台设备**的，不进后端。
+    **搜索在工具条里就地展开**（对齐 DSH 的 section 头）：点搜索按钮后标题「工作区」与
+    筛选 / 加号一起收起，输入框占满工具条，`Esc` 或「取消」关闭并清空查询。**不要另起
+    一行放输入框**——展开的瞬间列表会整体下移，正在读的那一行跟着跳。工具条固定
+    `h-9`（36px，DSH 的 `--workspace-toolbar-height`），展开与收起都不改变列表的起点；
+    搜索期间 `wsReorderable` 为 false（列表被过滤，拖拽没有落点）。
     **拖拽的落点由行的上/下半决定**（`dropHalf`：上半插到它前面、下半插到它后面，
     `moveTo` 的落点就是提示线画的地方）：拖到哪一行，就在那一行的上沿或下沿画一条
     2px 强调色提示线 + 左端圆点（`styles.css` 的 `.side-drop-line`，对齐 DSH 的
@@ -366,7 +377,12 @@ src/
     **所有 hook 必须在 `if (!open) return null` 之前**：关闭时组件仍挂载、只是早返回 null，
     少渲染一条 hook 就是 React #300（「Rendered fewer hooks than expected」），
     用户看到的是整屏「界面出错了」。`WorkspaceDialog` 踩过一次，有回归用例钉住。
-26. **设置页按页签懒加载**：`SettingsDrawer` 只剩导航壳（外壳是
+26. **设置页的导航在移动端是横向滚动条**（桌面是竖列）：七项在 360px 宽里放不下，
+    切页签后把当前项 `scrollIntoView({ block: "nearest", inline: "nearest" })` 滚进视野
+    （对齐 DSH 的 navCell）——从侧栏「有更新」直接落到「部署 / 访问 / 关于」时，
+    选中项可能整颗在屏幕外，用户看不到「现在在哪一页」。调用前判一下 `scrollIntoView`
+    是否存在（jsdom / 老 WebView 没有）。
+    **设置页按页签懒加载**：`SettingsDrawer` 只剩导航壳（外壳是
     `settings/SettingsSurface.tsx` 的 `SettingsSurface` + `SettingsPane`），每页在自己首次
     被访问时挂载（`visited` 集合）并动态 import。各页 `useEffect` 一挂载就发请求，全部常驻
     会让「打开设置」变成一次并发拉取。

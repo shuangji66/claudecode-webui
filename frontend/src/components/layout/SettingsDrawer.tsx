@@ -1,4 +1,4 @@
-import { lazy, useEffect, useState, type ReactNode } from "react";
+import { lazy, useEffect, useRef, useState, type ReactNode } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import { useT } from "../../lib/i18n";
 import { Section } from "./settings/Section";
@@ -43,6 +43,21 @@ export function SettingsDrawer({
     setVisited((prev) => (prev.has(tab) ? prev : new Set(prev).add(tab)));
   }, [tab]);
 
+  /**
+   * 移动端导航是一条横向滚动条（桌面是竖列）：七项在 360px 宽里放不下，
+   * `初始页签` 落在「部署 / 访问 / 关于」时，选中项可能整颗在屏幕外——用户
+   * 看不到「现在在哪一页」。切页签后把当前项滚进视野（对齐 DSH 的 navCell）。
+   *
+   * 只在打开时与切换时做；`block: "nearest"` 保证桌面竖列里不会带着整页跳。
+   */
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const active = navRef.current?.querySelector<HTMLElement>('[aria-current="page"]');
+    // jsdom / 老 WebView 没有 scrollIntoView：判一下，别为它报错。
+    active?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [open, tab]);
+
   if (!open) return null;
 
   return (
@@ -50,7 +65,10 @@ export function SettingsDrawer({
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {/* 桌面端导航宽 136px（w-34）：192px 时那列文字只占一半、留白过大，
             分隔线离内容太远；标签最长只有两个字（MCP 三个），收窄后仍然一行放得下。 */}
-        <nav className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-2 py-2 md:w-34 md:flex-col md:border-b-0 md:border-r md:px-2.5 md:py-3">
+        <nav
+          ref={navRef}
+          className="flex shrink-0 gap-1 overflow-x-auto border-b border-line px-2 py-2 md:w-34 md:flex-col md:border-b-0 md:border-r md:px-2.5 md:py-3"
+        >
           <NavItem active={tab === "general"} icon={<IconSettings size={16} />} onClick={() => setTab("general")}>
             {t("通用", "General")}
           </NavItem>

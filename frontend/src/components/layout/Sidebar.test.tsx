@@ -1104,3 +1104,56 @@ describe("Sidebar 工作区拖动排序", () => {
     vi.useRealTimers();
   });
 });
+
+// 搜索在工具条里**就地展开**（对齐 DSH 的 section 头）：不再另起一行把下面的
+// 工作区列表整体顶下去——正在看的那一行不该在点搜索的瞬间跟着跳。
+describe("Sidebar 搜索工具条", () => {
+  function seed() {
+    localStorage.clear();
+    resetHiddenFeaturesCache();
+    useAppStore.setState({
+      workspaces: [
+        { path: "/w/demo", name: "demo", last_used: "", exists: true },
+        { path: "/w/other", name: "other", last_used: "", exists: true },
+      ],
+      currentWorkspace: "/w/demo",
+      activeId: null,
+      conversations: [
+        { id: "c1", cwd: "/w/demo", title: "甲", created_at: "", last_active: "2026-01-01T00:00:00Z", messages: 1, archived: false, live: false },
+        { id: "c2", cwd: "/w/other", title: "乙", created_at: "", last_active: "2026-01-01T00:00:00Z", messages: 1, archived: false, live: false },
+      ],
+    });
+  }
+
+  it("点搜索就地展开：标题收起、输入即过滤、Esc 关闭并清空", () => {
+    seed();
+    const { container } = renderSidebar();
+    expect(screen.getByText("工作区")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "搜索对话" }));
+    expect(screen.queryByText("工作区")).toBeNull();
+    const input = screen.getByRole("textbox", { name: "搜索工作区或对话" });
+
+    fireEvent.change(input, { target: { value: "demo" } });
+    expect(container.querySelector('[data-workspace="/w/demo"]')).not.toBeNull();
+    expect(container.querySelector('[data-workspace="/w/other"]')).toBeNull();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "搜索工作区或对话" })).toBeNull();
+    expect(screen.getByText("工作区")).toBeInTheDocument();
+    expect(container.querySelector('[data-workspace="/w/other"]')).not.toBeNull();
+  });
+
+  it("「取消」同样收起并清空查询", () => {
+    seed();
+    const { container } = renderSidebar();
+    fireEvent.click(screen.getByRole("button", { name: "搜索对话" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "搜索工作区或对话" }), {
+      target: { value: "demo" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "关闭搜索" }));
+
+    expect(screen.getByText("工作区")).toBeInTheDocument();
+    expect(container.querySelector('[data-workspace="/w/other"]')).not.toBeNull();
+  });
+});
