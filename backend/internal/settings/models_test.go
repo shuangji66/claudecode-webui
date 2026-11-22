@@ -1,11 +1,14 @@
 package settings
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestParseModelsShapes(t *testing.T) {
@@ -470,5 +473,343 @@ func TestParseModelsDoesNotUseDescriptionAsDisplay(t *testing.T) {
 	}
 	if got[1].Display != "" {
 		t.Fatalf("只有 description 时 Display 应为空，实际 %q", got[1].Display)
+	}
+}
+
+// listingCandidates：预置的 Anthropic 兼容端点把对话放在子路径上，列表在主机根。
+//
+// 这条是实机踩到的：DeepSeek 预置填的是 `https://api.deepseek.com/anthropic`，
+// 旧实现只问 `…/anthropic/v1/models`（带密钥实测 404），「获取模型列表」永远失败；
+// 真正的地址是 `…/v1/models`。百炼 coding 更靠外：base 是 `/apps/anthropic`，
+// 列表在主机根，连 `/apps/v1/models` 都是 404。
+func TestListingCandidatesCoversConversationSubpaths(t *testing.T) {
+	cases := []struct {
+		base string
+		want []string
+	}{
+		{
+			// 官方端点：base 底下就是答案，不多猜。
+			"https://api.anthropic.com",
+			[]string{"/v1/models?limit=1000", "/models"},
+		},
+		{
+			"https://api.deepseek.com/anthropic",
+			[]string{"/anthropic/v1/models?limit=1000", "/v1/models?limit=1000", "/models"},
+		},
+		{
+			"https://coding.dashscope.aliyuncs.com/apps/anthropic",
+			[]string{"/apps/anthropic/v1/models?limit=1000", "/v1/models?limit=1000", "/models"},
+		},
+	}
+	for _, c := range cases {
+		got := listingCandidates(Provider{BaseURL: c.base})
+		paths := make([]string, 0, len(got))
+		for _, u := range got {
+			paths = append(paths, pathOf(u))
+		}
+		if strings.Join(paths, " ") != strings.Join(c.want, " ") {
+			t.Fatalf("%s 的候选 = %v，期望 %v", c.base, paths, c.want)
+		}
+	}
+}
+
+// 手动填了列表路径：以它为准，但也要能吃「base 带对话子路径」这一套。
+//
+// 用户填 `/v1/models` 时想的是主机根；DeepSeek 的 base 是 `/anthropic`，
+// 只拼 base 的话正好落到那个 404 上——这个输入框就成了摆设。
+func TestListingCandidatesRespectsManualPath(t *testing.T) {
+	got := listingCandidates(Provider{BaseURL: "https://api.deepseek.com/anthropic", ModelsPath: "/v1/models"})
+	want := []string{
+		"https://api.deepseek.com/anthropic/v1/models",
+		"https://api.deepseek.com/v1/models",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("手填路径的候选 = %v，期望 %v", got, want)
+	}
+	// base 本来就是主机根时只有一条，不多猜。
+	only := listingCandidates(Provider{BaseURL: "https://gw.example", ModelsPath: "/api/models"})
+	if len(only) != 1 || only[0] != "https://gw.example/api/models" {
+		t.Fatalf("主机根 base 的手填路径 = %v", only)
+	}
+}
+
+// 列表在主机根、对话 base 带 /anthropic：FetchModels 必须顺着候选找到它。
+func TestFetchModelsFallsBackToHostRoot(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		if r.URL.Path != "/v1/models" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"message":"Not Found"}}`))
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"deepseek-flash"}]}`))
+	}))
+	defer srv.Close()
+
+	res := FetchModels(t.Context(), Provider{
+		BaseURL: srv.URL + "/anthropic",
+		APIKey:  "sk-1",
+		Auth:    AuthBearer,
+	})
+	if len(res.Models) != 1 || res.Models[0].ID != "deepseek-flash" {
+		t.Fatalf("应从主机根拿到模型: %+v", res)
+	}
+	if len(seen) != 2 || seen[0] != "/anthropic/v1/models" || seen[1] != "/v1/models" {
+		t.Fatalf("应先问 base 底下那条、再退到主机根，实际 %v", seen)
+	}
+	if !strings.Contains(res.Detail, "/v1/models") {
+		t.Fatalf("应说明命中的路径: %q", res.Detail)
+	}
+}
+
+// 子路径 base 上「路径不存在」也可能回 401（实测 MiniMax 的 /anthropic/*），
+// 这时不能当场判「鉴权失败」：主机根那条用同一把密钥能拉到列表。
+func TestFetchModelsKeepsScanningAfter401OnSubpath(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		if r.URL.Path != "/v1/models" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"authentication_error"}}`))
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"MiniMax-M3"}]}`))
+	}))
+	defer srv.Close()
+
+	res := FetchModels(t.Context(), Provider{
+		BaseURL: srv.URL + "/anthropic",
+		APIKey:  "valid-key",
+		Auth:    AuthBearer,
+	})
+	if len(res.Models) != 1 {
+		t.Fatalf("401 之后应继续试主机根: %+v", res)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("应请求两条路径，实际 %v", seen)
+	}
+	if res.Auth.SwitchedTo != "" {
+		t.Fatalf("同一把密钥就成功了，不该报换认证: %q", res.Auth.SwitchedTo)
+	}
+}
+
+// 而 base 只有主机根时，401 就是结论：当场换一种头重试，不扩散成对别的路径的猜测。
+func TestFetchModelsHostOnlyBaseStopsOn401(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid key"}}`))
+	}))
+	defer srv.Close()
+
+	res := FetchModels(t.Context(), Provider{BaseURL: srv.URL, APIKey: "wrong"})
+	if len(res.Models) != 0 || !strings.Contains(res.Detail, "鉴权失败") {
+		t.Fatalf("应报鉴权失败: %+v", res)
+	}
+	if len(seen) != 2 || seen[0] != "/v1/models" || seen[1] != "/v1/models" {
+		t.Fatalf("应只对同一路径换头发两次，实际 %v", seen)
+	}
+}
+
+// 智谱不在「主机根 + /v1/models」这条通用规律里：列表在 OpenAI 兼容端点的
+// 版本号后面，主机根下没有 /v1/models。这类按主机登记。
+func TestListingCandidatesZai(t *testing.T) {
+	got := listingCandidates(Provider{BaseURL: "https://api.z.ai/api/anthropic"})
+	paths := make([]string, 0, len(got))
+	for _, u := range got {
+		paths = append(paths, pathOf(u))
+	}
+	want := []string{
+		"/api/anthropic/v1/models?limit=1000",
+		"/v1/models?limit=1000",
+		"/models",
+		"/api/paas/v4/models",
+		"/api/coding/paas/v4/models",
+	}
+	if strings.Join(paths, " ") != strings.Join(want, " ") {
+		t.Fatalf("候选 = %v，期望 %v", paths, want)
+	}
+	// 中国区同一套。
+	cn := listingCandidates(Provider{BaseURL: "https://open.bigmodel.cn/api/anthropic"})
+	if pathOf(cn[len(cn)-2]) != "/api/paas/v4/models" {
+		t.Fatalf("bigmodel 应带 paas 路径: %v", cn)
+	}
+}
+
+// 同主机登记的路径也能命中：Z.AI 的 /api/paas/v4/models 是它的真实列表地址。
+func TestFetchModelsFallsBackToRegisteredPath(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		if r.URL.Path != "/api/paas/v4/models" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"code":"500","message":"404 NOT_FOUND"}}`))
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"glm-5"}]}`))
+	}))
+	defer srv.Close()
+
+	// httptest 的主机是 127.0.0.1:port，不在登记表里——登记表按 host 匹配，
+	// 所以这里用测试覆盖登记表本身（上一条）与「通用规律之外的候选也会被尝试」。
+	hostListingPaths["127.0.0.1"] = []string{"/api/paas/v4/models"}
+	defer delete(hostListingPaths, "127.0.0.1")
+
+	res := FetchModels(t.Context(), Provider{
+		BaseURL: srv.URL + "/api/anthropic",
+		APIKey:  "id.secret",
+		Auth:    AuthBearer,
+	})
+	if len(res.Models) != 1 || res.Models[0].ID != "glm-5" {
+		t.Fatalf("应从登记路径拿到模型: %+v", res)
+	}
+	if len(seen) < 2 || seen[len(seen)-1] != "/api/paas/v4/models" {
+		t.Fatalf("最后应问到登记路径，实际 %v", seen)
+	}
+}
+
+// 单条候选有自己的超时：一条不响应的路径不能吃掉整个 15 秒预算。
+//
+// 以前 5 条候选共用调用方的 ctx，第一条卡住就全部变成
+// `context deadline exceeded`——「获取模型列表」变成「转 15 秒然后请求失败」，
+// 比修复前还差。这里让第一条永远不响应（超过 perListingTimeout），
+// 第二条必须仍然被问到。
+func TestListModelsPerTryTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("依赖真实超时，short 模式跳过")
+	}
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.URL.Path)
+		mu.Unlock()
+		if r.URL.Path == "/anthropic/v1/models" {
+			// 不响应，直到客户端自己超时。
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), ProbeTimeout)
+	defer cancel()
+	start := time.Now()
+	res := FetchModels(ctx, Provider{BaseURL: srv.URL + "/anthropic", APIKey: "k"})
+	elapsed := time.Since(start)
+
+	if len(res.Models) != 1 {
+		t.Fatalf("第一条超时后应继续问下一条: %+v", res)
+	}
+	if elapsed > perListingTimeout+3*time.Second {
+		t.Fatalf("不该用掉整个预算，实际 %v", elapsed)
+	}
+	if len(seen) < 2 || seen[1] != "/v1/models" {
+		t.Fatalf("应继续问主机根，实际 %v", seen)
+	}
+}
+
+// 「有一条 401」不等于「密钥不对」：路径不存在也可能回 401（MiniMax 实测）。
+// 只有每一条候选都被拒、且换头也没救回来，才能下鉴权失败的结论。
+func TestProbeAuthVerdictNeedsAllRejected(t *testing.T) {
+	// 子路径 401、主机根 404：结论是「不知道列表在哪」，不是「密钥无效」。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/anthropic/v1/messages":
+			// 对话请求：凭据其实是对的（base 带 /anthropic，CLI 就是拼这里）。
+			w.Header().Set("content-type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"msg_1","type":"message"}`))
+		case "/anthropic/v1/models":
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	res := Probe(t.Context(), Provider{
+		BaseURL: srv.URL + "/anthropic",
+		APIKey:  "valid",
+		Models:  []string{"m"},
+	})
+	if !res.OK {
+		t.Fatalf("凭据有效时不该报鉴权失败: %+v", res)
+	}
+	if strings.Contains(res.Detail, "鉴权失败") {
+		t.Fatalf("Detail 不应说鉴权失败: %q", res.Detail)
+	}
+
+	// 反过来：每一条都 401 → 真的是鉴权失败。
+	all401 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid key"}}`))
+	}))
+	defer all401.Close()
+	bad := Probe(t.Context(), Provider{BaseURL: all401.URL, APIKey: "wrong"})
+	if bad.OK || !strings.Contains(bad.Detail, "鉴权失败") {
+		t.Fatalf("全部 401 应报鉴权失败: %+v", bad)
+	}
+}
+
+// 每条候选都栽在网络层时，列表这一步已经给出结论，不要再发一次对话请求
+// （那会多等 15 秒，还把原因换成 POST 的错误）。
+func TestProbeNetFailureStopsEarly(t *testing.T) {
+	// .invalid 是保留 TLD，DNS 必然失败。
+	start := time.Now()
+	res := Probe(t.Context(), Provider{BaseURL: "https://no-such-host-ccweb-test.invalid", APIKey: "k"})
+	elapsed := time.Since(start)
+
+	if res.OK || !strings.Contains(res.Detail, "请求失败") {
+		t.Fatalf("应报网络失败: %+v", res)
+	}
+	if strings.Contains(res.Detail, "/v1/messages") {
+		t.Fatalf("不该退到对话探测: %q", res.Detail)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("DNS 失败应立即返回，实际 %v", elapsed)
+	}
+}
+
+// 「有些路径连不上、有些回了 404」不是网络故障：端点本身是通的，
+// 结论应该是「列表不在这些路径上」，而不是「请求失败」。
+//
+// 用 ModelsPath 造出两条候选（{base} 下一条、主机根一条），让它们分别落到
+// 死地址与活地址上——这正是真实预置的样子：base 是 /anthropic 子路径，
+// 而列表在主机根。
+func TestListModelsMixedNetAnd404(t *testing.T) {
+	// 先起一个服务拿到端口，再关掉：连接会被拒。
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadHost := dead.URL
+	dead.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"Not Found"}}`))
+	}))
+	defer srv.Close()
+
+	// 全部候选都在死地址上 → netFailed。
+	onlyDead := listModels(t.Context(), proxyClient(), Provider{BaseURL: deadHost, APIKey: "k"})
+	if !onlyDead.netFailed {
+		t.Fatalf("候选全连不上时应标 netFailed: %+v", onlyDead)
+	}
+	if onlyDead.deadline {
+		t.Fatalf("连接被拒不是超时: %+v", onlyDead)
+	}
+
+	// 活地址上全 404 → 不是 netFailed（端点通了，只是没这个路径）。
+	all404 := listModels(t.Context(), proxyClient(), Provider{BaseURL: srv.URL, APIKey: "k"})
+	if all404.netFailed {
+		t.Fatalf("端点可达时不该标 netFailed: %+v", all404)
+	}
+	if len(all404.attempts) == 0 {
+		t.Fatal("应该至少问过一条")
 	}
 }

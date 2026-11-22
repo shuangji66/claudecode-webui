@@ -521,29 +521,47 @@ function ProviderCard({
           {advanced ? t("收起高级设置", "Hide advanced") : t("高级设置（认证方式）", "Advanced (auth method)")}
         </button>
         {advanced && (
-          <div className="block">
-            <span className="block text-[10.5px] text-faint">{t("认证方式", "Auth method")}</span>
-            <Select
-              className="mt-0.5"
-              ariaLabel={t("认证方式", "Auth method")}
-              value={provider.auth}
-              onChange={(v) => {
-                setAuthNotice("");
-                onChange({ auth: v === "bearer" ? "bearer" : "x-api-key" });
-              }}
-              options={[
-                { value: "x-api-key", label: t("x-api-key 头（ANTHROPIC_API_KEY）", "x-api-key header (ANTHROPIC_API_KEY)") },
-                { value: "bearer", label: t("Authorization: Bearer（ANTHROPIC_AUTH_TOKEN）", "Authorization: Bearer (ANTHROPIC_AUTH_TOKEN)") },
-              ]}
-              menuWidth={320}
-            />
-            <p className="mt-1 text-[10px] leading-relaxed text-faint">
-              {t(
-                "同一把密钥放进哪个请求头：官方 Anthropic 端点认 x-api-key，多数中转（DeepSeek / Z.AI / Kimi 等）认 Bearer。选错只会 401——对话请求由 CLI 发出，没有换头重试的机会。",
-                "Which header carries the key: the official Anthropic endpoint reads x-api-key, most relays (DeepSeek / Z.AI / Kimi …) read Bearer. A wrong choice is a 401, and the CLI has no chance to retry with the other header.",
-              )}
-            </p>
-          </div>
+          <>
+            <div className="block">
+              <span className="block text-[10.5px] text-faint">{t("认证方式", "Auth method")}</span>
+              <Select
+                className="mt-0.5"
+                ariaLabel={t("认证方式", "Auth method")}
+                value={provider.auth}
+                onChange={(v) => {
+                  setAuthNotice("");
+                  onChange({ auth: v === "bearer" ? "bearer" : "x-api-key" });
+                }}
+                options={[
+                  { value: "x-api-key", label: t("x-api-key 头（ANTHROPIC_API_KEY）", "x-api-key header (ANTHROPIC_API_KEY)") },
+                  { value: "bearer", label: t("Authorization: Bearer（ANTHROPIC_AUTH_TOKEN）", "Authorization: Bearer (ANTHROPIC_AUTH_TOKEN)") },
+                ]}
+                menuWidth={320}
+              />
+              <p className="mt-1 text-[10px] leading-relaxed text-faint">
+                {t(
+                  "同一把密钥放进哪个请求头：官方 Anthropic 端点认 x-api-key，多数中转（DeepSeek / Z.AI / Kimi 等）认 Bearer。选错只会 401——对话请求由 CLI 发出，没有换头重试的机会。",
+                  "Which header carries the key: the official Anthropic endpoint reads x-api-key, most relays (DeepSeek / Z.AI / Kimi …) read Bearer. A wrong choice is a 401, and the CLI has no chance to retry with the other header.",
+                )}
+              </p>
+            </div>
+            <label className="block">
+              <span className="block text-[10.5px] text-faint">{t("模型列表路径（可选）", "Model list path (optional)")}</span>
+              <input
+                {...NO_AUTOFILL}
+                value={provider.modelsPath}
+                onChange={(e) => onChange({ modelsPath: e.target.value })}
+                placeholder="/v1/models"
+                className="mt-0.5 w-full rounded-md border border-line-strong bg-canvas px-2 py-1 font-mono text-[11px] text-ink outline-none focus:border-brand/60"
+              />
+              <p className="mt-1 text-[10px] leading-relaxed text-faint">
+                {t(
+                  "留空就自动试（base 底下 → 主机 /v1/models → 主机 /models，以及少数按主机登记的路径）。填了就只用这一条，先按 API 地址拼、再按主机根拼一次——所以填 /v1/models 在带 /anthropic 的地址上也对。",
+                  "Leave empty to auto-try (under the base → host /v1/models → host /models, plus a few registered per-host paths). When set, only that path is used: tried against the API base first, then the host root — so /v1/models also works on bases ending in /anthropic.",
+                )}
+              </p>
+            </label>
+          </>
         )}
 
         <div className="rounded-lg border border-line bg-panel/40 p-2">

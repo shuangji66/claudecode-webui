@@ -110,8 +110,8 @@ func (p Provider) Root() string {
 
 // Probe 检查「地址 + 凭据」是否可用。
 //
-// 先问模型列表（不计费）；拿不到时，用第一个已添加模型发一次
-// max_tokens=1 的对话请求。401/403 视为鉴权失败直接返回。
+// 先问模型列表（不计费，按候选路径依次试，见 listingCandidates）；拿不到时，
+// 用第一个已添加模型发一次 max_tokens=1 的对话请求。401/403 视为鉴权失败直接返回。
 func Probe(ctx context.Context, p Provider) ProbeResult {
 	res := ProbeResult{Endpoint: p.Root()}
 	if !strings.HasPrefix(res.Endpoint, "http://") && !strings.HasPrefix(res.Endpoint, "https://") {
@@ -122,37 +122,35 @@ func Probe(ctx context.Context, p Provider) ProbeResult {
 	start := time.Now()
 	client := proxyClient()
 
-	url := ListingURL(p.ListBaseURL(), p.ModelsPath)
-	status, body, _, err := doAuth(ctx, client, http.MethodGet, url, p, nil)
-	res.Method = "GET " + url
-	res.Status = status
+	out := listModels(ctx, client, p)
+	res.Method = "GET " + out.path
+	res.Status = out.status
 	res.LatencyMs = time.Since(start).Milliseconds()
-	switch {
-	case err != nil:
-		res.Detail = "请求失败：" + err.Error()
+	if len(out.models) > 0 {
+		res.OK = true
+		res.Detail = fmt.Sprintf("端点可用，返回 %d 个模型", len(out.models))
+		if out.authSwitched != "" {
+			res.AuthSwitchedTo = out.authSwitched
+			res.Detail = fmt.Sprintf("端点可用，返回 %d 个模型（%s 认证）", len(out.models), authLabel(out.authSwitched))
+		}
 		return res
-	case status >= 200 && status < 300:
-		if models, perr := parseModels(body); perr == nil && len(models) > 0 {
-			res.OK = true
-			res.Detail = fmt.Sprintf("端点可用，返回 %d 个模型", len(models))
-			return res
-		}
-	case status == http.StatusUnauthorized || status == http.StatusForbidden:
-		// 与 FetchModels 同一条诊断：换成另一种认证再试一次，成功就把
-		// 「该用哪种」带回去——列表与连接两处都要做，否则会出现「列表拉得到、
-		// 探测却报鉴权失败」这种自相矛盾的结论。
-		if alt, header, ok := p.switchAuth(); ok {
-			if s2, b2, _, e2 := doAuth(ctx, client, http.MethodGet, url, alt, nil); e2 == nil && s2 >= 200 && s2 < 300 {
-				if models, perr := parseModels(b2); perr == nil && len(models) > 0 {
-					res.OK = true
-					res.Status = s2
-					res.AuthSwitchedTo = header
-					res.Detail = fmt.Sprintf("端点可用，返回 %d 个模型（%s 认证）", len(models), authLabel(header))
-					return res
-				}
-			}
-		}
-		res.Detail = "鉴权失败：" + snippet(body)
+	}
+	if out.deadline {
+		res.Detail = "探测超时，还有路径没试完；请检查网络与代理设置"
+		return res
+	}
+	if out.netFailed {
+		// 列表这一步每条候选都栽在网络层：地址/网络/代理就是原因，
+		// 不必再发一次注定一样的对话请求。
+		res.Detail = "请求失败：" + out.lastNetErr.Error()
+		return res
+	}
+	if out.allAuthRejected {
+		// 每一条候选都回了 401/403，且换头也没救回来（listModels 已经试过）：
+		// 这才是真的鉴权失败，不再往下发一次注定 401 的对话请求。
+		// 只判「有一条 401」是不行的——路径不存在也可能回 401，而别的路径是 404，
+		// 那时结论是「不知道列表在哪」，交给下面的对话探测回答「地址+凭据」。
+		res.Detail = "鉴权失败：" + snippet(out.body)
 		return res
 	}
 
@@ -169,7 +167,7 @@ func Probe(ctx context.Context, p Provider) ProbeResult {
 		"max_tokens": 1,
 		"messages":   []map[string]any{{"role": "user", "content": "ping"}},
 	})
-	status, body, _, err = doAuth(ctx, client, http.MethodPost, p.ChatBaseURL()+"/v1/messages", p, payload)
+	status, body, _, err := doAuth(ctx, client, http.MethodPost, p.ChatBaseURL()+"/v1/messages", p, payload)
 	res.Method = "POST /v1/messages"
 	res.Status = status
 	res.LatencyMs = time.Since(start).Milliseconds()

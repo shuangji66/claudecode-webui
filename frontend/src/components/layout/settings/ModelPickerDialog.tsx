@@ -174,7 +174,16 @@ export function ModelPickerDialog({
         {!loading && error && (
           <div className="mt-2 shrink-0 rounded-md bg-amber-50 px-2 py-1.5 text-[10.5px] text-warn dark:bg-amber-950/20">
             <p className="break-words">{error}</p>
-            {attempts.length > 0 && <p className="mt-0.5 font-mono opacity-80">{attempts.map((a) => `${a.path} → ${a.status || "-"}`).join(" · ")}</p>}
+            {attempts.length > 0 && (
+              <ul className="mt-0.5 space-y-0.5 font-mono opacity-80">
+                {attempts.map((a) => (
+                  <li key={`${a.path}#${a.status}`} className="break-all">
+                    {a.path} → {a.status || "-"}
+                    {a.note ? `（${a.note}）` : ""}
+                  </li>
+                ))}
+              </ul>
+            )}
             {raw && (
               <details className="mt-0.5">
                 <summary className="cursor-pointer opacity-70">{t("查看网关返回", "Show response")}</summary>

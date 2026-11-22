@@ -1736,6 +1736,31 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `ListBaseURL` 都走它。以前只有对话剥、列表对 anthropic 不剥，于是「列表拉得到、
   对话 404」（或反过来）取决于用户填的地址带不带 `/v1`。现在填不填都一样。
   `ListingURL` 因此只剩一个签名 `(baseURL, override)`，override 仍然原样拼。
+- **列表路径要按候选依次试，不能只拼 `{base}/v1/models`**（`listingCandidates`）：
+  Anthropic 兼容端点把**对话**放在 `/anthropic`、`/apps/anthropic` 这类子路径上，
+  而**模型列表**在同一主机根。实测（2026-11）：DeepSeek / Moonshot / MiniMax / 小米
+  的 `/anthropic/v1/models` 都是 404（DeepSeek 带真密钥复现），真正的列表在
+  `/v1/models`；百炼 coding 的 base 是 `/apps/anthropic`，列表也在主机根；Copilot 是
+  `/models`；智谱（`api.z.ai` / `open.bigmodel.cn`）连主机根 `/v1/models` 都没有，
+  列表在 `/api/paas/v4/models`（Coding Plan 是 `/api/coding/paas/v4/models`）。
+  所以顺序是「base 底下 → 主机 `/v1/models` → 主机 `/models` → 按主机登记的
+  `hostListingPaths`」，**用户填了 `models_path` 时以它为准**（先按 API 地址拼、
+  再按主机根拼一次——手填 `/v1/models` 在 `…/anthropic` 这类 base 上也要能用，
+  否则那个输入框等于摆设），但不再去猜别的路径名。以前只拼一条，
+  预置里一半提供商「获取模型列表」永远失败，界面只说「未能获取模型列表」。
+  - **单条候选有自己的 3 秒上限**（`perListingTimeout`）：候选最多 5 条，整体预算
+    只有 15 秒，一条不响应的路径就能把后面的候选全变成 `context deadline exceeded`
+    ——「点一下转 15 秒然后请求失败」，比不修还差。单条超时只跳过这一条（后面继续问），
+    只有**调用方的 ctx** 到期才算 `deadline`。
+  - **401 的处理要分 base 有没有子路径**：子路径 base 上「路径不存在」也可能回 401
+    （MiniMax 的 `/anthropic/*` 实测如此），当场判鉴权失败会把一把有效密钥说成无效；
+    只有主机根的 base 才「401 即结论」，当场换另一种头重试一次（单地址时代的兜底）。
+  - **「鉴权失败」的结论要求每条候选都被拒**（`allAuthRejected`）：某条 401 + 别的
+    404 只能说明「不知道列表在哪」，交给对话探测回答「地址+凭据」。同理
+    **每条候选都栽在网络层**（`netFailed`，DNS / 证书 / 连接被拒）时直接报网络故障，
+    不要落到对话探测（白等 15 秒，原因还会变成 POST 的错误）。
+  - 失败时 `attempts` 要把每条路径的状态与说明都带上（前端逐条列出来），
+    只报最后一条的话，用户看不出「列表不在对话 base 底下」这件事。
 - **鉴权不再按协议分叉**：`x-api-key` 与 `Authorization: Bearer` 是同时可用的两种凭据
   （不是二选一），`doAuth` 都发；列表 401 时仍用同一把密钥换 Bearer 重试一次。
   Gemini 的 `x-goog-api-key` 随协议一起删掉了。
