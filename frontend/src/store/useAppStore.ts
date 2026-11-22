@@ -463,6 +463,28 @@ const eventEpoch = new Map<string, string>();
  * 只留最近一段：序号单调递增，被淘汰的序号不会再出现（补发跨度受后端缓冲上限约束）。
  */
 const appliedSeq = new Map<string, Set<number>>();
+/**
+ * 本次页面生命周期里已经回放过转录的会话。
+ *
+ * **不要用 `items[id].length > 0` 判断「要不要回放」**：用户点开一条正在跑的
+ * 对话时，WS 先落地几条实时帧就足以让 items 非空——按它跳过回放，更早的历史就
+ * 永久缺了（界面上只剩进入之后的内容，标题也退回「新对话」，因为标题是从 items
+ * 的首条用户消息推出来的）。只有刷新整页（store 重建、这张表清空）才恢复。
+ */
+const hydrated = new Map<string, number>();
+/**
+ * 首次连上一条**正在跑**的会话时，重新读一次转录，把「回放快照」与「订阅建立」
+ * 之间的空隙补上。
+ *
+ * 打开对话时转录回放与 `POST /api/session` 是并行的：回放读到 t0，握手完成后才
+ * connect（t1）。t0..t1 之间 CLI 产生的内容既不在那份转录快照里、也不会被补发
+ * （第一次连上时本地没有水位可补）——界面上就是「少了几条思考 / 工具」。
+ * 转录是磁盘上的权威版本，重读一次就能补回来。
+ *
+ * 值是订阅那一刻的快照序号：读完之后只放行 `seq > floor` 的实时事件，
+ * `seq <= floor` 的内容已经在刚读到的转录里，再应用一遍就是重复。
+ */
+const historyRefresh = new Map<string, number>();
 
 /** 记录一条已应用的事件；返回 false 表示这条之前已经处理过（重复投递）。 */
 function markApplied(sid: string, seq: number): boolean {
@@ -680,6 +702,8 @@ function purgeSession(state: {
   eventEpoch.delete(id);
   appliedSeq.delete(id);
   pendingLive.delete(id);
+  historyRefresh.delete(id);
+  hydrated.delete(id);
   endSyncWindow(id);
 }
 
@@ -930,6 +954,44 @@ async function replayTranscript(id: string, get: () => AppState): Promise<void> 
 }
 
 /**
+ * 首次连上**正在跑**的会话：重读转录，补掉「回放快照 → 订阅建立」之间产生的内容。
+ *
+ * 只在本次打开确实回放过转录（`hydrated`）时才走这条路——没回放过的会话（例如
+ * 子代理标签直接连）本地消息流就是全部，重读反而会盖掉它。
+ */
+async function refreshHistoryAfterAttach(id: string, floor: number): Promise<void> {
+  if (historyRefresh.has(id)) return;
+  historyRefresh.set(id, floor);
+  try {
+    const tr = await apiFetch<TranscriptPayload>(`/api/history/transcript?id=${encodeURIComponent(id)}`);
+    const next = itemsFromTranscript(tr);
+    if (next.length > 0) {
+      const conv = useAppStore.getState().conversations.find((c) => c.id === id);
+      const snap = mergeUsage(conv?.usage, usageFromTranscript(tr.lines ?? []));
+      useAppStore.setState((s) => ({
+        // `mergeReplayed` 以转录为主，只接本地 `ts` 比转录更晚的条目（窗口期间压住的
+        // 事件还没落地，所以这里不会把同一段正文接成两份）。
+        items: { ...s.items, [id]: mergeReplayed(next, s.items[id] ?? [], true) },
+        // 磁盘那份为主，本回合刚量到的速度样本保留（与 `replayTranscript` 同一口径）。
+        ...(snap
+          ? { usage: { ...s.usage, [id]: mergeUsage(snap, s.usage[id]) as UsageSnapshot } }
+          : {}),
+      }));
+    }
+  } catch {
+    // 读不到（转录还没落盘 / 被删）：保持现有消息流，别让界面空掉。
+  } finally {
+    historyRefresh.delete(id);
+    const buffered = (pendingLive.get(id) ?? []).filter(
+      (ev) => typeof ev.seq !== "number" || ev.seq > floor,
+    );
+    pendingLive.set(id, buffered);
+    // 正在等补发帧时不要抢着 flush：交给 replay 的收尾路径按序号统一应用。
+    if (!awaitingReplay.has(id)) flushLive(id);
+  }
+}
+
+/**
  * 收到 `session.snapshot` 之后决定要不要补拉断线期间漏掉的事件。
  *
  * 分三种情况：
@@ -939,7 +1001,12 @@ async function replayTranscript(id: string, get: () => AppState): Promise<void> 
  *      会把新进程的前几条当成老进程的续集拼上去，直接整份重放转录。
  *   ③ 身份一致、序号有缺口：发 sync 把那段补回来。
  */
-function syncMissedEvents(sid: string, epoch: string | undefined, seq: number | undefined): void {
+function syncMissedEvents(
+  sid: string,
+  epoch: string | undefined,
+  seq: number | undefined,
+  busy: boolean,
+): void {
   if (!epoch || typeof seq !== "number") return;
   const knownEpoch = eventEpoch.get(sid);
   const knownSeq = eventSeq.get(sid);
@@ -956,6 +1023,15 @@ function syncMissedEvents(sid: string, epoch: string | undefined, seq: number | 
   eventEpoch.set(sid, epoch);
   if (knownEpoch === undefined || knownSeq === undefined) {
     eventSeq.set(sid, seq);
+    // 第一次连上、且这条会话是本次刚回放过转录的：回放读的是磁盘快照，订阅是
+    // 之后才建立的，中间那段（冷启动时能有几秒）既不在快照里也没人补。
+    // 只在会话还在跑时重读：空闲的会话转录已经写完了，多读一遍纯属浪费。
+    const hydratedAt = hydrated.get(sid);
+    // 「正在跑」一定要补；已经跑完但握手超过 300ms（冷启动 spawn + initialize 要几秒）
+    // 的也要补——回放读完之后转录可能又写进去了几行。本机热打开握手只有几十毫秒，
+    // 不值得为它再多解析一遍 jsonl。
+    const stale = hydratedAt !== undefined && Date.now() - hydratedAt > 300;
+    if (hydratedAt !== undefined && (busy || stale)) void refreshHistoryAfterAttach(sid, seq);
     return;
   }
   if (seq <= knownSeq) return;
@@ -1849,24 +1925,34 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
     const loadTranscript = async () => {
       try {
-        if ((get().items[id] ?? []).length > 0) return;
-        // 全新空对话没有转录文件；直接跳过，避免制造一次预期的 404。
-        if (conv.messages === 0 && !conv.title) return;
+        // **只认「这次页面生命周期里回放过没有」**，不要看 items 是否为空：
+        // 用户点开一条别的设备正在跑的对话时，WS 先落几条实时帧就足以让 items 非空，
+        // 按它跳过回放等于把更早的历史（包括那一轮的用户消息）永久丢掉——界面上
+        // 只剩进入之后的内容，标题也退回「新对话」。
+        // 「已经回放过」还要 items 还在：测试或外部清空 items 之后必须能重新回放。
+        if (hydrated.has(id) && (get().items[id] ?? []).length > 0) return;
+        // 也不用元数据预判「有没有转录」：本机的对话列表可能比磁盘旧（另一台设备
+        // 刚发的消息、还没刷新到的 `messages`/`title`），那样会把整份历史跳过去。
+        // 真没有转录时后端回 404，一次请求的代价远小于丢一段对话。
         try {
           const tr = await apiFetch<TranscriptPayload>(`/api/history/transcript?id=${encodeURIComponent(id)}`);
-          if ((get().items[id] ?? []).length > 0) return;
+          if ((get().items[id] ?? []).length > 0 && hydrated.has(id)) return;
           const next = itemsFromTranscript(tr);
           // 转录里带着 usage（assistant 行），重开对话时据此还原底部统计；
           // 转录算不出的 API 耗时 / 窗口，用上次持久化的快照补。实时快照不覆盖。
           const snap = mergeUsage(conv.usage, usageFromTranscript(tr.lines ?? []));
           if (next.length > 0) {
             set((s) => ({
-              items: { ...s.items, [id]: next },
+              // 已经由实时帧落地的那几条也并进来：转录为主，本地更晚的条目接在后面。
+              items: { ...s.items, [id]: mergeReplayed(next, s.items[id] ?? []) },
               ...(snap && !s.usage[id] ? { usage: { ...s.usage, [id]: snap } } : {}),
             }));
+            hydrated.set(id, Date.now());
           }
+          // 转录为空（刚建的对话还没有内容）时不记：下一次进入再试一次。
         } catch {
-          // 新对话还没有转录；实时 WS 会补上后续消息。
+          // 新对话还没有转录；实时 WS 会补上后续消息。不记 `hydrated`——下次打开
+          // 转录已经存在（另一台设备发过消息），那时必须回放。
         }
       } finally {
         notifyHistory();
@@ -2434,9 +2520,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     // 补发帧 / resync 自己不受这条限制（它们是这个窗口的收尾者）。
     if (
       sid &&
-      awaitingReplay.has(sid) &&
-      ev.kind !== "session.replay" &&
-      ev.kind !== "session.resync" &&
+      ((awaitingReplay.has(sid) && ev.kind !== "session.replay" && ev.kind !== "session.resync") ||
+        (historyRefresh.has(sid) && ev.kind !== "session.replay" && ev.kind !== "session.resync")) &&
       typeof ev.seq === "number"
     ) {
       const buffered = pendingLive.get(sid) ?? [];
@@ -2528,7 +2613,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
             conversations: s.conversations.map((c) => (c.id === sid ? { ...c, live: true, state } : c)),
           }));
         }
-        syncMissedEvents(sid, data?.epoch, data?.seq);
+        syncMissedEvents(sid, data?.epoch, data?.seq, data?.info?.state === "busy");
         return;
       }
       case "session.replay": {
@@ -2554,6 +2639,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // 开始，旧集合里的 1..N 会把它们全判成重复。缓冲里压着的实时事件同属旧序号
         // 空间，一并丢掉——它们要么会从转录里回来，要么本来就对不上。
         endSyncWindow(sid);
+        historyRefresh.delete(sid);
         // 窗口里压着的实时事件直接丢掉：它们的内容已经在刚重放的转录里（转录是磁盘上
         // 的权威版本，断线期间产生的都写了进去），再应用一遍就是同一段正文出现两三遍。
         // 不丢的话它们还会留在 `pendingLive` 里，等下一次补发帧到达时一起被冲出去。
@@ -2858,6 +2944,8 @@ export function __resetSyncState(): void {
   pendingLive.clear();
   syncTimers.clear();
   awaitingReplay.clear();
+  historyRefresh.clear();
+  hydrated.clear();
   lastSoundAt.clear();
   localWorkAt.clear();
 }
