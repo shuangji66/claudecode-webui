@@ -513,22 +513,34 @@ src/
     `object-fit: scale-down` 看着像，但它在 zoom>1 时会把尺寸锁死在原始像素，缩放直接失效；
     `h-full w-full object-contain` 又会把小图拉到窗口大小。所以 `ZoomableImage` 用
     `ResizeObserver` 量窗口、用 `onLoad` 量原图，把结果写进 img 的 `width/height`。
-    **两种取景方式，由 `pannable` 分**：
-    - 侧栏文件预览不开它：根节点 `h-full w-full` 供测量，滚动交给外层的 `dsh-scroll`。
-    - 灯箱开它：图片区自己 `overflow-hidden`，图片靠 `transform: translate(calc(-50% + Npx))`
+    **两种取景方式，由 `pannable` 分**：默认（根节点 `h-full w-full` 供测量）把滚动交给
+    调用方的 `overflow-auto`；`pannable` 自己接管取景、不再有滚动条。**两处都开 `pannable`**：
+    - 灯箱：图片区自己 `overflow-hidden`，图片靠 `transform: translate(calc(-50% + Npx))`
       平移（`left-1/2 top-1/2` 定位），**不再有滚动条**——放大后两个轴都可能溢出，
       滚动条那套得分别去抠两个角落的滑块，拖动才是这个场景的手势。
+    - 侧栏文件预览**也开**（2026-11 起）：理由同上，窄侧栏里两条滚动条几乎没法用。
+      所以 `FilePreview` 在图片分支把外层从 `dsh-scroll overflow-auto` 换成
+      `overflow-hidden p-2`——**外层不能再是滚动容器**，否则放大后还会多出一条横向
+      滚动条，而 `pannable` 那层本来就不滚动。文本 / markdown / Office / PDF 分支
+      仍然走外层滚动，别把那层一起改掉；缩放条的显示条件与这个类名判断共用同一个
+      `imageView`，两处各写一遍条件迟早会漏一处。
+    `pannable` 的手势细节（两处共用，改一处两边一起变）：
       **滚轮缩放必须用原生 `wheel` 监听 + `{ passive: false }`**：React 17 起 root 上的
       wheel 是 passive 的，`preventDefault()` 会被忽略，页面会在背后一起滚。
       倍数用**乘法**（`WHEEL_ZOOM_FACTOR` ≈ 1.1）：触控板一次滑动就是几十个小事件，
       加法会瞬间冲到上下限。缩放以**光标为锚点**（锚点下的像素缩放前后停在原处），
-      否则想放大看角落时每次都要重新拖回来。
+      否则想放大看角落时每次都要重新拖回来。`Ctrl`/`⌘ + 滚轮` 仍放行给浏览器/系统
+      （那是捏合缩放）。
       **平移量由 `clampPan()` 夹在「图片边缘不离开容器边缘」**，图比容器小时两个上限都是 0、
       自动居中——松手后小图歪在角落里会像是被甩飞了。`clampPan` 里的 `+ 0` 是把 `-0`
       归一成 `0`，别删。
       拖动走 pointer 事件 + `setPointerCapture`（拖出面板也不断），`touchAction: "pinch-zoom"`
       （关掉单指平移这个「滚页面」语义，但保住两指捏合缩放）；图没超出窗口时**不接管
       pointerdown**，否则会顺手吃掉文字选中与点击。
+    **「仅预览前 1MB」只对文本成立**：`file.truncated` 说的是「读出来的 `content` 被截到
+    1MB」，而图片 / PDF 走 `/api/fs/raw`、Office 走 `/api/fs/blob`，三者都不看 `content`。
+    在那些分支挂这条提示是假的，图片那条还会被 `overflow-hidden` 裁成半句。条件写成
+    `file.truncated && !file.binary && textLike`。
     **灯箱的图片区铺满面板，不再是固定 1:1 的正方形**：正方形在宽图上上下留一大片黑、
     竖图上左右留一大片黑，而面板本身够宽，撑满才像个查看器。因此 `panelClassName`
     仍然要把高度定下来（移动 `h-full` 吃 Dialog 的 `max-h-[85dvh]`，桌面 `md:h-[82vh]`），

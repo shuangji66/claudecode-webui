@@ -270,7 +270,7 @@ describe("ZoomableImage 滚轮缩放与拖动（pannable）", () => {
     expect(img.style.transform).toContain("translate(calc(-50% + 0px), calc(-50% + 0px))");
   });
 
-  it("没开 pannable 时不写 transform（侧栏预览仍靠外层滚动）", () => {
+  it("没开 pannable 时不写 transform（仍靠外层滚动）", () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {

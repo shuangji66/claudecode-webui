@@ -265,11 +265,74 @@ describe("文件预览的缩放", () => {
     expect(screen.getByRole("button", { name: /放大|Zoom in/ })).toBeTruthy();
   });
 
+  // 图片自己接管取景：滚轮缩放 + 拖动平移（ZoomableImage 的 pannable）。
+  // 外层滚动容器必须让位，否则放大后两个轴各挂一条滚动条，图片却拖不动。
+  it("图片预览走 pannable 取景，外面没有滚动容器", async () => {
+    render(<FilesPanel cwd={CWD} active pending={{ path: "probe/quad.png", seq: 1 }} />);
+    const img = await screen.findByAltText("quad.png");
+    expect(img.closest(".dsh-scroll")).toBeNull();
+    expect(img.parentElement!.className).toContain("overflow-hidden");
+  });
+
+  // 内缩不能挂在测量元素上：clientWidth 含 padding，fitSize 会多算 16px，
+  // 图右侧被裁一截、平移上限也跟着偏。
+  it("图片的内缩挂在外层，不污染测量容器", async () => {
+    render(<FilesPanel cwd={CWD} active pending={{ path: "probe/quad.png", seq: 1 }} />);
+    const img = await screen.findByAltText("quad.png");
+    expect(img.parentElement!.className).not.toContain("p-2");
+    expect(img.parentElement!.parentElement!.className).toContain("p-2");
+  });
+
+  it("图片预览支持滚轮缩放", async () => {
+    render(<FilesPanel cwd={CWD} active pending={{ path: "probe/quad.png", seq: 1 }} />);
+    const img = await screen.findByAltText("quad.png");
+    fireEvent.wheel(img.parentElement!, { deltaY: -100 });
+    expect(await screen.findByText("110%")).toBeTruthy();
+  });
+
+  // 后端对大图也会置 truncated（它算的是「读出来的 content 有没有被截到 1MB」），
+  // 而图片压根不看 content。以前这条提示能看见（外层能滚），现在外层 overflow-hidden
+  // 会被裁成半句——所以图片分支压根不该出这条提示。
+  it("图片预览不显示「仅预览前 1MB」", async () => {
+    useSidebarStore.setState({
+      readFile: async (path: string) => ({
+        path,
+        size: 4 << 20,
+        binary: true,
+        truncated: true,
+        content: "",
+      }),
+    });
+    render(<FilesPanel cwd={CWD} active pending={{ path: "probe/quad.png", seq: 1 }} />);
+    expect(await screen.findByAltText("quad.png")).toBeTruthy();
+    expect(screen.queryByText(/仅预览前 1MB|preview truncated/)).toBeNull();
+  });
+
+  it("文本预览仍会提示截断", async () => {
+    useSidebarStore.setState({
+      readFile: async (path: string) => ({
+        path,
+        size: 4 << 20,
+        binary: false,
+        truncated: true,
+        content: "# hi",
+      }),
+    });
+    render(<FilesPanel cwd={CWD} active pending={{ path: "README.md", seq: 1 }} />);
+    expect(await screen.findByText(/仅预览前 1MB|preview truncated/)).toBeTruthy();
+  });
+
   it("markdown / 文本预览没有缩放条", async () => {
     render(<FilesPanel cwd={CWD} active pending={{ path: "README.md", seq: 1 }} />);
     // 树里也有 README.md，等预览区显示出来再断言（md 默认是源码视图）
     expect(await screen.findByText("# hi")).toBeTruthy();
     expect(screen.queryByText("100%")).toBeNull();
+  });
+
+  it("文本预览仍由外层滚动", async () => {
+    render(<FilesPanel cwd={CWD} active pending={{ path: "README.md", seq: 1 }} />);
+    const text = await screen.findByText("# hi");
+    expect(text.closest(".dsh-scroll")).not.toBeNull();
   });
 });
 

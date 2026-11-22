@@ -134,10 +134,11 @@ export function fitSize(
  *
  * 两种取景方式：
  * - 默认：根节点固定 `h-full w-full` 供测量，滚动交给调用方的 `overflow-auto`
- *   （FilesPanel 的 `dsh-scroll`）——放大后由它出现滚动条。
- * - `pannable`：自己接管取景，滚轮缩放 + 拖动平移（灯箱）。这一层是
+ *   （放大后由它出现滚动条）。
+ * - `pannable`：自己接管取景，滚轮缩放 + 拖动平移（灯箱与右侧栏文件预览）。这一层是
  *   `overflow-hidden`，图片用 `transform` 平移而不是滚动——放大后要能在两个方向上
  *   一起挪，滚动条那套在两个轴上都溢出时很难用（拖不出来，只能去抠角落里的滑块）。
+ *   调用方这一层也必须是不设滚动的容器，否则放大后还会多出一条横向滚动条。
  */
 export function ZoomableImage({
   src,
@@ -156,7 +157,7 @@ export function ZoomableImage({
   onImgClick?: (() => void) | undefined;
   /** 滚轮缩放要回写父级的 `zoom`（缩放条上的百分比跟着变）；不给就不吃滚轮。 */
   onZoomChange?: ((zoom: number) => void) | undefined;
-  /** 滚轮缩放 + 拖动平移。灯箱开，侧栏文件预览不开（那里要留给页面滚动）。 */
+  /** 滚轮缩放 + 拖动平移。灯箱与右侧栏文件预览都开。 */
   pannable?: boolean;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);

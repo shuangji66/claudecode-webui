@@ -725,6 +725,11 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
   // 它在无空格的长串（base64 / 长路径 / 长 URL）上不给断点。
   const lines = file && !file.binary && textLike ? file.content.split("\n") : [];
   const shown = lines.slice(0, MAX_PREVIEW_LINES);
+  // 图片自己接管取景（滚轮缩放 + 拖动平移，见 ZoomableImage 的 pannable）：
+  // 外层不能再是滚动容器，否则放大后两个轴各挂一条滚动条，而拖不动——图片那层是
+  // overflow-hidden，滚动条既没用又会被误认成「这里能滚」。缩放条与滚动容器共用这一个
+  // 判断（两处各写一遍条件，改一处漏一处时图片会既没有缩放条也拖不动）。
+  const imageView = kind === "image" && file !== null && !loading && !error;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -782,7 +787,7 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
         )}
       </div>
 
-      <div className="dsh-scroll min-h-0 flex-1 overflow-auto">
+      <div className={imageView ? "min-h-0 flex-1 overflow-hidden" : "dsh-scroll min-h-0 flex-1 overflow-auto"}>
         {loading && <p className="px-3 py-3 text-[11.5px] text-faint">{t("读取文件…", "Loading file…")}</p>}
         {error && (
           <div className="m-3 rounded-lg border border-danger/25 bg-danger/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-danger">
@@ -802,12 +807,21 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
                 </p>
               </div>
             ) : kind === "image" ? (
-              <ZoomableImage
-                src={rawUrl}
-                alt={name}
-                zoom={zoom}
-                imgClassName="rounded-lg border border-line"
-              />
+              /* 内缩挂在**测量元素外面**这一层：`ZoomableImage` 用 clientWidth/clientHeight
+                 量窗口（含 padding），把 `p-2` 加在它身上会让 fitSize 认为可用宽度多出
+                 16px——图按那个宽度算出来，右侧就被 overflow-hidden 裁掉一截，平移上限
+                 也跟着偏。以前这条内缩在非 pannable 分支的 `min-w-full p-2` 上，那正是
+                 「图片总是顶着一条横向滚动条」的来源。 */
+              <div className="h-full p-2">
+                <ZoomableImage
+                  src={rawUrl}
+                  alt={name}
+                  zoom={zoom}
+                  pannable
+                  onZoomChange={setZoom}
+                  imgClassName="rounded-lg border border-line"
+                />
+              </div>
             ) : kind === "pdf" ? (
               <iframe src={rawUrl} title={name} className="h-full min-h-[420px] w-full border-0 bg-panel" />
             ) : kind === "markdown" && !showSource ? (
@@ -836,7 +850,12 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
                 ))}
               </div>
             )}
-            {file.truncated && (
+            {/* `file.truncated` 说的是**文本读出来的 content 被截到 1MB**。图片 / PDF 走
+                /api/fs/raw、Office 走 /api/fs/blob，三者都不读 content；二进制占位更是
+                一行正文都没有。这些分支提示「仅预览前 1MB」是假的，图片那条尤其明显——
+                外层已经是 overflow-hidden，挂在图下面的提示还会被裁掉，用户只看到半句
+                不存在的警告。只有真的渲染了文本的才说这句。 */}
+            {file.truncated && !file.binary && textLike && (
               <p className="mx-3 mb-3 mt-2 rounded-md bg-warn/10 px-2 py-1 text-[10.5px] text-warn">
                 {t("文件超过 1MB，仅预览前 1MB。", "File exceeds 1MB; preview truncated.")}
               </p>
@@ -849,9 +868,7 @@ function FilePreview({ cwd, path, file, loading, error, copied, onBack, onCopy }
           </>
         )}
       </div>
-      {kind === "image" && file !== null && !loading && !error && (
-        <ZoomBar zoom={zoom} onChange={setZoom} />
-      )}
+      {imageView && <ZoomBar zoom={zoom} onChange={setZoom} />}
     </div>
   );
 }
