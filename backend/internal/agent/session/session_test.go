@@ -318,6 +318,27 @@ func TestIntentionalCloseDoesNotReportReadError(t *testing.T) {
 	}
 }
 
+// 上面那条是「不该报」的反面：单行超过 maxLineBytes 时 done 还没关，必须照常报。
+// 少了这条，`done` 那个判断可以被写成「读循环一结束就静默」，而界面只会看到
+// 一条 closed，完全不知道发生了什么。
+func TestReadErrorStillReported(t *testing.T) {
+	sess, fc, rec := startSession(t)
+	defer sess.Close()
+
+	// 行长按生产上限 +1：Scanner 的初始缓冲是 64KB，只有超过 maxLineBytes 才会
+	// 走到 ErrTooLong（见 readLoop 的 sc.Buffer）。
+	if _, err := fc.conn.Write([]byte(strings.Repeat("x", maxLineBytes+1) + "\n")); err != nil {
+		t.Fatalf("写超长行: %v", err)
+	}
+	ev, ok := rec.wait(KindError, 5*time.Second)
+	if !ok {
+		t.Fatal("单行超限是真故障，必须报 error 事件")
+	}
+	if !strings.Contains(string(ev.Data), "读取 claude 输出中断") {
+		t.Fatalf("error 事件内容不像读取中断: %s", ev.Data)
+	}
+}
+
 func TestPromptSendsUserMessageAndMarksBusy(t *testing.T) {
 	sess, fc, _ := startSession(t)
 	defer sess.Close()
