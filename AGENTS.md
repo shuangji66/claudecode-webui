@@ -1596,8 +1596,20 @@ hub ── manager ── session ── process ── claude (NDJSON)
   回来就是一条 `读取 claude 输出中断`）。判定是 `fresh`（启动参数里没有 `--resume`，
   由 `manager.createWith` 调 `MarkFresh`）**且** `!prompted`（首条消息写进 stdin 时置位）：
   首条消息一发，它就恢复成普通会话；`--resume` 起来的会话即使这一程还没收到新消息也
-  不豁免——它带着整段历史，重开确实接得上。判定集中在 `session.Reclaimable(now, timeout)`，
-  `manager.reapIdle` 只负责收集与关闭。
+  不豁免——它带着整段历史，重开确实接得上。
+- **空对话的豁免只在「有人看着」时永久成立**：直接关标签页 / 浏览器崩掉 / 断网都不会走
+  `DELETE /api/session`，留下的空壳没有转录、没有上下文，也没有任何管理入口（空对话行
+  按 DSH 的 blank 行不摆归档 / 置顶 / ⋯，见 `frontend/AGENTS.md`），却一直占着「常驻
+  会话数」的槽位——攒到上限之后用户既新建不了对话、也没地方关掉它们（`createWith` 回
+  409「请先关闭空闲会话」，而界面上关不掉）。所以 `session.Reclaimable(now, timeout, watched)`
+  里 `watched` 为真就永不回收，没人看时空对话还有 `blankIdleGrace`（2 小时）的宽限：
+  锁屏 / 切后台 / 断网一会儿再回来的用户仍然接得上，真正被丢下的空壳会自己走掉。
+  `watched` 由装配层 `mgr.SetWatcher(func(id) bool { return h.Count(id) > 0 })` 接到 hub
+  的订阅数上，可信度靠 WS 的上行心跳（前端每 20–25 秒 ping，停两分钟 `readIdleTimeout`
+  即退订）；没接 watcher（单测装配）一律按「没人看」处理。
+  普通对话不受 `watched` 影响：它带着转录，收掉之后重开只是多一次冷启动（这条没改）。
+  判定集中在 `session.Reclaimable`，`manager.reapIdle` 只负责收集与关闭，而且**在锁外**
+  判定与关闭：`watched` 要走 hub 的锁，`Close` 要等进程退出，都不该压在 `m.mu` 上。
 - **主动关闭不再报「读取输出中断」**：`readLoop` 在 `sc.Err()` 非空时先看 `done`——自己关掉的
   会话（空闲回收 / 结束进程 / 切版本）管道是被我们关的，`file already closed` 不是故障，
   报出去只会在「连接已关闭」旁边多一条红字。真正的故障（进程崩了、单行超限）那时 `done`

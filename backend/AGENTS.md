@@ -83,7 +83,13 @@ starting ──initialize 回包──> ready ──Prompt──> busy ──res
 - **新建后没发过消息的对话不进空闲回收**（`Session.IsBlank` = `fresh && !prompted`）：
   `--session-id` 新开时 manager 调 `MarkFresh`，首条消息写成功时置 `prompted`。
   它在 CLI 那边没有转录，回收后没有「下次打开重新接上」可言。判定收在
-  `Session.Reclaimable(now, timeout)`（状态 + 闲置 + 非新对话），manager 只收集与关闭。
+  `Session.Reclaimable(now, timeout, watched)`（状态 + 闲置 + 空对话的两条例外），
+  manager 只收集与关闭。
+  **豁免只在「有人看着」时永久**：`watched` 由 `Manager.SetWatcher` 从 hub 订阅接上
+  （装配层 `h.Count(id) > 0`），为真就永不回收；没人看时空对话还有 `blankIdleGrace`
+  （2h）的宽限，超过就照常收。少了这条宽限，关掉标签页留下的空壳（没有转录、界面上
+  也没有关闭入口）会永远占着一个常驻槽位，攒到上限就再也新建不了会话。
+  `reapIdle` 在锁外判定与关闭：`watched` 要走 hub 的锁，`Close` 要等进程退出。
 - **stdout 上的非 JSON 行转成 `system/stdout` 文本**，不要原样塞进 `cli` 事件：
   `json.RawMessage` 遇到非法 JSON 会让 `json.Marshal` 失败，最后变成一条
   「json: error calling MarshalJSON」的错误提示，原文反而丢了。

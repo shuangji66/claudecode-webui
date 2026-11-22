@@ -238,7 +238,7 @@ func TestBlankSessionNotReclaimable(t *testing.T) {
 	if sess.IsBlank() {
 		t.Fatal("没有 MarkFresh 的会话不应算新对话")
 	}
-	if !sess.Reclaimable(time.Now().Add(time.Hour), time.Minute) {
+	if !sess.Reclaimable(time.Now().Add(time.Hour), time.Minute, false) {
 		t.Fatal("resume 的会话闲置超过阈值应当可回收")
 	}
 
@@ -246,13 +246,43 @@ func TestBlankSessionNotReclaimable(t *testing.T) {
 	if !sess.IsBlank() {
 		t.Fatal("fresh 且没发过消息应当算新对话")
 	}
-	if sess.Reclaimable(time.Now().Add(time.Hour), time.Minute) {
-		t.Fatal("新对话不能被空闲回收")
+	if sess.Reclaimable(time.Now().Add(time.Hour), time.Minute, true) {
+		t.Fatal("有人在看的新对话不能被空闲回收")
 	}
 
 	// 阈值 <= 0 是「不回收」的老语义，不能因为新判定被绕成「全都可收」。
-	if sess.Reclaimable(time.Now().Add(time.Hour), 0) {
+	if sess.Reclaimable(time.Now().Add(time.Hour), 0, false) {
 		t.Fatal("回收阈值 <= 0 时不应回收任何会话")
+	}
+}
+
+// 空对话的豁免只在「有人看着」时永久成立：没人看的空壳要给一个回收出口。
+//
+// 直接关标签页 / 浏览器崩掉 / 断网都不会走 `DELETE /api/session`，留下的空壳没有
+// 转录、没有上下文，也没有任何管理入口（见 frontend 的 blank 行），却一直占着
+// 「常驻会话数」的槽位——攒到上限之后既新建不了对话、也没地方关掉它们。
+func TestBlankSessionGrace(t *testing.T) {
+	sess, _, _ := startSession(t)
+	defer sess.Close()
+	sess.MarkFresh()
+	now := time.Now()
+
+	// 页面还连着（刚打开这条对话）：多久都不收。
+	if sess.Reclaimable(now.Add(24*time.Hour), time.Minute, true) {
+		t.Fatal("有人看的空对话不应被回收，多久都不行")
+	}
+	// 页面掉线但还在宽限内（锁屏 / 切后台 / 断网一会儿回来）：不收。
+	if sess.Reclaimable(now, time.Minute, false) {
+		t.Fatal("空对话在宽限内不应被回收")
+	}
+	// 超过宽限且没人看：这个空壳已经被丢下了，照常回收。
+	sess.idle.Store(now.Add(-blankIdleGrace - time.Minute).UnixNano())
+	if !sess.Reclaimable(now, time.Minute, false) {
+		t.Fatal("超过宽限、又没人看的空对话应当回收，否则会一直占着常驻槽位")
+	}
+	// 同一个时刻，只要补上「有人看」，仍然不收。
+	if sess.Reclaimable(now, time.Minute, true) {
+		t.Fatal("有人看的空对话不应被回收")
 	}
 }
 

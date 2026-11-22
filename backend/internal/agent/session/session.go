@@ -400,21 +400,42 @@ func (s *Session) MarkFresh() { s.fresh.Store(true) }
 // 早就带着一整段历史，重开确实接得上——所以不能只看 prompted。
 func (s *Session) IsBlank() bool { return s.fresh.Load() && !s.prompted.Load() }
 
+// blankIdleGrace 是「新对话」在**没人看着**时的额外宽限。
+//
+// 空对话有「不该回收」的硬理由（见 Reclaimable），但那个理由只在有人看着它时成立。
+// 直接关标签页 / 浏览器崩掉 / 断网都不会走 `DELETE /api/session`，留下的空壳是一条
+// 既没有转录、也没有上下文、还没有任何管理入口的行（见 frontend 的 blank 行），
+// 却一直占着「常驻会话数」的一个槽位（`manager.createWith` 到上限就回 409）。
+// 攒满之后用户既新建不了对话、也没有地方关掉它们——比回收掉更糟。
+//
+// 所以宽限按**小时**算而不是按 idle 阈值：手机锁屏、切后台、断网一会儿再回来的
+// 人不该看到一页死的（他马上要打字的就是那一页），而真正被丢弃的空壳照常被收掉。
+// 取值比 idle 阈值的上限（60 分钟）大一倍，保证「按最大阈值也没等到回收」的情形。
+const blankIdleGrace = 2 * time.Hour
+
 // Reclaimable 判断这条会话现在能不能被空闲回收。
 //
-// 三条缺一不可：ready（busy / starting 一律不动）、确实闲置超过阈值、
-// **不是新对话**。新对话在 CLI 那边没有转录也没有上下文，「下次打开重新接上」
-// 对它根本不成立——收掉之后用户回到那一页只会看到「连接已关闭」，而他马上要
-// 打字的就是这一页。首条消息一写进 stdin，它就恢复成普通会话（prompted）。
-func (s *Session) Reclaimable(now time.Time, timeout time.Duration) bool {
+// 前提是 ready（busy / starting 一律不动）且确实闲置够了。之后分两种：
+//
+//   - **普通对话**：闲置超过 timeout 就收。它带着转录，重开用 `--resume` 接得上，
+//     收掉只是下次打开要等一次冷启动。
+//   - **新对话**（`IsBlank`，见上）：在 CLI 那边没有转录也没有上下文，「下次打开
+//     重新接上」对它根本不成立——收掉之后用户回到那一页只会看到「连接已关闭」。
+//     所以**有人看着就永不回收**（watched），没人看时给一段 blankIdleGrace 的宽限：
+//     页面掉线（锁屏 / 切后台 / 断网）回来的用户仍然接得上，而关掉标签页留下的
+//     空壳不会永远占着常驻槽位。
+func (s *Session) Reclaimable(now time.Time, timeout time.Duration, watched bool) bool {
 	if timeout <= 0 {
-		return false
-	}
-	if s.IsBlank() {
 		return false
 	}
 	if s.State() != StateReady {
 		return false
+	}
+	if s.IsBlank() {
+		if watched {
+			return false
+		}
+		return s.LastActive().Before(now.Add(-blankIdleGrace))
 	}
 	return s.LastActive().Before(now.Add(-timeout))
 }

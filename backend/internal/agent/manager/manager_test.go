@@ -328,3 +328,21 @@ func TestRenameKeepsSessionIDFieldAndRoutesEvents(t *testing.T) {
 		t.Fatal("搬失败时原登记不该被改动")
 	}
 }
+
+// 没接 watcher（单测装配 / 没有网关的场合）时必须按「没人看」处理。
+//
+// 「有人看」是**豁免**回收的理由，判错方向代价完全不同：返回值反了会让每一个
+// 空对话都永久豁免，攒到常驻上限之后既新建不了对话、也没地方关掉它们。
+func TestWatcherDefaultsToNobodyWatching(t *testing.T) {
+	m := &Manager{}
+	if m.isWatched("s1") {
+		t.Fatal("没接 watcher 时应按「没人看」处理")
+	}
+	m.SetWatcher(func(id string) bool { return id == "s1" })
+	if !m.isWatched("s1") {
+		t.Fatal("watcher 说有页面连着，isWatched 应当同样回答")
+	}
+	if m.isWatched("s2") {
+		t.Fatal("watcher 说不认识这个会话，isWatched 不该自己编")
+	}
+}

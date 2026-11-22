@@ -49,6 +49,9 @@ type Manager struct {
 	// toolRules 返回「本会话该预先允许 / 禁用的工具」，由装配层按内置搜索的状态接上
 	// （见 SetToolRules）。为 nil 表示不加任何规则。
 	toolRules func() (allow, deny []string)
+	// watched 回答「这条会话此刻有没有页面连着」，由装配层按 hub 订阅接上
+	// （见 SetWatcher）。为 nil 按「没人看」处理。
+	watched func(id string) bool
 
 	// createMu 只保护 creating 这张「正在创建」表，不覆盖 spawn 与握手。
 	// 它保证同一个 key（会话 id 或目录）的并发创建共享一次结果：
@@ -128,6 +131,26 @@ func sessionToolRules(rules func() (allow, deny []string)) (allow, deny []string
 // 只在装配阶段调用一次，之后不再改动（否则与 create 里的读取构成竞争）。
 func (m *Manager) SetToolRules(fn func() (allow, deny []string)) {
 	m.toolRules = fn
+}
+
+// SetWatcher 接上「这条会话此刻有没有页面连着」的判定（装配层按 hub 的订阅数回答）。
+//
+// 空闲回收只认 I/O 时间，看不出「有人正盯着这一页」：用户停在一条对话上、一句话
+// 都没发，`LastActive` 就停在打开那一刻，到点把进程收掉，他回来只会看到「连接已
+// 关闭」。判定交给订阅——WS 断开会退订（上行的 ping 停了，`readIdleTimeout` 两分钟
+// 内连接就结束），所以「没人看」是即时且可信的，空对话不必为此永久豁免。
+//
+// 与 SetToolRules 一样只在装配阶段调用一次，之后不再改动。
+func (m *Manager) SetWatcher(fn func(id string) bool) {
+	m.watched = fn
+}
+
+// isWatched 报告某条会话此刻有没有页面连着。没接 watcher（单测装配）时按「没人看」。
+func (m *Manager) isWatched(id string) bool {
+	if m.watched == nil {
+		return false
+	}
+	return m.watched(id)
 }
 
 // Binary 返回当前生效的 claude 路径；未安装时返回空串（/api/info 只做展示）。
@@ -763,23 +786,34 @@ func (m *Manager) idleTimeout() time.Duration {
 
 // reapIdle 回收空闲超时的会话。
 //
-// 判定整个交给 `session.Reclaimable`：状态、闲置时间，以及「新对话不回收」。
-// 后者不能漏——新建的对话在 CLI 那边没有转录，收掉之后没有「下次打开重新接上」
+// 判定整个交给 `session.Reclaimable`：状态、闲置时间，以及「空对话」的两条例外。
+// 例外不能漏——新建的对话在 CLI 那边没有转录，收掉之后没有「下次打开重新接上」
 // 这回事，用户回来只会看到「连接已关闭」，而那一页正是他马上要打字的地方。
+//
+// 会话表先在锁内收集、再在锁外判定与关闭：`watched` 要走 hub 的锁，session 的
+// 关停会等进程退出，两者都不该压在 `m.mu` 上（见 backend/AGENTS.md 第 2 节）。
 func (m *Manager) reapIdle() {
 	timeout := m.idleTimeout()
 	if timeout <= 0 {
 		return
 	}
 	now := time.Now()
-	var victims []string
+	type candidate struct {
+		id string
+		s  *session.Session
+	}
 	m.mu.Lock()
+	all := make([]candidate, 0, len(m.sessions))
 	for id, s := range m.sessions {
-		if s.Reclaimable(now, timeout) {
-			victims = append(victims, id)
-		}
+		all = append(all, candidate{id, s})
 	}
 	m.mu.Unlock()
+	var victims []string
+	for _, it := range all {
+		if it.s.Reclaimable(now, timeout, m.isWatched(it.id)) {
+			victims = append(victims, it.id)
+		}
+	}
 	for _, id := range victims {
 		_ = m.Close(id)
 	}

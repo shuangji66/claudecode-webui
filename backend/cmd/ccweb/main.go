@@ -216,6 +216,11 @@ func main() {
 		return gateway.SessionToolRules(payload.User, store.Get().SearchEnabled)
 	})
 
+	// 空闲回收要知道「这条会话现在有没有页面连着」：hub 的订阅就是答案（页面按
+	// `/ws?id=` 订阅自己的会话，断线 / 关标签页会退订）。没有它，停在一条新对话上
+	// 十几分钟的用户会被当成「空闲」把进程收掉，回来只剩一句「连接已关闭」。
+	mgr.SetWatcher(func(id string) bool { return h.Count(id) > 0 })
+
 	historyDir := filepath.Join(cfg.ClaudeHome, ".claude", "projects")
 	srv := gateway.New(gateway.Deps{
 		Cfg:           cfg,
