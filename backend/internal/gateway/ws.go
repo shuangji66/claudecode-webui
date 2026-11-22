@@ -510,6 +510,10 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 			s.sendError(c, attErr.Error())
 			return
 		}
+		// 发 prompt **之前**有没有转录：决定这一轮要不要等「首条消息落盘」再推一次
+		// 列表（标题从转录首条消息算）。发出去之后再查可能已经落盘了，那样就永远
+		// 不会为这条对话起探针——正是「要等回合结束才有标题」的来源。
+		hadTranscript := s.hasTranscript(id)
 		// priority=now 是「插话」：立刻写进 stdin 并要求 CLI 在当前回合读到它。
 		// 只认这一个值——别的取值语义（later）前端用不到，静默降级会骗人。
 		switch cmd.Priority {
@@ -533,8 +537,13 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 				// 还没有转录 = 标题还没定：等这一轮跑完（转录落盘）再推一次，
 				// 否则别处那行会一直停在「新对话」。**只在有这一层需要时才记**，
 				// 逐条 prompt 都记等于每回合让所有连接重扫一遍全部转录。
-				if created || !s.hasTranscript(id) {
+				if created || !hadTranscript {
 					s.watchPendingTurn(id, pendingTurn{})
+				}
+				if !hadTranscript {
+					// 标题是从转录首条消息算的，落盘比回合结束早得多：等它出现就
+					// 推一次，别让别的设备在整轮跑完之前一直看到「新对话」。
+					s.watchFirstTranscript(id)
 				}
 			}
 			// 同一会话的别的连接看不到这条提示词（CLI 不回显 stdin）：广播一份，

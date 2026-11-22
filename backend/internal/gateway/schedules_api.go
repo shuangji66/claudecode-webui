@@ -525,6 +525,52 @@ func (s *Server) DeliverScheduledTask(ctx context.Context, t schedule.Task, fire
 	return id, nil
 }
 
+// firstTranscriptProbeInterval 是「等首条消息落盘」的轮询间隔（测试里会调小）。
+var firstTranscriptProbeInterval = 500 * time.Millisecond
+
+// firstTranscriptProbeTries 是探针的最长等待轮数：20 × 500ms = 10s。
+// 超过就放弃——回合结束时的 `pendingTurn` 广播仍然是兜底。
+const firstTranscriptProbeTries = 20
+
+// watchFirstTranscript 等转录落盘后**立刻**广播一次对话列表变更。
+//
+// 为什么不能只靠回合结束（`pendingTurn`）：列表里的标题是「转录首条用户消息」
+// （`history.List` 的兜底），而首条消息在 prompt 之后几十毫秒就写进 jsonl 了，
+// 比回合结束早得多。长任务一跑几分钟，那期间另一台设备上这一行会一直显示
+// 「新对话」——刷新一下、点进去、或者等它跑完才正常，正是这个时间差。
+//
+// 只给「还没有转录的对话」用（调用方判断），同一 id 同时只跑一个探针；
+// 每 500ms 查一次 `TranscriptExists`，文件很小，代价可以忽略。
+func (s *Server) watchFirstTranscript(id string) {
+	if id == "" || s.d.Hub == nil {
+		return
+	}
+	s.transcriptProbeMu.Lock()
+	if s.transcriptProbes == nil {
+		s.transcriptProbes = make(map[string]bool)
+	}
+	if s.transcriptProbes[id] {
+		s.transcriptProbeMu.Unlock()
+		return
+	}
+	s.transcriptProbes[id] = true
+	s.transcriptProbeMu.Unlock()
+	go func() {
+		defer func() {
+			s.transcriptProbeMu.Lock()
+			delete(s.transcriptProbes, id)
+			s.transcriptProbeMu.Unlock()
+		}()
+		for i := 0; i < firstTranscriptProbeTries; i++ {
+			time.Sleep(firstTranscriptProbeInterval)
+			if s.hasTranscript(id) {
+				s.BroadcastConversationsChanged()
+				return
+			}
+		}
+	}()
+}
+
 // pendingTurn 是一条「这一轮还没跑完」的记录：回合结束后要补写标题（如果有）
 // 并通知所有面板重拉对话列表。
 //

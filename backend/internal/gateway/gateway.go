@@ -139,6 +139,12 @@ type Server struct {
 	pendingMu    sync.Mutex
 	pendingTurns map[string]pendingTurn
 
+	// transcriptProbeMu/transcriptProbes 是「首条消息落盘就广播」的探针去重。
+	// 与 pendingTurns 分开：探针只关心转录何时出现（列表标题从转录首条消息算），
+	// 不等回合结束——长任务跑几分钟的期间，别的设备不能一直看到「新对话」。
+	transcriptProbeMu sync.Mutex
+	transcriptProbes  map[string]bool
+
 	// tcp 是直连 TCP 端口的监听状态：端口来自设置，保存后可运行期换端口。
 	tcp tcpState
 	// tcpOpMu 串行化「改端口/开关 + 落盘」这一整段：两个标签页同时保存时，
@@ -155,8 +161,9 @@ func New(d Deps, logger *log.Logger) *Server {
 		d:            d,
 		mux:          http.NewServeMux(),
 		log:          logger,
-		termSlots:    make(chan struct{}, maxTerminals),
-		pendingTurns: make(map[string]pendingTurn),
+		termSlots:        make(chan struct{}, maxTerminals),
+		pendingTurns:     make(map[string]pendingTurn),
+		transcriptProbes: make(map[string]bool),
 	}
 	// TCP 访问密码存在设置里、可运行期修改，所以把取值函数接到 Guard 上，
 	// 而不是启动时快照一份。unix socket 通道本来就不校验它。

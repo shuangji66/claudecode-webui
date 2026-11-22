@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ccweb/backend/internal/agent/manager"
 	"ccweb/backend/internal/agent/session"
@@ -381,5 +382,61 @@ func TestSessionReplacedKeepsExistingPendingTurn(t *testing.T) {
 	turn, ok := srv.consumePendingTurn("cleared-id")
 	if !ok || turn.title != "新的" {
 		t.Fatalf("新 id 上原有的记录被覆盖了: %+v (ok=%v)", turn, ok)
+	}
+}
+
+// 首条消息落盘就该推一次，不必等到回合结束。
+//
+// 标题是「转录首条用户消息」（`history.List` 的兜底），而首条消息在 prompt 之后
+// 几十毫秒就写进 jsonl 了。只靠回合结束的广播时，长任务跑几分钟的期间，另一台
+// 设备上那一行会一直停在「新对话」——用户看到的就是「要刷新 / 点进去 / 等跑完」。
+func TestFirstTranscriptBroadcastsBeforeTurnEnd(t *testing.T) {
+	srv, mgr, _, id := newSyncFixture(t)
+	// 这条对话还没有转录：刚新建、还没发过消息。
+	if err := os.Remove(filepath.Join(srv.d.HistoryDir, "proj", id+".jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	old := firstTranscriptProbeInterval
+	firstTranscriptProbeInterval = 5 * time.Millisecond
+	defer func() { firstTranscriptProbeInterval = old }()
+
+	rec := &recClient{}
+	srv.d.Hub.Subscribe(systemTopic, rec)
+
+	dispatchPrompt(t, srv, mgr, id, "第一个问题")
+	rec.take() // 首条消息那一次（新对话进列表）
+
+	// CLI 把第一条 user 行写进转录；回合还没结束。
+	seedTranscript(t, srv.d.HistoryDir, id, mgr.cwd())
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if events := rec.take(); len(events) > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("转录落盘后应广播一次 conversations.changed（不必等回合结束）")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// 已经有转录的对话不再起探针：那条路的标题早就定了，每回合多推一次没有意义。
+func TestExistingTranscriptDoesNotProbe(t *testing.T) {
+	srv, mgr, _, id := newSyncFixture(t)
+	old := firstTranscriptProbeInterval
+	firstTranscriptProbeInterval = 5 * time.Millisecond
+	defer func() { firstTranscriptProbeInterval = old }()
+
+	rec := &recClient{}
+	srv.d.Hub.Subscribe(systemTopic, rec)
+
+	// 种子里已经有转录，而且会话已经在列表里：这一条 prompt 不该起探针。
+	dispatchPrompt(t, srv, mgr, id, "第二个问题")
+	rec.take()
+
+	time.Sleep(50 * time.Millisecond)
+	if events := rec.take(); len(events) != 0 {
+		t.Fatalf("已经有转录的对话不该再起探针，得到 %+v", events)
 	}
 }
