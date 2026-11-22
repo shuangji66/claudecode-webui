@@ -195,17 +195,11 @@ export function SchedulePage({ onClose, onOpenSidebar }: Props) {
       // 留在屏幕最下方反而够不着。
       actions={
         draft ? (
-          <button
-            type="button"
-            onClick={() => setDraft(null)}
-            className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px] text-muted hover:bg-panel-strong hover:text-ink"
-          >
-            <IconChevronLeft size={13} />
+          <Button size="sm" variant="ghost" onClick={() => setDraft(null)} icon={<IconChevronLeft size={13} />}>
             {t("返回列表", "Back")}
-          </button>
+          </Button>
         ) : (
-          <Button onClick={startNew} className="flex items-center gap-1.5">
-            <IconPlus size={14} />
+          <Button size="sm" variant="primary" onClick={startNew} icon={<IconPlus size={13} />}>
             {t("新建", "New")}
           </Button>
         )

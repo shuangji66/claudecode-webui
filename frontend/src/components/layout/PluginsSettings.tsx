@@ -256,7 +256,7 @@ export function PluginsSettings({ cwd }: { cwd: string }) {
             variant="ghost"
             disabled={busy || (!data.supported && !error)}
             onClick={() => void refreshAvailable()}
-            icon={<IconRefresh size={12} />}
+            icon={<IconRefresh size={13} />}
           >
             {t("刷新可用插件", "Refresh available")}
           </Button>

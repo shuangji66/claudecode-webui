@@ -59,6 +59,24 @@ describe("SchedulePage", () => {
     expect(screen.queryByText("立即执行")).toBeNull();
   });
 
+  // 功能区页头的动作统一：主要动作 = 主题色 + sm（与 MCP 的「添加」、模型页的「保存」
+  // 完全同一套 Button 尺寸），次要动作（返回列表）是 ghost sm——以前这里是 md 的
+  // 默认按钮 + 手写 `<button>`，和相邻页放一起时大小与颜色都不一致。
+  it("页头动作用统一尺寸与主题色", () => {
+    render(<SchedulePage onClose={() => {}} />);
+    const primary = screen.getByRole("button", { name: "新建" });
+    const primaryClasses = primary.className.split(/\s+/);
+    expect(primaryClasses).toContain("bg-brand");
+    expect(primaryClasses).toContain("px-2.5");
+    expect(primaryClasses).toContain("py-1.5");
+
+    fireEvent.click(primary);
+    const back = screen.getByRole("button", { name: "返回列表" });
+    const backClasses = back.className.split(/\s+/);
+    expect(backClasses).not.toContain("bg-brand");
+    expect(backClasses).toContain("px-2.5");
+  });
+
   it("列表为空时给一句人话", () => {
     useScheduleStore.setState({ tasks: [] });
     render(<SchedulePage onClose={() => {}} />);
@@ -74,7 +92,13 @@ describe("SchedulePage", () => {
 
     const body = screen.getByText("每日巡检").closest(".dsh-scroll") as HTMLElement;
     expect(body).toBeTruthy();
-    expect(body.className).toContain("overflow-y-auto");
+    // 三条缺一不可：`flex-1` 拿到剩余高度、`min-h-0` 允许它被压到视口内（否则 flex 子项
+    // 按内容撑开、`overflow-y-auto` 永远没有溢出，手指划它不会有反应——技能页踩过同一个坑）、
+    // `overflow-y-auto` 才是滚动容器本身（滚动归属的约定见 frontend/AGENTS.md 26.1）。
+    const bodyClasses = body.className.split(/\s+/);
+    expect(bodyClasses).toContain("flex-1");
+    expect(bodyClasses).toContain("min-h-0");
+    expect(bodyClasses).toContain("overflow-y-auto");
     expect(body.className).toContain("px-4");
     expect(body.className).toContain("pb-[calc(env(safe-area-inset-bottom");
   });

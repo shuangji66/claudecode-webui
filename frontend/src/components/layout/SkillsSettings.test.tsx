@@ -108,6 +108,19 @@ describe("SkillsSettings", () => {
     expect(listClasses).toContain("md:overflow-y-auto");
   });
 
+  // 顶栏这一排和 MCP / 模型 / 自动化任务同一套：只有「新建」是主题色主按钮，
+  // 刷新与导入是次要动作。尺寸统一 sm，图标 13。
+  it("顶栏动作：新建是主题色，刷新/导入不是", () => {
+    render(<SkillsSettings cwd="/work" />);
+    const classes = (name: string) => screen.getByRole("button", { name }).className.split(/\s+/);
+    expect(classes("新建")).toContain("bg-brand");
+    expect(classes("刷新")).not.toContain("bg-brand");
+    expect(classes("导入")).not.toContain("bg-brand");
+    for (const name of ["新建", "刷新", "导入"]) {
+      expect(classes(name)).toContain("px-2.5");
+    }
+  });
+
   it("选中技能后加载正文并可保存", async () => {
     render(<SkillsSettings cwd="/work" />);
     fireEvent.click(screen.getByText("summarize"));

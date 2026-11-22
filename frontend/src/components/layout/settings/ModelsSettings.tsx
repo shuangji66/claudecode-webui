@@ -112,9 +112,10 @@ export function ModelsSettings({
           </span>
           <Button
             variant="primary"
+            size="sm"
             onClick={() => void onSave()}
             disabled={saving || !settings}
-            icon={<IconCheck size={14} />}
+            icon={<IconCheck size={13} />}
             aria-label={t("保存", "Save")}
           >
             {t("保存", "Save")}

@@ -209,7 +209,7 @@ export function SkillsSettings({ cwd }: { cwd: string }) {
           >
             {t("导入", "Import")}
           </Button>
-          <Button size="sm" variant="secondary" icon={<IconPlus size={13} />} onClick={startCreate} disabled={busy}>
+          <Button size="sm" variant="primary" icon={<IconPlus size={13} />} onClick={startCreate} disabled={busy}>
             {t("新建", "New")}
           </Button>
         </div>
