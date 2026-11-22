@@ -80,8 +80,21 @@ export function setBusyEnter(next: BusyEnterBehavior): void {
 
 export function subscribeBusyEnter(fn: () => void): () => void {
   listeners.add(fn);
+  // 跨标签页同步：另一页在设置里改了偏好，这一页的发送按钮与底栏提示也要跟着换
+  // （与 `lib/waitLabel` 同一个做法）。只在有订阅者时挂监听。
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== KEY) return;
+    cached = null; // 让下一次读取重新解析盘上的值
+    fn();
+  };
+  if (listeners.size === 1 && typeof window !== "undefined") {
+    window.addEventListener("storage", onStorage);
+  }
   return () => {
     listeners.delete(fn);
+    if (listeners.size === 0 && typeof window !== "undefined") {
+      window.removeEventListener("storage", onStorage);
+    }
   };
 }
 

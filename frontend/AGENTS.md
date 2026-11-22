@@ -305,7 +305,7 @@ src/
     Enter 与右下角发送按钮**共用偏好那一档**，`Ctrl/⌘+Enter` 永远用**另一档**。默认
     「排队发送」＝按 Enter 只调 `onQueue`（草稿清空，消息进输入框**上方**的待发送面板）、
     `Ctrl/⌘+Enter` 才是 `onSend`（立刻插话）；切到「插话发送」后两个手势互换。偏好只存本机
-    （`ccweb-busy-enter`，`lib/busyEnter.ts`），不进 `settings.json`。空闲时按
+    （`ccweb-busy-enter`，`lib/busyEnter.ts`）＋跨标签页同步，不进 `settings.json`。空闲时按
     Enter / 发送按钮就是「立刻发」，只有队列里还压着暂停的消息时才排在队尾（否则新消息会
     插到前面那条之前；`enqueuePrompt` 在主手势入队后马上发队首，顺序不变），`Ctrl/⌘+Enter`
     永远**越过队列**直接发。面板每条**点正文就地展开

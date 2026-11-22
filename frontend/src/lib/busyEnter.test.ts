@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_BUSY_ENTER_BEHAVIOR,
   busyEnter,
@@ -48,6 +48,26 @@ describe("繁忙时的发送行为偏好", () => {
     off();
     setBusyEnter("queue");
     expect(calls).toBe(1);
+  });
+
+  // 另一个标签页改了偏好：本页必须重新读盘，否则两个窗口按不同的规则发消息。
+  it("跨标签页同步：storage 事件让本页重新读盘并通知订阅者", () => {
+    const fn = vi.fn();
+    const off = subscribeBusyEnter(fn);
+
+    localStorage.setItem("ccweb-busy-enter", "steer");
+    window.dispatchEvent(new StorageEvent("storage", { key: "ccweb-busy-enter" }));
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(busyEnter()).toBe("steer");
+
+    // 别的键不相关，不能白刷一遍
+    window.dispatchEvent(new StorageEvent("storage", { key: "ccweb-process-view" }));
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    // 没订阅者之后不再挂监听
+    off();
+    window.dispatchEvent(new StorageEvent("storage", { key: "ccweb-busy-enter" }));
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it("盘上是不认识的值时当没设置过", () => {
