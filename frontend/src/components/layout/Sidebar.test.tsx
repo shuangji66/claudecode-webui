@@ -475,6 +475,31 @@ describe("Sidebar 新建的空对话（对齐 DSH 的 blank 行）", () => {
     expect(screen.getByRole("button", { name: "归档 第一条消息" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "置顶 第一条消息" })).toBeInTheDocument();
   });
+
+  // 反过来这一侧更重要：判定必须先看**元数据**。打开历史对话时 items 是异步回放的，
+  // 只按「本机有没有消息流」判的话，那几百毫秒里每一行都像空对话——管理入口整组消失，
+  // 用户想归档 / 置顶一条有内容的对话时会发现按钮根本不在。
+  it("历史对话在转录还没回放时不判成空对话", () => {
+    useAppStore.setState({
+      items: {},
+      conversations: [
+        {
+          id: "c-old",
+          cwd,
+          title: "旧对话",
+          created_at: "",
+          last_active: "2026-01-02T00:00:00Z",
+          messages: 12,
+          archived: false,
+          live: false,
+        },
+      ],
+      activeId: "c-old",
+    });
+    renderSidebar();
+    expect(screen.getByRole("button", { name: "管理对话 旧对话" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "归档 旧对话" })).toBeInTheDocument();
+  });
 });
 
 describe("Sidebar 新建对话后关闭移动端抽屉", () => {
