@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { SessionInfo } from "../../transport/types";
 import { useT } from "../../lib/i18n";
 import { formatElapsed } from "../../lib/elapsed";
@@ -165,18 +165,35 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, backgr
     subAnchor !== null && session ? s.subagentTokens[session.id] : undefined,
   );
 
+  // 复制/下载后的「已完成」提示要自己复位。句柄记在 ref 里，卸载时清掉：
+  // 不清的话定时器会在组件已经卸载之后触发 setState（React 19 不再报错，但那次
+  // 回调没有任何意义，而且连续点击还会攒下一串互不相关的复位）。
+  const actionTimer = useRef<number | null>(null);
+  useEffect(() => {
+    return () => {
+      if (actionTimer.current !== null) window.clearTimeout(actionTimer.current);
+    };
+  }, []);
+  const resetLater = (fn: () => void, ms: number) => {
+    if (actionTimer.current !== null) window.clearTimeout(actionTimer.current);
+    actionTimer.current = window.setTimeout(() => {
+      actionTimer.current = null;
+      fn();
+    }, ms);
+  };
+
   const copySession = async () => {
     if (!session) return;
     const ok = await onCopySession();
     setCopyState(ok ? "ok" : "fail");
-    if (ok) window.setTimeout(() => setCopyState("idle"), 900);
+    resetLater(() => setCopyState("idle"), 900);
   };
 
   const downloadSession = async () => {
     if (!session) return;
     const ok = await onDownloadSession();
     setDownloadState(ok ? "ok" : "fail");
-    window.setTimeout(() => setDownloadState("idle"), ok ? 1200 : 2200);
+    resetLater(() => setDownloadState("idle"), ok ? 1200 : 2200);
   };
   return (
     <header className="safe-top shrink-0 border-b border-line bg-canvas md:pt-0">

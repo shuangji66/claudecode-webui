@@ -705,6 +705,10 @@ function purgeSession(state: {
   historyRefresh.delete(id);
   hydrated.delete(id);
   endSyncWindow(id);
+  // 用量落盘的「上次写的是什么」也要清：它按会话 id 记账，不清会随删除的对话
+  // 线性增长；而且同一 id 被重新建出来（分叉/恢复）时，残留的旧值会让第一次
+  // 落盘被误判成「内容没变」而跳过。
+  persistedUsage.delete(id);
 }
 
 /**
