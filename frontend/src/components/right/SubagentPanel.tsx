@@ -36,8 +36,12 @@ export function SubagentPanel({ sessionId, agentId }: { sessionId: string; agent
           const rec = line as { timestamp?: unknown };
           const at = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : NaN;
           // 同样是转录回放：关掉「CLI 回显去重」（子代理转录里也没有本地乐观气泡，
-          // 每一条 user 行都是真的发过的）。
-          next = applyCLI(next, line, Number.isFinite(at) ? at : Date.now(), undefined, { replay: true });
+          // 每一条 user 行都是真的发过的）。**要打开 sidechain**：这整份文件就是
+          // sidechain 行，按主消息流的规则过滤会得到一份空转录。
+          next = applyCLI(next, line, Number.isFinite(at) ? at : Date.now(), undefined, {
+            replay: true,
+            sidechain: true,
+          });
         }
         if (!alive) return;
         setMeta(tr.meta);

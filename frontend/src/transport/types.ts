@@ -684,6 +684,15 @@ export interface SubagentState {
   description?: string;
   /** claude 已收尾。**收尾 ≠ 成功**：成败看通知里的 status。 */
   finished: boolean;
+  /**
+   * 最后一次请求的 token 总量（prompt + output，CLI 的 `subagent_tokens` 口径）。
+   *
+   * 后端从子代理自己的转录里读：后台子代理的用量只在 stdout 的 `task_notification`
+   * 里，而写进主转录的那条 `<task-notification>` 不带 `<usage>`，重启后就靠这份恢复。
+   */
+  tokens?: number;
+  /** 子代理转录最后一行的时刻（unix 毫秒）：重启后算「跑了多久」用它。 */
+  ended_at?: number;
 }
 
 /** 子代理转录旁的 meta.json（读不到时后端不带这个字段）。 */

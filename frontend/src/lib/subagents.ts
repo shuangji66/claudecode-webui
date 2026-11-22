@@ -13,6 +13,19 @@ export interface SubagentEntry {
   taskType?: string;
   status: SubagentInfo["status"];
   usage?: SubagentInfo["usage"];
+  /** 后台子代理：它的 tool_result 只是启动回执，`finishedAt` 因此不是真正的结束时刻。 */
+  background?: boolean;
+  /**
+   * 启动 / 收尾时刻（工具卡片的 `ts` / `doneAt`）。
+   *
+   * 运行中的子代理靠 `startedAt` 走墙钟：`usage.durationMs` 只在 `task_progress` 到达时
+   * 刷新，两次工具调用之间可能几十秒没有新帧。结束之后才轮到 `usage.durationMs` 说话
+   * （见 `subagentElapsed`）。
+   */
+  startedAt?: number;
+  finishedAt?: number;
+  /** 从子代理转录尾部恢复的收尾时刻（见 `SubagentInfo.endedAt`）。 */
+  endedAt?: number;
 }
 
 function text(v: unknown): string {
@@ -45,6 +58,10 @@ export function subagentEntries(items: Item[]): SubagentEntry[] {
       taskType: sub.taskType,
       status: sub.status,
       usage: sub.usage,
+      ...(sub.background ? { background: true } : {}),
+      startedAt: it.ts,
+      ...(it.doneAt !== undefined ? { finishedAt: it.doneAt } : {}),
+      ...(sub.endedAt !== undefined ? { endedAt: sub.endedAt } : {}),
     });
   }
   return out;
@@ -58,4 +75,28 @@ export function subagentLabel(items: Item[], agentId: string): string | undefine
 /** 正在跑的子代理数量（页头触发器用强调色）。 */
 export function runningSubagents(entries: SubagentEntry[]): number {
   return entries.filter((e) => e.status === "running").length;
+}
+
+/**
+ * 一个子代理跑了多久（毫秒），没数据时返回 undefined。
+ *
+ * - **运行中**：按墙钟算（`now - startedAt`）。CLI 的 `usage.duration_ms` 只在
+ *   `task_progress` 到达时刷新，两个工具调用之间可能几十秒没有新帧——只看它，秒数会停住。
+ * - **已结束**：优先用 CLI 的 `usage.durationMs`（结束通知里的权威值，含它自己的计时口径），
+ *   没有再退回「收尾时刻 - 启动时刻」（转录回放只有这两个时间戳）。
+ */
+export function subagentElapsed(entry: SubagentEntry, now: number): number | undefined {
+  const usageMs = entry.usage?.durationMs;
+  if (entry.status === "running" && entry.startedAt !== undefined) {
+    return Math.max(0, now - entry.startedAt);
+  }
+  if (usageMs !== undefined && usageMs > 0) return usageMs;
+  // 后台子代理的 `finishedAt` 是**启动回执**到达的时刻（几乎等于启动时刻），拿它算会
+  // 得到「0s」——那是个假的耗时，宁可不显示。真实收尾时刻只有子代理转录里才有
+  // （重启后由 settleSubagents 回填成 endedAt）。
+  const end = entry.endedAt ?? (entry.background ? undefined : entry.finishedAt);
+  if (entry.startedAt !== undefined && end !== undefined) {
+    return Math.max(0, end - entry.startedAt);
+  }
+  return undefined;
 }

@@ -537,6 +537,20 @@ type SubagentState struct {
 	// **收尾 ≠ 成功**：真实成败要看通知里的 status，拿不到时按「已结束但原因未知」
 	// 处理，不能想当然地标成完成。
 	Finished bool `json:"finished"`
+	// Tokens 是这个子代理**最后一次请求**的 token 总量（prompt + output，CLI 的
+	// `subagent_tokens` 口径），从它自己的转录里读出来。
+	//
+	// 为什么要从旁路转录补：后台子代理（`run_in_background`）的用量只出现在 stdout 的
+	// `system/task_notification` 里，而写进主转录的那条 `<task-notification>` **不带
+	// `<usage>`**（CLI 的模板只有 task-id / tool-use-id / task-type / output-file /
+	// status / summary）。重启后主转录回放拿不到它，列表上的 token 就整条丢了。
+	// 子代理自己的 jsonl 一直带着 assistant 消息的 `message.usage`，同源同口径。
+	Tokens int `json:"tokens,omitempty"`
+	// EndedAt 是子代理转录最后一行的时刻（unix 毫秒），用来在重启后算「跑了多久」。
+	//
+	// 后台子代理的 tool_result 只是启动回执，拿它当结束时刻会算出 0 秒；主转录里也
+	// 没有 task_* 帧。转录尾部的时刻是磁盘上唯一还留着的收尾时间。
+	EndedAt int64 `json:"ended_at,omitempty"`
 }
 
 // 回放上限：太长会把浏览器和 JSON 响应一起拖垮，只保留最近的一段。
@@ -601,14 +615,90 @@ func subagentStates(projectDir, sessionID string) []SubagentState {
 		if b, err := os.ReadFile(filepath.Join(dir, "agent-"+agentID+".meta.json")); err == nil {
 			_ = json.Unmarshal(b, &m)
 		}
+		path := filepath.Join(dir, name)
+		tokens, endedAt := subagentTailStats(path)
 		out = append(out, SubagentState{
 			AgentID:     agentID,
 			ToolUseID:   m.ToolUseID,
 			Description: m.Description,
-			Finished:    m.Finished || subagentEnded(filepath.Join(dir, name)),
+			Finished:    m.Finished || subagentEnded(path),
+			Tokens:      tokens,
+			EndedAt:     endedAt,
 		})
 	}
 	return out
+}
+
+// subagentTailStats 从子代理转录的尾部读两样东西：用量与收尾时刻。
+//
+//   - tokens：**最后一条带 usage 的 assistant 消息**的 `input + cache_creation +
+//     cache_read + output`。这就是 CLI 的 `subagent_tokens` 口径（它取「最后一次请求」，
+//     不是累加），所以与结束通知里的数字同源。
+//   - endedAt：最后一条能解析出 `timestamp` 的行的时刻（unix 毫秒）。
+//
+// 只读文件尾部（64KB），几百 KB 的子代理转录不会整份进内存；被截断的半行直接丢掉。
+// 任何一步失败都返回零值——调用方只在拿得到时补，不能因此读不出整份转录。
+func subagentTailStats(path string) (tokens int, endedAt int64) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0
+	}
+	defer f.Close()
+	const tailBytes = 64 << 10
+	st, err := f.Stat()
+	if err != nil {
+		return 0, 0
+	}
+	offset := st.Size() - tailBytes
+	if offset < 0 {
+		offset = 0
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return 0, 0
+	}
+	buf, err := io.ReadAll(f)
+	if err != nil {
+		return 0, 0
+	}
+	// 从文件中间开始时，第一行多半是半截 JSON。
+	if offset > 0 {
+		if i := bytes.IndexByte(buf, '\n'); i >= 0 {
+			buf = buf[i+1:]
+		}
+	}
+	for _, line := range bytes.Split(buf, []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var rec struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+			Message   struct {
+				Usage *struct {
+					Input       int `json:"input_tokens"`
+					CacheCreate int `json:"cache_creation_input_tokens"`
+					CacheRead   int `json:"cache_read_input_tokens"`
+					Output      int `json:"output_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &rec) != nil {
+			continue
+		}
+		if ts, err := time.Parse(time.RFC3339Nano, rec.Timestamp); err == nil {
+			endedAt = ts.UnixMilli()
+		}
+		if rec.Type != "assistant" || rec.Message.Usage == nil {
+			continue
+		}
+		u := rec.Message.Usage
+		// output 为 0 的是流式中间态/工具预填充，不是一次完成的请求。
+		if u.Output <= 0 {
+			continue
+		}
+		tokens = u.Input + u.CacheCreate + u.CacheRead + u.Output
+	}
+	return tokens, endedAt
 }
 
 // subagentEnded 判断一个子代理的转录是否已经收尾。

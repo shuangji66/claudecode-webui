@@ -148,6 +148,28 @@ export function contextTokens(u: UsageTotals): number {
   return u.input + u.cacheRead + u.cacheCreation;
 }
 
+/**
+ * 一条 assistant 帧 → CLI 的 `subagent_tokens` 口径：**最后一次请求**的 prompt + output。
+ *
+ * 镜像 CLI（2.1.330）的算法：`prompt_tokens = input + cache_creation + cache_read`，
+ * 再加这次请求的 `output_tokens`；它不累加历史请求，所以长任务里这个数不会越滚越大
+ * （`task_progress` / `task_notification` 的 `usage.total_tokens` 就是这么来的）。
+ *
+ * 只用来给子代理列表出**实时**数字：CLI 的进度事件只在子代理调用过工具之后才发，
+ * 纯思考的子代理中途没有帧，而 `--forward-subagent-text` 转发的 assistant 帧一直带 usage。
+ * `output_tokens` 为 0 的消息不算（流式中间态与工具预填充都是这种），返回 undefined。
+ */
+export function messageTokens(msg: unknown): number | undefined {
+  if (!msg || typeof msg !== "object") return undefined;
+  const m = msg as Record<string, unknown>;
+  if (m.type !== "assistant") return undefined;
+  const message = m.message;
+  if (!message || typeof message !== "object") return undefined;
+  const totals = totalsFromUsage((message as Record<string, unknown>).usage);
+  if (!totals || totals.output <= 0) return undefined;
+  return contextTokens(totals) + totals.output;
+}
+
 /** 缓存命中率：命中 token / 输入侧总量；输入侧为 0 时没有意义，返回 undefined。 */
 export function cacheHitRate(u: UsageTotals): number | undefined {
   const total = contextTokens(u);

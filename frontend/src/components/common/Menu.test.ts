@@ -53,4 +53,9 @@ describe("menuHeight", () => {
     expect(menuHeight([])).toBe(8);
     expect(menuHeight([{ group: "a" }, { group: "a" }])).toBe(30 * 2 + 23 + 8);
   });
+
+  it("带 meta 的两行项按 44px 估算", () => {
+    // 子代理列表：标题一行 + 类型一行。按 30 算会让下沿被裁、或凭空多一条滚动条。
+    expect(menuHeight([{ group: undefined }, { group: undefined, meta: "Explore" }])).toBe(30 + 44 + 8);
+  });
 });

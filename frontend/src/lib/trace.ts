@@ -247,7 +247,7 @@ export function traceTurns(items: Item[], running = true, now = Date.now()): Tra
           end: spanEnd,
           label: sub ? tool.subagent?.description || tool.name : tool.name,
           detail: sub
-            ? [tool.subagent?.type, tool.subagent?.usage ? `${tool.subagent.usage.toolUses} 次工具` : ""]
+            ? [tool.subagent?.type, tool.subagent?.usage?.toolUses !== undefined ? `${tool.subagent.usage.toolUses} 次工具` : ""]
                 .filter(Boolean)
                 .join(" · ")
             : clip(toolSummary(tool), DETAIL_MAX),

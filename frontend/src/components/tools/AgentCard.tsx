@@ -42,10 +42,20 @@ export function AgentBody({ item }: { item: ToolItem }) {
           {usage && (
             <div className="flex flex-wrap items-center gap-2 text-[10.5px] text-muted">
               <span>{formatTokens(usage.totalTokens)} tokens</span>
-              <span>·</span>
-              <span>{t(`${usage.toolUses} 次工具`, `${usage.toolUses} tool calls`)}</span>
-              <span>·</span>
-              <span>{formatDuration(usage.durationMs)}</span>
+              {/* 工具次数与耗时只有 CLI 的进度/结束通知才给：重启后从子代理转录恢复的
+                  那份用量只有 token 数，这里不能拿 0 补齐（「0 次工具 · 00:00」是假数据）。 */}
+              {usage.toolUses !== undefined && (
+                <>
+                  <span>·</span>
+                  <span>{t(`${usage.toolUses} 次工具`, `${usage.toolUses} tool calls`)}</span>
+                </>
+              )}
+              {usage.durationMs !== undefined && (
+                <>
+                  <span>·</span>
+                  <span>{formatDuration(usage.durationMs)}</span>
+                </>
+              )}
             </div>
           )}
           {sub?.summary && <p className="line-clamp-3 text-[11.5px] leading-relaxed text-ink-2">{sub.summary}</p>}

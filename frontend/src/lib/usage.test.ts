@@ -4,6 +4,7 @@ import {
   mergeSpeedSamples,
   mergeUsage,
   settleTurnUsage,
+  messageTokens,
   usageFromTranscript,
   cacheHitRate,
   contextPercent,
@@ -973,5 +974,32 @@ describe("settleTurnUsage", () => {
     const snap = { contextTokens: 1 };
     expect(settleTurnUsage(snap)).toBe(snap);
     expect(settleTurnUsage(undefined)).toBeUndefined();
+  });
+});
+
+// 子代理列表上的实时 token：镜像 CLI 的 `subagent_tokens`（最后一次请求的 prompt + output）。
+describe("messageTokens", () => {
+  const assistant = (usage: Record<string, number> | undefined, over: Record<string, unknown> = {}) => ({
+    type: "assistant",
+    message: { role: "assistant", content: [{ type: "text", text: "hi" }], usage },
+    ...over,
+  });
+
+  it("prompt（含缓存）+ output，与 CLI 同口径", () => {
+    expect(
+      messageTokens(
+        assistant({ input_tokens: 300, cache_read_input_tokens: 9_000, cache_creation_input_tokens: 700, output_tokens: 500 }),
+      ),
+    ).toBe(10_500);
+  });
+
+  it("output 为 0 的消息不算（流式中间态 / 工具预填充）", () => {
+    expect(messageTokens(assistant({ input_tokens: 100, output_tokens: 0 }))).toBeUndefined();
+  });
+
+  it("只认 assistant 帧，没有 usage 时不给数", () => {
+    expect(messageTokens({ type: "user", message: { content: "hi" } })).toBeUndefined();
+    expect(messageTokens(assistant(undefined))).toBeUndefined();
+    expect(messageTokens(null)).toBeUndefined();
   });
 });

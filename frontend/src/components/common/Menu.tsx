@@ -6,7 +6,7 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { IconCheck, IconStop } from "./Icons";
+import { IconCheck, IconChevronRight, IconStop } from "./Icons";
 
 /** 所有浮层共用的面板外观（菜单、下拉选择）。 */
 export const POPUP_PANEL = "fixed z-[80] rounded-xl border border-line bg-canvas p-1 shadow-soft";
@@ -324,9 +324,26 @@ export function useDismiss(
 export interface MenuItem {
   id: string;
   label: ReactNode;
+  /**
+   * 标题下面的第二行小字（类型 / 状态这类补充）。
+   *
+   * 单行菜单项放不下的信息不要硬塞进 `hint`：`hint` 只占 42% 宽度，长一点就截断，
+   * 而 `meta` 吃的是整行宽度。设了它这一项会变成两行（`menuHeight` 按两行估算）。
+   */
+  meta?: ReactNode;
   icon?: ReactNode;
   /** 右侧灰色小字：命令别名、参数提示等（对齐 DSH 的菜单样式）。 */
   hint?: ReactNode;
+  /**
+   * 点这一项**不关菜单**（就地切换 `expanded`，展开 `detail`）。
+   *
+   * 后台操作的列表就是这种：点一下在原地下钻看详情，菜单关掉再点开就看不到刚才那条了。
+   */
+  keepOpen?: boolean;
+  /** 与 `keepOpen` 配套的展开态；有 `detail` 时行尾会画一颗方向箭头。 */
+  expanded?: boolean;
+  /** 展开后渲染在这一行下面的详情块（`keepOpen` 的菜单项用）。 */
+  detail?: ReactNode;
   /** 分组标题：只在同组第一项前渲染一次。 */
   group?: string;
   /**
@@ -378,11 +395,13 @@ interface MenuProps {
  * 滚动条——「空间明明够却在滚」就是这个估算漏掉 group 的结果。行高按
  * `py-1.5 + 11.5px 字`（≈28px）与 `pt-1.5 + 10px 字 + pb-0.5`（≈23px）取整数。
  */
-export function menuHeight(items: Pick<MenuItem, "group">[]): number {
+export function menuHeight(items: Pick<MenuItem, "group" | "meta">[]): number {
   const ITEM_H = 30;
+  // 带 meta 的两行项：py-1.5 + 11.5px 主行 + 10px 次行 ≈ 44px。
+  const ITEM_META_H = 44;
   const GROUP_H = 23;
   const rows = items.reduce(
-    (h, item, i) => h + ITEM_H + (item.group && item.group !== items[i - 1]?.group ? GROUP_H : 0),
+    (h, item, i) => h + (item.meta ? ITEM_META_H : ITEM_H) + (item.group && item.group !== items[i - 1]?.group ? GROUP_H : 0),
     0,
   );
   return rows + 8; // 面板 p-1 的上下内边距
@@ -458,9 +477,11 @@ export function Menu({
                 type="button"
                 role={item.checked === undefined ? "menuitem" : "menuitemradio"}
                 aria-checked={item.checked}
+                aria-expanded={item.detail === undefined ? undefined : Boolean(item.expanded)}
                 disabled={item.disabled}
                 onClick={() => {
-                  onClose();
+                  // `keepOpen` 的项（后台操作）就地展开详情：关掉菜单再点开就看不到刚才那条了。
+                  if (!item.keepOpen) onClose();
                   item.onSelect();
                 }}
                 className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[11.5px] disabled:opacity-40 ${
@@ -472,7 +493,16 @@ export function Menu({
                 }`}
               >
                 {item.icon}
-                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                {/* 两行项的标题容器自己不再是 truncate：两层都截断才各自生效，
+                    把 truncate 留在外层会让第二行被 `white-space: nowrap` 一起压掉。 */}
+                {item.meta === undefined ? (
+                  <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                ) : (
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{item.label}</span>
+                    <span className="block truncate text-[10px] text-faint">{item.meta}</span>
+                  </span>
+                )}
                 {/* 参数提示可能很长（[low|medium|high] [--fix]…）：限宽截断，别把标签挤没。 */}
                 {item.hint && (
                   <span className="max-w-[42%] shrink-0 truncate pl-2 font-mono text-[10px] text-faint" title={typeof item.hint === "string" ? item.hint : undefined}>
@@ -480,6 +510,13 @@ export function Menu({
                   </span>
                 )}
                 {item.checked && <IconCheck size={13} className="shrink-0 text-brand" />}
+                {/* 方向箭头是「这一行能展开」的唯一可见提示：只靠点一下有反应太隐晦。 */}
+                {item.detail !== undefined && (
+                  <IconChevronRight
+                    size={12}
+                    className={`shrink-0 text-faint transition-transform ${item.expanded ? "rotate-90" : ""}`}
+                  />
+                )}
               </button>
               {item.trailing && (
                 <button
@@ -515,6 +552,14 @@ export function Menu({
                 </button>
               )}
             </div>
+            {/* 详情块**不在** `relative` 那一层里：行尾的中止按钮是
+                `absolute top-1/2` 定位的，把详情塞进同一个相对容器会让它掉到
+                展开块的正中间（看起来像停错了行）。 */}
+            {item.detail !== undefined && item.expanded && (
+              <div className="mb-1 rounded-lg bg-panel-strong/60 px-2.5 py-2 text-[10.5px] leading-relaxed text-ink-2">
+                {item.detail}
+              </div>
+            )}
           </Fragment>
         ))}
       </div>

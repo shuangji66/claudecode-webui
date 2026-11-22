@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runningSubagents, subagentEntries, subagentLabel } from "./subagents";
+import { runningSubagents, subagentElapsed, subagentEntries, subagentLabel, type SubagentEntry } from "./subagents";
 import type { Item, ToolItem } from "./model";
 
 function tool(over: Partial<ToolItem>): ToolItem {
@@ -54,6 +54,59 @@ describe("subagentEntries", () => {
 
   it("统计运行中的数量", () => {
     expect(runningSubagents(subagentEntries(items))).toBe(1);
+  });
+});
+
+describe("subagentElapsed（列表里的运行时间）", () => {
+  const entry = (over: Partial<SubagentEntry>): SubagentEntry => ({
+    agentId: "a",
+    taskId: "a",
+    label: "a",
+    status: "running",
+    ...over,
+  });
+
+  it("运行中按墙钟算：CLI 的 duration_ms 不会每帧都来，只认它会停住", () => {
+    const e = entry({ status: "running", startedAt: 1_000, usage: { totalTokens: 10, toolUses: 1, durationMs: 2_000 } });
+    expect(subagentElapsed(e, 9_000)).toBe(8_000);
+  });
+
+  it("结束后优先用 CLI 的 usage.durationMs", () => {
+    const e = entry({
+      status: "completed",
+      startedAt: 1_000,
+      finishedAt: 9_000,
+      usage: { totalTokens: 10, toolUses: 1, durationMs: 5_000 },
+    });
+    expect(subagentElapsed(e, 20_000)).toBe(5_000);
+  });
+
+  it("没有 usage 时退回收尾 - 启动（转录回放只有这两个时间戳）", () => {
+    const e = entry({ status: "completed", startedAt: 1_000, finishedAt: 6_500 });
+    expect(subagentElapsed(e, 20_000)).toBe(5_500);
+  });
+
+  it("什么都没有时不编一个数", () => {
+    expect(subagentElapsed(entry({ status: "stopped" }), 20_000)).toBeUndefined();
+  });
+
+  // 后台子代理的 tool_result 只是启动回执：doneAt 几乎等于启动时刻。
+  // 拿它算会得到「0s」，那是个假耗时（截图复现过）。
+  it("后台子代理没有真实收尾时刻时宁可不显示，也不给 0s", () => {
+    const e = entry({ status: "completed", background: true, startedAt: 1_000, finishedAt: 1_005 });
+    expect(subagentElapsed(e, 99_000)).toBeUndefined();
+  });
+
+  it("恢复出转录里的收尾时刻后按它算（重启后）", () => {
+    const e = entry({
+      status: "completed",
+      background: true,
+      startedAt: 1_000,
+      finishedAt: 1_005,
+      endedAt: 28_000,
+      usage: { totalTokens: 47_200 },
+    });
+    expect(subagentElapsed(e, 99_000)).toBe(27_000);
   });
 });
 

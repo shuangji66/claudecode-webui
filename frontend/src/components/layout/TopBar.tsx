@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import type { SessionInfo } from "../../transport/types";
 import { useT } from "../../lib/i18n";
-import { type SubagentEntry } from "../../lib/subagents";
+import { formatElapsed } from "../../lib/elapsed";
+import { formatTokens } from "../../lib/usage";
+import { subagentElapsed, type SubagentEntry } from "../../lib/subagents";
+import { useAppStore } from "../../store/useAppStore";
 import type { BackgroundTaskEntry } from "../../lib/backgroundTasks";
 import { Menu } from "../common/Menu";
 import { StateDot, type StateDotState } from "../common/StateDot";
@@ -43,6 +46,78 @@ function SubagentMark({ status }: { status: SubagentEntry["status"] }) {
   return <StateDot state={state} size={state === "ongoing" ? 13 : 10} />;
 }
 
+/**
+ * 菜单开着时每秒走一次的时钟。
+ *
+ * 运行时间必须自己走：后台命令与子代理都没有「每秒一帧」的保证（`task_progress` 只在
+ * 真的有进度时报，两个工具调用之间可能几十秒什么都没有），靠事件驱动的秒数会停在最后
+ * 一次上报上——看起来像卡住了。菜单一关就停，不留一个空转的 interval。
+ */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  // 用 layout effect 在**绘制前**先校准一次：菜单打开的第一帧如果拿着上次关闭时留下的
+  // 时间戳去算，会先闪一下「0s / 一个偏小的秒数」，然后才跳到正确值。
+  useLayoutEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [active]);
+  return now;
+}
+
+/**
+ * 子代理行右侧的指标：token 消耗 + 运行时间（拿不到的项不占位）。
+ *
+ * 用量**不带单位**：它是这一行右侧的指标，不是一句话；`47.2K tokens · 2:31` 在
+ * 42% 的提示宽度里放不下，先把运行时间截掉（截图复现过「· 2…」），而两个都是要看的数。
+ */
+function subagentHint(sub: SubagentEntry, now: number, liveTokens?: number): string | undefined {
+  const parts: string[] = [];
+  // CLI 的 usage 是权威值（结束通知给），实时值是转发帧算出来的；两边同源，取大的那个
+  // ——先到的可能是旧进度事件里的数，而转发的 assistant 帧已经往前走了。
+  const tokens = Math.max(sub.usage?.totalTokens ?? 0, liveTokens ?? 0);
+  if (tokens > 0) parts.push(formatTokens(tokens));
+  const elapsed = subagentElapsed(sub, now);
+  if (elapsed !== undefined) parts.push(formatElapsed(elapsed));
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+/**
+ * 后台操作行展开后的详情：运行时间、工具、命令与一行进度说明。
+ *
+ * 只展示我们**确实拿到了**的东西——后台命令没有逐行输出流（那份在 CLI 的输出文件里，
+ * 要等结束通知才带回路径），这里不摆一个「实时输出」的空框。
+ */
+function backgroundDetail(
+  task: BackgroundTaskEntry,
+  now: number,
+  t: (zh: string, en?: string) => string,
+) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-baseline gap-2">
+        <span className="text-faint">{t("已运行", "Elapsed")}</span>
+        <span className="ml-auto font-mono">{formatElapsed(now - task.startedAt)}</span>
+      </div>
+      <div className="flex items-baseline gap-2">
+        <span className="text-faint">{t("工具", "Tool")}</span>
+        <span className="ml-auto truncate font-mono">{task.toolName}</span>
+      </div>
+      {task.progressNote && <p className="text-warn">{task.progressNote}</p>}
+      {task.summary && <p>{task.summary}</p>}
+      {task.command && (
+        <div>
+          <p className="mb-0.5 text-faint">{t("命令", "Command")}</p>
+          <pre className="max-h-28 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded-md bg-[#0f1115] px-2 py-1.5 font-mono text-[10.5px] leading-relaxed text-[#d9e0e8]">
+            {task.command}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface Props {
   session: SessionInfo | null;
   /** 本会话的子代理（页头「子智能体 N」触发器）。 */
@@ -76,8 +151,19 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, backgr
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [subAnchor, setSubAnchor] = useState<HTMLElement | null>(null);
   const [taskAnchor, setTaskAnchor] = useState<HTMLElement | null>(null);
+  /** 后台操作里正在展开详情的那一行（默认全折叠；关菜单即复位）。 */
+  const [expandedTask, setExpandedTask] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "ok" | "fail">("idle");
   const [downloadState, setDownloadState] = useState<"idle" | "ok" | "fail">("idle");
+  // 只有「列表正开着、里面真有时长在走」时才起时钟：不在屏幕上时不值得每秒重渲染一次页头。
+  const now = useNow(
+    (subAnchor !== null && subagents.length > 0) || (taskAnchor !== null && backgroundTasks.length > 0),
+  );
+  // 子代理的实时用量只在列表打开时订阅：关闭时返回 undefined（引用稳定，不触发重渲染），
+  // 否则每一条子代理帧都会把整个页头重画一遍。
+  const liveTokens = useAppStore((s) =>
+    subAnchor !== null && session ? s.subagentTokens[session.id] : undefined,
+  );
 
   const copySession = async () => {
     if (!session) return;
@@ -132,12 +218,15 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, backgr
           items={subagents.map((sub) => ({
             id: sub.agentId,
             label: sub.label,
+            // 类型放第二行（DSH 的 subagent 列表同样是「标题 + 次要信息 + 指标」两行）：
+            // token 与运行时间要占住右侧那一列，两者挤在同一行只够显示一个。
+            meta: sub.type || undefined,
             icon: <SubagentMark status={sub.status} />,
-            hint: sub.type,
+            hint: subagentHint(sub, now, liveTokens?.[sub.agentId]),
             onSelect: () => onOpenSubagent(sub.agentId, sub.label),
           }))}
           onClose={() => setSubAnchor(null)}
-          width={260}
+          width={300}
           align="end"
         />
 
@@ -147,7 +236,11 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, backgr
         {backgroundTasks.length > 0 && (
           <button
             type="button"
-            onClick={(e) => setTaskAnchor((prev) => (prev ? null : e.currentTarget))}
+            onClick={(e) => {
+              // 每次开合都从全折叠开始：上一次展开的那行不该自己又弹开。
+              setExpandedTask(null);
+              setTaskAnchor((prev) => (prev ? null : e.currentTarget));
+            }}
             className="flex items-center gap-1 rounded-lg px-1.5 py-1 text-brand hover:bg-brand/10"
             aria-label={t(`后台操作 ${backgroundTasks.length} 个进行中`, `${backgroundTasks.length} background tasks running`)}
             aria-haspopup="menu"
@@ -161,33 +254,44 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, backgr
         <Menu
           open={taskAnchor !== null}
           anchor={taskAnchor}
-          items={backgroundTasks.map((task) => ({
-            id: task.taskId || task.toolUseId,
-            label: task.label,
-            icon: <span className="h-1.5 w-1.5 rounded-full bg-brand" />,
-            hint: typeof task.progress === "number" ? `${task.progress}s` : undefined,
-            // 行尾的中止按钮：不关闭菜单，可以连续停几个。拿不到 task_id 时不给——
-            // 点了只会报错（后端表里也没有，说明这个任务已经不在 CLI 那里了）。
-            // 图标用描边版：实心方块单摆在白底菜单里像一块常驻的高亮背景。
-            // 中止要二次确认，确认按钮**就地**换在这一行（不另开弹窗）：这条命令
-            // 可能正在写文件，误点的代价比多点一下大。
-            ...(task.taskId && onStopTask
-              ? {
-                  trailing: {
-                    label: t("中止", "Stop"),
-                    confirmLabel: t("确认中止", "Confirm"),
-                    icon: <IconStopOutline size={13} />,
-                    onSelect: () => {
-                      if (task.taskId) onStopTask(task.taskId);
+          items={backgroundTasks.map((task) => {
+            const id = task.taskId || task.toolUseId;
+            return {
+              id,
+              label: task.label,
+              icon: <span className="h-1.5 w-1.5 rounded-full bg-brand" />,
+              // 运行时间在行尾一直走（每秒），点开详情里还有一份带「已运行」标签的。
+              hint: formatElapsed(now - task.startedAt),
+              // 点一行**就地展开**详情，不关菜单：这是「看一眼它在跑什么」的动作，
+              // 关掉菜单再点开就看不到刚才那条了。
+              keepOpen: true,
+              expanded: expandedTask === id,
+              detail: backgroundDetail(task, now, t),
+              // 行尾的中止按钮：不关闭菜单，可以连续停几个。拿不到 task_id 时不给——
+              // 点了只会报错（后端表里也没有，说明这个任务已经不在 CLI 那里了）。
+              // 图标用描边版：实心方块单摆在白底菜单里像一块常驻的高亮背景。
+              // 中止要二次确认，确认按钮**就地**换在这一行（不另开弹窗）：这条命令
+              // 可能正在写文件，误点的代价比多点一下大。
+              ...(task.taskId && onStopTask
+                ? {
+                    trailing: {
+                      label: t("中止", "Stop"),
+                      confirmLabel: t("确认中止", "Confirm"),
+                      icon: <IconStopOutline size={13} />,
+                      onSelect: () => {
+                        if (task.taskId) onStopTask(task.taskId);
+                      },
                     },
-                  },
-                }
-              : {}),
-            onSelect: () => {
-              /* 面板里的条目本身没有可打开的目标：后台命令没有转录。 */
-            },
-          }))}
-          onClose={() => setTaskAnchor(null)}
+                  }
+                : {}),
+              onSelect: () => setExpandedTask((cur) => (cur === id ? null : id)),
+            };
+          })}
+          onClose={() => {
+            setTaskAnchor(null);
+            // 展开态只在这一次菜单里成立：重新打开时默认全折叠。
+            setExpandedTask(null);
+          }}
           width={300}
           align="end"
         />

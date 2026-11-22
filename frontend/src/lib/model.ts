@@ -132,7 +132,21 @@ export interface SubagentInfo {
   spawnDepth?: number;
   summary?: string;
   outputFile?: string;
-  usage?: { totalTokens: number; toolUses: number; durationMs: number };
+  /**
+   * 用量。字段可缺：
+   * - `totalTokens` 一定有（CLI 的 `subagent_tokens`，或重启后从子代理转录恢复的同一个数）；
+   * - `toolUses` / `durationMs` 只有 CLI 的进度/结束通知才给，恢复出来的那份没有——
+   *   别拿 0 兜底，界面上「0 次工具 · 00:00」比不显示更误导。
+   */
+  usage?: { totalTokens: number; toolUses?: number; durationMs?: number };
+  /**
+   * 从子代理转录尾部读出的收尾时刻（unix 毫秒，`settleSubagents` 回填）。
+   *
+   * 后台子代理的 `tool_result` 只是启动回执，`doneAt` 记的是「启动回执到达」；
+   * 拿它当结束时刻会算出 0 秒。主转录里又没有 `task_*` 帧，只有磁盘上那份转录
+   * 还留着真实的收尾时间。
+   */
+  endedAt?: number;
 }
 
 /** tool_result 里带的图片（base64）；渲染成缩略图，不把 base64 当正文塞进 <pre>。 */

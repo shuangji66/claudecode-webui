@@ -1004,6 +1004,25 @@ describe("子代理任务事件", () => {
 
   // 被中断（TaskStop）的子代理**不写 task-notification**：转录里只有那条启动回执。
   // 不靠 meta.json 的 finished 结算，重开对话后它永远是 running——页头一直转圈。
+  // 子代理自己的转录**每一行都是 sidechain**：主消息流要丢掉它们，回放那份文件时不能丢。
+  describe("子代理转录回放（sidechain）", () => {
+    const line = {
+      type: "assistant",
+      isSidechain: true,
+      message: { role: "assistant", content: [{ type: "text", text: "子代理说" }] },
+    };
+
+    it("默认丢掉 sidechain 行", () => {
+      expect(applyCLI([], line)).toHaveLength(0);
+    });
+
+    it("显式打开 sidechain 时保留（子代理对话面板用）", () => {
+      const out = applyCLI([], line, 1_700_000_000_000, undefined, { replay: true, sidechain: true });
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ kind: "assistant", text: "子代理说" });
+    });
+  });
+
   describe("settleSubagents（回放时用 meta 的 finished 结算）", () => {
     function started(toolUseId: string, agentId: string): Item[] {
       let items = applyCLI([], {
@@ -1066,6 +1085,38 @@ describe("子代理任务事件", () => {
       });
       const out = settleSubagents(items, [{ agent_id: "a1", finished: true }]);
       expect((out[0] as Extract<Item, { kind: "tool" }>).subagent!.status).toBe("completed");
+    });
+
+    // 后台子代理的用量只在 stdout 的 task_notification 里；写进主转录的那条
+    // <task-notification> 不带 <usage>。重启后只能从子代理自己的转录恢复。
+    it("从子代理转录恢复 token 与收尾时刻", () => {
+      const items = started("tu-1", "a1");
+      const endedAt = Date.now() + 27_000;
+      const out = settleSubagents(items, [
+        { agent_id: "a1", tool_use_id: "tu-1", finished: true, tokens: 47_200, ended_at: endedAt },
+      ]);
+      const sub = (out[0] as Extract<Item, { kind: "tool" }>).subagent!;
+      expect(sub.usage).toEqual({ totalTokens: 47_200 });
+      expect(sub.endedAt).toBe(endedAt);
+    });
+
+    it("已有的 usage（进度帧 / 结束通知）更权威，不被恢复值覆盖", () => {
+      let items = started("tu-1", "a1");
+      items = applyCLI(items, {
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: '<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>tu-1</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n<usage>\nsubagent_tokens: 48000\ntool_uses: 3\nduration_ms: 9000\n</usage>\n</task-notification>',
+            },
+          ],
+        },
+      });
+      const out = settleSubagents(items, [{ agent_id: "a1", finished: true, tokens: 47_200, ended_at: Date.now() }]);
+      const sub = (out[0] as Extract<Item, { kind: "tool" }>).subagent!;
+      expect(sub.usage).toEqual({ totalTokens: 48_000, toolUses: 3, durationMs: 9_000 });
     });
 
     it("没有 meta（老转录 / 读不到）时原样返回", () => {

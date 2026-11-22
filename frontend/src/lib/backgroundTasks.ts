@@ -29,8 +29,21 @@ export interface BackgroundTaskEntry {
   label: string;
   /** 工具名（`Bash` / MCP 工具名），用于图标与分类。 */
   toolName: string;
-  /** 已跑秒数（实时 task_progress 给的；没有就不显示）。 */
-  progress?: number;
+  /**
+   * 任务启动时刻（工具卡片的 `ts`：实时是 tool_use 帧到达，回放是转录行的时间戳）。
+   *
+   * 运行时间由它和当前时钟算，**不依赖 CLI 的进度事件**：`tool_progress` / `task_progress`
+   * 只在前台命令与子代理上稳定出现，后台命令跑着的时候可能一条都不来（等它报秒数就是
+   * 「一直在跑、却看不到跑了多久」）。CLI 自己也只在任务结束的通知里给 `usage`，
+   * 而这块列表只列还在跑的，所以只能用我们收到的启动时刻。
+   */
+  startedAt: number;
+  /** 卡片上的一行进度说明（子代理重试等），展开详情里看。 */
+  progressNote?: string;
+  /** `task_progress` 的一行摘要（后台命令一般没有）。 */
+  summary?: string;
+  /** Bash 的命令原文；MCP 调用没有，展开详情里用于看清到底在跑什么。 */
+  command?: string;
 }
 
 function text(v: unknown): string {
@@ -88,7 +101,10 @@ export function backgroundTasks(items: Item[], live: LiveTask[] = []): Backgroun
       toolUseId: it.toolUseId,
       label: known?.description || sub.description || text(input.description) || text(it.name),
       toolName: it.name,
-      progress: it.progress,
+      startedAt: it.ts,
+      ...(it.progressNote ? { progressNote: it.progressNote } : {}),
+      ...(sub.summary ? { summary: sub.summary } : {}),
+      ...(text(input.command) ? { command: text(input.command) } : {}),
     });
   }
   return out;

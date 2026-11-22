@@ -969,6 +969,22 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **回放只能靠 tool_result**：主转录里没有 task_* 行，Agent 的 tool_result 文本带着
   `agentId: …` 与 `<usage>subagent_tokens / tool_uses / duration_ms</usage>`，
   `subagentFromResult` 从这里补状态、用量与「查看对话」的入口。
+- **重启后子代理的用量与收尾时刻从它自己的转录恢复**：后台子代理的 usage 只在 stdout
+  的 `system/task_notification` 里，而写进主转录的 `<task-notification>` **不带
+  `<usage>`**（CLI 的模板只有 task-id / tool-use-id / task-type / output-file / status /
+  summary）——回放时它整条丢了。`history.subagentStates` 因此从 `agent-<id>.jsonl` 尾部
+  （64KB）读两样：最后一条带 usage 的 assistant 的
+  `input + cache_creation + cache_read + output`（CLI 的 `subagent_tokens` 口径），
+  与最后一行的 `timestamp`；随转录的 `subagents[].tokens` / `ended_at` 下发。
+  前端 `settleSubagents` **只在卡片没有 usage 时**才补（进度帧/结束通知更权威），
+  并写进 `subagent.endedAt`。
+  **不要拿后台子代理的 `doneAt` 当结束时刻**：那是启动回执到达的时刻，差值是 0 秒
+  （截图复现过「0s」）；`subagentElapsed` 对 `background` 条目在没有 `endedAt` 时
+  宁可不显示。恢复出来的 usage 只有 `totalTokens`，`toolUses` / `durationMs` 可以缺，
+  界面不能拿 0 补齐。
+- **子代理自己的转录里每一行都是 `isSidechain: true`**：`applyCLI` 默认丢掉 sidechain
+  （主消息流要丢），回放子代理对话必须传 `{sidechain:true}`——漏了的话面板显示
+  「子代理还没有输出」，重启后才能复现（实时走的是 `subagentItems`，不经过这条过滤）。
 - **子代理的正文要靠 `--forward-subagent-text` 才有**（不带时只有任务事件与最终报告）。
   这个参数只有较新版本才有，`manager.supportsFlag` 用 `claude --help` 探测一次并按二进制
   路径缓存——**不要无条件加到 `process.Args`**，旧版本会因为未知参数直接起不来。
@@ -1029,6 +1045,34 @@ hub ── manager ── session ── process ── claude (NDJSON)
   点开选对话）与后台操作（终端图标 + 数量，点开可中止）。
   **后台操作只列还在跑的**：它是控制面板不是历史记录，跑完即从列表消失、全跑完后
   入口图标自动隐藏；结束的后台命令仍在正文那张卡片上。
+- **页头两个列表都带时长，数据从哪来必须说清楚**（对齐 DSH 的 job list / subagent catalog）：
+  - 后台操作行的运行时间由 `BackgroundTaskEntry.startedAt`（工具卡片的 `ts`：实时是
+    `tool_use` 到达，回放是转录行的时间戳）与本地时钟算，菜单开着且有任务时每秒跳一次
+    （`TopBar.useNow`）。**不要等 `tool_progress` / `task_progress` 报秒数**：它们只在前台
+    命令与子代理上稳定出现，后台命令跑着时可能一条都不来，秒数就停在最后一次上报上；
+    CLI 的 `usage` 也只在**结束**通知里给，而这块列表只列还在跑的。
+  - 点一行**就地展开详情**（`MenuItem.keepOpen` + `expanded` + `detail`，默认折叠、关菜单
+    复位、菜单不关）：已运行、工具名、命令原文、进度说明。后台命令没有逐行输出流可看
+    （那份在 CLI 的 `output_file` 里），不要摆一个空的「实时输出」框。
+  - 子代理行右侧是 token 消耗 + 运行时间（**不带单位**：`47.2K · 2:31`。写成
+    `47.2K tokens · …` 会超出 `hint` 的 42% 宽度，先把运行时间截成「· 2…」），类型挪到
+    `MenuItem.meta` 的第二行。运行中按 `startedAt` 走墙钟、结束后优先用
+    `usage.durationMs`（`lib/subagents.subagentElapsed`）。
+  - **子代理的用量要实时显示，不能只等 `task_progress`**：CLI 的那条进度帧只在子代理
+    **调用过工具**之后才发（2.1.330 的发射条件：assistant 消息里带 `tool_use`），一个
+    只思考、不调工具的子代理在结束前一条都不来，列表上就只剩时间，token 要等
+    `task_notification` 才出现（截图复现过）。所以 store 在
+    `--forward-subagent-text` 转发的 assistant 帧上顺手记一份实时值
+    （`subagentTokens[sid][agentId]`，`lib/usage.messageTokens`）：口径与 CLI 的
+    `subagent_tokens` 相同——`prompt(input + cache_creation + cache_read) + output`，
+    **取最后一次请求、不累加**（2.1.330 的 `wke`/`RZr`）。列表里 `usage.totalTokens` 与
+    实时值取大的那个：同源，先到的可能是旧进度事件里的数。
+    结束通知里的 `usage` 仍是最权威的一份，回放时回落到 tool_result 的 `<usage>`。
+    **没有转发帧时（老版本 CLI / 未开该参数）会退回「只有结束时才有数」**，这是数据源
+    的限制，不要在那里编一个近似值。
+  - **后台 `local_bash` 没有 token 可报**（它不是模型调用），CLI 的 `<task-notification>`
+    模板里也只有 task-id / tool-use-id / task-type / output-file / status / summary——
+    运行时间只能由我们自己的时钟给。
 - **`task_id` 只出现在实时的 `task_started` 里，必须由后端补**：中途连上来的设备只有
   转录回放，拿不到它，界面上「进行中」的条目就发不出 `stop_task`（也是"两台设备数量
   不一致"的来源之一）。`session.Session` 用 `noteTaskEvent` 维护

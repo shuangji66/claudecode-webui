@@ -160,6 +160,13 @@ export function commandsChanged(msg: unknown): CommandInfo[] | undefined {
  */
 export interface ApplyOptions {
   replay?: boolean;
+  /**
+   * 允许 sidechain 行（`isSidechain: true`）。
+   *
+   * 只给**子代理自己的转录**用：那份文件里的每一行都是 sidechain，主消息流才要丢掉它们。
+   * 少了这个开关，「查看子代理对话」重启后会读到一份空转录（界面显示「子代理还没有输出」）。
+   */
+  sidechain?: boolean;
 }
 
 /**
@@ -184,7 +191,7 @@ export function applyCLI(
   // 伴随行（`turnCompanion`，例如把附加的图片/路径写成一句 `[Image: source: …]`），
   // 不挡的话它会被当成用户又发了一句，气泡里凭空多出一条 `[Image: source: /tmp/…]`，
   // 而且轮次刻度也跟着多一格。
-  if (m.isSidechain === true || m.isMeta === true) return items;
+  if ((m.isSidechain === true && opts.sidechain !== true) || m.isMeta === true) return items;
   // 压缩之后 CLI 会把摘要当一条 user 行塞回上下文（`isCompactSummary` /
   // `isVisibleInTranscriptOnly`）。它是给模型看的续接提示，不是用户说的话——
   // 不挡的话界面里就是一条占满半屏的英文摘要气泡（见 lib/continuation.ts）。
@@ -402,29 +409,38 @@ export function settleStreaming(items: Item[]): Item[] {
  */
 export function settleSubagents(
   items: Item[],
-  states: ReadonlyArray<{ agent_id: string; tool_use_id?: string; finished: boolean }> | undefined,
+  states:
+    | ReadonlyArray<{ agent_id: string; tool_use_id?: string; finished: boolean; tokens?: number; ended_at?: number }>
+    | undefined,
 ): Item[] {
   if (!states || states.length === 0) return items;
-  const done = new Set<string>();
-  const doneTools = new Set<string>();
+  const byAgent = new Map<string, (typeof states)[number]>();
+  const byTool = new Map<string, (typeof states)[number]>();
   for (const s of states) {
-    if (!s.finished) continue;
-    if (s.agent_id) done.add(s.agent_id);
-    if (s.tool_use_id) doneTools.add(s.tool_use_id);
+    if (s.agent_id) byAgent.set(s.agent_id, s);
+    if (s.tool_use_id) byTool.set(s.tool_use_id, s);
   }
-  if (done.size === 0 && doneTools.size === 0) return items;
   let changed = false;
   const out = items.map((it) => {
     if (it.kind !== "tool" || !it.subagent) return it;
     const sub = it.subagent;
-    if (sub.status !== "running") return it;
-    const hit =
-      (sub.agentId !== undefined && done.has(sub.agentId)) ||
-      (sub.taskId !== "" && done.has(sub.taskId)) ||
-      doneTools.has(it.toolUseId);
-    if (!hit) return it;
+    const state =
+      (sub.agentId !== undefined ? byAgent.get(sub.agentId) : undefined) ??
+      (sub.taskId !== "" ? byAgent.get(sub.taskId) : undefined) ??
+      byTool.get(it.toolUseId);
+    if (!state) return it;
+    let next = sub;
+    if (state.finished && sub.status === "running") next = { ...next, status: "stopped" as const };
+    // 用量/收尾时刻在**重启之后**只能从子代理转录恢复：后台子代理的 usage 只在
+    // stdout 的 task_notification 里，而主转录那条 <task-notification> 不带 <usage>。
+    // 已有 usage（CLI 的进度帧或结束通知）就保留——那是权威值，恢复出来的是同源副本。
+    if (state.tokens !== undefined && state.tokens > 0 && !next.usage) {
+      next = { ...next, usage: { totalTokens: state.tokens } };
+    }
+    if (state.ended_at !== undefined && state.ended_at > 0) next = { ...next, endedAt: state.ended_at };
+    if (next === sub) return it;
     changed = true;
-    return { ...it, subagent: { ...sub, status: "stopped" as const } };
+    return { ...it, subagent: next };
   });
   return changed ? out : items;
 }

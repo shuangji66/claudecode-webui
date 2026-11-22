@@ -29,6 +29,7 @@ import {
   applyUsageMessage,
   mergeSpeedSamples,
   mergeUsage,
+  messageTokens,
   settleTurnUsage,
   usageFromTranscript,
   type UsageSnapshot,
@@ -182,6 +183,16 @@ interface AppState {
    * parent_tool_use_id），必须按 agent 分流到这里，绝不能进主消息流。
    */
   subagentItems: Record<string, Record<string, Item[]>>;
+  /**
+   * 子代理的**实时** token 用量：`subagentTokens[sid][agentId]`。
+   *
+   * 为什么要单独存一份：CLI 的 `task_progress`（带 usage）只在子代理**调用过工具**之后
+   * 才发，一个只思考、不调工具的子代理在结束前一条进度都不会来——列表上就只剩运行时间，
+   * token 要等 `task_notification` 才出现。而 `--forward-subagent-text` 转发过来的
+   * assistant 帧一直带着 usage，按 CLI 自己的口径（`prompt + output`，取最后一次请求）
+   * 算出来与最终那条通知同源（`lib/usage.messageTokens`）。
+   */
+  subagentTokens: Record<string, Record<string, number>>;
   /**
    * 要在右侧栏打开的子代理对话。右侧栏的标签是它自己管的，这里只放一个「请求」，
    * nonce 让重复点同一张卡片也能把标签切回来。
@@ -640,6 +651,7 @@ function dropKey<T>(map: Record<string, T>, key: string): Record<string, T> {
 function purgeSession(state: {
   items: Record<string, unknown>;
   subagentItems: Record<string, unknown>;
+  subagentTokens: Record<string, unknown>;
   perms: Record<string, unknown>;
   states: Record<string, string>;
   inits: Record<string, unknown>;
@@ -652,6 +664,7 @@ function purgeSession(state: {
 }, id: string) {
   delete state.items[id];
   delete state.subagentItems[id];
+  delete state.subagentTokens[id];
   delete state.perms[id];
   delete state.states[id];
   delete state.inits[id];
@@ -1057,6 +1070,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   activeId: null,
   items: {},
   subagentItems: {},
+  subagentTokens: {},
   subagentView: null,
   perms: {},
   inits: {},
@@ -2032,6 +2046,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         const buckets = {
           items: { ...s.items },
           subagentItems: { ...s.subagentItems },
+          subagentTokens: { ...s.subagentTokens },
           perms: { ...s.perms },
           states: { ...s.states },
           inits: { ...s.inits },
@@ -2595,6 +2610,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
           items: { ...dropKey(s.items, old), [to]: [] },
           usage: dropKey(s.usage, old),
           subagentItems: dropKey(s.subagentItems, old),
+          subagentTokens: dropKey(s.subagentTokens, old),
           activeId: s.activeId === old ? to : s.activeId,
           sessions: s.sessions.map((x) => (x.id === old ? { ...x, id: to } : x)),
         }));
@@ -2742,6 +2758,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
           // 当成「上游出声了，压缩早已结束」，而子代理的正文恰恰也是 assistant 帧。
           // 压缩发生在主链上，子代理跑着的时候主会话仍在压缩——按子代理的帧清掉，
           // 计时行就会在压缩途中退回「上游 Ns 没有响应」。
+          const tokens = messageTokens(ev.data);
           set((s) => {
             const byAgent = s.subagentItems[sid] ?? {};
             const prev = byAgent[sub.agentId] ?? [];
@@ -2750,6 +2767,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
                 ...s.subagentItems,
                 [sid]: { ...byAgent, [sub.agentId]: applyCLI(prev, ev.data) },
               },
+              // 同一条帧顺手记实时用量：子代理的进度事件要等它调用过工具才来，
+              // 只靠它的话列表上的 token 会一直空到任务结束。
+              ...(tokens !== undefined
+                ? {
+                    subagentTokens: {
+                      ...s.subagentTokens,
+                      [sid]: { ...(s.subagentTokens[sid] ?? {}), [sub.agentId]: tokens },
+                    },
+                  }
+                : {}),
             };
           });
           return;
