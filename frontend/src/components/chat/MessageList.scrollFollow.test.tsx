@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MessageList } from "./MessageList";
 import type { Item } from "../../lib/model";
 import {
@@ -265,5 +265,192 @@ describe("MessageList 别人发的消息不抢滚动位置", () => {
     const mine: Item = { id: "u-mine", seq: 3, ts: 0, kind: "user", text: "我刚发的" };
     rerender(<MessageList items={[thinking, answer, mine]} resetKey="k" />);
     expect(el.scrollTop).toBe(2000);
+  });
+});
+
+// 右侧栏轨迹点某一步 = 「我要看这一条」。从那一刻起不该再贴底跟随，否则下一帧流式
+// 内容长高（或任何一次尺寸变化）会立刻把视口拽回底部——用户看到的是「跳过去闪一下
+// 又弹回最新」，那颗点击等于白点。
+describe("轨迹跳转后的跟随", () => {
+  const firstUser: Item = { id: "u0", seq: 0, ts: 0, kind: "user", text: "跑一下" };
+  const firstAnswer: Item = { id: "a0", seq: 1, ts: 0, kind: "assistant", text: "好了", streaming: false };
+  const secondUser: Item = { id: "u1", seq: 2, ts: 0, kind: "user", text: "再来" };
+  const secondAnswer: Item = { id: "a1", seq: 3, ts: 0, kind: "assistant", text: "又好了", streaming: false };
+
+  it("跳到中间某条之后，内容继续长高也不会把视口拽回底部", async () => {
+    render(
+      <MessageList items={[firstUser, firstAnswer, secondUser, secondAnswer]} resetKey="jump-follow" />,
+    );
+    const el = screen.getByTestId("message-scroller");
+    Object.defineProperty(el, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(el, "clientHeight", { value: 500, configurable: true });
+    // jsdom 不会像浏览器那样把 scrollTop 夹到 scrollHeight - clientHeight：
+    // 自己补上，否则「钉到底部」写进去的 2000 会让后面的落点算错。
+    let top = 0;
+    Object.defineProperty(el, "scrollTop", {
+      get: () => top,
+      set: (v: number) => {
+        top = Math.max(0, Math.min(v, 2000 - 500));
+      },
+      configurable: true,
+    });
+    await raf();
+    el.scrollTop = 1500;
+    fireEvent.scroll(el);
+
+    // jsdom 没有真实几何：把目标摆在视口上方 400px（1500 - 400 - 8 = 1092）。
+    const target = el.querySelector<HTMLElement>('[data-item-id="a0"]');
+    expect(target).not.toBeNull();
+    vi.spyOn(target!, "getBoundingClientRect").mockReturnValue({ top: -400 } as DOMRect);
+    vi.spyOn(el, "getBoundingClientRect").mockReturnValue({ top: 0 } as DOMRect);
+
+    useAppStore.setState({ scrollRequest: null });
+    act(() => useAppStore.getState().requestScrollToItem("a0"));
+    await raf();
+    expect(el.scrollTop).toBe(1092);
+
+    // 内容继续长高：跟随不能把它拽回底部（2400）。
+    grow(el, 2400);
+    await fireResize();
+    expect(el.scrollTop).toBe(1092);
+  });
+});
+
+// 手机上长按选文本 / 按住屏幕读一段话时内容还在流式增长：跟随会在手指底下继续推，
+// 选中直接跑掉。按住期间只暂停，松手没动过就恢复（轻点一下不该让会话从此不跟随）。
+describe("按住屏幕期间暂停跟随", () => {
+  it("按住时不推内容，松手后贴回底部", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+
+    fireEvent.pointerDown(el, { clientY: 100 });
+    grow(el, 1400);
+    await fireResize();
+    expect(el.scrollTop).toBe(500);
+
+    fireEvent.pointerUp(el, { clientY: 100 });
+    expect(el.scrollTop).toBe(1400);
+  });
+
+  it("按住后拖动过（读者在滚）就不恢复跟随", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+
+    fireEvent.pointerDown(el, { clientY: 300 });
+    fireEvent.pointerMove(el, { clientY: 240 });
+    el.scrollTop = 200;
+    fireEvent.scroll(el);
+    fireEvent.pointerUp(el, { clientY: 240 });
+
+    grow(el, 1400);
+    await fireResize();
+    expect(el.scrollTop).toBe(200);
+    expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
+  });
+
+  it("滚轮往上滚立刻解除跟随（不必等 scroll 事件）", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
+
+    fireEvent.wheel(el, { deltaY: -40 });
+    expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
+  });
+
+  it("嵌套滚动区（代码块）里的滚轮不动跟随", async () => {
+    const el = await mountAndSettle([bash, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+    // 工具卡片里的命令块：滚的是它自己，读者并没有离开会话底部。
+    const nested = document.createElement("pre");
+    nested.className = "code-scroll";
+    el.appendChild(nested);
+
+    fireEvent.wheel(nested, { deltaY: -40 });
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
+    nested.remove();
+  });
+});
+
+// 不贴底时收起一段内容（一轮结束把过程折起来、折叠一张卡片），浏览器会按新的
+// scrollHeight 重排；读者正在看的那一行必须留在原来的屏幕位置，否则「点一下收起，
+// 正文跳一段」，人得重新找读到哪儿了。
+describe("内容变短时钉住读者视线", () => {
+  const q1: Item = { id: "q1", seq: 0, ts: 0, kind: "user", text: "问题" };
+  const r1: Item = { id: "r1", seq: 1, ts: 0, kind: "assistant", text: "回答一", streaming: false };
+  const q2: Item = { id: "q2", seq: 2, ts: 0, kind: "user", text: "再问" };
+  const r2: Item = { id: "r2", seq: 3, ts: 0, kind: "assistant", text: "回答二", streaming: false };
+  const items = [q1, r1, q2, r2];
+
+  /** jsdom 没有布局：按给定的「行顶/行底」摆位置，滚动区自身顶在 0。 */
+  function place(el: HTMLElement, table: Record<string, [number, number]>) {
+    Object.defineProperty(el, "getBoundingClientRect", {
+      value: () => ({ top: 0 } as DOMRect),
+      configurable: true,
+    });
+    for (const [id, [top, bottom]] of Object.entries(table)) {
+      const row = el.querySelector<HTMLElement>(`[data-item-id="${id}"]`);
+      if (!row) continue;
+      Object.defineProperty(row, "getBoundingClientRect", {
+        value: () => ({ top, bottom } as DOMRect),
+        configurable: true,
+      });
+    }
+  }
+
+  it("收起一段内容后，读者正在看的那一行还在原位", async () => {
+    const { rerender } = render(<MessageList items={items} resetKey="anchor" />);
+    const el = screen.getByTestId("message-scroller");
+    Object.defineProperty(el, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(el, "clientHeight", { value: 500, configurable: true });
+    Object.defineProperty(el, "scrollTop", { value: 800, writable: true, configurable: true });
+
+    // 视口顶（scrollTop=800）落在 q2 与 r2 的交界：r2 是第一条越过视口顶的行。
+    place(el, { q1: [-800, -700], r1: [-700, -600], q2: [-600, 0], r2: [0, 400] });
+    // 一次同长度的新数组：让 layout effect 记下内容高度（2000）。
+    rerender(<MessageList items={[...items]} resetKey="anchor" />);
+
+    el.scrollTop = 800;
+    fireEvent.scroll(el); // 读者在中间：跟随解除
+    // 停手 150ms 后才刷新锚点（见 onScroll 的 settle）。
+    await new Promise<void>((resolve) => setTimeout(resolve, 200));
+
+    // 内容变短 400px：r2 上方少了一段，它的顶部上移到 -400。
+    Object.defineProperty(el, "scrollHeight", { value: 1600, configurable: true });
+    place(el, { q1: [-800, -700], r1: [-700, -600], q2: [-600, 0], r2: [-400, 0] });
+    rerender(<MessageList items={[...items]} resetKey="anchor" />);
+
+    // 视线钉在 r2 的顶部：scrollTop 跟着少 400，而不是停在 800 让正文跳走。
+    expect(el.scrollTop).toBe(400);
+  });
+});
+
+// 松手可能发生在滚动区外（拖出去再松开），也可能收不到 pointerup（移动端滚动换成
+// pointercancel）。漏一次 press 就永远清不掉，跟随再也回不来。
+describe("松手兜底", () => {
+  it("在滚动区外松手也能恢复跟随", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+
+    fireEvent.pointerDown(el, { clientY: 100 });
+    grow(el, 1400);
+    await fireResize();
+    expect(el.scrollTop).toBe(500);
+
+    fireEvent.pointerUp(window);
+    expect(el.scrollTop).toBe(1400);
+  });
+
+  it("正文元素上的滚轮仍然解除跟随（不能被当成嵌套滚动）", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+    const body = screen.getByText("答案");
+    fireEvent.wheel(body, { deltaY: -40 });
+    expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
   });
 });

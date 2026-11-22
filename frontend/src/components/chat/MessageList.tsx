@@ -7,7 +7,9 @@ import {
   useMemo,
   useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 import type { Item, ToolItem } from "../../lib/model";
 import { AssistantBubble } from "./AssistantBubble";
@@ -31,7 +33,7 @@ import {
   type TurnSpan,
 } from "../../lib/process";
 import { useCollapseTiming, useFoldedReplies, useProcessView, type CollapseTiming } from "../../lib/viewMode";
-import { useFollowGrowth } from "../../lib/scrollFollow";
+import { ScrollFollow, useFollowGrowth } from "../../lib/scrollFollow";
 import { useAppStore } from "../../store/useAppStore";
 import { ProcessGroup } from "./ProcessGroup";
 import { TurnCollapse } from "./TurnCollapse";
@@ -55,6 +57,14 @@ function entryTouchesProcess(entry: ProcessEntry): boolean {
  * 也不会破坏浏览器自带的查找、锚点与无障碍树。
  */
 const VISIBLE_STEP = 80;
+/**
+ * 「算贴底」的容差（px）。
+ *
+ * 以前是 2px：滚到距底 3px 停下就再也恢复不了跟随，而用户明明觉得已经到底了——
+ * 触屏惯性、亚像素误差、以及一圈圆角都会留下几个像素。24px 小于一行正文，
+ * 不会把「停在倒数第二行读」误判成贴底（与 DSH 的 FOLLOW_THRESHOLD 同一量级）。
+ */
+const BOTTOM_SLOP = 24;
 /**
  * 离屏跳过布局/绘制**只给密集的单行过程行**：它们的高度稳定在一行（~28px），32px 的
  * 占位与真实值几乎一致，滚动过程中不会来回回缩。
@@ -381,8 +391,13 @@ export function MessageList({
   const scroller = useRef<HTMLDivElement>(null);
   /** 滚动内容的外层：它的高度变化（展开折叠块、图片加载）触发贴底跟随。 */
   const content = useRef<HTMLDivElement>(null);
-  /** 贴底跟随：用户往上翻就停下，回到底部再恢复。 */
-  const stick = useRef(true);
+  /**
+   * 贴底跟随的意图与归因（见 `lib/scrollFollow`）：往上翻就停、回到底部恢复。
+   *
+   * 不用「上一次 scroll 的位置」判方向：内容变短（收起过程）、输入框聚焦、
+   * 浏览器自己的 scroll anchoring 都会产生朝上的位移，但它们不是读者在往上滚。
+   */
+  const [follow] = useState(() => new ScrollFollow(true, BOTTOM_SLOP));
   const [limit, setLimit] = useState(VISIBLE_STEP);
   const [atBottom, setAtBottom] = useState(true);
   /** 不贴底时来了新内容：按钮上点一个提示点。 */
@@ -396,8 +411,36 @@ export function MessageList({
    * 「最后一条用户消息是谁」，与滚动位置无关。
    */
   const lastUserSent = useRef<string | null>(null);
-  /** 展开更早消息前记录的「距底部距离」，用于展开后保持视口不动。 */
-  const anchorFromBottom = useRef<number | null>(null);
+  /**
+   * 读者视线钉住的那一行（`data-item-id` + 它相对滚动区顶部的偏移）。
+   *
+   * 为什么不是「距底部多远」：加载更早、收起一轮的过程都会改变内容高度，而距底距离
+   * 把「视口上方长了多少」与「下方短了多少」混成一个数；历史里有图片、代码块延迟
+   * 撑高时它会漂。按一行真实元素钉，位置由那一行自己给出（与 DSH 的
+   * `capturePosition` 同一思路）。
+   */
+  const anchor = useRef<{ id: string; offset: number } | null>(null);
+  /** 上一次 commit 的内容高度：用来发现「内容变短了」（收起过程 / 折叠卡片）。 */
+  const lastHeight = useRef(0);
+  /** 上一次的窗口大小：变大 = 刚点了「加载更早」，要按锚点还原。 */
+  const prevLimit = useRef(VISIBLE_STEP);
+  /** 上一次 commit 的结构签名：只有结构变了才值得重算锚点（流式纯内容增长不算）。 */
+  const prevStruct = useRef<{
+    count: number;
+    manual: Record<string, boolean>;
+    timing: CollapseTiming;
+    running: boolean;
+    dense: boolean;
+    hidden: number;
+  } | null>(null);
+  /**
+   * 手指/鼠标按住滚动区的状态。
+   *
+   * 手机上长按选文本、按住屏幕读一段话时内容还在流式增长；跟随会在手指底下继续把
+   * 内容往上推，选中直接跑掉。按住期间只**暂停**跟随，不解除：松手时手指没动过就
+   * 恢复跟随并贴回底部（用户只是点了一下），动过就按落点重新判断。
+   */
+  const press = useRef<{ following: boolean; moved: boolean; y: number; top: number } | null>(null);
   /** 轮次刻度：每条用户消息一个刻度，点一下跳到那一轮。 */
   const turns = useMemo(() => turnsOf(items), [items]);
   const [activeTurn, setActiveTurn] = useState(0);
@@ -412,6 +455,44 @@ export function MessageList({
    */
   const pendingJump = useRef<{ id: string; fallback?: string; tries: number } | null>(null);
 
+  /**
+   * 记下此刻视口顶部那一行，供「内容变短 / 展开更早」之后把视线钉回去。
+   *
+   * 行按文档顺序排列、底边单调递增，所以二分找第一个越过视口顶部的行：每帧 commit
+   * 都可能调一次，不能线性扫一遍再逐个读几何。
+   */
+  const captureAnchor = () => {
+    const sc = scroller.current;
+    if (!sc) return;
+    const top = sc.getBoundingClientRect().top;
+    const rows = sc.querySelectorAll<HTMLElement>("[data-item-id]");
+    let low = 0;
+    let high = rows.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (rows.item(mid).getBoundingClientRect().bottom > top + 1) high = mid;
+      else low = mid + 1;
+    }
+    const row = rows.item(low);
+    const id = row?.dataset.itemId;
+    anchor.current = row && id ? { id, offset: row.getBoundingClientRect().top - top } : null;
+  };
+
+  /** 把锚点那一行放回原来的屏幕位置；行已经不在了（被收起）就什么都不做。 */
+  const restoreAnchor = () => {
+    const sc = scroller.current;
+    const a = anchor.current;
+    if (!sc || !a) return;
+    const row =
+      sc.querySelector<HTMLElement>(`[data-item-id="${a.id}"]`) ??
+      sc.querySelector<HTMLElement>(`[data-item-ids~="${a.id}"]`);
+    if (!row) return;
+    const rel = row.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+    sc.scrollTop += rel - a.offset;
+    // 这次写入是我们做的：登记成新基准，别让它在下一次 scroll 事件里被算成读者移动。
+    follow.reset(sc.scrollTop);
+  };
+
   const scrollToItem = (id: string): boolean => {
     const sc = scroller.current;
     // `data-item-id` 是单条；`data-item-ids` 是「几块合成一行」的容器（连续的思考块合并
@@ -421,9 +502,18 @@ export function MessageList({
       sc?.querySelector<HTMLElement>(`[data-item-ids~="${id}"]`);
     if (!sc || !el) return false;
     const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 8;
+    /**
+     * 跳转的语义就是「我要看这一条」，所以从这一刻起不再贴底跟随。
+     *
+     * 不解除的话，下一帧流式内容长高（或一次尺寸变化）会立刻把视口拽回底部——用户
+     * 在右侧栏轨迹里点某一步，看到的是「跳过去闪一下又弹回最新」。目标本身就在底部
+     * 附近时不解除（那是「回到最新」的同义操作）。
+     */
+    const floor = Math.max(0, sc.scrollHeight - sc.clientHeight);
+    if (Math.abs(floor - top) > BOTTOM_SLOP) follow.release();
     const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
     if (!reduce && typeof sc.scrollTo === "function") sc.scrollTo({ top, behavior: "smooth" });
-    else sc.scrollTop = top;
+    else follow.jump(sc, top);
     return true;
   };
 
@@ -602,10 +692,19 @@ export function MessageList({
       turnSig.current = sig;
       // 被「最近 N 条」窗口截掉的轮次没有 DOM 节点，但它们一定在视口上方：
       // 用 -Infinity 参与比较，不必去查一个不存在的元素。
+      // **一次查询建表**：以前每一轮调一次 `querySelector`（每轮都在整棵子树上扫一遍），
+      // 几百轮的会话每次滚动停止都要扫几百遍。只要每轮的锚点（用户消息），先收成一个
+      // Set，扫一遍 DOM 就够。
+      const wanted = new Set(turns.map((turn) => turn.id));
+      const found = new Map<string, HTMLElement>();
+      for (const el of sc.querySelectorAll<HTMLElement>("[data-item-id]")) {
+        const id = el.dataset.itemId;
+        if (id !== undefined && wanted.has(id)) found.set(id, el);
+      }
       const origin = sc.getBoundingClientRect().top - sc.scrollTop;
       turnTops.current = turns.map((turn) => {
         if (turn.index < hidden) return Number.NEGATIVE_INFINITY;
-        const el = sc.querySelector<HTMLElement>(`[data-item-id="${turn.id}"]`);
+        const el = found.get(turn.id);
         return el ? el.getBoundingClientRect().top - origin : Number.NEGATIVE_INFINITY;
       });
     },
@@ -621,8 +720,37 @@ export function MessageList({
   const syncActiveTurn = useCallback(() => {
     const sc = scroller.current;
     if (!sc || turnTops.current.length === 0) return;
-    setActiveTurn(activeTurnIndex(turnTops.current, sc.scrollTop, undefined, stick.current));
-  }, []);
+    setActiveTurn(activeTurnIndex(turnTops.current, sc.scrollTop, undefined, follow.following));
+    // `follow` 是 useState 出来的稳定实例，不必进依赖。
+  }, [follow]);
+
+  /**
+   * 首次挂载与切换对话：**在绘制前**就贴到底。
+   *
+   * 以前这一步排在一个 rAF 里（`useEffect` 之后），长对话的表现是「先画出中间一段，
+   * 下一帧再跳到底部」——闪一下。layout 阶段写 `scrollTop` 虽然会触发一次同步布局，
+   * 但那次布局本来就要为这批新节点做。
+   *
+   * 必须先于下面的「内容变化」effect 声明：切对话要把跟随复位成 true，再让它去贴底。
+   */
+  useLayoutEffect(() => {
+    setLimit(VISIBLE_STEP);
+    follow.resume();
+    setAtBottom(true);
+    setUnseen(false);
+    prevCount.current = items.length;
+    prevLimit.current = VISIBLE_STEP;
+    // 换对话：新会话的第一条 user 不是「刚发的」，别在挂载时额外触发一次强制贴底。
+    lastUserSent.current = items[items.length - 1]?.kind === "user" ? items[items.length - 1].id : null;
+    const el = scroller.current;
+    if (el) {
+      follow.pin(el);
+      lastHeight.current = el.scrollHeight;
+      anchor.current = null;
+    }
+    // 只认 resetKey：首次挂载与切对话各跑一次，items 变化不该重跑（那会反复贴底）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey]);
 
   // 内容、窗口或容器尺寸变化后重新量一次，并按当前滚动位置校准刻度。
   useLayoutEffect(() => {
@@ -645,13 +773,13 @@ export function MessageList({
     const ro = new ResizeObserver(() => {
       window.cancelAnimationFrame(raf);
       raf = window.requestAnimationFrame(() => {
-        if (stick.current) {
-          // 高度变化本身不是「用户往上滚」，不要用它去判贴底——只认 `stick`（由
-          // onScroll 的方向判定维护）。这里**不做**「已经在底部就跳过」的优化：
-          // 这次回调的触发原因就是几何变了，此刻的 scrollHeight/scrollTop 恰好在
-          // 旧值上仍然自洽（视口变矮时差值是正的、变高时也可能是 0），按它们判断会
-          // 跳过写入，滚动位置就此停在离底部更远的地方。
-          sc.scrollTop = sc.scrollHeight;
+        if (follow.following && press.current === null) {
+          // 几何变了不是「读者移动」，不要拿它去改跟随意图（那是 `ScrollFollow`
+          // 在 scroll 事件里按归因结算的事）。这里**不做**「已经在底部就跳过」的
+          // 优化：这次回调的触发原因就是几何变了，此刻的 scrollHeight/scrollTop
+          // 恰好在旧值上自洽（视口变矮时差值是正的、变高时也可能是 0），按它们判断
+          // 会跳过写入，滚动位置就此停在离底部更远的地方。
+          follow.pin(sc);
           setAtBottom(true);
           setUnseen(false);
         }
@@ -666,54 +794,109 @@ export function MessageList({
     };
   }, [measureTurns, syncActiveTurn]);
 
-  useEffect(() => {
-    setLimit(VISIBLE_STEP);
-    stick.current = true;
-    setAtBottom(true);
-    setUnseen(false);
-    prevCount.current = items.length;
-    // 换对话：新会话的第一条 user 不是「刚发的」，别在挂载时额外触发一次强制贴底。
-    lastUserSent.current = items[items.length - 1]?.kind === "user" ? items[items.length - 1].id : null;
-  }, [resetKey]);
-
-  // 距底部距离：窗口是「尾部 limit 条」，消息一增长窗口就整体上移一条，
-  // 最上面那条会离开 DOM。用户正在往上翻（不贴底）时要靠这个值还原视口，
-  // 否则他正在读的那条会直接消失。onScroll 里持续记录，代价是一次减法。
-  const distFromBottom = useRef<number | null>(null);
-
-  // 新内容到达：贴底就跟随；否则只点亮「有新内容」。
-  useEffect(() => {
+  /**
+   * 每次 commit 后决定「视口该在哪」。这是滚动策略的全部分支，三件事按顺序判：
+   *
+   *   1. **读者自己发了一条** → 无条件回到底部并恢复跟随（他在往上翻着读历史时发消息，
+   *      刚发的气泡和后面的回复全在视口外，看起来像「发了没反应」）。`echoed` 的除外：
+   *      那是别的设备/标签发的，不能把正在读历史的人拽回底部。
+   *   2. **跟随中** → 钉到底部。内容变高（流式追加、图片加载、展开折叠块）也好，
+   *      视口变矮（审批卡片、计时行）也好，都在这里跟上。
+   *   3. **不跟随** → 内容**变短**（一轮结束收起过程、折叠卡片）或**刚展开更早的消息**时，
+   *      按锚点把读者视线钉回原位；否则只刷新锚点。
+   *
+   * 写在 layout 阶段而不是 `useEffect` + `rAF`：长对话首次打开要先画出中段再跳到底，
+   * 那一下就闪在用户眼前；流式输出也会慢一帧。
+   */
+  useLayoutEffect(() => {
     const el = scroller.current;
+    if (!el) return;
     const grew = items.length > prevCount.current;
     prevCount.current = items.length;
-    if (!el) return;
-    if (stick.current) {
-      requestAnimationFrame(() => {
-        el.scrollTop = el.scrollHeight;
-      });
+
+    const tail = items[items.length - 1];
+    const sentNow = tail?.kind === "user" && !tail.echoed && tail.id !== lastUserSent.current;
+    if (tail?.kind === "user") lastUserSent.current = tail.id;
+    if (sentNow) {
+      follow.resume();
+      follow.pin(el);
       setAtBottom(true);
       setUnseen(false);
-    } else if (grew) {
-      setUnseen(true);
+      lastHeight.current = el.scrollHeight;
+      anchor.current = null;
+      return;
     }
-  }, [items]);
+
+    const height = el.scrollHeight;
+    const shrunk = lastHeight.current - height;
+    // 窗口只会在「加载更早」时变大；切对话会把它复位成 `VISIBLE_STEP`（变小），
+    // 那不是展开，别按锚点还原（那时锚点本来就是空的）。
+    const openedEarlier = limit > prevLimit.current;
+    prevLimit.current = limit;
+    lastHeight.current = height;
+
+    /**
+     * **刚展开了更早的消息**：读者点的是「加载更早」，意思是「我要往上读」，所以
+     * 既不能把视口钉到底部（刚展开的内容全在视口上方，钉底就什么也看不到），也不能
+     * 继续跟随（接下来的新内容不该把他拽回来）。按展开前记下的那一行保持位置。
+     */
+    if (openedEarlier) {
+      follow.release();
+      setAtBottom(false);
+      restoreAnchor();
+      captureAnchor();
+      return;
+    }
+
+    if (follow.following) {
+      // 按住屏幕期间不要推内容（见 `press`）：跟随意图还在，只是先不动。
+      if (press.current !== null) return;
+      follow.pin(el);
+      setAtBottom(true);
+      setUnseen(false);
+      anchor.current = null;
+      return;
+    }
+
+    if (grew) setUnseen(true);
+    // 纯内容增长（流式追加同一个气泡）不改结构，锚点也不会变：只有结构变了、
+    // 或者内容真的变短了才值得读一遍几何。否则用户在读历史时，流式输出的每一帧
+    // 都要做一次全树查询 + 二分读 rect。
+    const ps = prevStruct.current;
+    const structural =
+      ps === null ||
+      ps.count !== items.length ||
+      ps.manual !== manual ||
+      ps.timing !== timing ||
+      ps.running !== running ||
+      ps.dense !== dense ||
+      ps.hidden !== hidden;
+    prevStruct.current = { count: items.length, manual, timing, running, dense, hidden };
+    if (structural || shrunk > 0) {
+      if (openedEarlier || shrunk > 0) restoreAnchor();
+      captureAnchor();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, hidden, limit, manual, timing, running, dense]);
 
   // 内容变高（展开思考过程 / 工具卡片、图片加载完、流式追加一段）也跟随贴底。
   //
   // 上面那个 effect 只认条数变化：展开一个折叠块不改 items，新露出来的正文就留在
   // 视口外，点开像没反应。这里按内容容器的高度变化补上，规则与滚动本身一致——
   // 用户往上滚过（不贴底）就不跟，滚回底部自然恢复，不额外给状态。
-  useFollowGrowth(scroller, content, () => stick.current);
+  useFollowGrowth(
+    scroller,
+    content,
+    () => follow.following && press.current === null,
+    true,
+    // 落点要登记成归因基准，否则下一次 scroll 事件会拿旧基准去比。
+    (el) => follow.pin(el),
+  );
 
   // 展开更早的消息后把视口钉在原来那条消息上，别让它「跳一下」。
   // 顺手把挂起的跳转走完：目标可能在窗口外（limit 变了）、也可能在刚被展开的轮里
   // （manual 变了）——两个依赖缺一不可，否则「点轨迹里那一步」会停在没滚动的状态。
   useLayoutEffect(() => {
-    const el = scroller.current;
-    if (el && anchorFromBottom.current !== null) {
-      el.scrollTop = el.scrollHeight - anchorFromBottom.current;
-      anchorFromBottom.current = null;
-    }
     const jump = pendingJump.current;
     if (!jump) return;
     jump.tries += 1;
@@ -730,38 +913,6 @@ export function MessageList({
     if (jump.tries >= 3) pendingJump.current = null;
   }, [limit, manual, items, spans, jumpTick]);
 
-  // 窗口整体上移（`hidden` 变了）时还原视口，以及**用户自己发消息时强制贴底**。
-  useLayoutEffect(() => {
-    const el = scroller.current;
-    if (!el) return;
-    const dist = distFromBottom.current;
-    /**
-     * **用户自己刚发了一条**：无论此刻滚到哪儿都回到底部并恢复跟随。
-     *
-     * 用户往上翻着读历史、直接发一句话，界面却停在他读的那段、自己刚发的气泡和后面的
-     * 回复全在视口外，看起来就像「发了没反应」。这是唯一会强行接管滚动的情况——别人发来的
-     * 消息（另一台设备、定时任务投递）仍然遵守「往上翻就停下」。
-     *
-     * 判定放在这里而不是下面那个 effect：`hidden > 0` 的「还原视口」也在这段跑，
-     * 放到后面会把刚滚到底的位置又按旧距离还原回去（闪一帧再跳回）。
-     *
-     * **`echoed` 的不算「我刚发的」**：那是后端 `prompt.echo` 补进来的别的设备/标签
-     * 发的消息。按「尾巴是新的 user」一刀切会把正在读历史的人拽回底部——注释里说的
-     * 「别人发来的仍然遵守往上翻就停下」正是这条，之前漏了这个标记。
-     */
-    const tail = items[items.length - 1];
-    const sentNow = tail?.kind === "user" && !tail.echoed && tail.id !== lastUserSent.current;
-    if (tail?.kind === "user") lastUserSent.current = tail.id;
-    if (sentNow) {
-      stick.current = true;
-      el.scrollTop = el.scrollHeight;
-      return;
-    }
-    if (!stick.current && hidden > 0 && dist !== null) {
-      el.scrollTop = el.scrollHeight - dist;
-    }
-  }, [items, hidden]);
-
   // 滚动停止后重量一次：折叠/展开卡片、图片加载完成都会让上面的高度变化，
   // 而轮次签名没变、缓存不会自动失效。趁用户没在滚（也没有布局竞争）时补一次。
   useEffect(() => {
@@ -771,39 +922,31 @@ export function MessageList({
   }, []);
 
   /**
-   * 上一次 scroll 事件的 scrollTop：判断用户是在往上滚还是在往下滚。
+   * 一次 scroll 事件 = 一次位置变化，按它结算跟随意图。
    *
-   * **贴底状态只认滚动方向，不认「距底多远」**（以前是 `距底 < 100`）。那个判法在流式
-   * 输出下会自己把跟随关掉：跟随把 scrollTop 推到底之后，内容往往在下一个 scroll 事件
-   * 被处理前又长高了一截，事件到达时距底已经 > 100，于是被判成「用户往上翻了」，
-   * 从此不再跟随——表现就是「滚着滚着突然不跟了，得手动点一次回到底部」。
-   * 内容变高只会让 scrollTop 不变或变大，不会伪装成「往上滚」。
+   * 归因在 `ScrollFollow.read` 里：只有「相对上一次确认的位置真的动了」才算是读者
+   * 移动。内容变短被浏览器 clamp、输入框聚焦挪动、原生 scroll anchoring 补偿……
+   * 这些朝上的位移都不会把跟随关掉（详见 `lib/scrollFollow`）。
    */
-  const lastTop = useRef<number | null>(null);
-
   const onScroll = () => {
     const el = scroller.current;
     if (!el) return;
-    const top = el.scrollTop;
-    const prev = lastTop.current;
-    lastTop.current = top;
+    const { metrics, movedByReader } = follow.read(el);
     if (scrollSettle.current !== null) window.clearTimeout(scrollSettle.current);
     scrollSettle.current = window.setTimeout(() => {
       scrollSettle.current = null;
       measureTurns(true);
       syncActiveTurn();
+      // 停手后刷新锚点：下一次「收起过程」要靠它把视线钉住。
+      if (!follow.following) captureAnchor();
     }, 150);
-    distFromBottom.current = el.scrollHeight - top;
-    const bottom = el.scrollHeight - top - el.clientHeight;
-    // 往上滚 = 用户要离开底部；滚到底 = 恢复跟随。其余情况（内容长高导致的位置变化）
-    // 保持当前状态，不要拿它改判。阈值给 2px 抖动量，避免亚像素误差来回翻。
-    if (prev !== null && top < prev - 2) stick.current = false;
-    else if (bottom <= 2) stick.current = true;
+    // 按住屏幕期间不结算：手指没动，跟随也不该在这里被改写（见 `press`）。
+    if (press.current === null) follow.sample(metrics, movedByReader);
     // 这两个 setState 在值没变时会被 React 自己挡掉（`Object.is` 相同即跳过重渲染），
     // 不必再手写一层比较。真正会变的是 `syncActiveTurn` 里的 `activeTurn`——它一变
     // `MessageList` 就重渲染，所以行树才要单独 memo 成 `TurnRows`（见那里的注释）。
-    setAtBottom(stick.current);
-    if (stick.current) setUnseen(false);
+    setAtBottom(follow.following);
+    if (follow.following) setUnseen(false);
     if (rafPending.current === null) {
       rafPending.current = window.requestAnimationFrame(() => {
         rafPending.current = null;
@@ -812,23 +955,108 @@ export function MessageList({
     }
   };
 
+  /** 按下：只记住「按下前在不在跟随」与按下时的位置，真正改意图要等松手。 */
+  const onPointerDown = (e: ReactPointerEvent) => {
+    press.current = {
+      following: follow.following,
+      moved: false,
+      y: e.clientY,
+      top: e.currentTarget.scrollTop,
+    };
+  };
+
+  /** 手指/鼠标移动超过 6px 才算「读者在滚」，否则视为一次点击。 */
+  const onPointerMove = (e: ReactPointerEvent) => {
+    const p = press.current;
+    if (!p || p.moved) return;
+    if (Math.abs(e.clientY - p.y) > 6) p.moved = true;
+  };
+
+  /**
+   * 松手：没动过就恢复原来的跟随（并贴回底部），动过就按落点重新判断。
+   *
+   * 「按住但没滚」恢复跟随是有意的：轻点一下消息（选中、点链接）不该让会话从此不再
+   * 跟随最新内容；而按住读的那几秒里内容长高了，松手后回到底部也符合「我在看最新」。
+   */
+  const endPress = useCallback(() => {
+    const p = press.current;
+    press.current = null;
+    const el = scroller.current;
+    if (!p || !el) return;
+    // 位置变了才叫「读者滚过」。不能只看手指位移：移动端滚动一开始浏览器就可能发
+    // `pointercancel`，之后不再有 `pointermove`，那时位置已经变了。
+    const { metrics } = follow.read(el);
+    const movedPos = Math.abs(metrics.top - p.top) > 2;
+    if (!p.moved && !movedPos && p.following) {
+      follow.resume();
+      follow.pin(el);
+      setAtBottom(true);
+      setUnseen(false);
+      return;
+    }
+    follow.sample(metrics, true);
+    setAtBottom(follow.following);
+    if (follow.following) setUnseen(false);
+  }, [follow]);
+
+  /**
+   * 松手可能在滚动区之外（拖出去再松开），也可能根本收不到 `pointerup`
+   * （移动端滚动会把它换成 `pointercancel`）。**必须挂到 window 上兜底**：
+   * 漏一次，`press` 就永远不为 null，跟随从此再也回不来。
+   */
+  useEffect(() => {
+    const release = () => {
+      if (press.current !== null) endPress();
+    };
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+      window.removeEventListener("blur", release);
+    };
+  }, [endPress]);
+
+  /**
+   * 滚轮往上滚 = 读者要看历史。立刻解除跟随，不等 scroll 事件（一次滚轮的位移
+   * 可能小到落在容差里，那样内容仍会被下一帧的跟随推走）。
+   *
+   * 嵌套滚动区（代码块、工具卡片的命令块）里的滚轮不算：那里横向/纵向滚动的是
+   * 卡片自己，读者并没有离开会话底部。
+   */
+  const onWheel = (e: ReactWheelEvent) => {
+    const sc = scroller.current;
+    const target = e.target as Element | null;
+    // 注意比的是**最近的**那个滚动容器是不是会话滚动区自己：滚轮事件的 target
+    // 通常是正文里的某个元素，而它的祖先链上就有消息区（`.dsh-scroll`）。
+    // 拿「有没有祖先」当条件的话，页面里的每一次滚轮都会被当成嵌套滚动。
+    const nested = target?.closest("pre, .dsh-scroll, .code-scroll");
+    if (sc && nested && nested !== sc) return;
+    if (e.deltaY >= 0) return;
+    follow.release();
+    setAtBottom(false);
+  };
+
   const toBottom = () => {
     const el = scroller.current;
     if (!el) return;
-    stick.current = true;
+    follow.resume();
     setAtBottom(true);
     setUnseen(false);
-    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
-    if (!reduce && typeof el.scrollTo === "function") {
-      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-    } else {
-      el.scrollTop = el.scrollHeight;
-    }
+    /**
+     * **不写 smooth**：这条路径要跨过的可能是整段历史（几百条消息），平滑动画要跑好几秒；
+     * 而流式输出每帧都在长高，跟随（即时定位）会在动画途中直接改写 `scrollTop`，把动画
+     * 打断成一次瞬移——用户看到的是「点了回到底部，滚到一半卡住」。这颗按钮的语义是
+     * 「立刻回到最新」，即时定位才是它该有的手感。跳转某一条（`scrollToItem`）仍用 smooth。
+     */
+    follow.pin(el);
   };
 
   const loadEarlier = () => {
-    const el = scroller.current;
-    if (el) anchorFromBottom.current = el.scrollHeight - el.scrollTop;
+    // 展开更早的消息会把视口上方整段变高：先把视线所在的那一行记下来，
+    // 展开后由「内容变化」那个 layout effect 按它还原。
+    captureAnchor();
     setLimit((n) => n + VISIBLE_STEP);
   };
 
@@ -860,6 +1088,9 @@ export function MessageList({
         // 溢出，不是内容。
         className={`dsh-scroll h-full overflow-x-hidden overflow-y-auto ${turns.length >= 2 ? "dsh-scroll-none-md" : ""}`}
         onScroll={onScroll}
+        onWheel={onWheel}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
       >
         <div
           ref={content}

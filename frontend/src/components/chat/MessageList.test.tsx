@@ -135,6 +135,48 @@ describe("MessageList 长对话", () => {
     expect(screen.queryByRole("button", { name: "回到底部" })).toBeNull();
   });
 
+  // 「加载更早」是「我要往上读」：展开后视口不能停在底部（刚展开的内容全在视口上方），
+  // 而且要解除跟随——否则下一条流式内容会立刻把人拽回最新。
+  it("贴底时点「加载更早」会解除跟随", () => {
+    render(<MessageList items={many(200)} />);
+    const el = sizedScroller();
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /加载更早/ }));
+    expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
+  });
+
+  // 回归：一轮结束、过程自动收起时内容会**变短**，浏览器把 scrollTop 夹到新的底部。
+  // 那是一次朝上的位移，但不是用户在往上滚——先判方向会把跟随关掉，界面上就是
+  // 「跑完一轮突然冒出『回到底部』，之后的回复再也不跟」。
+  it("内容变短（收起过程）造成的位置回退不算「用户往上滚」", () => {
+    render(<MessageList items={many(5)} />);
+    const el = sizedScroller(1000, 500);
+    el.scrollTop = 500;
+    fireEvent.scroll(el); // 贴底
+
+    // 过程收起：内容短到不够一屏，浏览器把 scrollTop 夹回 0。
+    Object.defineProperty(el, "scrollHeight", { value: 400, configurable: true });
+    el.scrollTop = 0;
+    fireEvent.scroll(el);
+
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
+  });
+
+  // 惯性停在距底十几像素处时，用户已经觉得「到底了」；容差太小就永远恢复不了跟随。
+  it("滚到距底一两个像素以内就恢复跟随", () => {
+    render(<MessageList items={many(5)} />);
+    const el = sizedScroller(1000, 500);
+    scrollUp(el);
+    expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
+
+    el.scrollTop = 500 - 12;
+    fireEvent.scroll(el);
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
+  });
+
   it("不贴底时来了新消息，按钮提示「有新内容」", () => {
     const { rerender } = render(<MessageList items={many(5)} />);
     const el = sizedScroller();
@@ -170,6 +212,19 @@ describe("MessageList 长对话", () => {
     rerender(<MessageList items={[...many(5), userItem(99), assistantItem(100)]} />);
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     expect(el.scrollTop).toBe(2000);
+  });
+
+  // 切对话会把窗口与跟随一起复位。判「刚展开了更早的消息」如果拿 `hidden` 比，
+  // 这里会被误判（切对话时 hidden 也会变），于是复位后的跟随马上又被关掉。
+  it("切换对话后仍然贴底跟随", () => {
+    const { rerender } = render(<MessageList items={many(5)} resetKey="a" />);
+    const el = sizedScroller(1000, 500);
+    scrollUp(el);
+    expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
+
+    rerender(<MessageList items={many(5)} resetKey="b" />);
+    expect(el.scrollTop).toBe(el.scrollHeight);
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
   });
 
   it("切换对话（resetKey 变化）后回到只渲染最近一批", () => {
