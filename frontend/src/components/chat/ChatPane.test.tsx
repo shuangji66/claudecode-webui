@@ -3,6 +3,7 @@ import { act, render, screen } from "@testing-library/react";
 import { ChatPane, CONN_BAR_DELAY } from "./ChatPane";
 import { useAppStore } from "../../store/useAppStore";
 import type { ConversationInfo, SessionInfo } from "../../transport/types";
+import { resetBusyEnterCache, setBusyEnter } from "../../lib/busyEnter";
 
 function conv(over: Partial<ConversationInfo> = {}): ConversationInfo {
   return {
@@ -49,6 +50,9 @@ function setup(activeId: string | null, conversations: ConversationInfo[], sessi
 
 beforeEach(() => {
   useAppStore.setState({ settings: null } as never);
+  // 「繁忙时的发送行为」是模块级缓存的偏好：每个用例从默认的「排队」开始。
+  localStorage.removeItem("ccweb-busy-enter");
+  resetBusyEnterCache();
 });
 
 describe("ChatPane 新对话布局", () => {
@@ -111,6 +115,20 @@ describe("ChatPane 回合计时", () => {
   it("空闲时不显示计时行", () => {
     setupTurn("ready");
     expect(screen.queryByText("少女祈祷中")).not.toBeInTheDocument();
+  });
+
+  // 底栏那行操作提示必须与「繁忙时的发送行为」一致：偏好在哪一档、Enter 投递哪一档。
+  // 写反了用户照着提示按，得到的是相反的结果（而且不会报错）。
+  it("底栏提示跟着发送行为：默认排队", () => {
+    setupTurn("busy");
+    expect(screen.getByText("Enter 排队 · Ctrl+Enter 立即插话")).toBeInTheDocument();
+  });
+
+  it("底栏提示跟着发送行为：偏好插话时两档互换", () => {
+    setBusyEnter("steer");
+    setupTurn("busy");
+    expect(screen.getByText("Enter 插话 · Ctrl+Enter 排队")).toBeInTheDocument();
+    expect(screen.queryByText("Enter 排队 · Ctrl+Enter 立即插话")).toBeNull();
   });
 });
 
