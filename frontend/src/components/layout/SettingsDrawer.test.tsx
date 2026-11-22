@@ -49,6 +49,27 @@ describe("设置导航的可见性", () => {
     vi.unstubAllGlobals();
   });
 
+  // 动机就是「从侧栏『有更新』直接落到部署 / 访问 / 关于」：打开那一刻选中的页签
+  // 可能在屏幕外，必须先把它滚进来，而不是等用户自己点一下。
+  it("带着初始页签打开时就把该页签滚进视野", async () => {
+    const spy = vi.fn();
+    const proto = Element.prototype as unknown as { scrollIntoView?: unknown };
+    const original = proto.scrollIntoView;
+    proto.scrollIntoView = spy;
+    try {
+      await act(async () => {
+        render(<SettingsDrawer open onClose={() => {}} initialTab="deploy" />);
+      });
+      const nav = screen.getByRole("navigation");
+      const deploy = within(nav).getByRole("button", { name: "部署" });
+      expect(spy).toHaveBeenCalled();
+      expect(spy.mock.instances[0]).toBe(deploy);
+      expect(spy).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+    } finally {
+      proto.scrollIntoView = original;
+    }
+  });
+
   it("切页签后把当前项滚进视野", async () => {
     const spy = vi.fn();
     // jsdom 没有 scrollIntoView：装上桩再卸掉。
