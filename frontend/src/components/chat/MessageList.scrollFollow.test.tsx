@@ -359,7 +359,6 @@ describe("按住屏幕期间暂停跟随", () => {
     fireEvent.wheel(el, { deltaY: -40 });
     expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
   });
-
   it("嵌套滚动区（代码块）里的滚轮不动跟随", async () => {
     const el = await mountAndSettle([bash, answer]);
     el.scrollTop = 500;
@@ -425,6 +424,141 @@ describe("内容变短时钉住读者视线", () => {
 
     // 视线钉在 r2 的顶部：scrollTop 跟着少 400，而不是停在 800 让正文跳走。
     expect(el.scrollTop).toBe(400);
+  });
+});
+
+// 触摸滚动一开始（滚动交给 compositor）、以及长按选择手势，浏览器都会发
+// `pointercancel` 并且**不再补 `pointerup`**；手指真正离开屏幕是 `touchend`。
+//
+// 曾经把 `pointercancel` 当松手：那一刻 `press` 被清空，而 `press` 正是三条贴底写入
+// （items 的 layout effect、内容 ResizeObserver、容器 ResizeObserver）唯一的守卫——
+// 于是在整段滚动过程中，流式思考每长高一帧就把 `scrollTop` 写回底部，手指每滑几像素
+// 就被拽回去；`onScroll` 的归因又因为落点落在 24px 容差内把 `following` 判回 true，
+// 越滚越回底。手机上表现就是「消息一直往底部撤回、抖」，只有使劲一甩才滚得动。
+describe("触摸滚动期间 pointercancel 不结束手势", () => {
+  // **这是这次问题的核心回归**：触摸滚动每帧只动几像素，而流式思考每帧都在长高。
+  // 只要 `press` 在滚动途中被清掉，三条贴底守卫就全失效——内容每长高一帧就把视口写回
+  // 底部，手指的几像素位移被吃掉；`onScroll` 的归因又因为落点落在 24px 容差内把
+  // `following` 判回 true，于是越滚越回底，只有一帧滑过 24px 才滚得动。
+  it("手指缓慢上滑的整段过程中，视口始终停在手指的位置", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+
+    fireEvent.pointerDown(el, { clientY: 400, pointerType: "touch" });
+    // 真实浏览器：触摸滚动一开始就把 pointer 收走（滚动交给 compositor），
+    // 之后只有 `scroll` 事件，没有 `pointermove`，直到 `touchend`。
+    fireEvent.pointerCancel(el, { clientY: 400 });
+
+    let height = 1000;
+    let top = 500;
+    for (let i = 0; i < 10; i += 1) {
+      // 一帧：内容长高 8px（流式思考），手指向上滑 6px。
+      height += 8;
+      top -= 6;
+      grow(el, height);
+      await fireResize();
+      el.scrollTop = top;
+      fireEvent.scroll(el);
+    }
+
+    // 视口停在手指的位置，没有被贴底跟随吃掉。
+    expect(el.scrollTop).toBe(top);
+    // 手势还没结束：此刻仍不该出现「回到底部」。
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
+
+    fireEvent.touchEnd(el);
+    expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
+  });
+
+  it("pointercancel 之后内容长高也不把视口拽回底部", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+
+    // 手指按上去、开始滑动：浏览器把 pointer 收走（滚动转交 compositor）。
+    fireEvent.pointerDown(el, { clientY: 400, pointerType: "touch" });
+    fireEvent.pointerCancel(el, { clientY: 400 });
+
+    // 手势还没结束：贴底写入必须继续被暂停，内容长高不影响视口。
+    el.scrollTop = 420;
+    fireEvent.scroll(el);
+    grow(el, 1400);
+    await fireResize();
+    expect(el.scrollTop).toBe(420);
+  });
+
+  it("touchend 之后才结算：手指划过就停止跟随，出现「回到底部」", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+
+    fireEvent.pointerDown(el, { clientY: 400, pointerType: "touch" });
+    fireEvent.pointerCancel(el, { clientY: 400 });
+    el.scrollTop = 300;
+    fireEvent.scroll(el);
+
+    // 手指离开屏幕：结算成「读者往上滚过」，从此不跟。
+    fireEvent.touchEnd(el);
+    grow(el, 1400);
+    await fireResize();
+    expect(el.scrollTop).toBe(300);
+    expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
+  });
+
+  it("touchend 时已经真回到最底部则恢复跟随", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+
+    fireEvent.pointerDown(el, { clientY: 400, pointerType: "touch" });
+    fireEvent.pointerCancel(el, { clientY: 400 });
+    // 内容 1000 / 视口 500：贴底就是 500。
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+    fireEvent.touchEnd(el);
+
+    grow(el, 1600);
+    await fireResize();
+    expect(el.scrollTop).toBe(1600);
+  });
+
+  it("鼠标（非 touch）松手仍按 pointerup 结算", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+
+    // 鼠标拖选文本：pointerup 就来（没有 touchend）。
+    fireEvent.pointerDown(el, { clientY: 100, pointerType: "mouse" });
+    fireEvent.pointerUp(window);
+    grow(el, 1400);
+    await fireResize();
+    // 没动过 → 恢复跟随并贴底。
+    expect(el.scrollTop).toBe(1400);
+  });
+
+  it("touchend 没到达时由 10 秒兜底结算，跟随不会永久停摆", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+
+    // 只把 set/clearTimeout 换成假时钟：`requestAnimationFrame` 必须保持真实，
+    // 否则 `mountAndSettle` / `fireResize` 等不到那一帧。
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      fireEvent.pointerDown(el, { clientY: 400, pointerType: "touch" });
+      // 手指没离开、touchend 也没来（WebView 吞事件）。
+      el.scrollTop = 300;
+      fireEvent.scroll(el);
+      act(() => vi.advanceTimersByTime(10_000));
+    } finally {
+      vi.useRealTimers();
+    }
+
+    grow(el, 1400);
+    await fireResize();
+    expect(el.scrollTop).toBe(300);
+    expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
   });
 });
 

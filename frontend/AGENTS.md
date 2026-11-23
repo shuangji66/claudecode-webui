@@ -768,6 +768,11 @@ src/
   『回到底部』，之后的回复再也不跟」。
 - **程序化写入一律走 `follow.pin` / `follow.jump`**：它们会把落点登记成归因基准。
   裸写 `el.scrollTop = …` 会让下一次 scroll 事件拿旧基准去比，位移被算成读者移动。
+- **消息滚动区必须 `overflow-anchor: none`**（`.dsh-chat-scroll`）：浏览器自带的 scroll
+  anchoring 会在内容变化时偷偷改 `scrollTop`，而我们的贴底跟随也在写同一个值——两个写者
+  抢一个位置，流式内容每帧长高时就是抖动。DSH 的 `ChatView.module.css` 同样这么设。
+  **只加在消息区**，不要加到 `.dsh-scroll`：代码块与侧栏是纯内容滚动容器，
+  它们正需要浏览器锚定来保位。
 - **贴底的写入都在 layout 阶段**：首次挂载、切对话（`resetKey`）在绘制前就 `pin`；
   每次 commit 的「跟随 / 保位」也在 `useLayoutEffect`。用 `useEffect + rAF` 会先画出
   中段再跳到底（长对话闪一帧），流式输出也慢一帧。
@@ -783,6 +788,21 @@ src/
   跑掉。松手时手指没动过就恢复跟随并贴底（轻点一下不该从此不跟随），动过就按落点重新
   判断。滚轮往上滚立即 `release()`，但**嵌套滚动区**（`pre` / `.code-scroll` /
   `.dsh-scroll`）里的滚轮不算——那里滚的是卡片自己。
+- **触屏手势必须活到 `touchend`，`pointercancel` 不是松手**：触摸滚动一开始（滚动交给
+  compositor 之后）、以及长按选择手势，浏览器都会发 `pointercancel` 且**不再补
+  `pointerup`**。`press` 是三条贴底写入（items 的 layout effect、内容 ResizeObserver、
+  容器 ResizeObserver）**唯一的守卫**；一旦在这一刻被清空，整段滚动过程中流式内容每长高
+  一帧就把 `scrollTop` 写回底部——手指每滑几像素被吃掉，`onScroll` 的归因又因为落点落在
+  24px 容差内把 `following` 判回 true，越滚越回底。手机上表现就是**消息一直往底部撤回、
+  抖动**，只有一帧滑过 `BOTTOM_SLOP` 才滚得动（「使劲滚还是能滚，不是彻底阻塞」）；
+  鼠标看不出来是因为滚轮走 `onWheel` 直接 release、一滚就是几十像素。
+  所以 window 监听分两套：`pointerup` / `blur` 结算**鼠标与笔**，`touchend` /
+  `touchcancel` 结算**触屏**（`press.touch` 由 `pointerdown` 的 `pointerType` 决定）。
+  `touchend` 万一没来（WebView 吞事件）由 `pressTimer`（10s）兜底，否则跟随永久暂停。
+- **松手结算只有真到底（≤2px）才恢复贴底**，不套 `BOTTOM_SLOP`：那个容差是给「程序化
+  写入被 clamp」留的余地，用在松手上就变成「轻滑十几像素松手又被拽回底部」。不恢复时
+  `follow.release()` + `follow.reset(top)`（登记落点，别让下次 scroll 把这段位移再算成
+  读者移动），右下角出现「回到底部」；读者自己滚回底部由 `onScroll` 的归因恢复。
 - **跳转（轨迹 / 刻度）后解除跟随**：落点离底部超过容差就 `release()`，否则下一帧
   流式内容会把视口拽回底部（「点了闪一下又弹回最新」）。
 - 「回到底部」用即时定位（`pin`），不写 `smooth`：它可能跨几百条消息，动画期间跟随会
@@ -1145,6 +1165,22 @@ src/
     「思考过程 · 0 字」，点开只有一个空格（截图复现过）。三层都挡：空白增量在没有打开的气泡
     时直接丢弃（已有气泡时照常追加——那是思考里的换行，丢了段落会粘在一起）；完整消息里没有
     thinking 块时，补回 leftover 也要 `trim()` 过；`ThinkingBlock` 正文全空白就 `return null`。
+  - **思考摘要取「最后一个已完成段落的首行」，且溢出纯靠 CSS**（对齐 DSH 的
+    `ReasoningRow` / `latestCompletedParagraphFirstLine`）。两条都不能改回去：
+    - 以前取「最后一行的末尾 200 字」：那一行永远在变（模型正在写），还常截在词/句中间，
+      界面上每帧都跟着抖。段落是模型自己划定的语义单元，**段落首行写完就不动了**，是稳定
+      的标题。**流式取最后段落首行（显示进展）、结束态退回首行（那是标题）**——与 DSH 的
+      `running ? latestCompletedParagraphFirstLine(text) : firstLine(text)` 同一口径；
+      还没出现空行（第一段都没写完）时退回首行，别让摘要空着。
+    - 以前 `SummaryTail` 每帧 `useLayoutEffect` 里读 `scrollWidth` 再写 `scrollLeft`
+      （为了「贴右显示最新」）：那是**每次流式增量一次强制同步布局**，整棵树要先算一遍
+      布局，而它恰好发生在触摸滚动过程中——把 compositor 的滚动帧挤掉，手感发涩，还和
+      贴底跟随抢 `scrollTop`（截图里「持续滚动的正在思考」就是它）。现在：
+      非流式 `text-overflow: ellipsis`；流式 `clip` + 右侧 48px `mask-image` 渐隐
+      （末尾一直在变，画省略号会跟着跳）。**不读任何几何**。
+    - **渐隐要按「可能溢出」才开**（`SUMMARY_MAY_OVERFLOW_CHARS`，按字符数近似、
+      CJK 算 1、ASCII 算 0.5）：`mask` 不能自己判溢出，短摘要会被固定 48px 的渐变啃掉
+      末尾几个字（截图确认过），而用 `scrollWidth` 判断正是要去掉的那件事。
   - 组头（简洁档）是**人话摘要**：进行中取「正在跑的那件事」（`正在读取文件`），已结束按类别
     次数拼 `已读取文件并执行了命令`（两类用「并」、三类用逗号、超过三类加「等」），类别与拼接
     都在 `lib/process.ts`，未知工具归到「调用工具」——绝不能因为工具名没见过就不显示组头。

@@ -437,10 +437,29 @@ export function MessageList({
    * 手指/鼠标按住滚动区的状态。
    *
    * 手机上长按选文本、按住屏幕读一段话时内容还在流式增长；跟随会在手指底下继续把
-   * 内容往上推，选中直接跑掉。按住期间只**暂停**跟随，不解除：松手时手指没动过就
-   * 恢复跟随并贴回底部（用户只是点了一下），动过就按落点重新判断。
+   * 内容往上推，选中直接跑掉。按住期间**暂停所有贴底写入**（三条守卫全读它，
+   * 见 `follow.pin` 的三处调用），松手时再按落点结算。
+   *
+   * **它必须活到 `touchend`，不能被 `pointercancel` 收掉**：触摸滚动一开始（以及
+   * 长按选择手势）浏览器就发 `pointercancel`，此后不再有 `pointerup`。把它当松手的话
+   * `press` 立刻变成 null，于是整个滚动过程中 `pin` 每帧都在跑——手指每滑几像素就被
+   * 写回底部，`onScroll` 的归因又因为「已经在容差内」把 `following` 判回 true，
+   * 越滚越回底，只有一帧滑过 24px 才滚得动（截图复现过）。滚轮没有这个问题，
+   * 它一滚就是几十像素且直接 `release()`。
+   *
+   * `touch` 记「这次是按在触屏上」：只有触屏才需要等 `touchend`，鼠标/笔继续按
+   * `pointerup` 结算（否则鼠标拖选文本也要等一个永远不会来的 `touchend`）。
    */
-  const press = useRef<{ following: boolean; moved: boolean; y: number; top: number } | null>(null);
+  const press = useRef<{
+    following: boolean;
+    moved: boolean;
+    y: number;
+    top: number;
+    /** 触屏手势：松手信号是 `touchend`/`touchcancel`，不是 pointer 事件。 */
+    touch: boolean;
+  } | null>(null);
+  /** 触摸手势的兜底超时：`touchend` 万一没来（WebView 吞事件），别让跟随永久暂停。 */
+  const pressTimer = useRef<number | null>(null);
   /** 轮次刻度：每条用户消息一个刻度，点一下跳到那一轮。 */
   const turns = useMemo(() => turnsOf(items), [items]);
   const [activeTurn, setActiveTurn] = useState(0);
@@ -918,6 +937,11 @@ export function MessageList({
   useEffect(() => {
     return () => {
       if (scrollSettle.current !== null) window.clearTimeout(scrollSettle.current);
+      // 卸载时把触摸兜底计时器一起收掉，别让它在已卸载的组件上 setState。
+      if (pressTimer.current !== null) {
+        window.clearTimeout(pressTimer.current);
+        pressTimer.current = null;
+      }
     };
   }, []);
 
@@ -957,12 +981,25 @@ export function MessageList({
 
   /** 按下：只记住「按下前在不在跟随」与按下时的位置，真正改意图要等松手。 */
   const onPointerDown = (e: ReactPointerEvent) => {
+    if (pressTimer.current !== null) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
     press.current = {
       following: follow.following,
       moved: false,
       y: e.clientY,
       top: e.currentTarget.scrollTop,
+      touch: e.pointerType === "touch",
     };
+    // 触屏手势的兜底：`touchend` 万一没来（WebView 吞事件 / 手势被系统接管），
+    // `press` 挂着就等于跟随永久暂停。10 秒足够覆盖任何真实的按住-阅读操作。
+    if (press.current.touch) {
+      pressTimer.current = window.setTimeout(() => {
+        pressTimer.current = null;
+        if (press.current) endPress();
+      }, 10_000);
+    }
   };
 
   /** 手指/鼠标移动超过 6px 才算「读者在滚」，否则视为一次点击。 */
@@ -977,14 +1014,24 @@ export function MessageList({
    *
    * 「按住但没滚」恢复跟随是有意的：轻点一下消息（选中、点链接）不该让会话从此不再
    * 跟随最新内容；而按住读的那几秒里内容长高了，松手后回到底部也符合「我在看最新」。
+   *
+   * 「动过」的判据只有位移（`movedPos`）：触摸滚动全程没有 `pointermove`，
+   * `p.moved` 永远是 false，所以滚动了的位置变化必须认。
+   *
+   * 落点**只有真到底（≤2px）才恢复贴底**，不套 24px 的 `BOTTOM_SLOP`：那个容差是给
+   * 「程序化写入后被 clamp」留的余地，用在松手结算上会变成「轻滑十几像素松手就被拽
+   * 回底部」，正是这次要根除的手感。不恢复时 `following=false`，右下角出现
+   * 「回到底部」；读者自己滚回底部后由 `onScroll` 的归因恢复。
    */
   const endPress = useCallback(() => {
+    if (pressTimer.current !== null) {
+      window.clearTimeout(pressTimer.current);
+      pressTimer.current = null;
+    }
     const p = press.current;
     press.current = null;
     const el = scroller.current;
     if (!p || !el) return;
-    // 位置变了才叫「读者滚过」。不能只看手指位移：移动端滚动一开始浏览器就可能发
-    // `pointercancel`，之后不再有 `pointermove`，那时位置已经变了。
     const { metrics } = follow.read(el);
     const movedPos = Math.abs(metrics.top - p.top) > 2;
     if (!p.moved && !movedPos && p.following) {
@@ -994,27 +1041,57 @@ export function MessageList({
       setUnseen(false);
       return;
     }
-    follow.sample(metrics, true);
-    setAtBottom(follow.following);
-    if (follow.following) setUnseen(false);
+    /**
+     * 读者滚过：按落点结算，**只有真的到底才继续跟随**。
+     *
+     * 这里不调 `follow.sample`：它按 `nearBottom`（24px 容差）判，轻滑十几像素松手
+     * 也会被拽回底部——正是这次要根除的手感。那个容差是给「程序化写入被 clamp」
+     * 留的余地，不该用在松手结算上。
+     */
+    if (Math.abs(metrics.floor - metrics.top) <= 2) {
+      follow.resume();
+      follow.pin(el);
+      setAtBottom(true);
+      setUnseen(false);
+      return;
+    }
+    follow.release();
+    // 把落点登记成新基准：下一次 scroll 事件从这里往上比，才不会把这次结算前的
+    // 位移再算一遍读者移动。
+    follow.reset(metrics.top);
+    setAtBottom(false);
   }, [follow]);
 
   /**
-   * 松手可能在滚动区之外（拖出去再松开），也可能根本收不到 `pointerup`
-   * （移动端滚动会把它换成 `pointercancel`）。**必须挂到 window 上兜底**：
-   * 漏一次，`press` 就永远不为 null，跟随从此再也回不来。
+   * 松手可能发生在滚动区之外（拖出去再松开），也可能根本收不到 `pointerup`。
+   * **必须挂到 window 上兜底**：漏一次，`press` 就永远不为 null，跟随再也回不来。
+   *
+   * **触屏手势认 `touchend`/`touchcancel`，不认 `pointercancel`**：触摸滚动一开始、
+   * 以及长按选择手势，浏览器都会发 `pointercancel` 并且**不再补 `pointerup`**，而
+   * `touchend` 才是手指真的离开屏幕的时刻。把 `pointercancel` 当松手的话，手指还在
+   * 滑的过程中 `press` 就被清掉，三条贴底守卫同时失效——内容每帧被 `pin` 回底部，
+   * 手指滚不动（详见 `press` 的注释）。`touchcancel` 是系统收走手势（来电、边缘手势），
+   * 那时也要结算，否则 `press` 挂到超时为止。
+   *
+   * 鼠标/笔仍按 `pointerup` 结算；`blur` 一律结算（窗口被打断，等不到松手了）。
    */
   useEffect(() => {
-    const release = () => {
+    const settle = () => {
       if (press.current !== null) endPress();
     };
-    window.addEventListener("pointerup", release);
-    window.addEventListener("pointercancel", release);
-    window.addEventListener("blur", release);
+    /** 触屏手指离开。`pointerup` 也可能随后再来一条，那时 `press` 已被清空，无害。 */
+    const touchEnd = () => {
+      if (press.current?.touch) endPress();
+    };
+    window.addEventListener("pointerup", settle);
+    window.addEventListener("touchend", touchEnd);
+    window.addEventListener("touchcancel", touchEnd);
+    window.addEventListener("blur", settle);
     return () => {
-      window.removeEventListener("pointerup", release);
-      window.removeEventListener("pointercancel", release);
-      window.removeEventListener("blur", release);
+      window.removeEventListener("pointerup", settle);
+      window.removeEventListener("touchend", touchEnd);
+      window.removeEventListener("touchcancel", touchEnd);
+      window.removeEventListener("blur", settle);
     };
   }, [endPress]);
 
@@ -1086,7 +1163,9 @@ export function MessageList({
         // 内容本身仍然要能显示：正文走 `[overflow-wrap:anywhere]` 折行，代码块与表格
         // 各自是内部横向滚动容器（见 `common/Markdown`），所以这里裁掉的是真正的
         // 溢出，不是内容。
-        className={`dsh-scroll h-full overflow-x-hidden overflow-y-auto ${turns.length >= 2 ? "dsh-scroll-none-md" : ""}`}
+        // `dsh-chat-scroll` 关掉浏览器的 scroll anchoring：它会在内容变化时偷偷改
+        // `scrollTop`，和我们的贴底跟随抢同一个值（见 `styles.css` 那条注释）。
+        className={`dsh-scroll dsh-chat-scroll h-full overflow-x-hidden overflow-y-auto ${turns.length >= 2 ? "dsh-scroll-none-md" : ""}`}
         onScroll={onScroll}
         onWheel={onWheel}
         onPointerDown={onPointerDown}

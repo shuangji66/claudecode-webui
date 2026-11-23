@@ -3,10 +3,31 @@ import { IconSpark } from "../common/Icons";
 import { useT } from "../../lib/i18n";
 
 /**
- * 流式摘要最多保留尾部这么多字符：一行摘要铺满屏幕也就一百多个字符，
- * 多留的都是被 `overflow-hidden` 裁掉的宽度。
+ * 流式摘要取「**最后一个已完成段落的首行**」（对齐 DSH `ReasoningRow` 的
+ * `latestCompletedParagraphFirstLine`）。
+ *
+ * 以前取的是「最后一行的末尾 200 字」：那一行永远在变（模型正在写它），而且常常
+ * 截在词/句中间，读起来是半截话；更糟的是它每帧都改文本，界面上跟着抖。
+ * 段落是模型自己划定的语义单元——空行分段落，一个段落的首行是**稳定**的标题，
+ * 写完就不再动。流式期间还没写完第一段时退回已收到的首行，不至于一片空白。
  */
-const SUMMARY_TAIL_CHARS = 200;
+function latestParagraphFirstLine(text: string): string {
+  let summary = "";
+  let paragraphStart = 0;
+  const separator = /\r?\n(?:[\t ]*\r?\n)+/g;
+  while (true) {
+    const nextParagraph = separator.exec(text);
+    const paragraphEnd =
+      nextParagraph === null ? text.length : nextParagraph.index + nextParagraph[0].indexOf("\n");
+    const newline = text.indexOf("\n", paragraphStart);
+    if (newline !== -1 && newline <= paragraphEnd) {
+      const candidate = text.slice(paragraphStart, newline).trim();
+      if (candidate !== "") summary = candidate;
+    }
+    if (nextParagraph === null) return summary;
+    paragraphStart = nextParagraph.index + nextParagraph[0].length;
+  }
+}
 
 /**
  * 思考块：一行摘要（思考首行）＋ 点开看全文，默认收起。
@@ -15,15 +36,15 @@ const SUMMARY_TAIL_CHARS = 200;
  * 以前这里还有个 `live` 参数，回答一出现就把块重挂回收起态；改成轮级收起之后，
  * 那属于重复折叠，已经删掉。
  *
- * 摘要是**首行正文**，正文全是空白时才退回字数。`normalize` 已经把纯空白的 thinking
- * 挡在外面（上游会在工具调用之间发一个 `" "`），这里再兜一层：摘要退回字数时点开
- * 只会看到一个空格，那种行不该长得像「有内容」。
+ * 摘要是**最后一段的首行正文**，正文全是空白时才退回字数。`normalize` 已经把纯空白的
+ * thinking 挡在外面（上游会在工具调用之间发一个 `" "`），这里再兜一层：摘要退回字数时
+ * 点开只会看到一个空格，那种行不该长得像「有内容」。
  *
- * **还在想的时候摘要跟着最新的字走**（`streaming`）：取最后一行，由 `Collapsible` 的
- * `summaryTail` 贴到末尾（开头溢出被裁掉）。首行是开头，模型一旦写完第一句它就不动了——
- * 流式期间那一行停在原地，看起来像「滚到左边尽头就卡住」，后面想了什么都不显示。
- * 已结束的块仍取首行（那是这一段思考的标题，读它的开头）。**不加闪烁/呼吸动画**
- * （前端规范只允许 StateDot 的进度环是循环动画）。
+ * **流式期间摘要跟着最后一个已完成段落走**（`summaryStreaming`）：单行 nowrap，
+ * 溢出的处理全交给 CSS（见 `Collapsible` 的 `SummaryTail`），**不写 `scrollLeft`**
+ * ——那会每帧读一次几何，拖累滚动。已结束的块退回**首行**：那是这一段思考的标题，
+ * 读它的开头（与 DSH 的 `running ? 最后段落首行 : 首行` 同一口径）。
+ * **不加闪烁/呼吸动画**（前端规范只允许 StateDot 的进度环是循环动画）。
  */
 export function ThinkingBlock({
   text,
@@ -40,21 +61,27 @@ export function ThinkingBlock({
   // 「思考过程 · 0 字」这种既没信息又点不动的行（截图复现过）。宁可少一行，也不要
   // 留一个空壳。
   if (!text.trim()) return null;
-  const lines = text.split("\n").filter((line) => line.trim());
-  const firstLine = lines[0]?.trim() ?? "";
+  const lines = text.split("\n");
+  const firstLine = lines.find((line) => line.trim())?.trim() ?? "";
   const chars = t(`${text.trim().length} 字`, `${text.trim().length} chars`);
-  // 流式取末尾：思考常常是一整段没有换行的长文，只留尾部这么多字符就够铺满一行。
-  // 不切成尾部的话，那个 `whitespace-nowrap` 的 span 会跟着思考一起长到几万像素宽，
-  // 每个增量都要重新布局一次。
-  const tail = (lines[lines.length - 1]?.trim() ?? "").slice(-SUMMARY_TAIL_CHARS);
-  const summary = (streaming ? tail : firstLine) || chars;
+  /**
+   * 流式取「最后一个已完成段落的首行」——显示的是**进展**；
+   * 结束态取**首行**——那是这段思考的标题，读它的开头（与 DSH 的
+   * `running ? latestCompletedParagraphFirstLine(text) : firstLine(text)` 同一口径）。
+   *
+   * 两者都可能在思考刚开头时为空（还没写完第一行 / 还没出现空行），退回另一个，
+   * 最后才退到字数。
+   */
+  const summary =
+    (streaming ? latestParagraphFirstLine(text) : firstLine) || firstLine || chars;
   const title = streaming ? t("正在思考", "Thinking") : t("思考过程", "Reasoning");
 
   return (
     <Collapsible
       title={title}
       summary={summary}
-      summaryTail={streaming}
+      summaryTail
+      summaryStreaming={streaming}
       tone="muted"
       dense={dense}
       icon={dense ? <IconSpark size={12} /> : undefined}

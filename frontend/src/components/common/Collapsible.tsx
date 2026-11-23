@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { IconChevronRight } from "./Icons";
 
 interface Props {
@@ -8,10 +8,18 @@ interface Props {
   /** 折叠时显示的摘要（右侧小字）。 */
   summary?: string;
   /**
-   * 摘要跟着最新内容走（流式思考用）：超出部分溢到**左侧**并被裁掉，
-   * 最新的一段始终贴着右边缘可见。
+   * 摘要跟着最新内容走（流式思考用）。
+   *
+   * 摘要是单行 `nowrap`，溢出**纯靠 CSS** 处理，不写 `scrollLeft`：
+   * - 非流式：`text-overflow: ellipsis`（末尾省略号，表示「这里还有」）；
+   * - 流式（`summaryStreaming`）：`clip` + 右侧 `mask-image` 渐隐——文字还在长，
+   *   末尾一直在变，画省略号会跟着跳。
+   *
+   * 不再每帧读 `scrollWidth`：那是强制同步布局，会把触摸滚动的帧挤掉（见 `SummaryTail`）。
    */
   summaryTail?: boolean;
+  /** 摘要还在流式增长（决定用渐隐还是省略号），只在 `summaryTail` 下有意义。 */
+  summaryStreaming?: boolean;
   children: ReactNode;
   tone?: "neutral" | "muted";
   /** 标题前的图标（紧凑模式下工具行与思考行共用同一套外观）。 */
@@ -28,38 +36,37 @@ interface Props {
 }
 
 /**
- * 流式摘要：内容贴右，超出宽度的那一段从**左侧**裁掉。
+ * 流式摘要：溢出**纯靠 CSS** 裁掉。
  *
- * 只靠 `justify-end` 不够——flex 的溢出方向是主轴的**末端**，在 LTR 下会从右边溢出去，
- * 结果正好把最新的那几个字裁掉。所以在这里把 `scrollLeft` 钉到最右：内容一长过容器，
- * 视口就停在末尾，最新的一段永远看得见，而且不需要任何动画（前端规范只允许 StateDot
- * 的进度环循环动）。
+ * 以前这里每帧读 `scrollWidth` 再写 `scrollLeft`（`useLayoutEffect(pin, [text])`），
+ * 那是每次流式增量各一次**强制同步布局**——整棵树要为读几何先算一遍布局，而它恰好
+ * 发生在触摸滚动过程中，把 compositor 的滚动帧挤掉，手感发涩、还和贴底跟随抢
+ * `scrollTop`。DSH 的做法是纯 CSS（`ReasoningRow.module.css` 的 `.summary`），我们照它：
+ *
+ *   - 非流式：`text-overflow: ellipsis`，末尾省略号表示「这里还有」；
+ *   - 流式：`text-overflow: clip` + 右侧 `mask-image` 渐隐——文字还在长，末尾一直在变，
+ *     画省略号会跟着跳；渐隐表达的是「还在继续」，不指某个具体位置。
+ *
+ * 两种状态都**不读任何几何、不写 `scrollLeft`**，样式在 `styles.css` 的 `.summary-tail` 里。
+ *
+ * **渐隐要按「可能溢出」才开**：`mask-image` 是固定 48px 的，摘要很短时它会把末尾几个
+ * 字也啃掉（截图确认过：只写「短摘要」四个字，最后的「要」是半透明的，看着像渲染坏了）。
+ * `text-overflow` 能自己判断溢出，`mask` 不能，而用 `scrollWidth` 判断又是我们要去掉的
+ * 那件事。所以退一步用**字符数**近似：一行摘要装得下二十来个汉字，超过就按溢出处理。
+ * 阈值给宽一点（宁可早开渐隐，也别让长文本硬切），代价只是短文本多显示一点渐隐。
  */
-function SummaryTail({ text, font }: { text: string; font: string }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  /** 内容是不是已经长过这一格了——只有溢出时左缘才该渐隐，否则首字被吃掉。 */
-  const [clipped, setClipped] = useState(false);
-  const pin = () => {
-    const el = ref.current;
-    if (!el) return;
-    // `overflow-hidden` 的元素一样是滚动容器，写 scrollLeft 是合法的（不出现滚动条）。
-    el.scrollLeft = el.scrollWidth;
-    setClipped(el.scrollWidth - el.clientWidth > 1);
-  };
-  // 布局阶段就贴到末尾，避免流式增量时闪一帧「开头那段」。
-  useLayoutEffect(pin, [text]);
-  // 字体/侧栏宽度变化会改溢出量，尺寸变了要重新贴一次。
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ob = new ResizeObserver(pin);
-    ob.observe(el);
-    return () => ob.disconnect();
-  }, []);
+const SUMMARY_MAY_OVERFLOW_CHARS = 16;
+
+function SummaryTail({ text, font, streaming = false }: { text: string; font: string; streaming?: boolean }) {
+  // 按字符数近似「会不会溢出」，不读几何。CJK 按 1 个字算，ASCII 两个算一个宽单位：
+  // 英文摘要一行能装四五十个字母，按汉字数一刀切会让英文一直提前渐隐。
+  let width = 0;
+  for (const ch of text) width += ch.codePointAt(0)! > 0x2e80 ? 1 : 0.5;
+  const mask = streaming && width > SUMMARY_MAY_OVERFLOW_CHARS;
   return (
     <span
-      ref={ref}
-      className={`${clipped ? "summary-tail " : ""}ml-auto min-w-0 overflow-hidden whitespace-nowrap pl-3 font-normal text-faint ${font}`}
+      data-streaming={mask || undefined}
+      className={`summary-tail ml-auto min-w-0 overflow-hidden whitespace-nowrap pl-3 font-normal text-faint ${font}`}
     >
       {text}
     </span>
@@ -72,6 +79,7 @@ export function Collapsible({
   defaultOpen = false,
   summary,
   summaryTail = false,
+  summaryStreaming = false,
   children,
   tone = "neutral",
   icon,
@@ -84,13 +92,13 @@ export function Collapsible({
    * 摘要那一格。
    *
    * 普通摘要按「从头显示、右侧省略」走（`truncate`）：那是这一块的**标签**，读它的开头。
-   * `summaryTail` 是流式内容的另一套语义——内容还在往后长，只有末尾是新的，
-   * 所以贴到末尾、把开头溢出裁掉。
+   * `summaryTail` 是流式内容的另一套语义——内容还在往后长，末尾一直在变；
+   * 流式时右侧渐隐、结束后退回省略号（见 `SummaryTail`）。
    */
   const summaryCell = (font: string) => {
     if (!summary) return null;
     return summaryTail ? (
-      <SummaryTail text={summary} font={font} />
+      <SummaryTail text={summary} font={font} streaming={summaryStreaming} />
     ) : (
       <span className={`ml-auto min-w-0 truncate pl-2 font-normal text-faint ${font}`}>{summary}</span>
     );

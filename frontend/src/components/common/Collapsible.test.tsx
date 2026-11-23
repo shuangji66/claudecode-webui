@@ -33,4 +33,43 @@ describe("Collapsible 的标题行动作", () => {
     const cell = screen.getByRole("button", { name: "启用" }).parentElement!;
     expect(cell.className).toContain("pr-3");
   });
+
+  /**
+   * 流式摘要的渐变（`summaryStreaming`）。
+   *
+   * `mask-image` 是固定 48px 的，**短摘要也会被啃掉末尾几个字**（截图确认过：只写
+   * 「短摘要」四个字，最后的「要」半透明）。而 `text-overflow` 能自己判溢出、`mask`
+   * 不能——判断溢出又必须读 `scrollWidth`，那正是要根除的每帧强制同步布局。
+   * 所以按字符数近似：够短就不挂 `data-streaming`，交给 `text-overflow` 兜着。
+   */
+  it("流式摘要长到可能溢出时才开渐隐，短的不开", () => {
+    const { container, rerender } = render(
+      <Collapsible title="正在思考" summary="短摘要" summaryTail summaryStreaming>
+        正文
+      </Collapsible>,
+    );
+    const short = container.querySelector(".summary-tail")!;
+    expect(short.getAttribute("data-streaming")).toBeNull();
+
+    rerender(
+      <Collapsible
+        title="正在思考"
+        summary="这一行是流式摘要，它很长很长很长很长很长很长很长很长"
+        summaryTail
+        summaryStreaming
+      >
+        正文
+      </Collapsible>,
+    );
+    expect(container.querySelector(".summary-tail")!.getAttribute("data-streaming")).toBe("true");
+  });
+
+  it("结束态的摘要不带渐隐（用省略号）", () => {
+    const { container } = render(
+      <Collapsible title="思考过程" summary="很长很长很长很长很长很长很长很长很长很长很长" summaryTail>
+        正文
+      </Collapsible>,
+    );
+    expect(container.querySelector(".summary-tail")!.getAttribute("data-streaming")).toBeNull();
+  });
 });

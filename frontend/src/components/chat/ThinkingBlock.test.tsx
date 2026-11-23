@@ -21,18 +21,28 @@ describe("ThinkingBlock", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  // 首行是思考的开头，写完第一句就不动了。流式时沿用它的话，那一行截断之后就停在
-  // 原地，后面想了什么一个字都看不到（截图里的「滚到左边尽头就停住」）。
-  it("流式中摘要跟着最新一行走，已结束仍取首行", () => {
-    const text = "先看布局\n再改样式\n最后补测试";
+  // 摘要取「最后一个已完成段落的首行」（对齐 DSH `ReasoningRow`）。空行是模型自己
+  // 划定的段落边界：段落首行写完就不动了，是稳定的标题；而「最后一行字符」永远在变，
+  // 还常常截在句中，读起来是半截话（截图复现过「滚到左边尽头就停住」）。
+  it("流式取最后一个已完成段落的首行，结束态退回首行", () => {
+    const text = "先看布局\n再改样式\n\n这一段是新的段落\n它还没写完";
     const { rerender } = render(<ThinkingBlock text={text} streaming />);
     expect(screen.getByText("正在思考")).toBeInTheDocument();
-    expect(screen.getByText("最后补测试")).toBeInTheDocument();
+    // 最后一个段落已经写了首行：取它，而不是取「它还没写完」那半句。
+    expect(screen.getByText("这一段是新的段落")).toBeInTheDocument();
     expect(screen.queryByText("先看布局")).toBeNull();
 
+    // 结束了：摘要退回首行——那是这段思考的标题（DSH 同一口径）。
     rerender(<ThinkingBlock text={text} />);
     expect(screen.getByText("思考过程")).toBeInTheDocument();
     expect(screen.getByText("先看布局")).toBeInTheDocument();
-    expect(screen.queryByText("最后补测试")).toBeNull();
+    expect(screen.queryByText("这一段是新的段落")).toBeNull();
+  });
+
+  // 还没出现空行时（第一段都还没写完）没有「已完成段落」，退回已收到的首行，
+  // 别让摘要空着。
+  it("一个段落都没写完时退回已收到的首行", () => {
+    render(<ThinkingBlock text={"先看布局\n再改样式"} streaming />);
+    expect(screen.getByText("先看布局")).toBeInTheDocument();
   });
 });

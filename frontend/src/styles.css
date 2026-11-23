@@ -140,6 +140,19 @@ pre {
   overscroll-behavior: contain;
 }
 
+/* 对话消息滚动区（`MessageList` 的 scroller）。
+ *
+ * **`overflow-anchor: none` 不能省**：浏览器自带的 scroll anchoring 会在内容变化时
+ * 悄悄改写 `scrollTop`（它想「保持你正在看的那一行不动」），而我们的贴底跟随也在写
+ * 同一个值——两个写者抢一个位置，流式内容每帧长高时就是抖动。DSH 的
+ * `ChatView.module.css` 也是这么做的（并且折叠动画期间还会动态收掉）。
+ *
+ * 只加在这个滚动区上，不加到 `.dsh-scroll`：代码块 / 侧栏那些是纯内容滚动容器，
+ * 它们**正是需要**浏览器锚定来保位的。 */
+.dsh-chat-scroll {
+  overflow-anchor: none;
+}
+
 .dsh-scroll::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -391,11 +404,25 @@ pre {
     font-size: var(--code-font-size);
   }
 
-  /* 流式摘要「跟着最新内容走」：内容贴右、左侧溢出被裁掉（`Collapsible` 的
-     `summaryTail`）。左缘给一段渐隐，否则一个字母拦腰截断看着像渲染坏了。 */
+  /* 流式摘要（`Collapsible` 的 `summaryTail`）：单行 nowrap，溢出纯靠 CSS 处理。
+     **不写 scrollLeft、不读 scrollWidth** —— 那是每次流式增量一次强制同步布局，
+     会把触摸滚动的帧挤掉（见 `Collapsible` 里 `SummaryTail` 的注释）。
+     与 DSH 的 `ReasoningRow.module.css` 同一套：
+
+       - 非流式：末尾省略号，表示「这里还有」；
+       - 流式（`data-streaming`）：`clip` + 右侧渐隐——末尾一直在变，省略号会跟着跳。
+
+     渐隐的宽度给 48px（DSH 同值）：够看出「还在继续」，又不吃掉多少正文。 */
   .summary-tail {
-    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 14px);
-    mask-image: linear-gradient(to right, transparent 0, #000 14px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .summary-tail[data-streaming] {
+    text-overflow: clip;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent 100%);
+    mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent 100%);
   }
 }
 
