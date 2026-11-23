@@ -120,13 +120,29 @@ describe("待发送队列", () => {
     expect(queueOf()).toHaveLength(0);
   });
 
-  it("「立即插话」现在就写信道，并标出 priority=now（否则 CLI 只会等本轮收尾）", async () => {
+  it("回合进行中「立即插话」现在就写信道，并标出 priority=now（否则 CLI 只会等本轮收尾）", async () => {
+    // reset() 的默认 state 就是 busy：这才是「插话」的语义前提。
     useAppStore.getState().enqueuePrompt("先跑测试");
     const id = queueOf()[0].id;
 
     await useAppStore.getState().steerQueued(id);
 
     expect(sendPrompt).toHaveBeenCalledWith("先跑测试", [], "附件：", { priority: "now" });
+    expect(queueOf()).toHaveLength(0);
+  });
+
+  // 空闲时同一个箭头按钮的文案是「发送这条」——那是「中断之后逐条发」的正常路径，
+  // 它开的是**新的一轮**。无条件标 priority=now 的话，sendPrompt 会给这条消息打上
+  // interjected，于是两轮被压成一整轮：turnsOf / turnSpans / 「N 轮」各少一格，
+  // 计时行取到上一轮的提问时间，而「仅最终回答」会按合并后的轮切、藏掉上一轮的回答。
+  it("空闲时「发送这条」不带 priority（它开的是新的一轮，不是插话）", async () => {
+    seedQueue("s1", "空闲时发的一条");
+    const id = queueOf()[0].id;
+
+    await useAppStore.getState().steerQueued(id);
+
+    // 第四个参数是 undefined：不带 priority 就是普通的「发一条新消息」。
+    expect(sendPrompt).toHaveBeenCalledWith("空闲时发的一条", [], "附件：", undefined);
     expect(queueOf()).toHaveLength(0);
   });
 
@@ -190,6 +206,34 @@ describe("待发送队列", () => {
 
     expect(sendPrompt).toHaveBeenCalledWith("改完了的版本", [], "附件：");
     expect(queueOf()).toHaveLength(0);
+  });
+
+  // 切对话时 Composer 的清理 effect 会在**新**会话上调用 onEditingQueued(null)。
+  // 用结束时的 activeId 取 sid 的话删的是新会话（本来就没记过），老会话那条
+  // flushPending 永远留着——那一轮结束之后队首再也不会自动发出去。
+  it("编辑期间切了对话，补发仍然落在开始编辑的那条会话上", async () => {
+    seedQueue("s1", "改到一半的那条");
+    useAppStore.getState().setEditingQueued("q1");
+
+    // 这一轮结束：正在编辑 → 按住并记进 flushPending(s1)。
+    useAppStore.getState().applyEvent("s1", {
+      kind: "cli",
+      data: { type: "result", subtype: "success", is_error: false },
+    } as never);
+    await Promise.resolve();
+    expect(sendPrompt).not.toHaveBeenCalled();
+
+    // 用户切到 s2（Composer 卸载会在这里调一次 onEditingQueued(null)）。
+    useAppStore.setState({ activeId: "s2", states: { s1: "ready", s2: "ready" } } as never);
+    useAppStore.getState().setEditingQueued(null);
+    await Promise.resolve();
+
+    // 切回去时队首必须自动发出去（s1 的那条 flushPending 被消费掉了）。
+    useAppStore.setState({ activeId: "s1" } as never);
+    const flushed = await useAppStore.getState().flushQueued("s1");
+    expect(flushed).toBe(true);
+    // flushQueued 走三参数（不带 priority）：排队投递就是普通的新消息。
+    expect(sendPrompt).toHaveBeenCalledWith("改到一半的那条", [], "附件：");
   });
 
   it("删掉一条：只影响它，其余顺序不变", () => {

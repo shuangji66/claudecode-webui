@@ -45,6 +45,15 @@ type Options struct {
 	// 响应」换成「hook X 正在跑」——hook 是本地进程，跑多久与上游无关。
 	// 老版本不认识这个参数会直接起不来，所以要用 supportsFlag 探测。
 	IncludeHookEvents bool
+	// ReplayUserMessages 让 CLI 把客户端写进 stdin 的用户消息原样回显一遍
+	// （带 `isReplay:true` 与我们给的 `uuid`）。
+	//
+	// 这是**判断哪条消息是插话的唯一可靠依据**：转录里 `priority=now` 的消息与排队
+	// 投递的消息字段完全一样（实测 2.1.330，连 queue-operation 与 turnPosition 都
+	// 相同），纯转录侧推断不可能对。回显帧由 session 接住，命中登记的 uuid 就记一笔。
+	//
+	// 老版本不认识这个参数会直接起不来，所以要用 supportsFlag 探测。
+	ReplayUserMessages bool
 	// AllowBypassPermissions 允许会话在运行中切到 bypassPermissions（界面上的「跳过权限」）。
 	//
 	// claude 只在「启动时带着这个能力」的会话里接受 set_permission_mode
@@ -82,6 +91,9 @@ func Args(o Options) []string {
 	}
 	if o.IncludeHookEvents {
 		args = append(args, "--include-hook-events")
+	}
+	if o.ReplayUserMessages {
+		args = append(args, "--replay-user-messages")
 	}
 	if o.AllowBypassPermissions {
 		args = append(args, "--allow-dangerously-skip-permissions")

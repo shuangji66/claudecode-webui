@@ -135,67 +135,35 @@ export function isPromptRow(line: Record<string, unknown>): boolean {
 }
 
 /**
- * 一轮「还没收尾」时落下的 `stop_reason`。
+ * 转录里哪些行是**插话**，返回它们在 `lines` 里的下标。
  *
- * CLI 每轮收尾必定写一条带终止 stop_reason 的 assistant 行（纯思考回合也一样，
- * 实测 178 条只有 thinking 块的 `end_turn`），工具循环里的那条是 `tool_use`。
+ * 数据来源是**宿主机记账**，不是推断：`--replay-user-messages` 让 CLI 把我们写进
+ * stdin 的消息原样回显，帧上带 `isReplay:true` 与**我们给的那个 uuid**；后端认出
+ * 命中登记的 uuid 就写进 `<session>/interjections.jsonl`（见
+ * `session.KindInterjection` / `history.AppendInterjection`），回放时随转录下发
+ * `interjected_uuids`。这里只做「uuid → 行下标」的映射。
  *
- * **缺失值按「已收尾」处理**：老转录、被裁剪的片段、以及测试夹具里常没有这个字段，
- * 当成「还在跑」会让后面每一句提问都被误判成插话（一轮永远开不完）。宁可少认几个
- * 插话（退化成现在的两段），也不要把整份历史都折进一轮。
+ * **不要退回任何启发式**。曾经按「一轮 = 提问 → 终止性 stop_reason，中间出现的提问
+ * 就是插话」来认，在本机 162 份真实转录上 **14 条判定全部是误判、真插话 0 条**：
+ * 排队投递（回合中按 Enter，回合结束后自动投递）的形状与插话一模一样——两者都有
+ * `queue-operation enqueue/dequeue`、都有全新的 `turnPosition`、都是
+ * `origin:{kind:human}`。实测 2.1.330 起一个真 `priority=now` 会话对比确认：
+ * 两条 user 行的字段集合完全相同（18/18），转录里**不存在**任何区分信息。
+ *
+ * 误判的代价很重：两轮被折成一整轮，耗时与用量相加（实测一段变成 43 分钟），
+ * 而且「仅最终回答」那一档会按合并后的轮切，把上一轮真正的结论藏掉。
+ *
+ * 老会话没有那份记账文件，返回空集合——那时插话会被当成新一轮。这是刻意的取舍：
+ * 少认一次插话只是观感退化成两段，误判一次却会吞掉一整轮的回答。
  */
-const OPEN_STOP = new Set(["tool_use", "pause_turn"]);
-
-/**
- * 转录里哪些行是**插话**（`priority=now`），返回它们在 `lines` 里的下标。
- *
- * 实时路径靠本地记的 `priority` 与后端广播的 `prompt.echo`（`interjected`）标出来，
- * 但**转录里这两样都没有**：实测 2.1.330 一份含插话的 jsonl 里，插话那行与普通提问行
- * 的字段完全一致（`origin: {kind:human}` / `turnOrigin: human` / `turnPosition`），
- * 全库 grep `priority` 一条都搜不到。于是重进前端时它被当成新一轮的起点，把整轮劈成
- * 两半——前半截收进「已完成」、后半截重新铺开，轮次刻度还多一格（截图复现过）。
- *
- * 能认的依据是**它落在哪**：一轮从用户提问开始，到某条 assistant 的终止性
- * `stop_reason` 为止。这一段之间出现的用户提问，只可能是「这一轮还没跑完就发进来的」，
- * 也就是插话。插入的位置就是它被并进当前回合的那一刻——与实时路径的观感一致。
- *
- * 注入行（任务通知 / 附图注解 / 中断标记）既不算提问，也不改变这一轮的开合状态；
- * 中断标记单独把这一轮关掉（CLI 之后要先有新的提问才重新开）。
- *
- * **窗口里第一条提问永远不算插话**：转录被截断到最近 20k 行时，开头可能正好落在某一轮
- * 的中间，那一轮的提问已经不在窗口里了——不豁免的话，窗口里出现的第一句用户提问就会被
- * 当成插话挂在上一轮后面，历史从此少一格轮次刻度。截断是既成事实，那条提问在界面上
- * 就该是一轮的开头（`seenPrompt` 就是干这个的）。
- */
-export function interjectedPromptRows(lines: unknown[]): Set<number> {
+export function interjectedPromptRows(lines: unknown[], uuids?: readonly string[]): Set<number> {
   const out = new Set<number>();
-  let open = false;
-  /** 窗口里出现过用户的提问没有：第一次出现一定是新的一轮。 */
-  let seenPrompt = false;
+  if (!uuids || uuids.length === 0) return out;
+  const want = new Set(uuids);
   lines.forEach((raw, index) => {
     if (!raw || typeof raw !== "object") return;
-    const line = raw as Record<string, unknown>;
-    if (line.isSidechain === true || line.isMeta === true) return;
-    const type = str(line.type);
-    if (type === "assistant") {
-      const message = line.message as Record<string, unknown> | undefined;
-      // `stop_reason` 缺失时按「已收尾」：见 OPEN_STOP 上的注释。
-      open = OPEN_STOP.has(str(message?.stop_reason));
-      return;
-    }
-    if (type === "result") {
-      open = false;
-      return;
-    }
-    if (type !== "user") return;
-    if (isInterruptMarker(contentText((line.message as Record<string, unknown> | undefined)?.content))) {
-      open = false;
-      return;
-    }
-    if (!isPromptRow(line)) return;
-    if (open && seenPrompt) out.add(index);
-    open = true;
-    seenPrompt = true;
+    const uuid = str((raw as Record<string, unknown>).uuid);
+    if (uuid && want.has(uuid)) out.add(index);
   });
   return out;
 }

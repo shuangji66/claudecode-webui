@@ -465,6 +465,17 @@ const eventEpoch = new Map<string, string>();
  */
 const appliedSeq = new Map<string, Set<number>>();
 /**
+ * 「这个会话的对齐窗口是被 1 秒兜底冲掉的」。
+ *
+ * 兜底会把压着的实时事件先应用掉，而它们可能比补发段更晚。此后迟到的补发帧
+ * 再逐条追加，就会把开场白塞到结论后面（`items` 按到达顺序排，不按 seq），
+ * 于是 turnSpans / replyDividerIds / 「仅最终回答」全跟着错。
+ *
+ * **只认兜底这一条路**：`endSyncWindow` 还会被正常补发帧、resync、reset 调用，
+ * 那些情况下补发内容是新鲜的，必须照常应用。所以由兜底计时器自己置位。
+ */
+const windowTimedOut = new Set<string>();
+/**
  * 本次页面生命周期里已经回放过转录的会话。
  *
  * **不要用 `items[id].length > 0` 判断「要不要回放」**：用户点开一条正在跑的
@@ -517,6 +528,7 @@ function resetSyncWatermark(sid: string, seq: number, epoch: string): void {
   eventEpoch.set(sid, epoch);
   appliedSeq.delete(sid);
   pendingLive.delete(sid);
+  windowTimedOut.delete(sid);
   endSyncWindow(sid);
 }
 
@@ -616,6 +628,15 @@ const restartPromises = new Map<string, Promise<boolean>>();
 const flushing = new Set<string>();
 /** 正在编辑的那条待发送（只可能有一条：输入框上方的面板同一时刻只展开一个编辑框）。 */
 let editingQueuedId: string | null = null;
+/**
+ * 开始编辑时所在的会话。
+ *
+ * 结束编辑要补发「被跳过的那次自动发送」，而 `flushPending` 是按会话记的：
+ * 用结束时的 `activeId` 会补错地方——切对话时 Composer 的清理 effect 在新对话上
+ * 调一次 `onEditingQueued(null)`，那里删的是新会话（本来就没记过），
+ * 老会话那条永远留着，队首再也不会自动发出去。
+ */
+let editingSessionId: string | null = null;
 /** 因为「正在编辑」被跳过的那次自动发送，编辑结束后补上。 */
 const flushPending = new Set<string>();
 /** toast 的停留时间：够看完一句「先取消归档」，又不至于挡着下面接着点。 */
@@ -907,10 +928,10 @@ function errText(e: unknown): string {
 /** 把 `/api/history/transcript` 的原始事件行折成渲染用的消息列表。 */
 function itemsFromTranscript(tr: TranscriptPayload): Item[] {
   let next: Item[] = [];
-  // 转录里没有 `priority` / `prompt.echo`，插话只能按「它落在这一轮的哪一段里」认
-  // （一轮 = 提问 → 终止性的 stop_reason）。不认的话重进前端时插话被当成新一轮的
-  // 起点，把整轮劈成两半（前半截收进「已完成」，轮次刻度还多一格）。
-  const interjected = interjectedPromptRows(tr.lines ?? []);
+  // 插话名单来自宿主机记账（`interjected_uuids`）：转录里 `priority=now` 与排队投递
+  // 的 user 行字段完全相同（实测 2.1.330，18/18 一致），不存在可推断的信息。
+  // 老会话没有这份名单时为空的，那时插话算新一轮。
+  const interjected = interjectedPromptRows(tr.lines ?? [], tr.interjected_uuids);
   (tr.lines ?? []).forEach((line, index) => {
     const rec = line as { timestamp?: unknown };
     const at = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : NaN;
@@ -924,7 +945,7 @@ function itemsFromTranscript(tr: TranscriptPayload): Item[] {
   });
   // 转录里没有 result 行（claude 只把 result 写 stdout），所以「本轮耗时 ·
   // 输出 tok」必须从 assistant / api-request 行自己推，否则刷新后全丢。
-  next = attachTurnUsage(next, turnsFromTranscript(tr.lines ?? []));
+  next = attachTurnUsage(next, turnsFromTranscript(tr.lines ?? [], tr.interjected_uuids));
   // 子代理的收尾状态只在 `subagents/*.meta.json` 里：主转录没有 `system/task_*`，
   // 被中断（TaskStop）的那些连 `<task-notification>` 都不写——不在这里结算，
   // 重开对话后页头会一直给它们转圈。
@@ -948,7 +969,7 @@ async function replayTranscript(id: string, get: () => AppState): Promise<void> 
   try {
     const tr = await apiFetch<TranscriptPayload>(`/api/history/transcript?id=${encodeURIComponent(id)}`);
     const next = itemsFromTranscript(tr);
-    const base = mergeUsage(conv?.usage, usageFromTranscript(tr.lines ?? []));
+    const base = mergeUsage(conv?.usage, usageFromTranscript(tr.lines ?? [], tr.interjected_uuids));
     // 断线重连的 resync 不能用磁盘那份整份覆盖内存里的速度样本：这一轮刚量到的
     // 那几次请求磁盘上还没有（transcript 里没有 genMs），覆盖后速度计会退回上一轮。
     const live = get().usage[id];
@@ -1005,7 +1026,7 @@ async function refreshHistoryAfterAttach(id: string, floor: number): Promise<voi
       historyRefresh.delete(id);
       settleBuffered(id, floor);
       const conv = useAppStore.getState().conversations.find((c) => c.id === id);
-      const snap = mergeUsage(conv?.usage, usageFromTranscript(tr.lines ?? []));
+      const snap = mergeUsage(conv?.usage, usageFromTranscript(tr.lines ?? [], tr.interjected_uuids));
       useAppStore.setState((s) => ({
         // `settle` 必须是 false：这条会话**还在跑**，此刻的流式气泡是正在进行的那条
         // 消息，不是「上一轮留下的光标」。收掉它的话，同一段正文被转录里的完整版本
@@ -1081,6 +1102,7 @@ function syncMissedEvents(
   // 应用掉，别让界面一直卡在「已经连上但消息不动」。
   const timer = window.setTimeout(() => {
     if (!awaitingReplay.has(sid)) return;
+    windowTimedOut.add(sid);
     endSyncWindow(sid);
     flushLive(sid);
   }, 1000);
@@ -2000,7 +2022,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
           const next = itemsFromTranscript(tr);
           // 转录里带着 usage（assistant 行），重开对话时据此还原底部统计；
           // 转录算不出的 API 耗时 / 窗口，用上次持久化的快照补。实时快照不覆盖。
-          const snap = mergeUsage(conv.usage, usageFromTranscript(tr.lines ?? []));
+          const snap = mergeUsage(conv.usage, usageFromTranscript(tr.lines ?? [], tr.interjected_uuids));
           if (next.length > 0) {
             set((s) => ({
               // 已经由实时帧落地的那几条也并进来：转录为主，本地更晚的条目接在后面。
@@ -2470,9 +2492,19 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setEditingQueued: (qid) => {
     editingQueuedId = qid;
-    if (qid) return;
+    if (qid) {
+      // 记下「这次编辑是在哪条会话上开始的」：结束编辑时用户可能已经切到别的对话了。
+      editingSessionId = get().activeId;
+      return;
+    }
     // 编辑结束：把刚才因为编辑而跳过的那一次自动发送补上。
-    const sid = get().activeId;
+    //
+    // **必须补在开始编辑的那条会话上，不是此刻的 activeId**：切对话时 Composer 的
+    // 清理 effect 会在**新**对话上调用一次 `onEditingQueued(null)`，用 activeId 的话
+    // `flushPending.delete(新会话)` 删了个空，老会话那条永远留着——那一轮结束之后
+    // 队首再也不会自动发出去，用户只能手动点箭头。
+    const sid = editingSessionId ?? get().activeId;
+    editingSessionId = null;
     if (sid && flushPending.delete(sid)) void get().flushQueued(sid);
   },
 
@@ -2483,9 +2515,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (!item) return false;
     // 先摘出队列再发：发送期间又点一次「立即插话」不该把同一条发两遍。
     set((s) => ({ queued: { ...s.queued, [id]: removePrompt(s.queued[id] ?? [], qid) } }));
-    // priority=now：这是「插话」，不是「排队」——要不要让它进本轮是 CLI 的裁决，
-    // 但我们必须把意图标出来，否则它只能按默认的 next 等本轮收尾（看起来像没生效）。
-    const ok = await get().sendPrompt(item.text, item.attachments, item.label, { priority: "now" });
+    /**
+     * priority=now 只在这一轮确实在跑时才是「插话」。
+     *
+     * 空闲时同一个箭头按钮的文案是「发送这条 / Send this now」（Composer 按 busy 切换），
+     * 那是「中断之后逐条把队列发出去」的正常路径——它开的是**新的一轮**。
+     * 无条件标 now 的话，sendPrompt 会给这条消息打上 `interjected: true`，
+     * 结果两轮被压成一整轮（`turnsOf` / `turnSpans` 各少一格、ChatPane 的「N 轮」少一格、
+     * 计时行取到上一轮的提问时间），而「仅最终回答」那一档会按合并后的轮切，
+     * 把上一轮真正的结论藏掉。这不是启发式误判，是必然发生的逻辑错误。
+     */
+    const busy = (get().states[id] ?? "") === "busy" || (get().states[id] ?? "") === "starting";
+    const ok = await get().sendPrompt(item.text, item.attachments, item.label, busy ? { priority: "now" } : undefined);
     if (!ok) set((s) => ({ queued: { ...s.queued, [id]: [item, ...(s.queued[id] ?? [])] } }));
     return ok;
   },
@@ -2690,9 +2731,43 @@ export const useAppStore = create<AppState>()((set, get) => ({
         // 断线期间漏掉的事件：按原顺序逐条喂回同一条 apply 路径（补发的那几条里可能
         // 就有本轮结束的 result，它的 duration/usage 只能从这条路径落到 items 上）。
         // 逐条的 seq 去重在 applyEvent 头部，与这段时间里已经抢到的实时广播重叠时跳过。
+        //
+        // **补发帧迟到时不能直接追加**：1 秒兜底（syncMissedEvents 的 syncTimers）会
+        // 先放行窗口里压着的实时事件，它们已经落到 items 尾部；这时补发帧带着更早的
+        // 序号到来，逐条 apply 会把开场白插到结论**后面**——`items` 按到达顺序排，
+        // 不是按 seq。`turnSpans` / `replyDividerIds` / 「仅最终回答」全按列表顺序算，
+        // 顺序一乱后面全乱。
+        //
+        // 所以补发段之前先看它的起点是否已经落地：起点比分发水位还小，说明这段
+        // 内容早已被兜底路径放过（或者本来就重叠），整帧跳过；否则按原顺序应用。
         endSyncWindow(sid);
         const data = ev.data as { events?: { kind?: string; seq?: number; data?: unknown }[] } | undefined;
-        for (const e of data?.events ?? []) {
+        const replayed = data?.events ?? [];
+        // **补发段整体已经被越过** = 这帧迟到了：1 秒兜底把窗口里压着的更高序号
+        // 实时事件先放行了（它们落在 items 尾部），这时再把更早的这几条追加进去
+        // 就是乱序——`items` 按到达顺序排，不按 seq。
+        //
+        // **只在这个窗口是被兜底冲掉的时候才怀疑顺序**。正常补发（窗口还在、补发准时）
+        // 一律照常应用——那条路径的顺序本来就是对的。
+        //
+        // 兜底把压着的实时事件先放行了，它们可能比补发段更晚；这时迟到的补发帧
+        // 再逐条追加，会把开场白塞到结论后面。判据：整段补发都在已落地水位之下
+        // （`high <= ahead`，正常补发必然含高于水位的序号），且水位非零。
+        //
+        // 顺序一旦乱了，`turnSpans` / `replyDividerIds` / 「仅最终回答」全都跟着错，
+        // 唯一的自愈办法是整份重放转录。
+        const ahead = eventSeq.get(sid) ?? 0;
+        const high = replayed.reduce<number>((max, e) => {
+          const n = typeof e?.seq === "number" ? e.seq : -Infinity;
+          return n > max ? n : max;
+        }, -Infinity);
+        if (windowTimedOut.has(sid) && Number.isFinite(high) && ahead > 0 && high < ahead) {
+          windowTimedOut.delete(sid);
+          void replayTranscript(sid, get);
+          return;
+        }
+        windowTimedOut.delete(sid);
+        for (const e of replayed) {
           if (!e?.kind) continue;
           get().applyEvent(sid, { kind: e.kind, data: e.data, seq: e.seq });
         }

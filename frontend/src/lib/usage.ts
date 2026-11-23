@@ -698,7 +698,7 @@ function isPromptLine(m: Record<string, unknown>): boolean {
  * 实测值随快照持久化（`PATCH /api/conversations {usage}`），重开对话由 `mergeUsage`
  * 优先取那份；转录这边只报 token 与墙钟耗时。
  */
-export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined {
+export function usageFromTranscript(lines: unknown[], interjectedUUIDs?: readonly string[]): UsageSnapshot | undefined {
   let lastTotals: UsageTotals | undefined;
   let thinking: number | undefined;
   let prevApiMs = 0;
@@ -719,10 +719,9 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
   // 用户看到的就是「压了上下文，占用却没小」。后面只要发过请求就清掉它——那次请求的
   // 输入侧才是新的真实值。
   let compactedTokens: number | undefined;
-  // 插话不切轮：它并进当前回合，不是新的一轮。按它清零的话，同一个回合的「本轮输入 /
-  // 输出 / API 耗时」会被拆成两份，而界面上它们是同一轮。转录里没有 `priority` 标记，
-  // 只能按「落在这一轮的哪一段里」认（见 `transcriptRows.interjectedPromptRows`）。
-  const interjected = interjectedPromptRows(lines);
+  // 插话不切轮：它并进当前回合，不是新的一轮。名单来自宿主机记账
+  // （`interjected_uuids`），不做推断——见 transcriptRows.interjectedPromptRows。
+  const interjected = interjectedPromptRows(lines, interjectedUUIDs);
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     if (!line || typeof line !== "object") continue;

@@ -30,4 +30,17 @@ describe("isProtectedDir", () => {
     expect(isProtectedDir("/vol1/home/user", [])).toBe(false);
     expect(isProtectedDir("/vol1/home/user", [""])).toBe(false);
   });
+
+  // 根目录是任何绝对路径的祖先：撤销它等于把应用自己、数据目录的授权一起撤掉，
+  // 而且界面再无入口恢复。旧写法把 `/` 归一成空串后早退返回 false，摆出了一颗
+  // 点了就自断手脚的删除按钮。后端 protectedConflict 有同一套特例。
+  it("根目录一律算受保护（后端 protectedConflict 同一条规则）", () => {
+    expect(isProtectedDir("/", [app])).toBe(true);
+    expect(isProtectedDir("/", [data])).toBe(true);
+    expect(isProtectedDir("//", [app])).toBe(true);
+  });
+
+  it("受保护目录本身是根时，任何路径都命中", () => {
+    expect(isProtectedDir("/vol1/anything", ["/"])).toBe(true);
+  });
 });

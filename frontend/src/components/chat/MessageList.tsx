@@ -1034,11 +1034,19 @@ export function MessageList({
       touch: e.pointerType === "touch",
     };
     // 触屏手势的兜底：`touchend` 万一没来（WebView 吞事件 / 手势被系统接管），
-    // `press` 挂着就等于跟随永久暂停。10 秒足够覆盖任何真实的按住-阅读操作。
+    // `press` 挂着就等于跟随永久暂停。
+    //
+    // **到点只能「放弃跟随」，不能走 endPress 的恢复分支**：endPress 在「没动过 +
+    // 按之前是跟随」时会 resume + pin，而 10 秒时手指多半还按在屏幕上（长按选文本、
+    // 按住读一段）。把它 pin 回底部正是这次要根除的「每帧被拽回」，只是延后到 10 秒。
+    // 真正的松手仍由 touchend 结算。
     if (press.current.touch) {
       pressTimer.current = window.setTimeout(() => {
         pressTimer.current = null;
-        if (press.current) endPress();
+        if (!press.current) return;
+        press.current = null;
+        follow.release();
+        setAtBottom(false);
       }, 10_000);
     }
   };

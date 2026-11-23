@@ -681,6 +681,15 @@ export interface TranscriptPayload {
    * 它们会永远停在「运行中」。
    */
   subagents?: SubagentState[];
+  /**
+   * 哪些 user 行是插话（宿主机记在 `<session>/interjections.jsonl` 里）。
+   *
+   * 转录本身区分不出来：实测 2.1.330，`priority=now` 的消息与排队投递的消息在 jsonl
+   * 里字段完全相同（18/18），连 `queue-operation` 与 `turnPosition` 都一样。所以这个
+   * 事实只能在写 stdin 的那一刻靠 CLI 回显拿到（见后端 session.KindInterjection）。
+   * 老会话没有这份名单：那时插话算新一轮。
+   */
+  interjected_uuids?: string[];
 }
 
 /** 一个子代理的收尾状态（见 TranscriptPayload.subagents）。 */

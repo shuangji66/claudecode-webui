@@ -17,6 +17,7 @@ import (
 
 	"ccweb/backend/internal/agent/protocol"
 	"ccweb/backend/internal/agent/session"
+	"ccweb/backend/internal/gitctl"
 	"ccweb/backend/internal/wsframe"
 )
 
@@ -478,6 +479,14 @@ func (s *Server) dispatch(c *wsClient, sess *session.Session, id string, payload
 			if cwdErr != nil {
 				s.sendError(c, cwdErr.Error())
 				return
+			}
+			// 仓库根也必须在授权范围内：`ReadStatus` 同样以仓库根为 `-C`，
+			// 不挡的话工作区外的文件改动会被推成 git.changed（见 gitRootAuthorized）。
+			if root := gitctl.EnclosingRepo(cwd); root != "" && root != cwd {
+				if err := s.ensureCwdAuthorized(root); err != nil {
+					s.sendError(c, "该目录属于授权工作区之外的 Git 仓库（"+root+"），不能监视")
+					return
+				}
 			}
 			s.startGitWatch(c, cwd, strings.TrimSpace(cmd.Cwd))
 			return

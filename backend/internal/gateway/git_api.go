@@ -29,9 +29,17 @@ func (s *Server) decodeGitReq(w http.ResponseWriter, r *http.Request) (gitReq, s
 		s.writeCwdError(w, err)
 		return req, "", false
 	}
+	if !s.gitRootAuthorized(w, cwd) {
+		return req, "", false
+	}
 	return req, cwd, true
 }
 
+// gitCwd 只校验请求里的 cwd 落在授权工作区内。
+//
+// **不校验仓库根**：`GET /api/git/repos` 用它列举工作区里的仓库，而「cwd 属于一个
+// 在工作区之外的仓库」正是它要报告的那件事（响应里的 `cwd_repo`），不能在这里挡掉。
+// 真正执行 git 的接口改用 gitExecCwd（见 gitRootAuthorized 的注释）。
 func (s *Server) gitCwd(w http.ResponseWriter, r *http.Request) (string, bool) {
 	cwd, err := s.authorizedCwd(r.URL.Query().Get("cwd"))
 	if err != nil {
@@ -39,6 +47,45 @@ func (s *Server) gitCwd(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	return cwd, true
+}
+
+// gitExecCwd 是「要真正跑 git」的查询接口用的：cwd 与**仓库根**都要在授权范围内。
+func (s *Server) gitExecCwd(w http.ResponseWriter, r *http.Request) (string, bool) {
+	cwd, ok := s.gitCwd(w, r)
+	if !ok {
+		return "", false
+	}
+	if !s.gitRootAuthorized(w, cwd) {
+		return "", false
+	}
+	return cwd, true
+}
+
+// gitRootAuthorized 校验「git 实际会执行的那个目录」也落在授权工作区内。
+//
+// **只校验传入的 cwd 是不够的**：`gitctl` 的每条命令都先用 `rev-parse --show-toplevel`
+// 把 `-C` 提到**仓库根**再执行（见 repoRoot），所以工作区只授权到仓库的某个子目录时
+// （AGENTS 4.5 明写这是常见部署），status / diff / stage / discard / commit / pull /
+// checkout 全都在工作区**外面**操作：能读到工作区外文件的 diff，也能 discard 掉工作区外
+// 未提交的改动——那是数据丢失。
+//
+// 这里用 `gitctl.EnclosingRepo`（纯文件系统查找 `.git`，不 spawn git）拿到同一个根，
+// 再过一次工作区围栏。仓库根不在授权范围内时直接 403：界面本来也不该把那个仓库列出来
+// （见 withEnclosingRepo 的同一条判断）。
+//
+// cwd 本身不是仓库时 EnclosingRepo 返回空串，此时 git 命令会因为「不是一个仓库」失败，
+// 没有可执行目录，放行即可。
+func (s *Server) gitRootAuthorized(w http.ResponseWriter, cwd string) bool {
+	root := gitctl.EnclosingRepo(cwd)
+	if root == "" || root == cwd {
+		return true
+	}
+	if err := s.ensureCwdAuthorized(root); err != nil {
+		writeErr(w, "该目录属于一个更大的 Git 仓库（"+root+"），而它在授权工作区之外；"+
+			"请把那个仓库根加为工作区，或直接在仓库根上使用 Git 面板", http.StatusForbidden)
+		return false
+	}
+	return true
 }
 
 func writeGitError(w http.ResponseWriter, err error) {
@@ -105,7 +152,7 @@ func (s *Server) withEnclosingRepo(enclosing, scanRoot string, repos []gitctl.Re
 
 // handleGitStatus 返回 Git 面板快照；不是仓库时返回 is_repo=false。
 func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
-	cwd, ok := s.gitCwd(w, r)
+	cwd, ok := s.gitExecCwd(w, r)
 	if !ok {
 		return
 	}
@@ -119,7 +166,7 @@ func (s *Server) handleGitStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleGitDiff 返回工作区或索引侧的补丁。
 func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
-	cwd, ok := s.gitCwd(w, r)
+	cwd, ok := s.gitExecCwd(w, r)
 	if !ok {
 		return
 	}
@@ -140,7 +187,7 @@ func (s *Server) handleGitDiff(w http.ResponseWriter, r *http.Request) {
 // 界面把它拆成「提交详情 / 差异」两页，但两页描述的是同一次提交：分成两个
 // 接口只会让点开一次提交发两次 git show（大提交各跑一遍，慢一倍）。
 func (s *Server) handleGitShow(w http.ResponseWriter, r *http.Request) {
-	cwd, ok := s.gitCwd(w, r)
+	cwd, ok := s.gitExecCwd(w, r)
 	if !ok {
 		return
 	}
@@ -154,7 +201,7 @@ func (s *Server) handleGitShow(w http.ResponseWriter, r *http.Request) {
 
 // handleGitLog 返回最近提交。
 func (s *Server) handleGitLog(w http.ResponseWriter, r *http.Request) {
-	cwd, ok := s.gitCwd(w, r)
+	cwd, ok := s.gitExecCwd(w, r)
 	if !ok {
 		return
 	}
@@ -170,7 +217,7 @@ func (s *Server) handleGitLog(w http.ResponseWriter, r *http.Request) {
 
 // handleGitBranches 返回本地分支清单。
 func (s *Server) handleGitBranches(w http.ResponseWriter, r *http.Request) {
-	cwd, ok := s.gitCwd(w, r)
+	cwd, ok := s.gitExecCwd(w, r)
 	if !ok {
 		return
 	}

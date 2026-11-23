@@ -93,19 +93,37 @@ func ProtectedDirs(dataDir, claudeHome string) []string {
 // 三条都算冲突：**path 就是**受保护目录、path 是它的**祖先**（trim_acl 一并失效，
 // 二进制同样读不到）、path 在它**里面**（安装树里的文件同样是应用自己在用）。
 // 宁可多挡一层，也不要让用户在界面上把应用自己的目录撤掉。
+//
+// 祖先判断**不能靠给两边都拼一个分隔符再比前缀**：根目录 `/` 拼完是 `//`，永远匹配
+// 不上任何 `guard + "/"`，于是 `path = "/"` 一路放行——撤销根目录等于把应用自己、
+// 数据目录、claude HOME 的授权一起撤掉，而且没有界面能恢复。分隔符只在两边都不是
+// 根的时候才有意义，所以用 appendSep 统一处理。
 func (s *Server) protectedConflict(path string) (string, bool) {
+	path = filepath.Clean(path)
 	for _, p := range s.d.DirsProtected {
 		guard := filepath.Clean(p)
 		if guard == "" {
 			continue
 		}
-		if path == guard ||
-			strings.HasPrefix(guard+string(filepath.Separator), path+string(filepath.Separator)) ||
-			strings.HasPrefix(path+string(filepath.Separator), guard+string(filepath.Separator)) {
+		if path == guard || isAncestorDir(path, guard) || isAncestorDir(guard, path) {
 			return guard, true
 		}
 	}
 	return "", false
+}
+
+// isAncestorDir 报告 parent 是否是 child 的祖先目录（严格祖先，不含相等）。
+//
+// 根目录是文件系统里唯一以分隔符结尾的路径，单独处理：`/` 是任何绝对路径的祖先。
+func isAncestorDir(parent, child string) bool {
+	if parent == child {
+		return false
+	}
+	if parent == string(filepath.Separator) {
+		// `child` 走到这里一定是绝对路径（两边都经过 filepath.Clean）。
+		return filepath.IsAbs(child)
+	}
+	return strings.HasPrefix(child, parent+string(filepath.Separator))
 }
 
 // handleListDirs 返回当前飞牛用户授权给本应用的目录（「设置 → 目录」）。

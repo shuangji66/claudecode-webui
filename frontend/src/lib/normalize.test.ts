@@ -2397,10 +2397,11 @@ describe("CLI 注入的附图注解", () => {
 // 转录里没有 `priority`，也没有 `prompt.echo`：插话只能按「它落在这一轮的哪一段里」认。
 // 不认的话，重进前端时插话被当成新一轮的起点，把整轮劈成两半（截图复现过）。
 describe("转录回放里的插话判定", () => {
-  /** 一条 user 行；`stop` 给 assistant 用（CLI 每轮收尾会写终止性的 stop_reason）。 */
-  const user = (text: string, at: string) => ({
+  /** 一条 user 行。`uuid` 是插话记账用的关联键（CLI 原样写进转录，实测 2.1.330）。 */
+  const user = (text: string, at: string, uuid?: string) => ({
     type: "user",
     timestamp: at,
+    ...(uuid ? { uuid } : {}),
     message: { role: "user", content: [{ type: "text", text }] },
   });
   const asst = (at: string, stop: string | null, text = "答案") => ({
@@ -2417,67 +2418,67 @@ describe("转录回放里的插话判定", () => {
       content: [{ type: "tool_use", id: "tu1", name: "Read", input: {} }],
     },
   });
+  const queue = (at: string, operation: string) => ({ type: "queue-operation", operation, timestamp: at });
 
-  it("回合进行中的第二句算插话，轮末之后的提问不算", () => {
+  // 判据是**宿主机记账的 uuid 名单**，不是任何形状推断。
+  it("按 uuid 名单元判定，与行的形状无关", () => {
     const lines = [
-      user("第一问", "2026-01-02T00:00:00.000Z"),
+      user("第一问", "2026-01-02T00:00:00.000Z", "u-1"),
       toolUse("2026-01-02T00:00:01.000Z"),
-      user("插一句", "2026-01-02T00:00:02.000Z"),
+      user("插一句", "2026-01-02T00:00:02.000Z", "u-2"),
       asst("2026-01-02T00:00:03.000Z", "end_turn"),
-      user("第二问", "2026-01-02T00:00:04.000Z"),
+      user("第二问", "2026-01-02T00:00:04.000Z", "u-3"),
       asst("2026-01-02T00:00:05.000Z", "end_turn"),
     ];
-    expect([...interjectedPromptRows(lines)]).toEqual([2]);
-  });
-
-  it("工具回包、任务通知、附图注解都不移动轮边界", () => {
-    const lines = [
-      user("第一问", "2026-01-02T00:00:00.000Z"),
-      toolUse("2026-01-02T00:00:01.000Z"),
-      // 工具回包不是提问：它不能让这一轮「重新开一次」。
-      { type: "user", timestamp: "2026-01-02T00:00:01.500Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu1", content: "ok" }] } },
-      { type: "user", timestamp: "2026-01-02T00:00:01.600Z", message: { role: "user", content: "<task-notification>\n<task-id>t1</task-id>\n<status>completed</status>\n</task-notification>" } },
-      { type: "user", timestamp: "2026-01-02T00:00:01.700Z", message: { role: "user", content: "[Image: source: /tmp/1.png]" } },
-      user("插一句", "2026-01-02T00:00:02.000Z"),
-      asst("2026-01-02T00:00:03.000Z", "end_turn"),
-    ];
-    expect([...interjectedPromptRows(lines)]).toEqual([5]);
-  });
-
-  it("中断之后先要有新提问才重新开一轮", () => {
-    const lines = [
-      user("第一问", "2026-01-02T00:00:00.000Z"),
-      toolUse("2026-01-02T00:00:01.000Z"),
-      { type: "user", timestamp: "2026-01-02T00:00:02.000Z", message: { role: "user", content: "[Request interrupted by user]" } },
-      user("重新问", "2026-01-02T00:00:03.000Z"),
-      asst("2026-01-02T00:00:04.000Z", "end_turn"),
-    ];
-    // 中断把这一轮关掉了，「重新问」是新的一轮，不是插话。
+    expect([...interjectedPromptRows(lines, ["u-2"])]).toEqual([2]);
+    // 名单为空（老会话没有记账文件）→ 一条都不认，插话算新一轮。
+    expect(interjectedPromptRows(lines, []).size).toBe(0);
     expect(interjectedPromptRows(lines).size).toBe(0);
   });
 
-  it("窗口截断后的第一条提问不算插话", () => {
-    // 转录只回放最近一段时，窗口开头可能正好落在某一轮的中间（那一轮的提问已被切掉）。
-    // 不豁免的话第一句提问会挂到上一轮后面，历史少一格轮次刻度。
-    const partial = [toolUse("2026-01-02T00:00:01.000Z"), user("窗口里的第一问", "2026-01-02T00:00:02.000Z")];
-    expect(interjectedPromptRows(partial).size).toBe(0);
-    // 但窗口里已经有提问之后，再出现的才算插话。
-    const more = [
-      ...partial,
-      asst("2026-01-02T00:00:03.000Z", "tool_use"),
-      user("插一句", "2026-01-02T00:00:04.000Z"),
+  // 这条是那个曾经的 bug 的根：**排队投递与插话在转录里完全同形**。
+  // 旧的启发式（「一轮 = 提问 → 终止性 stop_reason，中间出现的提问就是插话」）
+  // 会把下面这条排队投递的消息判成插话，于是两轮折成一轮、耗时相加，
+  // 而「仅最终回答」会把上一轮真正的结论藏掉。实测 162 份真实转录里 14 条判定
+  // 全是这种误判、真插话 0 条。
+  it("排队投递在转录里与插话同形，没有 uuid 名单时绝不能靠形状认出来", () => {
+    const lines = [
+      user("第一问", "2026-01-02T00:00:00.000Z", "u-1"),
+      toolUse("2026-01-02T00:00:01.000Z"),
+      queue("2026-01-02T00:00:01.500Z", "enqueue"),
+      queue("2026-01-02T00:00:01.600Z", "dequeue"),
+      // 形状与插话一模一样：全新的提问、human 来源、没有终止性 stop_reason 在前。
+      user("排队投递的第二问", "2026-01-02T00:00:02.000Z", "u-2"),
+      asst("2026-01-02T00:00:03.000Z", "end_turn"),
     ];
-    expect([...interjectedPromptRows(more)]).toEqual([3]);
+    // 没有记账名单 → 不许认（认了就是把两轮折成一整轮）。
+    expect(interjectedPromptRows(lines).size).toBe(0);
+    // 只有宿主机明确记过它是插话时才认。
+    expect([...interjectedPromptRows(lines, ["u-2"])]).toEqual([4]);
+  });
+
+  // 真插话同样会带 queue-operation enqueue/dequeue（实测 priority=now 的样本：
+  // L22 enqueue、L24 dequeue、L25 user）。所以「有 dequeue 就不是插话」也是错的判据。
+  it("真插话同样经过 queue-operation，dequeue 不能用来排除", () => {
+    const lines = [
+      user("第一问", "2026-01-02T00:00:00.000Z", "u-1"),
+      asst("2026-01-02T00:00:01.000Z", null),
+      queue("2026-01-02T00:00:05.000Z", "enqueue"),
+      queue("2026-01-02T00:00:05.100Z", "dequeue"),
+      user("插话", "2026-01-02T00:00:05.200Z", "u-2"),
+      asst("2026-01-02T00:00:09.000Z", "end_turn"),
+    ];
+    expect([...interjectedPromptRows(lines, ["u-2"])]).toEqual([4]);
   });
 
   it("回放时打上 interjected，这一轮不被劈成两段", () => {
     const lines = [
-      user("第一问", "2026-01-02T00:00:00.000Z"),
+      user("第一问", "2026-01-02T00:00:00.000Z", "u-1"),
       toolUse("2026-01-02T00:00:01.000Z"),
-      user("插一句", "2026-01-02T00:00:02.000Z"),
+      user("插一句", "2026-01-02T00:00:02.000Z", "u-2"),
       asst("2026-01-02T00:00:03.000Z", "end_turn"),
     ];
-    const flagged = interjectedPromptRows(lines);
+    const flagged = interjectedPromptRows(lines, ["u-2"]);
     let items: Item[] = [];
     lines.forEach((line, index) => {
       items = applyCLI(items, line, Date.parse(line.timestamp), undefined, {
@@ -2491,5 +2492,21 @@ describe("转录回放里的插话判定", () => {
     expect(users[1]).toMatchObject({ text: "插一句", interjected: true });
     // 一整轮：turnSpans 只切出一段（插话不切轮）。
     expect(turnSpans(items, true)).toHaveLength(1);
+  });
+
+  // 反过来：没有名单时同一个形状必须切成两段——宁可多一格轮次刻度，
+  // 也不要把两轮折成一整轮（那会藏掉上一轮的回答）。
+  it("没有名单时插话退化成新一轮，不会误伤", () => {
+    const lines = [
+      user("第一问", "2026-01-02T00:00:00.000Z", "u-1"),
+      toolUse("2026-01-02T00:00:01.000Z"),
+      user("第二轮", "2026-01-02T00:00:02.000Z", "u-2"),
+      asst("2026-01-02T00:00:03.000Z", "end_turn"),
+    ];
+    let items: Item[] = [];
+    lines.forEach((line) => {
+      items = applyCLI(items, line, Date.parse(line.timestamp), undefined, { replay: true });
+    });
+    expect(turnSpans(items, true)).toHaveLength(2);
   });
 });

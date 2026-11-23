@@ -1084,7 +1084,7 @@ export interface TranscriptTurn {
  * 口径与实时路径一致：`contextTokens` 只取**最后一次请求**（上下文占用），
  * `turnInputTokens` / `outputTokens` / `apiMs` 是本轮所有请求之和（这一轮吃了多少）。
  */
-export function turnsFromTranscript(lines: unknown[]): TranscriptTurn[] {
+export function turnsFromTranscript(lines: unknown[], interjectedUUIDs?: readonly string[]): TranscriptTurn[] {
   const out: TranscriptTurn[] = [];
   let promptAt: number | undefined;
   let last: { ts: number; usage: UsageSnapshot } | undefined;
@@ -1093,8 +1093,9 @@ export function turnsFromTranscript(lines: unknown[]): TranscriptTurn[] {
   let turnIn = 0;
   let turnOut = 0;
   let turnApiMs = 0;
-  // 转录里没有 `priority`：插话按「落在这一轮的哪一段里」认（见 interjectedPromptRows）。
-  const interjected = interjectedPromptRows(lines);
+  // 插话由宿主机记账（`interjected_uuids`），不做任何推断——转录里区分不出来，
+  // 见 transcriptRows.interjectedPromptRows 的注释（启发式在真实数据上 100% 误判）。
+  const interjected = interjectedPromptRows(lines, interjectedUUIDs);
 
   const closeTurn = () => {
     if (promptAt === undefined || !last) return;

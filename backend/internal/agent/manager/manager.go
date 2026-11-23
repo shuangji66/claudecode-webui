@@ -462,9 +462,16 @@ func (m *Manager) createWith(abs, sessionID, resumeID, model, permissionMode str
 	// 否则两个请求可以同时通过检查、各起一个进程。
 	//
 	// 上限在锁外先读：settings.Store 有自己的锁，别在 m.mu 里嵌一层。
+	//
+	// 计数只有 `m.spawning` 一项：createWith 会把会话写进 m.sessions 的时机在
+	// `sess.Start()`（握手）**之前**，而 spawning 要到 createWith 返回才递减——
+	// 所以握手期间这条会话同时计入两项，`len+spawning` 等于把它数了两遍。上限 6、
+	// 三条在握手时，第四条就会被判「满了」，而实际只占了一半槽位。
+	// spawning 已经把「还没登记进 sessions」的算进来了（它在登记之前就 ++），
+	// 再叠加 sessions 就是重复计数。
 	limit := m.maxSessions()
 	m.mu.Lock()
-	if len(m.sessions)+m.spawning >= limit {
+	if slotsExhausted(len(m.sessions), m.spawning, limit) {
 		m.mu.Unlock()
 		return Info{}, fmt.Errorf("%w（当前上限 %d）", ErrTooMany, limit)
 	}
@@ -520,7 +527,8 @@ func (m *Manager) createWith(abs, sessionID, resumeID, model, permissionMode str
 		ForwardSubagentText:    m.supportsFlag(bin, "--forward-subagent-text"),
 		// hook 的生命周期帧：不带的话 hook 失败的原因（只在 stderr 里）与「hook 正在跑」
 		// 这条状态都拿不到，界面会把 hook 的几十秒误报成「上游没有响应」。
-		IncludeHookEvents: m.supportsFlag(bin, "--include-hook-events"),
+		IncludeHookEvents:  m.supportsFlag(bin, "--include-hook-events"),
+		ReplayUserMessages: m.supportsFlag(bin, "--replay-user-messages"),
 		// 「跳过权限」要在会话里切得动，启动时就得带上这个能力开关；
 		// 它不会让会话以 bypass 启动（实测带 + --permission-mode default 时首轮照常审批）。
 		AllowBypassPermissions: m.supportsFlag(bin, "--allow-dangerously-skip-permissions"),
@@ -647,11 +655,24 @@ func (m *Manager) Get(id string) (*session.Session, bool) {
 }
 
 // List 返回全部会话，按创建时间倒序。
+//
+// **已退出的会话不列**：进程自己退出（OOM / 被 kill / CLI fatal）后记录要等到
+// 下一次 `createWith` 里的 pruneClosed 才被摘掉，中间这段时间它一直躺在这张表里。
+// 网关的 `handleListConversations` 会把 List 里每一条都标成 `live:true`，于是侧栏那
+// 一行看起来和「活着但空闲」一模一样（连灰点都没有），行菜单还给出「重启 / 结束」。
+// 更要命的是 `handleCreateSession` 用 conversationInfo（= List）判断 wasLive，
+// 命中就会吞掉「进程被拉起来」那次广播（AGENTS 4.18 ④）。
+//
+// 口径与 infoByID 保持一致：那里早就把 closed 当不存在。`pruneClosed` 仍然要留着——
+// 它负责把记录真正摘掉、腾出常驻会话槽位，这里只是不再对外报告。
 func (m *Manager) List() []Info {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]Info, 0, len(m.sessions))
 	for id, s := range m.sessions {
+		if s.State() == session.StateClosed {
+			continue
+		}
 		info := infoOf(s)
 		if mt, ok := m.metas[id]; ok {
 			info.Provider = mt.Provider
@@ -757,6 +778,19 @@ func (m *Manager) reapLoop() {
 			m.reapIdle()
 		}
 	}
+}
+
+// slotsExhausted 判断常驻槽位是否已满。
+//
+// 两项各自与上限比，**不相加**：createWith 把会话写进 m.sessions 的时机在
+// `sess.Start()`（握手）之前，而 spawning 要到 createWith 返回才递减——握手期间
+// 同一条会话同时计入两项，相加就等于把它数了两遍（上限 6 时，3 条在手、3 条在跑
+// 就判「满了」，实际只占一半槽位）。
+//
+// spawning 自己在登记进 sessions **之前**就 ++，所以「还没登记进 sessions 的那些」
+// 已经被它覆盖了；再叠加 sessions 就是重复。
+func slotsExhausted(sessions, spawning, limit int) bool {
+	return spawning >= limit || sessions >= limit
 }
 
 // maxSessions 返回当前允许的常驻会话数。

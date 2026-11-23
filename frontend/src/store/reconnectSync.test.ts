@@ -272,4 +272,47 @@ describe("resync 之后不再重复应用窗口里压着的实时事件", () => 
       .map((i) => ("text" in i ? i.text : ""));
     expect(texts.filter((t) => t === "断线期间跑完了")).toHaveLength(1);
   });
+
+  // 1 秒兜底已经把窗口里压着的实时事件放行了（它们落在 items 尾部），此后迟到的
+  // 补发帧如果再逐条追加，开场白就会排到结论**后面**——items 按到达顺序排，不按 seq。
+  // 顺序一乱，turnSpans / replyDividerIds / 「仅最终回答」全跟着错。
+  // 这时唯一的自愈办法是整份重放转录（顺序由磁盘那份权威版本决定）。
+  it("兜底放行之后迟到的补发帧不再追加，改为整份重放转录", async () => {
+    vi.useFakeTimers();
+    try {
+      // 水位对齐到 5，然后出现缺口 → 发 sync、进入对齐窗口。
+      useAppStore.getState().applyEvent("c1", {
+        kind: "session.snapshot",
+        data: { info: { state: "busy" }, seq: 5, epoch: "e1" },
+      });
+      useAppStore.getState().applyEvent("c1", {
+        kind: "session.snapshot",
+        data: { info: { state: "busy" }, seq: 8, epoch: "e1" },
+      });
+      // 窗口里到达的实时事件（更高序号）先压着。
+      useAppStore.getState().applyEvent("c1", { kind: "cli", seq: 9, data: assistantLine("后来补上的结论") });
+      // 后端迟迟不回补发帧 → 1 秒兜底把它放行。
+      vi.advanceTimersByTime(1100);
+      const beforeReplay = (useAppStore.getState().items.c1 ?? []).map((i) => ("text" in i ? i.text : i.kind));
+      expect(beforeReplay).toContain("后来补上的结论");
+
+      // 补发帧这时才到，带的是更早的 6/7：整段都在水位之下。
+      useAppStore.getState().applyEvent("c1", {
+        kind: "session.replay",
+        data: {
+          events: [
+            { kind: "cli", seq: 6, data: assistantLine("真正的开场白") },
+            { kind: "cli", seq: 7, data: assistantLine("过渡正文") },
+          ],
+        },
+      });
+
+      // 走整份重放：转录里那条才是权威顺序，不需要把旧事件追加到尾部。
+      await vi.waitFor(() => {
+        expect(transcriptCalls.length).toBeGreaterThan(0);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

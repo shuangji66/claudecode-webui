@@ -519,6 +519,80 @@ type Transcript struct {
 	// 就永远停在「运行中」，页头上一直转圈（踩过）。meta.json 的 `finished` 是唯一
 	// 权威的收尾标记，所以随转录一起下发。
 	Subagents []SubagentState `json:"subagents,omitempty"`
+	// InterjectedUUIDs 是「哪些 user 行是插话」的 uuid 名单（宿主机记账）。
+	//
+	// 转录本身**没有任何字段能区分插话**：实测 2.1.330，`priority=now` 的消息与排队
+	// 投递的消息在 jsonl 里字段完全相同（连 `queue-operation`、`turnPosition`、
+	// `origin` 都一样）。所以这个事实只能在写 stdin 的那一刻、靠 CLI 的回显帧拿到
+	// （见 session.KindInterjection），落到 `<session>/interjections.jsonl`，回放时取回。
+	//
+	// 老会话没有这份文件时为空——那时插话会被当成新一轮（宁可少认，也不要把两轮
+	// 折成一整轮、把上一轮的回答藏掉）。
+	InterjectedUUIDs []string `json:"interjected_uuids,omitempty"`
+}
+
+// interjectionsFile 是插话记账文件的名字，与转录同目录（`<project>/<session>/`）。
+const interjectionsFile = "interjections.jsonl"
+
+// interjectionRecord 是 interjections.jsonl 的一行。
+type interjectionRecord struct {
+	UUID string `json:"uuid"`
+	At   string `json:"at,omitempty"`
+}
+
+// AppendInterjection 往 `<project>/<id>/interjections.jsonl` 追加一条插话记录。
+//
+// 由网关在收到 session.KindInterjection 时调用。**只追加、不重写**：这条链路很热
+// （每条插话一次），重写整份文件没必要，而且转录本身也是追加的。
+//
+// 失败只返回错误、不影响会话：最坏情况是这次插话在回放时被当成新一轮。
+func AppendInterjection(projectsDir, id, uuid string) error {
+	if !validSessionID(id) || strings.TrimSpace(uuid) == "" {
+		return nil
+	}
+	path, err := findTranscript(projectsDir, id)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(filepath.Dir(path), id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, interjectionsFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	b, _ := json.Marshal(interjectionRecord{UUID: uuid, At: time.Now().UTC().Format(time.RFC3339Nano)})
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		return err
+	}
+	return nil
+}
+
+// loadInterjections 读回插话 uuid 名单；文件不存在时返回空（老会话的常态）。
+func loadInterjections(projectDir, sessionID string) []string {
+	f, err := os.Open(filepath.Join(projectDir, sessionID, interjectionsFile))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	var out []string
+	seen := make(map[string]bool)
+	_ = scanLines(f, 64<<10, func(line []byte) bool {
+		var rec interjectionRecord
+		if json.Unmarshal(line, &rec) != nil {
+			return true
+		}
+		id := strings.TrimSpace(rec.UUID)
+		if id == "" || seen[id] {
+			return true
+		}
+		seen[id] = true
+		out = append(out, id)
+		return true
+	})
+	return out
 }
 
 // SubagentState 是子代理收尾状态的摘要，只带前端回放要用的字段。
@@ -581,6 +655,7 @@ func LoadTranscript(projectsDir, id string) (Transcript, error) {
 		return Transcript{}, err
 	}
 	tr.Subagents = subagentStates(filepath.Dir(path), id)
+	tr.InterjectedUUIDs = loadInterjections(filepath.Dir(path), id)
 	return tr, nil
 }
 

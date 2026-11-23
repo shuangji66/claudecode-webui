@@ -9,6 +9,7 @@ package session
 
 import (
 	"bufio"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -119,6 +120,15 @@ const (
 	KindSessionTitle = "session.title"
 	KindError        = "error"
 	KindClosed       = "closed"
+	// KindInterjection 标记 CLI 回显了一条**我们写过**的消息，且那条是插话。
+	//
+	// 转录回放没法从 jsonl 判断插话（实测 2.1.330：`priority=now` 的消息与排队投递
+	// 的消息在转录里字段完全相同，连 `queue-operation` 与 `turnPosition` 都一样）。
+	// 所以这个事实只能在写 stdin 的那一刻、靠 `--replay-user-messages` 的回显拿到。
+	// `data` 是 `{uuid}`——uuid 与转录里那条 user 行的 `uuid` 是同一个值（实测），
+	// 上层据此落到 `<session>/interjections.jsonl`，回放时再取回。
+	// 前端不认识这个 kind（落到 applyEvent 的 default 分支忽略），它只给装配层用。
+	KindInterjection = "session.interjection"
 )
 
 // writeReq 是一条待写入 stdin 的行；ack 非空时调用方等待写入结果。
@@ -177,7 +187,10 @@ type Session struct {
 	maxLine int64
 
 	state atomic.Value // string
-	idle  atomic.Int64 // unix nano，最近一次活动时间
+	// stateMu 让「读当前状态 → 判断 → 写新状态」成为一个原子动作（见 setState）。
+	// 只保护状态迁移，不覆盖 emit：emit 会拿 emitMu，两把锁不能嵌套。
+	stateMu sync.Mutex
+	idle    atomic.Int64 // unix nano，最近一次活动时间
 
 	// fresh 表示「这个进程是用 `--session-id` 新开的、CLI 那边还没有转录」。
 	// 由 manager 在 create 时按 `resumeID == ""` 置位（见 MarkFresh），之后不再变。
@@ -246,6 +259,12 @@ type Session struct {
 	interjected bool
 	// contentSeq 是读循环已处理的内容帧计数（assistant / stream_event）。
 	contentSeq uint64
+	// interjectUUIDs 记「这次写 stdin 的插话候选项」：CLI 的回显帧带同一个 uuid 时
+	// 就能确认它是插话。只有插话才登记（普通 prompt 不登记，回显时自然忽略）。
+	//
+	// 为什么要走「先登记、回显确认」而不是写完就认定：写失败会有回滚，而且 transcript
+	// 才是权威——没有落进转录的插话不该被回放出来。回显是 CLI 自己的确认。
+	interjectUUIDs map[string]struct{}
 	// interjectSeq 是写插话那一刻的 contentSeq。
 	interjectSeq uint64
 
@@ -541,11 +560,24 @@ func (s *Session) justFinishedTurn() bool {
 	return time.Since(time.Unix(0, at)) <= TurnHandoffWindow
 }
 
+// stateMu 串行化状态迁移：`setState` 的「读当前值 → 判断 → 写新值」必须是一个原子动作。
+//
+// 没有它时有一条能复现的交错：prompt() 在写 stdin 成功后调 setState(busy)，而同一瞬间
+// Close() 已经把它置成 closed。两边各自读到的旧值都不是对方刚写下的那个，于是
+// **closed 被覆盖回 busy**。busy 那一支不自愈：Reclaimable 要求 StateReady，busy 永远
+// 不会被空闲回收；infoByID 只把 closed 当死，`Resume` 会返回这个死壳、不再重新 spawn。
+// 结果是界面上那颗转圈环一直转、发消息永远写不进去，只有重启进程才能恢复。
 func (s *Session) setState(st string) {
-	if s.State() == st {
+	s.stateMu.Lock()
+	cur := s.State()
+	// **closed 是终态**：进程已经没了，任何迟到的迁移（写 stdin 的成功回执、读循环里
+	// 的半条消息、收尾的 result）都不该把它复活。
+	if cur == st || cur == StateClosed {
+		s.stateMu.Unlock()
 		return
 	}
 	s.state.Store(st)
+	s.stateMu.Unlock()
 	s.emitData(KindSessionState, map[string]any{"id": s.CurrentID(), "state": st})
 }
 
@@ -580,7 +612,23 @@ func (s *Session) prompt(text string, attachments []protocol.Attachment, opt pro
 	if text == "" && len(attachments) == 0 {
 		return errors.New("session: 消息不能为空")
 	}
+	// 每条用户消息都带一个宿主生成的 uuid：CLI 会把它原样写进转录、并在回显帧里带回来
+	// （实测 2.1.330）。普通 prompt 也带，是为了让「回显」这条路对两种消息形状一致；
+	// 只有插话会登记进 interjectUUIDs。
+	if opt.ClientUUID == "" {
+		opt.ClientUUID = newUUIDv4()
+	}
+	if opt.Priority == "now" {
+		s.interjectMu.Lock()
+		if s.interjectUUIDs == nil {
+			s.interjectUUIDs = make(map[string]struct{}, 4)
+		}
+		s.interjectUUIDs[opt.ClientUUID] = struct{}{}
+		s.interjectMu.Unlock()
+	}
 	if err := s.writeLine(protocol.UserMessageWith(text, attachments, opt)); err != nil {
+		// 写失败＝这条消息没发出去，登记也一并撤掉（否则回显永远不会来，表会一直涨）。
+		s.forgetInterject(opt.ClientUUID)
 		return err
 	}
 	// 首条消息一发出，这条进程就不再是「新对话」：空闲回收从这一刻起适用
@@ -1374,6 +1422,24 @@ func (s *Session) handleLine(line []byte) {
 		}
 		s.emitData(KindCLI, env.Raw)
 
+	case protocol.TypeUser:
+		// `--replay-user-messages` 让我们写进 stdin 的消息被 CLI 回显回来（带
+		// `isReplay:true` 与**我们给的那个 uuid**，实测 2.1.330 与转录里那条 user 行的
+		// uuid 是同一个值）。这是判断「哪条消息是插话」的唯一可靠依据：转录里
+		// `priority=now` 与排队投递的消息字段完全一样，什么都区分不出来。
+		//
+		// 命中就记一笔，由上层落到 `<session>/interjections.jsonl`，回放时据此标插话。
+		// **回显帧本身不再转给前端**：那是我们自己刚写出去的东西，前端已经本地乐观插入
+		// 过一条气泡（`appendUser`），再转一遍就是同一条消息出现两次。跨设备气泡靠
+		// gateway 的 `prompt.echo` 广播，那条路径不受影响。
+		if uuid := protocol.ReplayUserUUID(env.Raw); uuid != "" {
+			if s.takeInterjectUUID(uuid) {
+				s.emitData(KindInterjection, map[string]any{"uuid": uuid})
+			}
+			return
+		}
+		s.emitData(KindCLI, env.Raw)
+
 	default:
 		// assistant / stream_event：插话之后又产出了内容，说明这一轮跑起来了（CLI 把
 		// 插话并进了当前回合）。记下来，让后续那条 result 不被当成交棒。
@@ -1477,6 +1543,46 @@ func (s *Session) record(ev Event) Event {
 		s.replay = s.replay[1:]
 	}
 	return ev
+}
+
+// newUUIDv4 生成 RFC 4122 v4 UUID。
+//
+// CLI 的 user 行 `uuid` 是标准 UUID（实测），这里用同一格式避免它做校验时拒绝。
+// 不用第三方库：16 个随机字节 + 版本位 + 变体位就够。
+func newUUIDv4() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// 拿不到随机数时退回时间戳：uuid 只用于「认回自己写的那条消息」，
+		// 不参与任何安全判定，单调时间戳足够唯一。
+		return fmt.Sprintf("00000000-0000-4000-8000-%012x", time.Now().UnixNano()&0xffffffffffff)
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// forgetInterject 撤掉一条插话登记（写 stdin 失败时用）。
+func (s *Session) forgetInterject(uuid string) {
+	if uuid == "" {
+		return
+	}
+	s.interjectMu.Lock()
+	delete(s.interjectUUIDs, uuid)
+	s.interjectMu.Unlock()
+}
+
+// takeInterjectUUID 判断一条回显帧是不是我们写过的插话；是则取走（只认一次）。
+func (s *Session) takeInterjectUUID(uuid string) bool {
+	if uuid == "" {
+		return false
+	}
+	s.interjectMu.Lock()
+	defer s.interjectMu.Unlock()
+	if _, ok := s.interjectUUIDs[uuid]; !ok {
+		return false
+	}
+	delete(s.interjectUUIDs, uuid)
+	return true
 }
 
 // newEpoch 生成一个会话对象身份串。

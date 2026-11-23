@@ -59,7 +59,7 @@ var (
 	// ErrDisabled 表示服务处于停用状态（已经摘出 claude 的配置）。
 	ErrDisabled = errors.New("MCP 服务已停用")
 	// ErrSymlink 表示目标文件或工作区内的某一层上级是符号链接。
-	ErrSymlink = errors.New("配置路径经过符号链接，拒绝写入")
+	ErrSymlink = errors.New("配置路径经过符号链接，拒绝读写")
 	// ErrBadScope 表示作用域不合法。
 	ErrBadScope = errors.New("未知的作用域")
 )
@@ -307,7 +307,15 @@ func parseSpec(name, scope, path string, raw json.RawMessage) Server {
 // 关键点：.claude.json 里还有 projects / 计数 / 迁移标记，我们只碰 mcpServers。
 // 用 map[string]json.RawMessage 而不是 map[string]any，避免数字被 float64 改写、
 // 未知结构被重新排版——那等于把 claude 自己的状态文件改成另一份东西。
-func readTop(path string) (map[string]json.RawMessage, error) {
+//
+// base 是这份配置**应该**待着的目录（用户级是 claude HOME，项目级是工作区）：
+// 读取前走一遍 ensureWritable 的软链检查。写入侧早就挡住了 `.mcp.json -> /某处`，
+// **读取侧原来没有**——工作区里一个指向工作区外的 `.mcp.json` 软链，就能把别人项目
+// 的配置（连同 env / headers 里的密钥）显示在 MCP 面板上。
+func readTop(path, base string) (map[string]json.RawMessage, error) {
+	if err := ensureWritable(base, path); err != nil {
+		return nil, err
+	}
 	top := map[string]json.RawMessage{}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -452,7 +460,11 @@ func (m *Manager) readScope(scope, cwd string) (map[string]Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	top, err := readTop(path)
+	base, err := m.baseFor(scope, cwd)
+	if err != nil {
+		return nil, err
+	}
+	top, err := readTop(path, base)
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +485,11 @@ func (m *Manager) update(scope, cwd string, mutate func(map[string]json.RawMessa
 	if err != nil {
 		return err
 	}
-	top, err := readTop(path)
+	base, err := m.baseFor(scope, cwd)
+	if err != nil {
+		return err
+	}
+	top, err := readTop(path, base)
 	if err != nil {
 		return err
 	}

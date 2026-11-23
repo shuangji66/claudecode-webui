@@ -249,6 +249,11 @@ func (m *Manager) Read(scope, cwd, name string) (Doc, error) {
 		return Doc{}, err
 	}
 	path := filepath.Join(dir, "SKILL.md")
+	// 叶子是软链时拒绝读取：不挡的话工作区外任意文件都会被当成技能正文读回来
+	// （与 readMeta 同一条理由）。
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return Doc{}, ErrSymlink
+	}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return Doc{}, ErrNotFound
@@ -481,6 +486,18 @@ func readSkillSource(p string) (string, string, error) {
 // readMeta 读取单个技能目录的元信息；没有 SKILL.md 的目录直接跳过。
 func readMeta(dir, name, scope string, readOnly bool) (Skill, bool) {
 	path := filepath.Join(dir, "SKILL.md")
+	// **读取侧同样要拒绝软链**：写入侧早就有 rejectSymlinkPath（见 Save / Delete），
+	// 读取侧原来只 os.Stat + os.ReadFile——工作区里一个 `.claude/skills/x/SKILL.md
+	// -> /任意文件` 就能把工作区外的内容读进面板与模型上下文（恶意仓库 clone 下来
+	// 即自带这条链）。导入路径 readSkillSource 也挡了软链，口径本就该一致。
+	//
+	// 只挡叶子文件：技能目录本身允许是软链（claude 支持，见 isDir 的注释），
+	// 中间层的 .claude / skills 由 rejectSymlinkPath 在写入时挡，读取放行是为了
+	// 不改变「软链目录里的真文件能看」这一既有行为。
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return Skill{Name: name, Scope: scope, Path: path, ReadOnly: readOnly,
+			Invalid: "SKILL.md 是符号链接，出于安全考虑不读取"}, true
+	}
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
 		if err != nil && !errors.Is(err, os.ErrNotExist) {

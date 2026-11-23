@@ -643,10 +643,16 @@ hub ── manager ── session ── process ── claude (NDJSON)
   由它按扩展名挑应用。宿主回 `false`、老宿主没有该方法时**静默退回文件管理器**（只能定位
   所在目录），不要报错——用户至少落在文件夹里，报错却什么都得不到；调用方不要为
   `fallback` 再弹一次提示。
-- **`/api/fs/host-file` 是唯一不受工作区围栏约束的读文件接口**（选择器挑的文件本来就在
-  工作区外）。边界：只放行图片/PDF（扩展名初筛 + `http.DetectContentType` 复核，改名的
-  HTML/SVG 会被拒）、必须是普通文件、≤ 8MB、必须挂 `s.authed`。不要在这条路上加
-  「顺手读个文本文件」——那等于给前端开了任意宿主文件读取。
+- **`/api/fs/host-file` 不受工作区围栏约束**（选择器挑的文件本来就在工作区外）。边界：
+  只放行图片/PDF（扩展名初筛 + `http.DetectContentType` 复核，改名的 HTML/SVG 会被拒）、
+  必须是普通文件、≤ 8MB、必须挂 `s.authed`。不要在这条路上加「顺手读个文本文件」——
+  那等于给前端开了任意宿主文件读取。
+  **它不是唯一一条**：`/api/fs/list`（浏览任意目录）、`/api/fs/mkdir`（在任意可写目录建
+  一层子目录）、`/api/fs/access`（在任意目录落临时文件探测可写性）同样不受围栏——那是
+  「添加任意目录为工作区」的必要能力。这四条合起来意味着：**TCP 通道（局域网 + 单密码）
+  等于宿主文件系统的探测面**，不是只有 host-file 一条。服务端无法区分「用户在选择器里
+  挑的路径」与「前端拼出来的绝对路径」，所以这层风险的边界只能靠「谁能拿到访问密码」来定，
+  不要在 AGENTS 里把它写成「只有一条例外」。
 
 ### 4.6.2 飞牛「已授权目录」（设置 → 目录）
 
@@ -1370,14 +1376,21 @@ hub ── manager ── session ── process ── claude (NDJSON)
   要等本轮工具收尾才轮得到。曾经被报「工具操作中插话没生效」就是这个原因——
   `PromptInterject` 现在固定写 `priority=now` + `origin=human`，普通 prompt（含排队投递）
   只带 `origin=human`。改这条链路时先看 `protocol.PromptOptions` 的注释。
-- **CLI 不回显被并入的消息**（没开 `--replay-user-messages`）：所以用户气泡只能本地乐观插入，
-  转录里的位置可能和界面上略有出入——别为了「对得上」去开 replay，那会让同一条消息显示两遍。
-- **转录里没有插话标记，重进前端要靠形状认**：`priority` 只存在于我们写进 stdin 的帧上，
-  落盘的 jsonl 里**没有**（实测 2.1.330：插话那行与普通提问行字段完全一致，全库 grep
-  `priority` 一条都搜不到）。不认的话「插话发送后的消息重进前端就渲染成两段」——前半截
-  收进「已完成」、后半截重新铺开。判据在 `frontend/src/lib/transcriptRows.ts` 的
-  `interjectedPromptRows`（提问 → 终止性 `stop_reason` 之间出现的提问就是插话），
-  回放打 `interjected`、`turnsFromTranscript` 与 `usageFromTranscript` 一律不按插话切轮。
+- **`--replay-user-messages` 是插话回放的唯一依据**：开启后 CLI 把我们写进 stdin 的
+  消息原样回显一遍，帧上带 `isReplay: true` 与**我们给的 `uuid`**——它会原样写进转录，
+  回显帧与转录那条 user 行的 uuid 是同一个值（实测 2.1.330）。所以
+  `protocol.PromptOptions.ClientUUID` 由**宿主**生成（`session.newUUIDv4`），写入前登记
+  进 `interjectUUIDs`，回显时 `takeInterjectUUID` 认领 → `KindInterjection` →
+  `history.AppendInterjection` 落到 `<session>/interjections.jsonl`。
+  **回显帧不再转给前端**：那是我们自己刚写出去的东西，前端已经 `appendUser` 过一条气泡。
+- **转录里没有插话标记，而且不存在可推断的信息**：`priority` 只活在我们写进 stdin 的帧上，
+  落盘的 jsonl 里没有。曾经按「一轮 = 提问 → 终止性 `stop_reason`，中间出现的提问就是
+  插话」来认，在本机 162 份真实转录上 **14 条判定全是误判、真插话 0 条**；用真
+  `priority=now` 会话做对照，插话行与排队投递行的字段集合完全相同（18/18），两者都带
+  `queue-operation enqueue/dequeue`、都是全新的 `turnPosition`、都是 `origin:{kind:human}`。
+  **不要再写任何形状启发式**：误判会把两轮折成一整轮（耗时相加、实测一段变 43 分钟），
+  而「仅最终回答」按合并后的轮切，会藏掉上一轮真正的结论。
+  老的会话没有那份记账文件 → 名单为空 → 插话算新一轮（少认一次只是观感退化成两段）。
   详见 `frontend/AGENTS.md`。
 - **交互**：回合进行中按 Enter = 入队（草稿清空，消息进输入框上方的「待发送」面板）；点正文
   **就地展开编辑框**（Enter 保存、Shift+Enter 换行、Esc 取消，位置不变；正文与附件都清空等于删掉

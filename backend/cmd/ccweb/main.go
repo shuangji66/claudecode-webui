@@ -150,6 +150,9 @@ func main() {
 	// 网关在 manager 之后才建出来（它自己依赖 manager），所以用原子指针接一下。
 	//
 	// manager 同理用指针间接引用：它的构造要传这个闭包，而闭包里又要调它的 Rename。
+	// 转录根目录：manager 的事件闭包（插话记账）与网关都要用，所以在两者之前算好。
+	historyDir := filepath.Join(cfg.ClaudeHome, ".claude", "projects")
+
 	var mgrRef atomic.Pointer[manager.Manager]
 	var srvRef atomic.Pointer[gateway.Server]
 	mgr := manager.New(cfg, resolveClaude, store, func(sid string, ev session.Event) {
@@ -163,6 +166,15 @@ func main() {
 			srv.NoteSessionState(sid, ev.Data)
 		case session.KindClosed:
 			srv.NoteSessionClosed(sid)
+		case session.KindInterjection:
+			// CLI 回显确认了「这条是我们写过的插话」。转录里区分不出来
+			// （`priority=now` 与排队投递的消息字段完全相同，实测 2.1.330），
+			// 所以只能在这里记一笔，回放时再取回。见 history.AppendInterjection。
+			if uuid := interjectionUUID(ev.Data); uuid != "" {
+				if err := history.AppendInterjection(historyDir, sid, uuid); err != nil {
+					logger.Printf("记录插话失败（回放时它会被当成新一轮）: %v", err)
+				}
+			}
 		case session.KindSessionTitle:
 			// 别处改了会话名（终端 /rename、IDE 插件、--name）：并进对话元数据，
 			// 否则这边看不见那次改名，之后再改一次还会把旧标题盖回去。
@@ -221,7 +233,6 @@ func main() {
 	// 十几分钟的用户会被当成「空闲」把进程收掉，回来只剩一句「连接已关闭」。
 	mgr.SetWatcher(func(id string) bool { return h.Count(id) > 0 })
 
-	historyDir := filepath.Join(cfg.ClaudeHome, ".claude", "projects")
 	srv := gateway.New(gateway.Deps{
 		Cfg:           cfg,
 		Guard:         authz.New(cfg.AuthToken),
@@ -335,6 +346,17 @@ func main() {
 		logger.Printf("服务退出: %v", err)
 		os.Exit(1)
 	}
+}
+
+// interjectionUUID 解析 `session.interjection` 的 `{uuid}`。
+func interjectionUUID(data json.RawMessage) string {
+	var ev struct {
+		UUID string `json:"uuid"`
+	}
+	if err := json.Unmarshal(data, &ev); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(ev.UUID)
 }
 
 // sessionReplacedIDs 解析 `session.replaced` 的 `{from, to}`。

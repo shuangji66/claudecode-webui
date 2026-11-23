@@ -193,6 +193,34 @@ type PromptOptions struct {
 	// Human 写 origin:{kind:"human"}，告诉 CLI 这是用户亲手打的，而不是 SDK
 	// 注入的上下文。它还会让「需要人类提示词」的检查（如 ultracode 关键字）认这条消息。
 	Human bool
+	// ClientUUID 让这条消息在 CLI 回显时能被认回来（配合 `--replay-user-messages`）。
+	//
+	// **它是插话回放的唯一依据**：转录里 `priority=now` 与排队投递的消息字段完全
+	// 相同（实测 2.1.330），什么都区分不出来；而回显帧带的 `uuid` 与转录里那条
+	// user 行的 `uuid` 是**同一个值**（实测）。所以写 stdin 时先自己生成一个，
+	// 回显时按它判定「这条是插话」，再记进 interjections.jsonl。
+	ClientUUID string
+}
+
+// ReplayUserUUID 返回一条**回显**用户消息的 uuid；不是回显帧时返回空串。
+//
+// `--replay-user-messages` 把客户端写进 stdin 的消息原样回显一遍，帧上带
+// `isReplay: true` 与客户端给的 `uuid`（实测 2.1.330）。用的是我们自己生成的
+// uuid 而不是 CLI 的 promptId，因为 promptId 只有落盘时才有，写 stdin 那一刻
+// 还不知道。
+func ReplayUserUUID(raw json.RawMessage) string {
+	var m struct {
+		Type     string `json:"type"`
+		IsReplay bool   `json:"isReplay"`
+		UUID     string `json:"uuid"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return ""
+	}
+	if m.Type != TypeUser || !m.IsReplay {
+		return ""
+	}
+	return strings.TrimSpace(m.UUID)
 }
 
 // UserMessageWith 构造带附件与投递语义的用户消息。
@@ -251,6 +279,10 @@ func UserMessageWith(text string, attachments []Attachment, opt PromptOptions) [
 	}
 	if opt.Human {
 		frame["origin"] = map[string]any{"kind": "human"}
+	}
+	// uuid 由宿主给：CLI 会把它原样写进转录与回显帧（实测 2.1.330）。
+	if opt.ClientUUID != "" {
+		frame["uuid"] = opt.ClientUUID
 	}
 	return mustMarshal(frame)
 }

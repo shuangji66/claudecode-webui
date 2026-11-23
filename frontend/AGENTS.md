@@ -1253,19 +1253,19 @@ src/
     切了的话一句话就把这一轮劈成两半：前半截被当成「已完成」收进一行（还冒出复制按钮），
     后半截当新一轮重新铺开。本机发送由 `sendPrompt` 按 `priority` 标记，别的设备收到的
     `prompt.echo` 带 `interjected`（后端 `promptEchoOf` 从 `cmd.Priority` 取）。
-  - **转录回放里的插话要自己认出来**（`transcriptRows.interjectedPromptRows`）：**转录里
-    没有 `priority`，也没有 `prompt.echo`**（实测 2.1.330：插话那行与普通提问行的字段完全
-    一致，全库 grep `priority` 一条都搜不到）。不认的话「插话发送后的消息重进前端会渲染成
-    两段」——前半截收进「已完成」、后半截重新铺开，轮次刻度还多一格（截图复现过）。
-    判据是**它落在哪**：一轮 = 提问 → 某条 assistant 的终止性 `stop_reason`（`end_turn` /
-    `stop_sequence` / `max_tokens` / `refusal`），这段之间出现的提问就是插话。工具循环里的
-    那条是 `tool_use`（继续开着）；**缺失值按「已收尾」处理**（老转录 / 被裁剪的片段 / 测试
-    夹具都没有这个字段，当成「还在跑」会让后面每句提问都成了插话）。中断标记把这一轮关掉；
-    **窗口里的第一条提问永远不算插话**（转录被截到 20k 行时开头可能落在半轮中间，那一轮的
-    提问已经被切掉了，再判成插话就会让历史少一格轮次刻度）。
+  - **转录回放里的插话只认宿主机记账**（`transcriptRows.interjectedPromptRows`）：
+    转录里没有任何可推断的信息——实测 2.1.330，真 `priority=now` 的插话行与排队投递行
+    字段集合完全相同（18/18），两者都带 `queue-operation enqueue/dequeue`、都有全新的
+    `turnPosition`、都是 `origin:{kind:human}`。曾经按「一轮 = 提问 → 终止性
+    `stop_reason`，中间出现的提问就是插话」来认，在本机 162 份真实转录上
+    **14 条判定全部误判、真插话 0 条**。
+    真正的来源是 `TranscriptPayload.interjected_uuids`：后端开 `--replay-user-messages`
+    拿 CLI 的回显（带我们给的 uuid）才算得出来，落盘在 `<session>/interjections.jsonl`。
+    这里只做 uuid → 行下标；名单为空（老会话）就一条都不认，插话退化成新一轮。
+    **不要再加任何形状启发式**：误判会把两轮折成一整轮，耗时与用量相加（实测一段变
+    43 分钟），而「仅最终回答」按合并后的轮切，会藏掉上一轮真正的结论。
     结果同时喂给三处，口径必须一致：`itemsFromTranscript`（打 `interjected`）、
-    `turnsFromTranscript` 与 `usage.usageFromTranscript`（都**不**按插话切轮，否则同一轮的
-    用量被拆成两份）。
+    `turnsFromTranscript` 与 `usage.usageFromTranscript`（都**不**按插话切轮）。
   - **`isPromptRow` / `isLocalCommandEcho` / `isTaskNotification` / `isImageAnnotation` /
     `isInterruptMarker` 都在 `lib/transcriptRows.ts`**：`normalize.ts` 与 `usage.ts` 都要这份
     判定，而前者已经 import 后者，放任何一边都成环。`normalize.ts` 只是转手导出（调用方
