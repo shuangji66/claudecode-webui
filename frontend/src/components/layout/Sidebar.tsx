@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useAppStore } from "../../store/useAppStore";
 import type { ConversationInfo, WorkspaceEntry } from "../../transport/types";
 import { baseName, conversationTitle, relativeTime } from "../../lib/labels";
@@ -31,6 +31,11 @@ import {
 } from "../../lib/sidebarView";
 import { clearDragPreview, startDragPreview } from "../../lib/dragImage";
 import { toggleHiddenFeature, useHiddenFeatures, type FeatureKey } from "../../lib/sidebarFeatures";
+import {
+  syncCurrentWorkspace,
+  toggleWorkspaceExpanded,
+  useExpandedWorkspaces,
+} from "../../lib/workspaceExpand";
 import { askConfirm, askPrompt } from "../common/SystemDialogs";
 import { copyText } from "../../lib/clipboard";
 import { Menu, type MenuItem } from "../common/Menu";
@@ -131,9 +136,15 @@ const SHOW_COPY_SESSION_ID = false;
  * 触摸拖拽工作区长按多久才激活（毫秒）。
  *
  * 不用「按下就拖」：侧栏在手机上主要靠滑动滚动，按下即拖会把手势全吃掉。
- * 300ms 与系统列表排序的手感接近；期间手指移动超过 10px 就当滚动、放弃长按。
+ *
+ * **800ms 而不是 300ms**：侧栏在手机上最常见的操作是「按住 → 想一想 → 再滑」，
+ * 而长按一旦激活，document 上那条 `touchmove` 的 `preventDefault` 就把整段手势
+ * 吃掉了——表现为刚展开一组、手指还按在行上时，忽然怎么划都滚不动，直到松手再来。
+ * 300ms 比「按住再滑」的自然停顿还短，所以这个 bug 天天能撞上；800ms 已经明显长于
+ * 大多数人的停顿，按下就滑的滚动完全不受影响，真正想拖动排序的人也不差这半秒
+ * （松手前还会看到行变暗、拿起了才知道）。
  */
-const WS_LONG_PRESS_MS = 300;
+const WS_LONG_PRESS_MS = 800;
 
 interface MenuState {
   id: string;
@@ -213,10 +224,12 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     el: HTMLElement;
     timer: number | null;
     active: boolean;
+    /** 真手指（`pointerType === "touch"`）：只有它要等长按，也只有它给震动回执。 */
+    finger: boolean;
     /**
      * 活跃之后**真的动过**没有。
      *
-     * 长按 300ms 已经激活、但手指没移动就松手，那仍是一次点击：`beginWsDrag` 只是
+     * 长按到点已经激活、但手指没移动就松手，那仍是一次点击：`beginWsDrag` 只是
      * 把行调暗、清了选区，落点还是空的。按「激活了就吞掉这次 click」处理的话，
      * 用户点了一下工作区行（尤其那颗只在悬停才露出的 ⋯ / ＋）会毫无反应——
      * 不展开、不出菜单，看起来像界面卡了。
@@ -233,7 +246,16 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   /** 悬浮概览：鼠标停住一会儿才弹，离开/滚动就收。工作区与会话共用一张卡片位。 */
   const [hover, setHover] = useState<HoverState | null>(null);
   const hoverTimer = useRef<number | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentWorkspace ? [currentWorkspace] : []));
+  /**
+   * 哪些工作区是展开的（对齐 DSH：展开状态跨开关侧栏保持）。
+   *
+   * **不能放在组件的 `useState` 里**：移动端抽屉关一次就整个卸载（`App` 里是
+   * `{sidebarOpen && <Sidebar/>}`），组件本地状态随之归零，下次打开只剩「当前对话
+   * 所在的那一个」——用户刚展开的另一组于是一次次消失。桌面常驻实例与抽屉实例
+   * 同时挂载，各持一份还会互相打架。所以走 `lib/workspaceExpand` 的模块级快照
+   * （+ localStorage），两个实例、两次打开看到的是同一份。
+   */
+  const expanded = useExpandedWorkspaces();
   /**
    * 「展开其余 N 个会话」被点开的工作区。
    *
@@ -285,9 +307,19 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     saveOrder(order);
   }, [order]);
 
-  useEffect(() => {
-    if (!currentWorkspace) return;
-    setExpanded((prev) => (prev.has(currentWorkspace) ? prev : new Set(prev).add(currentWorkspace)));
+  /**
+   * 当前对话换工作区（或侧栏第一次挂载）时决定要不要展开某一组。
+   *
+   * 规则全在 `syncCurrentWorkspace` 里，组件只负责把「现在是哪个工作区」告诉它：
+   * 「看得见的那一个」要在**模块级**记，不能放组件的 ref——移动端抽屉关一次就
+   * 卸载，ref 跟着没了。
+   *
+   * **用 `useLayoutEffect` 而不是 `useEffect`**：盘上还没有这份偏好时要播种
+   * 「展开当前工作区」，走普通 effect 的话第一帧先把那一组画成收起的、浏览器画完
+   * 才弹开——打开抽屉时那一下闪动。layout effect 在绘制之前跑，用户看不到中间态。
+   */
+  useLayoutEffect(() => {
+    syncCurrentWorkspace(currentWorkspace);
   }, [currentWorkspace]);
 
   const archivedCount = conversations.filter((c) => c.archived).length;
@@ -534,6 +566,16 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     if (press.timer !== null) window.clearTimeout(press.timer);
     press.timer = null;
     endHover();
+    // 触摸上「拿起来了」必须有一声回执：阈值 800ms 长得足以让人以为没生效，
+    // 一段没有反馈的停顿读起来就是卡了。震动不可用时（桌面 / 老 WebView /
+    // 系统关了触感）静默跳过——行变暗与提示线仍然是反馈。
+    if (press.finger) {
+      try {
+        navigator.vibrate?.(12);
+      } catch {
+        /* 某些 WebView 里调用会抛 */
+      }
+    }
     // 指针移出这一行也要继续收 move：不 capture 的话拖到相邻工作区上就断线了。
     try {
       press.el.setPointerCapture(press.pointerId);
@@ -554,7 +596,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     // 会按第二个 press 的落点提交。
     if (wsPress.current?.active) return;
     wsSuppressClick.current = false;
-    const mouseLike = e.pointerType !== "touch";
+    // 手写笔按鼠标处理：它在触屏上没法「按住不动」。
+    const finger = e.pointerType === "touch";
     wsPress.current = {
       path: g.path,
       x: e.clientX,
@@ -562,10 +605,10 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
       pointerId: e.pointerId,
       el: e.currentTarget,
       active: false,
+      finger,
       moved: false,
       over: null,
-      // 手写笔按鼠标处理：它在触屏上没法「按住不动 300ms」。
-      timer: mouseLike ? null : window.setTimeout(beginWsDrag, WS_LONG_PRESS_MS),
+      timer: finger ? window.setTimeout(beginWsDrag, WS_LONG_PRESS_MS) : null,
     };
   };
 
@@ -947,8 +990,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     // 工作区行只是展开/收起开关：展开一组的会话列表不是导航，不切当前工作区，
     // 也不能替用户打开那个目录的最近一条对话（点一下就想看看列表，结果进了旧对话）。
     // 换工作区要么点具体对话（openConversation 自己会切），要么点行尾的「+」新建。
-    const open = expanded.has(g.path);
-    if (open) {
+    if (expanded.has(g.path)) {
       // 收起时把「展开其余」也复位：下次展开回到默认的前 5 条。
       setMoreSessions((prev) => {
         if (!prev.has(g.path)) return prev;
@@ -957,12 +999,7 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         return next;
       });
     }
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(g.path)) next.delete(g.path);
-      else next.add(g.path);
-      return next;
-    });
+    toggleWorkspaceExpanded(g.path);
   };
 
   const openWsMenu = (e: React.MouseEvent<HTMLButtonElement>, g: WorkspaceGroup) => {

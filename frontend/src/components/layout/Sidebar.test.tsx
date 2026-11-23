@@ -3,6 +3,7 @@ import { act, createEvent, fireEvent, render, screen } from "@testing-library/re
 import { Sidebar } from "./Sidebar";
 import { useAppStore } from "../../store/useAppStore";
 import { resetHiddenFeaturesCache } from "../../lib/sidebarFeatures";
+import { resetExpandedCache } from "../../lib/workspaceExpand";
 import { askConfirm } from "../common/SystemDialogs";
 
 // 二次确认统一走 askConfirm：这里只关心「有没有先问、确认后才动手」，
@@ -112,6 +113,7 @@ describe("Sidebar 分组/排序/筛选菜单", () => {
   beforeEach(() => {
     localStorage.clear();
     resetHiddenFeaturesCache();
+    resetExpandedCache();
     seed();
   });
 
@@ -157,6 +159,7 @@ describe("Sidebar 会话悬浮预览", () => {
   beforeEach(() => {
     localStorage.clear();
     resetHiddenFeaturesCache();
+    resetExpandedCache();
     useAppStore.setState({
       workspaces: [{ path: "/w/demo", name: "demo", last_used: "", exists: true }],
       currentWorkspace: "/w/demo",
@@ -227,6 +230,7 @@ describe("Sidebar 会话行的管理入口", () => {
   beforeEach(() => {
     localStorage.clear();
     resetHiddenFeaturesCache();
+    resetExpandedCache();
     useAppStore.setState({
       workspaces: [{ path: "/w/demo", name: "demo", last_used: "", exists: true }],
       currentWorkspace: "/w/demo",
@@ -429,6 +433,7 @@ describe("Sidebar 新建的空对话（对齐 DSH 的 blank 行）", () => {
   beforeEach(() => {
     localStorage.clear();
     resetHiddenFeaturesCache();
+    resetExpandedCache();
     useAppStore.setState({
       workspaces: [{ path: cwd, name: "demo", last_used: "", exists: true }],
       currentWorkspace: cwd,
@@ -556,6 +561,7 @@ describe("Sidebar 新建对话后关闭移动端抽屉", () => {
   beforeEach(() => {
     localStorage.clear();
     resetHiddenFeaturesCache();
+    resetExpandedCache();
     useAppStore.setState({
       workspaces: [{ path, name: "demo", last_used: "", exists: true }],
       currentWorkspace: path,
@@ -607,6 +613,7 @@ describe("Sidebar 工作区行与移动端抽屉", () => {
   beforeEach(() => {
     localStorage.clear();
     resetHiddenFeaturesCache();
+    resetExpandedCache();
     useAppStore.setState({
       workspaces: [
         { path: "/w/demo", name: "demo", last_used: "", exists: true },
@@ -665,6 +672,47 @@ describe("Sidebar 工作区行与移动端抽屉", () => {
     expect(openConversation).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  // 移动端抽屉关一次就整个卸载（`App` 里是 `{sidebarOpen && <Sidebar/>}`）。
+  // 展开状态留在组件 useState 里的话，下次打开只剩「当前对话那一组」——
+  // 用户刚展开的另一组一次次消失。
+  it("抽屉关上再打开：展开过的工作区还在（不只当前对话那一组）", () => {
+    const first = renderSidebar();
+    fireEvent.click(screen.getByText("other").closest("button")!);
+    expect(screen.getByText("other").closest("button")).toHaveAttribute("aria-expanded", "true");
+    first.unmount();
+
+    renderSidebar();
+    expect(screen.getByText("demo").closest("button")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("other").closest("button")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  // 用户把所有组都收起来之后，重新打开侧栏不该被「自动展开当前工作区」撑回去。
+  it("全部收起之后重新打开：仍然是全部收起", () => {
+    const first = renderSidebar();
+    fireEvent.click(screen.getByText("demo").closest("button")!);
+    expect(screen.getByText("demo").closest("button")).toHaveAttribute("aria-expanded", "false");
+    first.unmount();
+
+    renderSidebar();
+    expect(screen.getByText("demo").closest("button")).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("other").closest("button")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  // 会话中换到别的工作区（点开另一组的对话）：那一组要被展开，否则用户找不到自己
+  // 刚打开的那条对话在哪。
+  it("当前工作区换了：那一组自动展开，其余保持原样", () => {
+    renderSidebar();
+    expect(screen.getByText("other").closest("button")).toHaveAttribute("aria-expanded", "false");
+
+    act(() => {
+      useAppStore.setState({ currentWorkspace: "/w/other" });
+    });
+
+    expect(screen.getByText("other").closest("button")).toHaveAttribute("aria-expanded", "true");
+    // 原来那一组不动（用户没收起它，凭什么替人收）。
+    expect(screen.getByText("demo").closest("button")).toHaveAttribute("aria-expanded", "true");
+  });
 });
 
 describe("Sidebar 回对话区", () => {
@@ -673,6 +721,7 @@ describe("Sidebar 回对话区", () => {
   beforeEach(() => {
     localStorage.clear();
     resetHiddenFeaturesCache();
+    resetExpandedCache();
     useAppStore.setState({
       workspaces: [{ path: cwd, name: "demo", last_used: "", exists: true }],
       currentWorkspace: cwd,
@@ -770,6 +819,7 @@ describe("Sidebar 手动排序的拖拽（对齐 DSH）", () => {
   function seed(pinned = false) {
     localStorage.clear();
     resetHiddenFeaturesCache();
+    resetExpandedCache();
     localStorage.setItem("ccweb-sidebar-view", JSON.stringify({ group: "workspace", sort: "manual", archive: "hide" }));
     useAppStore.setState({
       workspaces: [{ path: cwd, name: "demo", last_used: "", exists: true }],
@@ -939,6 +989,7 @@ describe("Sidebar 功能区入口", () => {
   beforeEach(() => {
     localStorage.clear();
     resetHiddenFeaturesCache();
+    resetExpandedCache();
     useAppStore.setState({ conversations: [], workspaces: [], currentWorkspace: "", activeId: null });
   });
 
@@ -1027,6 +1078,7 @@ describe("Sidebar 工作区行（对齐 DSH）", () => {
   beforeEach(() => {
     localStorage.clear();
     resetHiddenFeaturesCache();
+    resetExpandedCache();
     useAppStore.setState({
       workspaces: [{ path: cwd, name: "demo", last_used: "", exists: true }],
       currentWorkspace: cwd,
@@ -1129,6 +1181,7 @@ describe("Sidebar 工作区拖动排序", () => {
   function seed() {
     localStorage.clear();
     resetHiddenFeaturesCache();
+    resetExpandedCache();
     useAppStore.setState({
       workspaces: paths.map((path) => ({ path, name: path.slice(-1), last_used: "", exists: true })),
       currentWorkspace: "/w/a",
@@ -1214,7 +1267,7 @@ describe("Sidebar 工作区拖动排序", () => {
     expect(order(container)).toEqual(paths);
   });
 
-  it("触摸：长按 300ms 后拖到末尾", async () => {
+  it("触摸：长按 800ms 后拖到末尾", async () => {
     vi.useFakeTimers();
     seed();
     const { container } = renderSidebar();
@@ -1222,12 +1275,33 @@ describe("Sidebar 工作区拖动排序", () => {
 
     fireEvent.pointerDown(a, { pointerType: "touch", buttons: 1, pointerId: 5, clientX: 8, clientY: 20 });
     await act(async () => {
-      vi.advanceTimersByTime(320);
+      vi.advanceTimersByTime(820);
     });
     fireEvent.pointerMove(a, { pointerType: "touch", buttons: 1, pointerId: 5, clientX: 8, clientY: 115 });
     fireEvent.pointerUp(a, { pointerType: "touch", buttons: 0, pointerId: 5, clientX: 8, clientY: 115 });
 
     expect(order(container)).toEqual(["/w/b", "/w/c", "/w/a"]);
+    vi.useRealTimers();
+  });
+
+  // 「按住 → 想一想 → 再滑」是手机上的常见手势。阈值太短时（曾经 300ms）那段停顿
+  // 就会激活拖拽，document 上的 touchmove 把整段手势吞掉——刚展开一组之后忽然
+  // 怎么划都滚不动，直到松手再来。
+  it("触摸：按住 500ms 后才滑动仍按滚动处理，不起拖拽", async () => {
+    vi.useFakeTimers();
+    seed();
+    const { container } = renderSidebar();
+    const [a] = sizedRows(container);
+
+    fireEvent.pointerDown(a, { pointerType: "touch", buttons: 1, pointerId: 7, clientX: 8, clientY: 20 });
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+    fireEvent.pointerMove(a, { pointerType: "touch", buttons: 1, pointerId: 7, clientX: 8, clientY: 60 });
+    fireEvent.pointerUp(a, { pointerType: "touch", buttons: 0, pointerId: 7, clientX: 8, clientY: 60 });
+
+    expect(container.querySelector(".opacity-50")).toBeNull();
+    expect(order(container)).toEqual(paths);
     vi.useRealTimers();
   });
 
@@ -1287,7 +1361,7 @@ describe("Sidebar 工作区拖动排序", () => {
 
     fireEvent.pointerDown(b, { pointerType: "touch", buttons: 1, pointerId: 6, clientX: 8, clientY: 60 });
     await act(async () => {
-      vi.advanceTimersByTime(320);
+      vi.advanceTimersByTime(820);
     });
     fireEvent.pointerUp(b, { pointerType: "touch", buttons: 0, pointerId: 6, clientX: 8, clientY: 60 });
     fireEvent.click(button);
@@ -1326,6 +1400,7 @@ describe("Sidebar 搜索工具条", () => {
   function seed() {
     localStorage.clear();
     resetHiddenFeaturesCache();
+    resetExpandedCache();
     useAppStore.setState({
       workspaces: [
         { path: "/w/demo", name: "demo", last_used: "", exists: true },

@@ -41,6 +41,7 @@ src/
   lib/permissionModes.ts 权限模式判定与危险模式标记（唯一入口）
   lib/sessionExport.ts 会话导出 Markdown（右上角「更多」菜单）
   lib/sidebarView.ts   左侧栏视图偏好：分组/排序/归档筛选 + 手动顺序（纯函数 + localStorage）
+  lib/workspaceExpand.ts 工作区展开/收起状态（模块级快照 + localStorage，两个侧栏实例共用）
   lib/fnosAuth.ts      飞牛路由授权：回调页路径判定、state、回包解析（纯函数）
   lib/dirs.ts          已授权目录页的受保护路径判定（等于/祖先/子路径，镜像后端）
   lib/ooxml.ts         OOXML 公共件：fflate 解 zip、部位路径归一、rels 解析、按本地名找元素
@@ -344,11 +345,15 @@ src/
       （只是点开了搜索框、还没输入时列表没变，显示顺序与拖拽都照旧）。
     - **工作区拖拽不能用 HTML5 DnD**：iOS/Android 上 `dragstart` 根本不触发，而触屏
       上「拖动排序」是刚需。这里走 Pointer Events：鼠标按下后移动超过 6px 开始拖；
-      **触摸必须先长按 300ms**（`WS_LONG_PRESS_MS`），长按前手指移动超过 10px 一律按
+      **触摸必须先长按 800ms**（`WS_LONG_PRESS_MS`），长按前手指移动超过 10px 一律按
       「在滚动」处理，否则侧栏就没法划了。长按成功后给行 `setPointerCapture`，
       并在 document 上挂 `{ passive: false }` 的 `touchmove` 阻止滚动（React 的 touch
       监听是 passive 的，拦不住）。手写笔按鼠标处理（`pointerType !== "touch"`）——
-      它在触屏上没法「按住不动 300ms」。
+      它在触屏上没法「按住不动」。
+      **阈值不能压回 300ms**：「按住 → 想一想 → 再滑」是手机上最常见的滚动姿势，
+      而长按一旦激活，那条 `touchmove` 的 `preventDefault` 就把整段手势吃掉了——
+      表现是刚展开一组、手指还按在行上时，忽然怎么划都滚不动，直到松手再来。
+      300ms 比这个停顿还短，所以这个 bug 是天天能撞上的；真正想拖动排序的人不差这半秒。
     - **`pointerup` 丢了必须能复位**（与右侧栏分隔线同一条规则）：`pointermove` 里
       非活跃状态遇到 `buttons === 0` 就丢掉 press——鼠标的 `pointerId` 是恒定的，
       残留的 press 会让之后**只是划过**行的鼠标被当成拖拽（行半透明 + document 上那条
@@ -853,6 +858,18 @@ src/
   换工作区只有两条路：点具体对话（`openConversation` 自己会切）或点行尾「+」新建。
   **工作区行没有常亮底色**（对齐 DSH）：当前工作区只靠文字色（`text-ink` / `text-ink-2`）
   区分，悬停才整行高亮——`data-active` 挂在行上会让人以为它是「已选中的导航项」。
+- **展开状态是模块级偏好，不是组件 state**（`lib/workspaceExpand.ts`，key
+  `ccweb-workspace-expanded`，存**展开**的路径数组，只存本机、跨标签页同步）：
+  移动端抽屉是 `{sidebarOpen && <Sidebar/>}`，关一次整个卸载，`useState` 里的展开集合
+  随之归零——下次打开只剩「当前对话那一组」，用户刚展开的另一组一次次消失；桌面常驻
+  实例与抽屉实例同时挂载，各持一份还会互相画不同的文件夹图。三条判定在
+  `syncCurrentWorkspace` 里，**缺一条都是 bug**：
+  - 第一次打开（盘上还没有这份偏好）→ 播种成「只展开当前对话那一组」；
+  - 盘上已有偏好（哪怕是被用户收空的 `[]`）→ 不再自动撑开任何东西。只看「集合空不空」
+    的话，收起变成一个关不掉的开关；
+  - 会话中换了工作区 → 展开新那一组（点开另一组的对话却看不见它在哪，比收起更让人
+    迷惑）。原来那一组不动。「上一次看见的当前工作区」记在**模块级**而不是组件 ref：
+    抽屉卸载后 ref 就没了。
 - **全局只有一条空对话**（`lib/newChat.blankConversations`）：`createSession` 一进来先找
   「新建了但一条消息都没发」的对话，分成两份：
   - `reusable`：cwd **就是**目标工作区的那条 → 直接进去（`openConversation`）、不再新建；
