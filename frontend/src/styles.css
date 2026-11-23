@@ -311,6 +311,17 @@ pre {
     padding: 6px 8px;
     text-align: left;
     transition: background 100ms ease;
+    /* **行里的文字一律不可选中**：这些行全是导航项（工作区 / 会话 / 功能区 / 历史
+       记录 / 目录选择），没有一处需要拖选文字，而移动端长按它们时浏览器会先按
+       「选中这段文字」处理——iOS 在按下约 500ms 后把整行文字涂蓝并弹出「拷贝 /
+       查询 / 共享」，那时手指一动是拖选而不是滚动，工作区的长按拖动排序也永远
+       轮不到。重命名要用标题时走弹窗里的输入框（那里照常能选）。
+       `-webkit-user-select` 不能省：老 iOS Safari 只认带前缀的那个。
+       `-webkit-touch-callout` 挡的是长按链接/图片弹出的系统菜单：这里目前没有
+       链接，但行里以后再放一个（比如附件预览）就会冒出来。 */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
   }
 
   /* **只在真有悬停能力的设备上生效**（对齐 DSH）：触摸屏点一下之后 `:hover`

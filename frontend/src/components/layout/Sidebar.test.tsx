@@ -625,6 +625,34 @@ describe("Sidebar 工作区行与移动端抽屉", () => {
     });
   });
 
+  // 移动端长按会先被浏览器当成「选中这段文字」：iOS 按下约 500ms 就把整行涂蓝并
+  // 弹出「拷贝 / 查询」，那时手指一动是拖选而不是滚动——工作区的长按拖动排序也
+  // 永远轮不到。规则写在 `styles.css` 的 `.side-row` 上（`user-select: none` +
+  // `-webkit-touch-callout: none`），所以两件事在这里锁住：① 这些行必须都带
+  // `side-row`，② 那个类上确实有这条规则（jsdom 不跑样式表，只能看源码）。
+  it("工作区行与会话行走 .side-row（禁止文本选中就挂在这个类上）", () => {
+    useAppStore.setState({
+      conversations: [
+        {
+          id: "c-1",
+          cwd: "/w/demo",
+          title: "会话甲",
+          created_at: "",
+          last_active: "2026-01-02T00:00:00Z",
+          messages: 2,
+          archived: false,
+          live: false,
+        },
+      ],
+    });
+    const { container } = renderSidebar();
+
+    const wsRow = container.querySelector('[data-workspace="/w/demo"]')!;
+    expect(wsRow.className.split(/\s+/)).toContain("side-row");
+    const convRow = screen.getByText("会话甲").closest(".side-row");
+    expect(convRow).not.toBeNull();
+  });
+
   // 展开/收起一组的会话列表不是导航，抽屉不该被收掉——否则刚展开的就看不见了。
   it("点当前工作区只切换展开，不关抽屉", () => {
     const onClose = vi.fn();
