@@ -122,49 +122,91 @@ describe("createSession：每个工作区只留一条空对话", () => {
   });
 });
 
-describe("createSession：跨工作区时收掉被留下的空壳", () => {
+describe("createSession：跨工作区的空壳", () => {
   beforeEach(reset);
 
-  // 「每个工作区一条空对话」只在同一目录内兜住。从 A 的空对话切到 B 再新建，
-  // A 那条空壳既没转录、也不在眼前，不收掉就一直占一个常驻会话槽位。
-  it("原来那条是空壳就关掉它", async () => {
+  // 会话全局唯一：A 里有内容对话、B 里躺着一条空壳时，在 A 点「新对话」不能
+  // 复用 B 的空壳（claude 会跑到 B 去），但也不能把这个空壳留在那儿占槽位。
+  // 正确做法：在 A 新建，再把 B 那条收掉。
+  it("别的工作区有空壳：在目标目录新建，并收掉那个空壳", async () => {
     const closeSession = vi.fn(async () => {});
-    const shell = { id: "c1", cwd: "/w", title: "", messages: 0, archived: false, live: true };
+    const shell = { id: "s1", cwd: "/b", title: "", messages: 0, archived: false, live: true };
+    h.list = [conv, shell];
+    useAppStore.setState({
+      activeId: "c1",
+      conversations: [conv, shell] as never,
+      closeSession: closeSession as never,
+    });
+
+    const p = useAppStore.getState().createSession("/w");
+    h.release?.();
+    await p;
+
+    // 新建走的是目标目录，不是把 /b 那条复用过来。
+    expect(h.calls.filter((x) => x === "/api/session")).toHaveLength(1);
+    expect(useAppStore.getState().activeId).toBe("c2");
+    expect(closeSession).toHaveBeenCalledWith("s1");
+  });
+
+  // 反过来这一侧更要命：有内容的对话永远不能被顺手关掉。
+  it("别的工作区那条有内容就不动它", async () => {
+    const closeSession = vi.fn(async () => {});
+    const other = { id: "o1", cwd: "/b", title: "旧对话", messages: 5, archived: false, live: true };
+    h.list = [conv, other];
+    useAppStore.setState({
+      activeId: "c1",
+      conversations: [conv, other] as never,
+      closeSession: closeSession as never,
+    });
+
+    const p = useAppStore.getState().createSession("/w");
+    h.release?.();
+    await p;
+
+    expect(closeSession).not.toHaveBeenCalled();
+  });
+
+  // 新建失败时不能收：用户会被回滚到原来那条，而那条已经被关掉就是错的。
+  it("新建失败时不收空壳", async () => {
+    const closeSession = vi.fn(async () => {});
+    const shell = { id: "s1", cwd: "/b", title: "", messages: 0, archived: false, live: true };
     h.list = [shell];
     useAppStore.setState({
       activeId: "c1",
       conversations: [shell] as never,
       closeSession: closeSession as never,
     });
-    const p = useAppStore.getState().createSession("/other");
-    h.release?.();
-    await p;
-    expect(closeSession).toHaveBeenCalledWith("c1");
-  });
+    h.fail = true;
 
-  // 反过来这一侧更要命：有内容的对话永远不能被顺手关掉。
-  it("原来那条有内容就不动它", async () => {
-    const closeSession = vi.fn(async () => {});
-    useAppStore.setState({ activeId: "c1", closeSession: closeSession as never });
-    const p = useAppStore.getState().createSession("/other");
+    const p = useAppStore.getState().createSession("/w");
     h.release?.();
     await p;
+
     expect(closeSession).not.toHaveBeenCalled();
+    // 回滚到点「新对话」之前那条。
+    expect(useAppStore.getState().activeId).toBe("c1");
   });
 
-  // `isNewChat(undefined, 0)` 是 true（「刚创建、还没落元数据」）。列表里查不到这个
-  // id 时若照它判，就会把一条有内容的对话关掉——必须先确认 prev 存在。
-  it("上一条不在列表里时不误关", async () => {
+  // 本工作区那条是「进去」而不是新建，进去之后同样把别处的空壳收掉。
+  it("复用本工作区的空壳后，也收掉别处的", async () => {
     const closeSession = vi.fn(async () => {});
+    const openConversation = vi.fn(async () => true);
+    const here = { id: "h1", cwd: "/w", title: "", messages: 0, archived: false, live: true };
+    const there = { id: "t1", cwd: "/b", title: "", messages: 0, archived: false, live: true };
+    h.list = [here, there];
     useAppStore.setState({
-      activeId: "gone",
-      conversations: [] as never,
-      items: { gone: [{ id: "u1", seq: 1, ts: 1, kind: "user", text: "有内容" }] } as never,
+      activeId: "c1",
+      conversations: [here, there] as never,
+      openConversation: openConversation as never,
       closeSession: closeSession as never,
     });
-    const p = useAppStore.getState().createSession("/other");
-    h.release?.();
-    await p;
-    expect(closeSession).not.toHaveBeenCalled();
+
+    await useAppStore.getState().createSession("/w");
+
+    expect(openConversation).toHaveBeenCalledWith("h1");
+    expect(h.calls.filter((x) => x === "/api/session")).toHaveLength(0);
+    expect(closeSession).toHaveBeenCalledWith("t1");
+    // 复用的那条不能被自己收掉。
+    expect(closeSession).not.toHaveBeenCalledWith("h1");
   });
 });

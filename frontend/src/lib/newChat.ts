@@ -37,10 +37,33 @@ export function blankConversationIn(
   conversations: ConversationInfo[],
   localItemCount: (id: string) => number = () => 0,
 ): ConversationInfo | null {
-  if (!cwd) return null;
-  // 有多条（历史遗留的堆叠）时进最近那条，其余留给用户在侧栏删掉。
-  const hits = conversations.filter(
-    (c) => !c.archived && samePath(c.cwd, cwd) && isNewChat(c, localItemCount(c.id)),
-  );
-  return sortByRecent(hits)[0] ?? null;
+  return blankConversations(cwd, conversations, localItemCount).reusable;
+}
+
+/**
+ * 找**全部工作区**里还没发过消息的空对话，分成「能直接复用」与「得先收掉」两份。
+ *
+ * 会话是**全局唯一**的：界面上只该有一条「新对话」，在哪个工作区点新建都一样。
+ * 但空壳的 cwd 是它创建时那个目录，**不能跨工作区复用**——claude 会在错的目录里
+ * 跑（后端 `handleCreateSession` 对 cwd 与记录不符的 resume 直接回 409），用户
+ * 以为在 A 里干活，实际文件都落在 B。
+ *
+ * 所以：
+ *   - `reusable`：cwd 就是这个工作区的，进去就行（`blankConversationIn` 用它）；
+ *   - `stale`：别的工作区留下的空壳。新建成功之后逐个收掉（见 `store.createSession`），
+ *     它们没有转录、没有标题，结束后后端列表连展示都不展示（`handleListConversations`
+ *     跳过「无转录 + 无标题 + 没在跑」的条目），所以「收掉」等于让它彻底消失。
+ */
+export function blankConversations(
+  cwd: string,
+  conversations: ConversationInfo[],
+  localItemCount: (id: string) => number = () => 0,
+): { reusable: ConversationInfo | null; stale: ConversationInfo[] } {
+  // 有多条（历史遗留的堆叠）时进最近那条，其余的全部按 stale 收掉——
+  // **包括同一个工作区里多出来的那几条**：它们和别处的空壳一样没有内容，
+  // 留着只是把侧栏堆满同名「新对话」。
+  const hits = conversations.filter((c) => !c.archived && isNewChat(c, localItemCount(c.id)));
+  const reusable = cwd ? (sortByRecent(hits.filter((c) => samePath(c.cwd, cwd)))[0] ?? null) : null;
+  const stale = sortByRecent(hits.filter((c) => c.id !== reusable?.id));
+  return { reusable, stale };
 }
