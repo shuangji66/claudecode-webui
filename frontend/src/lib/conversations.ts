@@ -9,6 +9,20 @@ export function belongs(cwd: string, root: string): boolean {
   return c === r || c.startsWith(`${r}/`);
 }
 
+/**
+ * 两个路径是不是同一个目录（忽略尾部斜杠）。
+ *
+ * 与 `belongs` 的区别是**不做包含关系**：需要「就是这一层」的地方（同一个工作区、
+ * 同一条对话的 cwd）只能用这个，用 `belongs` 会把子目录也算成同一处。
+ */
+export function samePath(a: string | undefined, b: string | undefined): boolean {
+  const clean = (p: string | undefined) => (p ?? "").trim().replace(/\/+$/, "");
+  const ca = clean(a);
+  // 空路径不是「同一个目录」：调用方拿它当「这条对话没有 cwd」用，两者都缺省时
+  // 说它们相等会把「无从比较」误判成「就是这里」。
+  return ca !== "" && ca === clean(b);
+}
+
 /** 找到 cwd 所属的最长授权工作区；没有则返回空串。 */
 export function workspaceFor(cwd: string, workspaces: WorkspaceEntry[]): string {
   return (

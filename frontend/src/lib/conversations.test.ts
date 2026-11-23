@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { belongs, conversationStatus, latestConversation, pinnedFirst, sortByRecent, timeValue, workspaceFor } from "./conversations";
+import { belongs, conversationStatus, latestConversation, pinnedFirst, samePath, sortByRecent, timeValue, workspaceFor } from "./conversations";
 import type { ConversationInfo, WorkspaceEntry } from "../transport/types";
 
 function conv(id: string, cwd: string, last: string, archived = false): ConversationInfo {
@@ -21,6 +21,18 @@ describe("conversations", () => {
     expect(belongs("/work/sub", "/work")).toBe(true);
     expect(belongs("/work2", "/work")).toBe(false);
     expect(belongs("/work/", "/work")).toBe(true);
+  });
+
+  // 与 belongs 的差别就在「不认子目录」：需要「就是这一层」的地方不能拿 belongs 凑。
+  it("samePath 只认同一个目录", () => {
+    expect(samePath("/work", "/work")).toBe(true);
+    expect(samePath("/work/", "/work")).toBe(true);
+    expect(samePath("/work/sub", "/work")).toBe(false);
+    expect(samePath("/work2", "/work")).toBe(false);
+    // 空路径等于「没有 cwd」，不能因为两边都空就说它们相同。
+    expect(samePath("", "")).toBe(false);
+    expect(samePath(undefined, "")).toBe(false);
+    expect(samePath(undefined, "/work")).toBe(false);
   });
 
   it("workspaceFor 选最长授权目录", () => {

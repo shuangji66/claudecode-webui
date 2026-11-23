@@ -69,6 +69,7 @@ import type {
 } from "../transport/types";
 import { normalizeSettings, type ProviderForm } from "../lib/providerForm";
 import { belongs, latestConversation, timeValue, workspaceFor } from "../lib/conversations";
+import { blankConversationIn, isNewChat } from "../lib/newChat";
 import {
   MAX_QUEUED,
   enqueuePrompt as pushQueued,
@@ -1829,14 +1830,31 @@ export const useAppStore = create<AppState>()((set, get) => ({
       return;
     }
     const previousId = get().activeId;
-    const previous = previousId ? get().conversations.find((c) => c.id === previousId) : null;
-    // 已经在一个空的新对话里：再点「新对话」不应新建进程，否则会先起一个
-    // 新会话、再把旧的空壳关掉，界面会闪一下。
-    if (previousId) {
-      const live = get().sessions.find((s) => s.id === previousId);
-      const cwd = previous?.cwd || live?.cwd || "";
-      const empty = (get().items[previousId] ?? []).length === 0 && (!previous || (previous.messages === 0 && !previous.title));
-      if (empty && cwd === dir && (previous || live)) return;
+    /**
+     * **每个工作区只留一条空对话**：这里已经有空壳就直接进去，不再建新的。
+     *
+     * 以前只判「当前打开的那条正好是空对话」，于是从一条有内容的对话上连点几次
+     * 「新对话」/ 工作区行尾的「+」会堆出一串同名空对话（截图复现过），每一条都
+     * 占一个常驻会话槽位，用户还得自己一条条删。
+     * `blankConversationIn` 用的判定与侧栏 blank 行、对话区居中布局完全同一套
+     * （元数据 + 本机消息流），所以「看起来是同一条新对话」和「点进来是不是它」一致。
+     */
+    const blank = blankConversationIn(dir, get().conversations, (id) => (get().items[id] ?? []).length);
+    if (blank) {
+      // 已经站在这条空对话上：再点一次是 no-op（不然会先关连接再重连，界面闪一下）。
+      if (blank.id === previousId && clients.get(blank.id)?.ready) return;
+      // 站在「新对话页」（activeId 为空，草稿按工作区分桶）打过的字不能因为这次
+      // 换来一个 id 就看不见了——与新建后那次 moveDraft 同一个理由。
+      moveDraft(draftKeyFor(null, dir), blank.id);
+      // **与新建路径同一条规矩：先把「新对话页」摆出来再等后端**。`openConversation`
+      // 要 `POST /api/session {resume}`（进程被回收过时还要冷启动握手），这期间
+      // 停在旧对话上用户会以为点击没生效。摆的是同一张新对话页（activeId 为空），
+      // id 到手时不重排、不闪。
+      if (previousId && previousId !== blank.id) get().setActive(null);
+      const opened = await get().openConversation(blank.id);
+      // 起不来就放回原来那条：与新建失败的回滚同一条理由（别把原对话藏起来）。
+      if (!opened && previousId && get().activeId === null) get().setActive(previousId);
+      return;
     }
     // 用户的意图变成「新建」：正在进行的 open 不能再改 activeId / 建连接。
     openSeq += 1;
@@ -1862,17 +1880,19 @@ export const useAppStore = create<AppState>()((set, get) => ({
         moveDraft(draftKeyFor(null, dir), info.id);
         get().setActive(info.id);
         get().connect(info.id);
-        // 上一个对话还是空白壳（没发过消息）时顺手结束它，避免点几次「新对话」
-        // 就堆出几条空的「新对话」。有内容的对话永远不自动关闭。
-        if (
-          previousId &&
-          previousId !== info.id &&
-          previous &&
-          previous.messages === 0 &&
-          !previous.title &&
-          (get().items[previousId] ?? []).length === 0
-        ) {
-          void get().closeSession(previousId);
+        // **跨工作区的那条空壳顺手收掉**：「每个工作区一条空对话」那道闸门只在同一个
+        // 目录内兜住；用户从 A 的空对话切到 B 再新建，A 那条既没转录、也不在眼前，
+        // 会一直挂在常驻列表里占一个槽位（改造前这里有段「新建后关掉上一个空对话」，
+        // 顺手承担了这个清理）。**只在成功之后关**：放在前面的话，新建失败回滚过去
+        // 就是一条已经被关掉的会话。
+        //
+        // **必须先确认 prev 存在**：`isNewChat(undefined, 0)` 返回 true（「刚创建、还没
+        // 落元数据」），拿它去判一个列表里查不到的 id，就会把一条有内容的对话关掉。
+        if (previousId && previousId !== info.id) {
+          const prev = get().conversations.find((c) => c.id === previousId);
+          if (prev && isNewChat(prev, (get().items[previousId] ?? []).length)) {
+            void get().closeSession(previousId);
+          }
         }
         return info;
       } catch (e) {
