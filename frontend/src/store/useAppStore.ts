@@ -19,6 +19,7 @@ import {
   attachTurnUsage,
   commandsChanged,
   isTurnResult,
+  interjectedPromptRows,
   mergeReplayed,
   prependSystem,
   settleSubagents,
@@ -906,14 +907,21 @@ function errText(e: unknown): string {
 /** 把 `/api/history/transcript` 的原始事件行折成渲染用的消息列表。 */
 function itemsFromTranscript(tr: TranscriptPayload): Item[] {
   let next: Item[] = [];
-  for (const line of tr.lines ?? []) {
+  // 转录里没有 `priority` / `prompt.echo`，插话只能按「它落在这一轮的哪一段里」认
+  // （一轮 = 提问 → 终止性的 stop_reason）。不认的话重进前端时插话被当成新一轮的
+  // 起点，把整轮劈成两半（前半截收进「已完成」，轮次刻度还多一格）。
+  const interjected = interjectedPromptRows(tr.lines ?? []);
+  (tr.lines ?? []).forEach((line, index) => {
     const rec = line as { timestamp?: unknown };
     const at = typeof rec.timestamp === "string" ? Date.parse(rec.timestamp) : NaN;
     // replay=true：关掉「CLI 回显去重」。那套去重是给实时流用的（本地已经乐观插过
     // 一条气泡），转录里每条 user 行都是真的发过的，而且转录没有 result 行、按 result
     // 划的轮边界永远触发不到——开着它会把用户重复发送的同一句话吞掉。
-    next = applyCLI(next, line, Number.isFinite(at) ? at : Date.now(), undefined, { replay: true });
-  }
+    next = applyCLI(next, line, Number.isFinite(at) ? at : Date.now(), undefined, {
+      replay: true,
+      interjected: interjected.has(index),
+    });
+  });
   // 转录里没有 result 行（claude 只把 result 写 stdout），所以「本轮耗时 ·
   // 输出 tok」必须从 assistant / api-request 行自己推，否则刷新后全丢。
   next = attachTurnUsage(next, turnsFromTranscript(tr.lines ?? []));

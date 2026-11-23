@@ -9,6 +9,7 @@ import {
   commandsChanged,
   imagesOfContent,
   isInterruptMarker,
+  interjectedPromptRows,
   mergeReplayed,
   isLocalCommandEcho,
   isImageAnnotation,
@@ -22,6 +23,7 @@ import {
 } from "./normalize";
 
 import type { Item } from "./model";
+import { turnSpans } from "./process";
 
 function assistantText(text: string) {
   return { type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } };
@@ -2389,5 +2391,105 @@ describe("CLI 注入的附图注解", () => {
     expect(isImageAnnotation("[Image: 随便写的]")).toBe(false);
     expect(isImageAnnotation("hello")).toBe(false);
     expect(isImageAnnotation("")).toBe(false);
+  });
+});
+
+// 转录里没有 `priority`，也没有 `prompt.echo`：插话只能按「它落在这一轮的哪一段里」认。
+// 不认的话，重进前端时插话被当成新一轮的起点，把整轮劈成两半（截图复现过）。
+describe("转录回放里的插话判定", () => {
+  /** 一条 user 行；`stop` 给 assistant 用（CLI 每轮收尾会写终止性的 stop_reason）。 */
+  const user = (text: string, at: string) => ({
+    type: "user",
+    timestamp: at,
+    message: { role: "user", content: [{ type: "text", text }] },
+  });
+  const asst = (at: string, stop: string | null, text = "答案") => ({
+    type: "assistant",
+    timestamp: at,
+    message: { role: "assistant", stop_reason: stop, content: [{ type: "text", text }] },
+  });
+  const toolUse = (at: string) => ({
+    type: "assistant",
+    timestamp: at,
+    message: {
+      role: "assistant",
+      stop_reason: "tool_use",
+      content: [{ type: "tool_use", id: "tu1", name: "Read", input: {} }],
+    },
+  });
+
+  it("回合进行中的第二句算插话，轮末之后的提问不算", () => {
+    const lines = [
+      user("第一问", "2026-01-02T00:00:00.000Z"),
+      toolUse("2026-01-02T00:00:01.000Z"),
+      user("插一句", "2026-01-02T00:00:02.000Z"),
+      asst("2026-01-02T00:00:03.000Z", "end_turn"),
+      user("第二问", "2026-01-02T00:00:04.000Z"),
+      asst("2026-01-02T00:00:05.000Z", "end_turn"),
+    ];
+    expect([...interjectedPromptRows(lines)]).toEqual([2]);
+  });
+
+  it("工具回包、任务通知、附图注解都不移动轮边界", () => {
+    const lines = [
+      user("第一问", "2026-01-02T00:00:00.000Z"),
+      toolUse("2026-01-02T00:00:01.000Z"),
+      // 工具回包不是提问：它不能让这一轮「重新开一次」。
+      { type: "user", timestamp: "2026-01-02T00:00:01.500Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu1", content: "ok" }] } },
+      { type: "user", timestamp: "2026-01-02T00:00:01.600Z", message: { role: "user", content: "<task-notification>\n<task-id>t1</task-id>\n<status>completed</status>\n</task-notification>" } },
+      { type: "user", timestamp: "2026-01-02T00:00:01.700Z", message: { role: "user", content: "[Image: source: /tmp/1.png]" } },
+      user("插一句", "2026-01-02T00:00:02.000Z"),
+      asst("2026-01-02T00:00:03.000Z", "end_turn"),
+    ];
+    expect([...interjectedPromptRows(lines)]).toEqual([5]);
+  });
+
+  it("中断之后先要有新提问才重新开一轮", () => {
+    const lines = [
+      user("第一问", "2026-01-02T00:00:00.000Z"),
+      toolUse("2026-01-02T00:00:01.000Z"),
+      { type: "user", timestamp: "2026-01-02T00:00:02.000Z", message: { role: "user", content: "[Request interrupted by user]" } },
+      user("重新问", "2026-01-02T00:00:03.000Z"),
+      asst("2026-01-02T00:00:04.000Z", "end_turn"),
+    ];
+    // 中断把这一轮关掉了，「重新问」是新的一轮，不是插话。
+    expect(interjectedPromptRows(lines).size).toBe(0);
+  });
+
+  it("窗口截断后的第一条提问不算插话", () => {
+    // 转录只回放最近一段时，窗口开头可能正好落在某一轮的中间（那一轮的提问已被切掉）。
+    // 不豁免的话第一句提问会挂到上一轮后面，历史少一格轮次刻度。
+    const partial = [toolUse("2026-01-02T00:00:01.000Z"), user("窗口里的第一问", "2026-01-02T00:00:02.000Z")];
+    expect(interjectedPromptRows(partial).size).toBe(0);
+    // 但窗口里已经有提问之后，再出现的才算插话。
+    const more = [
+      ...partial,
+      asst("2026-01-02T00:00:03.000Z", "tool_use"),
+      user("插一句", "2026-01-02T00:00:04.000Z"),
+    ];
+    expect([...interjectedPromptRows(more)]).toEqual([3]);
+  });
+
+  it("回放时打上 interjected，这一轮不被劈成两段", () => {
+    const lines = [
+      user("第一问", "2026-01-02T00:00:00.000Z"),
+      toolUse("2026-01-02T00:00:01.000Z"),
+      user("插一句", "2026-01-02T00:00:02.000Z"),
+      asst("2026-01-02T00:00:03.000Z", "end_turn"),
+    ];
+    const flagged = interjectedPromptRows(lines);
+    let items: Item[] = [];
+    lines.forEach((line, index) => {
+      items = applyCLI(items, line, Date.parse(line.timestamp), undefined, {
+        replay: true,
+        interjected: flagged.has(index),
+      });
+    });
+    const users = items.filter((it) => it.kind === "user");
+    expect(users).toHaveLength(2);
+    expect(users[0]).not.toMatchObject({ interjected: true });
+    expect(users[1]).toMatchObject({ text: "插一句", interjected: true });
+    // 一整轮：turnSpans 只切出一段（插话不切轮）。
+    expect(turnSpans(items, true)).toHaveLength(1);
   });
 });

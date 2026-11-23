@@ -22,7 +22,7 @@
 //   - 攒不出来就不显示：上游把整段回复合并下发（算出来超过 `MAX_GENERATION_TPS`）时
 //     宁可不显示，也不编。
 
-import { isInjectedUserRow, splitContinuation } from "./continuation";
+import { interjectedPromptRows, isPromptRow } from "./transcriptRows";
 
 /** 一次请求的 token 用量（字段名与 CLI 一致，这里转成驼峰）。 */
 export interface UsageTotals {
@@ -667,19 +667,15 @@ export function applyUsageMessage(
   return undefined;
 }
 
-/** 转录里这条 user 行是「用户的提问」（一轮的开始），而不是工具回包或命令回显。 */
+/**
+ * 转录里这条 user 行是「用户的提问」（一轮的开始），而不是工具回包 / 命令回显 / 注入行。
+ *
+ * 判定在 `transcriptRows.isPromptRow`：原先这里自己写了一份，只挡 tool_result 与
+ * 命令回显，`<task-notification>` 与附图注解会被当成提问（把上一轮的 token 结算掉）。
+ * 与 `normalize` 共用同一份，别在本地另写。
+ */
 function isPromptLine(m: Record<string, unknown>): boolean {
-  // 压缩后续接提示是一条 CLI 注入的 user 行，不能当一轮的开始：
-  // 它没有真正的用量，认下来会把下一轮的 token 记到它头上。
-  if (isInjectedUserRow(m)) return false;
-  const content = (m.message as Record<string, unknown> | undefined)?.content;
-  if (typeof content === "string") {
-    const text = splitContinuation(content).rest.trim();
-    // /model 这类本地命令的回显也是 user 行，它不结束也不开始一轮。
-    return text !== "" && !text.startsWith("<command-name>") && !text.startsWith("<local-command-");
-  }
-  if (!Array.isArray(content)) return false;
-  return !content.some((b) => (b as Record<string, unknown> | undefined)?.type === "tool_result");
+  return isPromptRow(m);
 }
 
 /**
@@ -723,7 +719,12 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
   // 用户看到的就是「压了上下文，占用却没小」。后面只要发过请求就清掉它——那次请求的
   // 输入侧才是新的真实值。
   let compactedTokens: number | undefined;
-  for (const line of lines) {
+  // 插话不切轮：它并进当前回合，不是新的一轮。按它清零的话，同一个回合的「本轮输入 /
+  // 输出 / API 耗时」会被拆成两份，而界面上它们是同一轮。转录里没有 `priority` 标记，
+  // 只能按「落在这一轮的哪一段里」认（见 `transcriptRows.interjectedPromptRows`）。
+  const interjected = interjectedPromptRows(lines);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     if (!line || typeof line !== "object") continue;
     const m = line as Record<string, unknown>;
     const ts = typeof m.timestamp === "string" ? Date.parse(m.timestamp) : NaN;
@@ -734,6 +735,8 @@ export function usageFromTranscript(lines: unknown[]): UsageSnapshot | undefined
       if (post !== undefined && post > 0) compactedTokens = post;
     } else if (m.type === "user") {
       if (!isPromptLine(m)) continue;
+      // 插话并进当前回合，不重置「本轮」的累计（与 `normalize.turnsFromTranscript` 同一口径）。
+      if (interjected.has(index)) continue;
       turnInput = 0;
       turnOutput = 0;
       turnApiMs = 0;

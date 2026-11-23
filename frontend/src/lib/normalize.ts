@@ -20,6 +20,24 @@ import { interruptReason } from "./model";
 import type { Item, SubagentInfo, ToolImage, TurnUsage, UserImage } from "./model";
 import type { CommandInfo } from "../transport/types";
 import { isInjectedUserRow, splitContinuation } from "./continuation";
+import {
+  interjectedPromptRows,
+  isImageAnnotation,
+  isInterruptMarker,
+  isLocalCommandEcho,
+  isPromptRow,
+  isTaskNotification,
+} from "./transcriptRows";
+
+// 这几条判定原本就定义在本文件里，挪到 `transcriptRows.ts` 是为了让 `usage.ts` 也能
+// 共用同一份（它不能反向 import 本文件，会成环）。对外仍然从这里导出，调用方不用改。
+export {
+  interjectedPromptRows,
+  isImageAnnotation,
+  isInterruptMarker,
+  isLocalCommandEcho,
+  isTaskNotification,
+} from "./transcriptRows";
 
 let idCounter = 0;
 function nextId(): string {
@@ -167,6 +185,14 @@ export interface ApplyOptions {
    * 少了这个开关，「查看子代理对话」重启后会读到一份空转录（界面显示「子代理还没有输出」）。
    */
   sidechain?: boolean;
+  /**
+   * 这一行是**插话**（`priority=now`），不是新一轮的开始。
+   *
+   * 实时路径靠 `prompt.echo` 的 `interjected` 拿到它；转录回放里没有这个字段，
+   * 由 `interjectedPromptRows` 先扫一遍标出来再逐行传进来（见该函数的注释）。
+   * 转录回放**必须**带上它，否则重进前端时插话会把整轮劈成两段。
+   */
+  interjected?: boolean;
 }
 
 /**
@@ -228,68 +254,6 @@ export function applyCLI(
     default:
       return items;
   }
-}
-
-// localCommandEchoRE 匹配「本地斜杠命令的回显」：claude CLI 把 /model、/clear 这类
-// 本地命令的输入与输出当作 user 消息写进会话流，界面里会把它们渲染成用户气泡
-// （例如 `<local-command-stdout>Set model to `x`</local-command-stdout>`）。
-// 这些不是用户说的话，切模型在设置页已经能表达，所以整条丢弃。
-//
-// 只认「整条消息就是这些标签」的形态：用户正文里恰好提到 `<command-name>` 时，
-// 前后还有自己的文字，不会命中。
-const localCommandEchoRE =
-  /^<(local-command-(?:stdout|stderr)|local-command-caveat|command-name|command-message|command-args)[\s\S]*<\/?(?:local-command-(?:stdout|stderr|caveat)|command-(?:name|message|args))>\s*$/;
-
-/** 判断一条文本是否是本地斜杠命令的回显（应整条忽略）。 */
-export function isLocalCommandEcho(text: string): boolean {
-  const t = text.trim();
-  if (!t.startsWith("<")) return false;
-  return localCommandEchoRE.test(t);
-}
-
-// 后台命令 / 子代理结束时，CLI 会往对话里写一条**普通 user 行**：
-//
-//	<task-notification>
-//	<task-id>…</task-id><status>killed</status><summary>…</summary>
-//	…
-//	</task-notification>
-//
-// 它是**系统注入的状态通知**，不是用户说的话：渲染成用户气泡，界面里就多出一坨
-// 原始 XML（实测「停掉后台命令再重进前端」时会看到），而且它会让轮次计数多一格。
-// `isMeta` 在这里是 null 而不是 true，绕过了 applyCLI 顶上那道 meta 过滤。
-//
-// 只认「整条消息就是这一个块」：用户正文里贴了这段 XML 时前后还有自己的文字，
-// 不会命中。后端 `history.isTaskNotification` 是同一条规则的镜像（两边都要改）。
-const taskNotificationRE = /^<task-notification>\s*<task-id>[\s\S]*<\/task-notification>$/;
-
-/** 判断一条用户文本是否是 CLI 注入的后台任务通知（应整条忽略）。 */
-export function isTaskNotification(text: string): boolean {
-  const t = text.trim();
-  if (!t.startsWith("<task-notification>")) return false;
-  return taskNotificationRE.test(t);
-}
-
-// 附图注解：用户发图时 CLI 会额外写一行 `[Image: source: /tmp/…/1.png]`（还带
-// `original 2748x1542, displayed at 2000x1122. Multiply coordinates by 1.37 …`），
-// 把尺寸与换算系数告诉模型。**它只是给模型的坐标系说明，不是用户说的话。**
-//
-// 转录里这一行带 `isMeta: true` + `turnCompanion: true`，`applyCLI` 顶上那一道
-// 就能挡住；但**实时流上的同一帧没有 `isMeta`**（实测 2.1.330：`{type:"user",
-// message:{content:[{type:"text",text:"[Image: original 2042x1406, …]"}]}}`，
-// 没有 isMeta、没有 turnCompanion），于是它被当作用户消息插了一个气泡——用户看到
-// 的就是「预览图片时，图片突然变成了一串消息」。
-//
-// 判据只看**整条消息就是这些注解**：用户可以自己打一句以 `[Image:` 开头的话，
-// 但那时后面还有他自己的正文，且不会以 `]` 恰好收在注解格式上。一条消息里可能
-// 连着好几个（多图），所以用 `*` 匹配整串。
-const imageAnnotationRE =
-  /^(?:\[Image: (?:source: [^\]]+|original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by [\d.]+ to map to original image\.)\])+$/;
-
-/** 判断一条用户文本是否只是 CLI 加的附图注解（应整条忽略）。 */
-export function isImageAnnotation(text: string): boolean {
-  const t = text.trim();
-  if (!t.startsWith("[Image:")) return false;
-  return imageAnnotationRE.test(t);
 }
 
 const NOTIFY_STATUS: Record<string, SubagentInfo["status"]> = {
@@ -356,21 +320,6 @@ function applyTaskNotification(items: Item[], text: string): Item[] {
 function tagValue(text: string, tag: string): string | undefined {
   const m = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(text);
   return m?.[1]?.trim() || undefined;
-}
-
-// 回合被中断时，CLI 会往流里写一条**合成的 user 消息**当标记：
-//   `[Request interrupted by user]`（按 Esc）
-//   `[Request interrupted by user for tool use]`（工具执行中被打断）
-//   `[Request interrupted: the session ended …]` / `[Agent call interrupted: …]`（进程/会话结束）
-// 它不是用户说的话：渲染成用户气泡，用户会以为自己发过这句；而且它让 CLI 在这一轮结束时
-// 报 error_during_execution（见 applyResult 里的处理）。判定照 CLI 自己的标记识别
-// （2.1.327 的 `/^(?:\s*<[a-z][\w-]*[\s>]|\[Request interrupted by user[^\]]*\])/`），
-// 只认「整条消息就是标记」的形态，用户正文里顺口提到这句话不会命中。
-const interruptMarkerRE = /^\[(?:Request interrupted|Agent call interrupted)(?: by user|:)[^\]]*\]$/;
-
-/** 判断一条用户文本是否是 CLI 的「本轮被中断」标记。 */
-export function isInterruptMarker(text: string): boolean {
-  return interruptMarkerRE.test(text.trim());
 }
 
 /**
@@ -1056,6 +1005,7 @@ function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): 
         kind: "user",
         text: display,
         ...(images.length > 0 ? { images } : {}),
+        ...(opts.interjected ? { interjected: true } : {}),
       },
     ];
   }
@@ -1065,7 +1015,17 @@ function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): 
   const text = split.rest;
   if (!text) return items;
   if (!opts.replay && echoAlreadyShown(items, text)) return items;
-  return [...items, { id: nextId(), seq: seqOf(items), ts: at, kind: "user", text }];
+  return [
+    ...items,
+    {
+      id: nextId(),
+      seq: seqOf(items),
+      ts: at,
+      kind: "user",
+      text,
+      ...(opts.interjected ? { interjected: true } : {}),
+    },
+  ];
 }
 
 /**
@@ -1133,6 +1093,8 @@ export function turnsFromTranscript(lines: unknown[]): TranscriptTurn[] {
   let turnIn = 0;
   let turnOut = 0;
   let turnApiMs = 0;
+  // 转录里没有 `priority`：插话按「落在这一轮的哪一段里」认（见 interjectedPromptRows）。
+  const interjected = interjectedPromptRows(lines);
 
   const closeTurn = () => {
     if (promptAt === undefined || !last) return;
@@ -1150,8 +1112,8 @@ export function turnsFromTranscript(lines: unknown[]): TranscriptTurn[] {
     });
   };
 
-  for (const raw of lines) {
-    const line = asRecord(raw);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = asRecord(lines[index]);
     if (!line) continue;
     // 服务端已经过滤过 sidechain / meta，这里再挡一次：子代理的话不能当回合边界。
     if (line.isSidechain === true || line.isMeta === true) continue;
@@ -1165,6 +1127,11 @@ export function turnsFromTranscript(lines: unknown[]): TranscriptTurn[] {
     }
     if (type === "user") {
       if (!isPromptLine(line)) continue;
+      // **插话不切轮**（与 `lib/process.turnSpans` 同一套锚点）：它并进当前回合，
+      // 不是新的一轮。按它 closeTurn 的话，同一个回合会被拆成两段耗时与两份用量，
+      // 而界面上它们是同一轮（轮次刻度、收起行都按「插话不切轮」算）。
+      // 转录里没有 `priority` 标记，只能靠 `interjectedPromptRows` 认出来。
+      if (interjected.has(index)) continue;
       closeTurn();
       promptAt = at;
       last = undefined;
@@ -1197,22 +1164,14 @@ export function turnsFromTranscript(lines: unknown[]): TranscriptTurn[] {
   return out.filter((t) => t.ts > 0);
 }
 
-/** 这条 user 行是用户的提问，而不是工具回包 / 本地命令回显 / CLI 注入的续接提示。 */
+/**
+ * 这条 user 行是用户的提问，而不是工具回包 / 本地命令回显 / CLI 注入的续接提示。
+ *
+ * 判定在 `transcriptRows.isPromptRow`：`usage.ts` 要用同一份规则，而它不能反向 import
+ * 本文件（会成环）。别在本地另写一份。
+ */
 function isPromptLine(line: Raw): boolean {
-  // 压缩后塞回上下文的摘要不是用户的话，不能当一轮的开始（否则那一轮的用量被算进它）。
-  if (isInjectedUserRow(line)) return false;
-  const content = asRecord(line.message)?.content;
-  if (typeof content === "string") {
-    const text = splitContinuation(content).rest;
-    return !isLocalCommandEcho(text) && text.trim() !== "";
-  }
-  if (!Array.isArray(content)) return false;
-  if (content.some((b) => asRecord(b)?.type === "tool_result")) return false;
-  // 只发了图片/PDF 的提问没有 text block，但它照样是「一轮的开始」：不认的话这一轮的
-  // 用量会被并进上一轮（lib/usage.ts 的同名判定早已按这个口径，两处必须一致）。
-  if (content.some((b) => ["image", "document"].includes(str(asRecord(b)?.type)))) return true;
-  const text = splitContinuation(content.map((b) => str(asRecord(b)?.text)).join("")).rest;
-  return text.trim() !== "" && !isLocalCommandEcho(text);
+  return isPromptRow(line);
 }
 
 /**

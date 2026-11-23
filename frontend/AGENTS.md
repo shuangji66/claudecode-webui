@@ -18,6 +18,7 @@ src/
   transport/terminal.ts 内置终端 WebSocket 客户端（二进制输出 + JSON 控制帧）
   lib/model.ts         渲染模型（Item 联合类型）
   lib/normalize.ts     CLI 原始消息 → Item（纯函数，最重要的可测单元）
+  lib/transcriptRows.ts 转录行的判定（是否提问 / 插话 / 注入行），normalize 与 usage 共用
   lib/diff.ts          Edit 卡片的 diff 构造
   lib/runtime.ts       baseurl / token / fetch 封装
   lib/i18n.tsx         极简双语（useT(中文, English)）
@@ -1226,6 +1227,24 @@ src/
     切了的话一句话就把这一轮劈成两半：前半截被当成「已完成」收进一行（还冒出复制按钮），
     后半截当新一轮重新铺开。本机发送由 `sendPrompt` 按 `priority` 标记，别的设备收到的
     `prompt.echo` 带 `interjected`（后端 `promptEchoOf` 从 `cmd.Priority` 取）。
+  - **转录回放里的插话要自己认出来**（`transcriptRows.interjectedPromptRows`）：**转录里
+    没有 `priority`，也没有 `prompt.echo`**（实测 2.1.330：插话那行与普通提问行的字段完全
+    一致，全库 grep `priority` 一条都搜不到）。不认的话「插话发送后的消息重进前端会渲染成
+    两段」——前半截收进「已完成」、后半截重新铺开，轮次刻度还多一格（截图复现过）。
+    判据是**它落在哪**：一轮 = 提问 → 某条 assistant 的终止性 `stop_reason`（`end_turn` /
+    `stop_sequence` / `max_tokens` / `refusal`），这段之间出现的提问就是插话。工具循环里的
+    那条是 `tool_use`（继续开着）；**缺失值按「已收尾」处理**（老转录 / 被裁剪的片段 / 测试
+    夹具都没有这个字段，当成「还在跑」会让后面每句提问都成了插话）。中断标记把这一轮关掉；
+    **窗口里的第一条提问永远不算插话**（转录被截到 20k 行时开头可能落在半轮中间，那一轮的
+    提问已经被切掉了，再判成插话就会让历史少一格轮次刻度）。
+    结果同时喂给三处，口径必须一致：`itemsFromTranscript`（打 `interjected`）、
+    `turnsFromTranscript` 与 `usage.usageFromTranscript`（都**不**按插话切轮，否则同一轮的
+    用量被拆成两份）。
+  - **`isPromptRow` / `isLocalCommandEcho` / `isTaskNotification` / `isImageAnnotation` /
+    `isInterruptMarker` 都在 `lib/transcriptRows.ts`**：`normalize.ts` 与 `usage.ts` 都要这份
+    判定，而前者已经 import 后者，放任何一边都成环。`normalize.ts` 只是转手导出（调用方
+    不用改）。`usage.ts` 原本自己写了一份、只挡 tool_result 与命令回显，`<task-notification>`
+    会被当成提问把上一轮 token 结算掉——想清楚一件事要在两个文件里各看一遍，别再分叉。
   - **「这一轮结束没有」在轮级判定里还要看「是不是最后一轮」**（`turnSpans` 的 `isTail`）：
     会话正在跑的时候，前面的轮次**必然已经结束**（后面已经开了新一轮）。只看「会话在不在跑」
     一刀切的话，历史轮次会被全判成进行中，于是对话进行中整段历史的思考与工具都摊在外面。

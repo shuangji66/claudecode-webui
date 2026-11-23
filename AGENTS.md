@@ -1372,6 +1372,13 @@ hub ── manager ── session ── process ── claude (NDJSON)
   只带 `origin=human`。改这条链路时先看 `protocol.PromptOptions` 的注释。
 - **CLI 不回显被并入的消息**（没开 `--replay-user-messages`）：所以用户气泡只能本地乐观插入，
   转录里的位置可能和界面上略有出入——别为了「对得上」去开 replay，那会让同一条消息显示两遍。
+- **转录里没有插话标记，重进前端要靠形状认**：`priority` 只存在于我们写进 stdin 的帧上，
+  落盘的 jsonl 里**没有**（实测 2.1.330：插话那行与普通提问行字段完全一致，全库 grep
+  `priority` 一条都搜不到）。不认的话「插话发送后的消息重进前端就渲染成两段」——前半截
+  收进「已完成」、后半截重新铺开。判据在 `frontend/src/lib/transcriptRows.ts` 的
+  `interjectedPromptRows`（提问 → 终止性 `stop_reason` 之间出现的提问就是插话），
+  回放打 `interjected`、`turnsFromTranscript` 与 `usageFromTranscript` 一律不按插话切轮。
+  详见 `frontend/AGENTS.md`。
 - **交互**：回合进行中按 Enter = 入队（草稿清空，消息进输入框上方的「待发送」面板）；点正文
   **就地展开编辑框**（Enter 保存、Shift+Enter 换行、Esc 取消，位置不变；正文与附件都清空等于删掉
   这条，附件在编辑态里可逐个移除）；右侧垃圾桶一键删（编辑态里也有「删除」，不必先保存空文本）；
