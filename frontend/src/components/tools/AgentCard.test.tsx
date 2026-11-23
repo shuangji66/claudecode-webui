@@ -94,3 +94,37 @@ describe("AgentCard", () => {
     expect(screen.getByText("完成")).toBeInTheDocument();
   });
 });
+
+// 后台子代理的 tool_result **只是一条启动回执**（`Async agent launched successfully.` +
+// `agentId:`，没有 <usage>）。它非空只说明「已经起来了」，不代表跑完了——按 result 判
+// 会让卡片一出现就是「完成」，而子代理其实正在跑（截图复现过）。
+describe("AgentCard 状态只认 subagent.status", () => {
+  const ack =
+    "Async agent launched successfully. (This tool result is internal metadata — never quote or paraphrase it.)\nagentId: a1\nThe agent is working in the background.";
+
+  it("启动回执到达、状态仍是 running 时写「运行中」而不是「完成」", () => {
+    const { container } = render(
+      <AgentCard
+        item={{
+          ...agentTool({ result: ack, doneAt: 1 }),
+          subagent: { taskId: "a1", agentId: "a1", status: "running", background: true },
+        }}
+      />,
+    );
+    expect(container.textContent).toContain("运行中");
+    expect(container.textContent).not.toContain("完成");
+  });
+
+  it("被中断的子代理写「已停止」，不是「完成」", () => {
+    const { container } = render(
+      <AgentCard
+        item={{
+          ...agentTool({ result: ack, doneAt: 1 }),
+          subagent: { taskId: "a1", agentId: "a1", status: "stopped", background: true },
+        }}
+      />,
+    );
+    expect(container.textContent).toContain("已停止");
+    expect(container.textContent).not.toContain("完成");
+  });
+});

@@ -458,6 +458,24 @@ describe("Composer 草稿", () => {
     expect(textarea().value).toBe("新对话页打的字");
   });
 
+  // 草稿只存正文（见 lib/drafts.ts 的文件头）：附件是 File/base64，既落不了盘也不该
+  // 跨对话。不清的话，在 A 里粘贴的一张截图会跟着切到 B，点发送就发到一个完全不相干的
+  // 对话里（用户报的「粘贴的图片草稿在切换任意对话时都在输入框」）。
+  it("切对话时输入框里的图片附件一并清掉", async () => {
+    const { rerender } = render(composerEl({ draftKey: "s1" }));
+    const input = screen.getByLabelText("消息输入框");
+    const png = new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" });
+    await act(async () => {
+      fireEvent.paste(input, { clipboardData: { items: [], files: [png] } });
+    });
+    expect(await screen.findByText("shot.png")).toBeInTheDocument();
+
+    rerender(composerEl({ draftKey: "s2" }));
+
+    expect(screen.queryByText("shot.png")).toBeNull();
+    expect(screen.queryByRole("button", { name: "预览 shot.png" })).toBeNull();
+  });
+
   // 新对话页的第一条消息会让 store 在发送途中新建会话：createSession 调
   // moveDraft(ws:<目录>, 新 id) 把这串正文搬到刚生成的 id 下，随后 activeId 一变，
   // Composer 换键重读草稿——那串正文已经不是草稿了，却会被当成草稿放回输入框。

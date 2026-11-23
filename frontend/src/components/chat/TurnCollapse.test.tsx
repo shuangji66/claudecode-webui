@@ -61,3 +61,26 @@ describe("TurnCollapse", () => {
     expect(expanded.className.baseVal).not.toContain("-rotate-90");
   });
 });
+
+// 「结束」不等于「做完了」：用户按停止、上游报错、进程被结束都会让这一轮收尾，
+// 把它们一律写成「已完成，用时 …」等于告诉用户「这活干完了」，而模型其实被打断了。
+// 文案对齐 DSH 的 message.stopped / message.turnProcess.failed。
+describe("TurnCollapse 按结局给文案", () => {
+  it("被中断时写「已停止」，且不报用时", () => {
+    render(<TurnCollapse durationMs={195_000} outcome="stopped" open={false} onToggle={() => {}} />);
+    expect(screen.getByText("已停止")).toBeInTheDocument();
+    // 那个时长只说明「跑了多久然后被打断」，挂在「已完成」后面读起来就是完成耗时。
+    expect(screen.queryByText(/用时/)).toBeNull();
+  });
+
+  it("出错时写「本轮失败」，且不报用时", () => {
+    render(<TurnCollapse durationMs={30_000} outcome="failed" open={false} onToggle={() => {}} />);
+    expect(screen.getByText("本轮失败")).toBeInTheDocument();
+    expect(screen.queryByText(/用时/)).toBeNull();
+  });
+
+  it("正常收尾才写「已完成，用时 …」", () => {
+    render(<TurnCollapse durationMs={195_000} outcome="ok" open={false} onToggle={() => {}} />);
+    expect(screen.getByText("已完成，用时 3 分 15 秒")).toBeInTheDocument();
+  });
+});

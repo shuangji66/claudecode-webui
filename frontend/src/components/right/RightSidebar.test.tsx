@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RightSidebar, RightSidebarDock, clampWidth } from "./RightSidebar";
 import { useSidebarStore } from "../../store/useSidebarStore";
 import { useAppStore } from "../../store/useAppStore";
@@ -329,6 +329,42 @@ describe("RightSidebar 的一次性请求", () => {
     render(<RightSidebar cwd="/w" onClose={() => {}} />);
     expect(screen.queryByText("SUB")).toBeNull();
     expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
+  });
+});
+
+describe("RightSidebar 切对话时关掉别的对话的子代理", () => {
+  // 子代理标签带着打开时的 sessionId：切到另一条对话之后它读的还是上一段对话的子代理
+  // 转录，右边挂着一份与眼前这一轮毫无关系的内容（用户报过）。
+  beforeEach(() => {
+    useSidebarStore.setState({ openRequest: null, cwd: "/w" });
+    useAppStore.setState({ subagentView: null, activeId: "sess-1" });
+  });
+
+  it("切走之后那个标签没了，同一条对话里再切回来也不会自己回来", () => {
+    const r = render(<RightSidebar cwd="/w" onClose={() => {}} />);
+    act(() => useAppStore.setState({ subagentView: { agentId: "agent-1", label: "researcher", nonce: 1 } }));
+    expect(screen.getByText("SUB")).toBeInTheDocument();
+
+    // 切到另一条对话：标签被关掉，这一栏回到开始页（它是唯一那个标签）。
+    act(() => useAppStore.setState({ activeId: "sess-2" }));
+    expect(screen.queryByText("SUB")).toBeNull();
+    expect(screen.getByRole("button", { name: /工作区文件/ })).toBeInTheDocument();
+
+    // 切回原对话：子代理标签不会自己长回来（重新打开仍是用户显式动作）。
+    act(() => useAppStore.setState({ activeId: "sess-1" }));
+    expect(screen.queryByText("SUB")).toBeNull();
+    r.unmount();
+  });
+
+  it("文件 / Git 标签不受影响（它们跟着工作区走，不跟对话）", () => {
+    render(<RightSidebar cwd="/w" onClose={() => {}} />);
+    openFiles();
+    // 开完「文件」就进标签页了，开始页的卡片不在屏幕上：先点 `+` 回开始页再开 Git。
+    openStart();
+    openGit();
+    act(() => useAppStore.setState({ activeId: "sess-2" }));
+    expect(screen.getByText("FILES")).toBeInTheDocument();
+    expect(screen.getByText("GIT")).toBeInTheDocument();
   });
 });
 

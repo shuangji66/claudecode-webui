@@ -1017,6 +1017,20 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - 打开后子代理帧带 `parent_tool_use_id` + `agent_id`，store 用 `subagentFrame` 把它们分流到
   `subagentItems[sid][agentId]`：既不能进主消息流（和过滤 sidechain 是同一类问题），
   也不能污染主会话的用量统计。子代理面板优先显示这份实时数据，没有才回落到旁路转录。
+  **但派发任务的那条消息只存在于旁路转录里**：prompt 是主会话那条 Agent `tool_use` 的
+  入参，不会出现在子代理自己的 stdout 上，所以「优先实时」会得到一个没有开头的问题
+  面板（截图复现过）。`SubagentPanel` 因此是**合并**而不是二选一：转录那份开头连续的
+  user 条目（子代理 jsonl 的首条 user 行就是 prompt）接到实时流前面；实时流自己已经带了
+  user 条目时按数量跳过，避免同一条 prompt 出现两遍。也不整份回落转录——那是落盘快照，
+  正在跑的时候尾巴上缺一段。
+- **子代理卡片的状态只认 `subagent.status`，不看 `item.result`**（`lib/subagents`
+  的 `subagentStatusOf`）：后台子代理的 `tool_result` 只是**启动回执**
+  （`Async agent launched successfully.` + `agentId:`，没有 `<usage>`），非空只说明
+  「已经起来了」。按 result 判会让卡片在刚出现的那一刻写上「完成」，而它其实正在跑
+  （截图复现过）。缺 `subagent` 时按「运行中」算——拿不到结论时宁可留着进行中，也不
+  给一个骗人的绿点；这与 `settleSubagents` 只把 running 收成 stopped 是同一条口径。
+  四种状态各有一句：运行中 / 完成 / 失败 / 已停止，`ToolShell.toolStatus` 与
+  `AgentCard` 共用这一份判定（以前两处各写一遍，回放路径上就漏掉了）。
 - **`tool_progress` 只更新卡片的已跑秒数**（`ToolItem.progress`），不产生新消息；
   `task_progress` 更新运行中的用量与一行摘要，状态保持 running。
 - **子代理里的审批带 `agent_id`**（实测 2.1.325 的 `can_use_tool` 不带
@@ -1412,6 +1426,10 @@ hub ── manager ── session ── process ── claude (NDJSON)
   （刷新页面会丢）。删对话时 `purgeSession` 一并清掉。**输入框正文相反**：按对话存 localStorage
   （`lib/drafts.ts`，只存正文；附件与队列不落盘），重进前端还在——会话建好时把「新对话页」
   按工作区存的那份迁到新 id 下，删对话时一并清掉。
+  **正文以外的输入框状态不跟着草稿走，切换时必须清掉**：`draftKey` 一变，
+  `Composer` 除了重读正文还要 `setFiles([])` / `setFileError(null)` / `setPreviewId(null)`。
+  草稿只存正文，在 A 里粘贴的一张截图如果留着，就会跟着切到 B，点发送发到一个完全不相干
+  的对话里（用户报的「粘贴的图片草稿在切换任意对话时都在输入框」）。
 - **后端要认「result 之后的 init」**：那条 init 意味着 CLI 自己在跑新一轮，`session` 里
   `protocol.IsTurnInit` + `resultAt`（`TurnHandoffWindow`）把它标回 busy。不认的话界面会在整轮里
   显示空闲（发送按钮而不是中断按钮），待发送队列也会被提前放出去。

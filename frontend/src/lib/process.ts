@@ -111,6 +111,15 @@ export interface TurnSpan {
    */
   finished: boolean;
   /**
+   * 这一轮是怎么结束的（只在 `finished` 时成立）。
+   *
+   * **「结束」不等于「做完了」**：用户按停止、上游报错、进程被结束都会让这一轮收尾，
+   * 但它们不该被同一句话说成「已完成」。中断/失败时收起行写「已停止 / 本轮失败」，
+   * 也不报用时——那个数在两种情况下都只描述「跑了多久然后被打断」，读起来像完成耗时。
+   * 文案对齐 DSH 的 `message.stopped` / `message.turnProcess.failed`。
+   */
+  outcome: TurnOutcome;
+  /**
    * 本轮耗时：本段各条 `result.duration_ms` 之和（一段里可能有多条：插话把一轮
    * 拆成了多个子回合）。
    *
@@ -119,6 +128,22 @@ export interface TurnSpan {
    * 都不可用时为空。
    */
   durationMs?: number;
+}
+
+/** 一轮的结局：正常收尾 / 被中断 / 出错。见 `TurnSpan.outcome`。 */
+export type TurnOutcome = "ok" | "stopped" | "failed";
+
+/**
+ * 这条 `result` 是不是「本轮被中断」（用户按停止、进程被结束、子代理被中断）。
+ *
+ * `normalize.applyResult` 已经把中断的诊断 result 改写成 `subtype: "interrupt"` 且
+ * `isError: false`（见那里的注释），所以这里只认 subtype，**不要**再按 isError 猜：
+ * 上游真报错的 result 也带 isError，两者必须分开。
+ */
+export function isStopResult(result: Item): boolean {
+  if (result.kind !== "result") return false;
+  const sub = (result.subtype ?? "").toLowerCase();
+  return sub.includes("interrupt") || sub.includes("abort") || sub.includes("cancel");
 }
 
 /**
@@ -459,6 +484,13 @@ export function turnSpans(items: Item[], running = true): TurnSpan[] {
     let firstActivity = -1;
     let lastResult = -1;
     let durationMs: number | undefined;
+    /**
+     * 本段最后一条 result 给出的结局（正常 / 被中断 / 出错）。
+     *
+     * 一段里可能有多条 result（插话把它拆成几个子回合），**最后一条**决定这一轮怎么
+     * 收场——前面几条只是子回合的收尾，后面还在继续跑。
+     */
+    let ending: TurnOutcome = "ok";
     for (let i = start; i < end; i += 1) {
       const item = items[i];
       if (isProcessItem(item)) {
@@ -472,6 +504,7 @@ export function turnSpans(items: Item[], running = true): TurnSpan[] {
         lastActivity = i;
       } else if (item.kind === "result") {
         lastResult = i;
+        ending = isStopResult(item) ? "stopped" : item.isError ? "failed" : "ok";
         // 一段里可能有多条 result（插话把它拆成了几个子回合），整轮耗时按它们累加。
         if (typeof item.durationMs === "number") durationMs = (durationMs ?? 0) + item.durationMs;
       }
@@ -514,6 +547,7 @@ export function turnSpans(items: Item[], running = true): TurnSpan[] {
       end,
       process,
       finished,
+      outcome: finished ? ending : "ok",
       durationMs,
     });
     start = end;

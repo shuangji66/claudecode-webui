@@ -240,6 +240,37 @@ describe("turnSpans", () => {
     expect(turnSpans([user2("u1")], false)[0].durationMs).toBeUndefined();
   });
 
+  // 「结束」不等于「做完了」：用户按停止、上游报错、进程被结束都会让这一轮收尾。
+  // 收起行按 outcome 分文案（见 TurnCollapse），不分的话被打断的一轮会写着
+  // 「已完成，用时 19 分 52 秒」——那是在告诉用户「这活干完了」。
+  describe("outcome：这一轮是怎么结束的", () => {
+    const stop = (id: string): Item => ({ id, seq: 0, ts: 0, kind: "result", subtype: "interrupt", isError: false });
+    const fail = (id: string): Item => ({ id, seq: 0, ts: 0, kind: "result", isError: true, subtype: "error_during_execution" });
+
+    it("正常收尾是 ok", () => {
+      expect(turnSpans([user2("u1"), tool("x1"), result2("r1", 1000)], true)[0].outcome).toBe("ok");
+    });
+
+    it("中断标记（subtype 带 interrupt）是 stopped，哪怕归一化之后 isError 是 false", () => {
+      expect(turnSpans([user2("u1"), tool("x1"), stop("r1")], true)[0].outcome).toBe("stopped");
+    });
+
+    it("真报错（isError）是 failed", () => {
+      expect(turnSpans([user2("u1"), tool("x1"), fail("r1")], true)[0].outcome).toBe("failed");
+    });
+
+    // 一段里可能有多条 result（插话把一轮拆成几个子回合）：决定结局的是**最后**那条。
+    it("多条 result 时以最后一条为准", () => {
+      const spans = turnSpans([user2("u1"), tool("x1"), stop("r1"), reply("a1"), result2("r2", 500)], true);
+      expect(spans[0].outcome).toBe("ok");
+    });
+
+    // null 一走的 result 不算收尾（见 handoffResult）：那时这一轮还在跑，不该有结局。
+    it("还没结束的轮报 ok（调用方本来也不用它）", () => {
+      expect(turnSpans([user2("u1"), tool("x1")], true)[0].outcome).toBe("ok");
+    });
+  });
+
   // 转录回放没有 result 行（claude 只把 result 写 stdout），以前「重进前端，已完成右边
   // 的用时」全没了。回放的条目带着转录里的时间戳，按这一轮首尾两条活动条目自己算。
   describe("回放没有 result 时按时间戳推耗时", () => {

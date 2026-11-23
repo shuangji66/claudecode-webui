@@ -4,7 +4,7 @@ import { IconChat, IconSpark, IconStop } from "../common/Icons";
 import type { SubagentInfo, ToolItem } from "../../lib/model";
 import { formatTokens } from "../../lib/usage";
 import { formatDuration } from "../../lib/elapsed";
-import { endedElapsed } from "../../lib/subagents";
+import { endedElapsed, subagentStatusOf } from "../../lib/subagents";
 import { useT } from "../../lib/i18n";
 import { useAppStore } from "../../store/useAppStore";
 import { ToolImages } from "./ToolImages";
@@ -32,8 +32,9 @@ export function AgentBody({ item }: { item: ToolItem }) {
   const input = (item.input ?? {}) as Record<string, unknown>;
   const sub = item.subagent;
   const prompt = sub?.prompt || text(input.prompt);
-  const status: SubagentInfo["status"] =
-    sub?.status ?? (item.result === undefined ? "running" : item.isError ? "failed" : "completed");
+  // 状态只认 `subagent.status`，不看 `item.result`（后台子代理的 result 只是启动回执，
+  // 见 `lib/subagents.subagentStatusOf`）。
+  const status = subagentStatusOf(sub);
   const usage = sub?.usage;
   // 重启后 CLI 的结束通知已经不在（只在 stdout 上），耗时只剩「转录里的收尾时刻 -
   // 启动时刻」。卡片和页头那个子代理列表用同一个口径（`endedElapsed`）。
@@ -108,8 +109,8 @@ export function AgentCard({ item }: { item: ToolItem }) {
   const sub = item.subagent;
   const input = (item.input ?? {}) as Record<string, unknown>;
   const type = sub?.type || text(input.subagent_type);
-  const status: SubagentInfo["status"] =
-    sub?.status ?? (item.result === undefined ? "running" : item.isError ? "failed" : "completed");
+  // 同 Body：状态只认 `subagent.status`（详见 `lib/subagents.subagentStatusOf`）。
+  const status = subagentStatusOf(sub);
 
   const statusLabel =
     status === "running"

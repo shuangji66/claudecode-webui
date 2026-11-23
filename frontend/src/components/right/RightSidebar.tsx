@@ -299,6 +299,41 @@ export function RightSidebar({ cwd, onClose, visible = true }: Props) {
     if (visible) void setCwd(cwd);
   }, [cwd, visible, setCwd]);
 
+  /**
+   * 切换对话时关掉**别的对话**的子代理标签。
+   *
+   * 子代理标签带着打开时的 `sessionId`：它只在那条对话里成立。切走之后那个面板还在
+   * 读上一段对话的子代理（转录接口按 sessionId + agentId 取），用户看到的就是
+   * 「换了对话，右边还挂着上一个对话的子代理」，而它跟眼前这一轮毫无关系。
+   *
+   * **只关 sessionId 对不上的那些**：文件 / Git / 终端跟着工作区走（工作区没变就该
+   * 留着），终端更是不能因为切对话被 SIGHUP。同一条对话里反复开合不受影响。
+   *
+   * 落点与 `closeTab` 一致：被关掉的正好是这一栏的激活标签时，退到这一栏剩下的最后
+   * 一个；没有就回开始页。**不在 `setTabs` 的 updater 里做这件事**——那里要做纯计算，
+   * 副作用会被严格模式执行两次。
+   */
+  const seenSession = useRef(activeSession);
+  useEffect(() => {
+    const prev = seenSession.current;
+    seenSession.current = activeSession;
+    if (prev === activeSession) return;
+    const stale = tabs.filter((tab) => tab.kind === "subagent" && tab.sessionId !== activeSession);
+    if (stale.length === 0) return;
+    const gone = new Set(stale.map((tab) => tab.id));
+    const next = tabs.filter((tab) => !gone.has(tab.id));
+    const pick = (pane: PaneId) => {
+      const remaining = next.filter((tab) => paneOf(tab) === pane);
+      return remaining[remaining.length - 1]?.id ?? "";
+    };
+    setTabs(next);
+    if (!next.some((tab) => tab.id === activeA && paneOf(tab) === "a")) setActiveA(pick("a"));
+    if (!next.some((tab) => tab.id === activeB && paneOf(tab) === "b")) setActiveB(pick("b"));
+    // 只认「切了对话」：tabs / activeA 是那一刻的渲染值，跟着一起进依赖就等于每开一个
+    // 标签都重算一次（而它们的变化正是这个 effect 要处理的对象）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSession]);
+
   /** 拖动中的宽度：只改 state，不落盘（pointermove 每秒几十次，localStorage 是同步 IO）。 */
   const previewWidth = (next: number) => setPreferredWidth(clampWidth(next, viewport));
 

@@ -12,6 +12,40 @@ export interface ToolStatus {
 
 /** 运行中 / 失败 / 完成：三张卡片与兜底卡片共用同一套措辞。 */
 export function toolStatus(item: ToolItem, t: (zh: string, en?: string) => string): ToolStatus {
+  /**
+   * 子代理不看 `item.result`。
+   *
+   * 后台子代理（`run_in_background`）的 `tool_result` **只是一条启动回执**
+   * （`Async agent launched successfully.` + `agentId:`，没有 `<usage>`），所以
+   * `result !== undefined` 在这里只说明「它已经起来了」，完全不代表跑完了。按
+   * `result` 判就会在卡片刚出现的那一刻写上「完成」，而它其实正在跑（截图复现过）。
+   *
+   * 子代理的结论有且只有两条来源：实时的 `system/task_*` 折进 `subagent.status`，
+   * 回放靠 `<task-notification>` 与 `settleSubagents`（见 `lib/normalize`）。
+   * 所以这里只认 `subagent.status`，没有就往「运行中」算——「还不知道」不能写成
+   * 「完成了」（这与 `lib/subagents.settleSubagents` 只把 running 收成 stopped 是
+   * 同一条口径：拿不到结论时宁可留着进行中，也不给一个骗人的绿点）。
+   */
+  if (item.subagent) {
+    const status = item.subagent.status;
+    if (status === "running") {
+      return {
+        label:
+          typeof item.progress === "number"
+            ? t(`运行中 ${item.progress}s`, `Running ${item.progress}s`)
+            : t("运行中…", "Running…"),
+        className: "bg-brand-soft text-brand",
+        tone: "run",
+      };
+    }
+    if (status === "failed") {
+      return { label: t("失败", "Failed"), className: "bg-rose-50 text-danger dark:bg-rose-950/30", tone: "fail" };
+    }
+    if (status === "stopped") {
+      return { label: t("已停止", "Stopped"), className: "bg-amber-50 text-warn dark:bg-amber-950/30", tone: "warn" };
+    }
+    return { label: t("完成", "Done"), className: "bg-panel-strong text-muted", tone: "ok" };
+  }
   if (item.result === undefined) {
     return {
       label:

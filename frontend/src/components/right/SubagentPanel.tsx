@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../../lib/runtime";
 import { applyCLI } from "../../lib/normalize";
 import type { Item } from "../../lib/model";
@@ -57,6 +57,35 @@ export function SubagentPanel({ sessionId, agentId }: { sessionId: string; agent
     };
   }, [sessionId, agentId]);
 
+  /**
+   * 面板里显示的条目：**实时流 + 转录里的派发消息**，不是二选一。
+   *
+   * 实时帧（`--forward-subagent-text`）只带子代理**自己说的话**：它是由主会话那条
+   * Agent `tool_use` 发起的，而 `prompt` 是那次调用的入参——从来不会出现在子代理
+   * 的 stdout 里。于是「优先用实时那份」会得到一个没有开头的问题面板：用户点开
+   * 「查看对话」，看到的是一串没有前提的步骤（截图复现过）。
+   *
+   * 转录里则一定有那条派发消息（子代理 jsonl 的首条 user 行就是 prompt），所以
+   * 从转录那份里**只取开头的 user 条目**接到实时流前面。不整份回落到转录：那份是
+   * 落盘快照，会比界面慢一拍，正在跑的时候尾巴上缺一段。
+   *
+   * 实时流自己已经有 user 条目时（CLI 版本把它转发过来了）不重复补——按「实时那份
+   * 从头到第一条非 user」判，避免同一条 prompt 出现两遍。
+   */
+  const merged = useMemo(() => {
+    if (!live || live.length === 0) return items;
+    // 转录那份开头的连续 user 条目 = 派发消息（子代理 jsonl 的首条 user 行）。
+    let cut = 0;
+    while (cut < items.length && items[cut].kind === "user") cut += 1;
+    const heads = items.slice(0, cut);
+    if (heads.length === 0) return live;
+    // 实时那份开头已经有同样多的 user 条目时不再补（CLI 把它转发过来了）。
+    let liveCut = 0;
+    while (liveCut < live.length && live[liveCut].kind === "user") liveCut += 1;
+    if (liveCut >= heads.length) return live;
+    return [...heads, ...live.slice(liveCut)];
+  }, [live, items]);
+
   if (state === "loading") {
     return (
       <div className="flex h-full items-center justify-center text-[12px] text-muted">
@@ -82,7 +111,6 @@ export function SubagentPanel({ sessionId, agentId }: { sessionId: string; agent
   ]
     .filter(Boolean)
     .join(" · ");
-
   return (
     <div className="flex h-full flex-col">
       <div className="shrink-0 border-b border-line px-3 py-2">
@@ -91,7 +119,7 @@ export function SubagentPanel({ sessionId, agentId }: { sessionId: string; agent
       </div>
       <div className="min-h-0 flex-1">
         <MessageList
-          items={live && live.length > 0 ? live : items}
+          items={merged}
           empty={t("子代理还没有输出", "No output from this subagent yet")}
         />
       </div>

@@ -33,6 +33,23 @@ function text(v: unknown): string {
 }
 
 /**
+ * 一个子代理**现在**是什么状态。
+ *
+ * **不能看 `item.result`**：后台子代理（`run_in_background`）的 `tool_result` 只是一条
+ * 启动回执（`Async agent launched successfully.` + `agentId:`，没有 `<usage>`），
+ * 它到达只说明「已经起来了」，`result !== undefined` 完全不代表跑完了。按它判的结果是
+ * 卡片一出现就写「完成」，而子代理其实正在跑（截图复现过）。
+ *
+ * 子代理的结论只有两条来源：实时的 `system/task_*` 折进 `subagent.status`；回放靠
+ * `<task-notification>`（`applyTaskNotification`）与 `settleSubagents`。缺 `subagent`
+ * 时**按运行中算**——「还不知道」不能写成「完成了」，这与 `settleSubagents` 只把
+ * running 收成 stopped 是同一条口径：拿不到结论时宁可留着进行中，也不给一个骗人的绿点。
+ */
+export function subagentStatusOf(sub: SubagentInfo | undefined | null): SubagentInfo["status"] {
+  return sub?.status ?? "running";
+}
+
+/**
  * 按出现顺序（= 启动顺序）列出本会话的子代理，同一个 agent 只保留一条。
  *
  * 标题的兜底顺序很重要：`subagent.description` 只在实时 task_started 里才有，

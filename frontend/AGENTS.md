@@ -571,6 +571,12 @@ src/
       不删已存的那一版**——粘贴一大段日志就把草稿抹成空白，等于刷新后什么都没了）、最多
       `MAX_DRAFT_ENTRIES` 条、30 天没动过的自动淘汰；读不出来（隐私模式 / 坏 JSON / 配额满）
       就当没有草稿，绝不能让输入框报错。
+    - **正文以外的输入框状态不属于草稿，切键时要一起清**（踩过）：`draftKey` 变化的那个
+      effect 除了重读正文，还必须 `setFiles([])` / `setFileError(null)` / `setPreviewId(null)`。
+      草稿只存正文，留在内存里的附件如果跟着走，在 A 里粘贴的一张截图就会出现在 B 的输入框，
+      点发送就发到一个完全不相干的对话里（用户报的「粘贴的图片草稿在切换任意对话时都在
+      输入框」）。也**不要**改成「按对话存附件」：`File`/base64 落盘会顶满配额，而「切回来
+      附件还在」没人指望。
 
 31. **飞牛「设置 → 目录」只在两端做**：**列表与撤销**走后端（`/api/dirs`、`/api/dirs/remove`，
    uid 只认网关注入的 `X-Trim-Userid`，见根 AGENTS.md 4.6.2）；**授权（添加）只能在前端**做——
@@ -923,6 +929,12 @@ src/
   文件/Git/子代理标签**每栏各一份**（id 带 `-a`/`-b`）：两栏可以同时开文件 + Git，
   也能各开一份文件；在另一栏点同一入口是**新建那一栏的副本**，不是把原标签搬走。
   并栏时 B 栏的同类副本丢掉、其余改回 `-a`；终端 id 不变只改归属（不重挂 PTY）。
+  **切对话时关掉别的对话的子代理标签**（`activeSession` 变化 → 过滤
+  `tab.sessionId !== activeSession`）：子代理标签带着打开时的 sessionId，切走之后那个
+  面板读的还是上一段对话的转录，右边挂着一份与眼前这一轮毫无关系的内容。文件 / Git /
+  终端**不动**（它们跟着工作区走，终端更不能因为切对话被 SIGHUP）。落点与 `closeTab`
+  一致：被关的正好是这一栏的激活标签时退到剩下最后一个，没有就回开始页；**不要在
+  `setTabs` 的 updater 里调 `setActiveA/B`**（updater 要是纯函数，严格模式跑两次）。
   两个 Git 面板的 `git.watch` 用 `acquireGitWatch` 引用计数，切走一个不影响另一个。
   全屏/收起侧栏的按钮在**最右那一栏**标签条末尾（整块面板的操作），分栏按钮在左栏。
   `useWheelScrollX(ref, enabled)` 的 `enabled` 给第二栏标签条用（它晚于首次渲染出现）。
@@ -1296,6 +1308,15 @@ src/
     `formatDuration` 的 mm:ss。它下方必须有一条 `border-b`——这一行是「过程的总括」，正文是
     这一轮的结果，没有边界两者会糊成一团（DSH 同款）。**用主题色**（`border-brand/60`），
     与「最终回答前面那条」同一档：灰细线在正文里几乎看不见，读起来像排版失误。
+  - **「结束」不等于「做完了」**（`TurnSpan.outcome` + `lib/process.isStopResult`）：
+    用户按停止、上游报错、进程被结束都会让这一轮收尾，但收起行一律写「已完成，用时 …」
+    等于告诉用户「这活干完了」——实测被打断的一轮就是这么显示的（截图复现过）。
+    `turnSpans` 因此给每轮一个结局：`ok` / `stopped`（`result.subtype` 带
+    interrupt/abort/cancel，**归一化之后中断的 result 是 `isError: false`**，所以只认
+    subtype、不按 isError 猜）/ `failed`（`isError` 且不是中断）。一段里有多条 result
+    时以**最后一条**为准（插话把一轮拆成几个子回合）。`TurnCollapse` 按它给三套文案，
+    并且**中断/失败时不报用时**：那个数只说明「跑了多久然后被打断」，挂在「已完成」
+    后面读起来就是完成耗时。文案对齐 DSH 的 `message.stopped` / `message.turnProcess.failed`。
   - **回放的轮也要有耗时**（`turnSpans` 的兜底）：实时路径的 `durationMs` 来自
     `result.duration_ms`，而转录里**没有 result 行**，刷新之后「已完成右边的用时」会全丢
     （踩过）。回放的条目带着转录里的时间戳，因此 `finished` 且没有 result 时长时，按这一段

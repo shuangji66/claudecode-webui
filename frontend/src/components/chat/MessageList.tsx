@@ -289,6 +289,7 @@ const TurnRows = memo(function TurnRows({
         const collapseRow = span.process.length > 0 && span.finished && (
           <TurnCollapse
             durationMs={span.durationMs}
+            outcome={span.outcome}
             open={!collapsed}
             onToggle={() => onToggleTurn(shown[span.start].id, collapsed)}
           />

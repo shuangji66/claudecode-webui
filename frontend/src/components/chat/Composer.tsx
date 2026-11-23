@@ -151,11 +151,20 @@ export function Composer({
   // 重进前端 / 切对话：把输入框换成这条对话自己的草稿。写盘在 updateText 里，
   // 每次改动立刻落盘（localStorage 同步写，几 KB 的 JSON 可以忽略），
   // 不用防抖——webview 被系统直接杀掉时防抖会丢掉最后几个字。
+  //
+  // **附件必须一起清**（`files` / `fileError`）：草稿只存正文（见 lib/drafts.ts 的
+  // 文件头），附件从来不属于任何一条对话的持久状态。留给下一条对话的话，在这里粘贴
+  // 的一张截图会跟着切到别的对话，点发送就发到一个完全不相干的地方去（用户报的
+  // 「粘贴的图片草稿在切换任意对话时都在输入框」）。清掉而不是按对话存：附件是
+  // File/base64，落盘会把 localStorage 配额顶满，而「切回来还在」也没人指望。
   useEffect(() => {
     draftKeyRef.current = draftKey;
     setText(draftKey ? readDraft(draftKey) : "");
     // 换对话后光标位置来自上一份正文，继续用会在新草稿里命中一个假的 `@` token。
     setCaret(0);
+    setFiles([]);
+    setFileError(null);
+    setPreviewId(null);
   }, [draftKey]);
 
   /** 唯一的改文本入口：写 state + 落盘（空正文会被 drafts 当成删除）。 */
