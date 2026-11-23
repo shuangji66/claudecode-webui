@@ -11,6 +11,7 @@ import {
   type ReactNode,
   type WheelEvent as ReactWheelEvent,
 } from "react";
+import { isTurnHead } from "../../lib/model";
 import type { Item, ToolItem } from "../../lib/model";
 import { AssistantBubble } from "./AssistantBubble";
 import { ResultBar } from "./ResultBar";
@@ -37,6 +38,7 @@ import { ScrollFollow, useFollowGrowth } from "../../lib/scrollFollow";
 import { useAppStore } from "../../store/useAppStore";
 import { ProcessGroup } from "./ProcessGroup";
 import { TurnCollapse } from "./TurnCollapse";
+import { WakeRow } from "./WakeRow";
 
 /**
  * 这一行是不是「过程」（收起时要藏掉的东西）。
@@ -211,6 +213,10 @@ const MessageRow = memo(function MessageRow({
         </div>
       );
     }
+    case "wake":
+      // 后台任务唤醒了这一轮。它**不占用户气泡**（渲染成气泡就是一坨 XML），也不是
+      // 过程（收起时不能藏——它是轮首的锚点），所以是独立的一条横条。
+      return <WakeRow item={item} />;
     case "system":
       return (
         <pre className="overflow-x-auto whitespace-pre-wrap [overflow-wrap:anywhere] rounded-xl border border-line bg-panel px-3 py-2 font-mono text-[11px] leading-relaxed text-muted">
@@ -295,8 +301,10 @@ const TurnRows = memo(function TurnRows({
           />
         );
         // 只有窗口截断把用户消息切掉时，第一行才不是用户消息：那种情况放在最前面。
+        // 唤醒轮的轮头是那条通知横条，同样算「轮首已有的东西」——收起行要排在它
+        // 后面（放到前面就跑到「子代理已返回」上方，读起来像上一轮的总括）。
         const head = turnRows[0];
-        const headIsUser = head?.type === "item" && head.item.kind === "user";
+        const headIsUser = head?.type === "item" && isTurnHead(head.item);
         return (
           <Fragment key={shown[span.start].id}>
             {!headIsUser && collapseRow}

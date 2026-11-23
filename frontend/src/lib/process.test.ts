@@ -586,3 +586,66 @@ describe("提问在组头里的说法", () => {
     expect(groupTitle(items, "done", "zh")).toBe("执行了命令并向你提出了问题");
   });
 });
+
+// 后台任务结束时的 `<task-notification>` 是**新的一轮**（CLI 自己就这么记：
+// 真实转录里 turnPosition.turnIndex 在通知处递增、promptIndex 不变）。不切轮的话，
+// 「主任务暂时收尾等子代理」的那一段会与后面三次唤醒并成一整轮——界面上就是
+// 「等待期间挂着『已完成』并收起思考 → 子代理回报后又重新铺开」，而中间那段过渡
+// 正文的用量还压在旧轮的收起行下面。
+describe("turnSpans 把唤醒通知当轮锚点", () => {
+  const user3 = (id: string, text: string): Item => ({ id, seq: 0, ts: 0, kind: "user", text });
+  const done = (id: string, ms: number): Item => ({ id, seq: 0, ts: 0, kind: "result", durationMs: ms });
+  const wake = (id: string): Item => ({
+    id,
+    seq: 0,
+    ts: 0,
+    kind: "wake",
+    origin: "task",
+    taskId: "agent-1",
+    text: "<task-notification>…</task-notification>",
+  });
+
+  it("等待段与唤醒段各成一轮，耗时不再相加", () => {
+    const spans = turnSpans(
+      [
+        user3("u1", "起个子代理然后等它"),
+        thinking("t1"),
+        reply("a1"),
+        done("r1", 9000), // 主任务先收尾，等子代理
+        wake("w1"),
+        thinking("t2"),
+        reply("a2"),
+        done("r2", 4000), // 回报之后这一段
+      ],
+      true,
+    );
+    expect(spans).toHaveLength(2);
+    expect(spans[0].durationMs).toBe(9000);
+    expect(spans[1].durationMs).toBe(4000);
+    // 两段都能各自收起（等待段只有 9 秒，不是「10 分钟」）
+    expect(spans.map((s) => s.finished)).toEqual([true, true]);
+    expect(spans[1].process.map((i) => i.id)).toEqual(["t2"]);
+  });
+
+  it("只被通知唤醒的那一段也有「有内容」的起点（不会判成空段）", () => {
+    const spans = turnSpans([user3("u1", "hi"), done("r1", 1000), wake("w1")], true);
+    expect(spans).toHaveLength(2);
+    expect(spans[1].start).toBe(2);
+    // 只有通知、还没吐字：判成还在跑（不是「结束了一个空轮」）
+    expect(spans[1].finished).toBe(false);
+  });
+
+  it("hiddenReplyIds 按唤醒切轮，不把唤醒前的回答一起藏掉", () => {
+    const items = [
+      user3("u1", "起个子代理"),
+      reply("a1"),
+      done("r1", 0),
+      wake("w1"),
+      reply("a2"),
+    ];
+    // 保留最新的唤醒轮 → 上一轮只留最后一条回答（它本来就只有一条）
+    const hidden = hiddenReplyIds(items, true);
+    expect(hidden.has("a1")).toBe(false);
+    expect(hidden.has("a2")).toBe(false);
+  });
+});

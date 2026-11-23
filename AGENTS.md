@@ -355,13 +355,16 @@ hub ── manager ── session ── process ── claude (NDJSON)
   user/assistant/system/result 且跳过 `isSidechain`/`isMeta`，否则子代理和系统提醒会混进主消息流。
 - **`<task-notification>` 是 CLI 注入的 user 行，`isMeta` 是 `null` 不是 `true`**：
   后台命令 / 子代理结束时它被当成一条普通用户消息写进转录，顶上的 meta 过滤挡不住。
-  不丢的话，停掉一个后台命令再重进对话，界面上就多出一坨原始 XML（`<task-id>`、
-  `<output-file>`、英文 `<note>`），而且它会让轮次计数多一格。
+  **不能渲染成用户气泡**——那就是一坨原始 XML（`<task-id>`、`<output-file>`、英文
+  `<note>`）；**但也不能整条丢掉**：它是**新的一轮**（见 4.8 的 `WakeItem`，CLI 的
+  `turnPosition.turnIndex` 在通知处递增）。前端把它变成一条 `wake`（轮次触发条），
+  所以「轮次计数」**确实**会多一格——这是对的，与 CLI 一致；错的是一格都不多。
   前端 `lib/normalize.isTaskNotification` 与后端 `history.isTaskNotification`
   是同一条规则的两份镜像（**两边都要改**），都只认「整条消息就是这一个块」——
   用户正文里贴了这段 XML 时前后还有自己的话，不会命中。
-  后端那份还负责让它**不参与消息计数、不当会话标题**：否则一条以「后台命令跑完了」
-  开头的对话在侧栏里会叫 `<task-notification> <task-id>…`。
+  后端那份管的是**另一件事**：列表的消息计数、会话标题、preview 要跳过它，否则一条
+  以「后台命令跑完了」开头的对话在侧栏里会叫 `<task-notification> <task-id>…`
+  （后端不往界面上发消息流，所以它那边「跳过」与前端「留一条 wake」不冲突）。
 - **`[Image: …]` 附图注解同样是 CLI 注入的 user 行，而且实时流上没有 `isMeta`**：
   用户发图 / 模型 Read 一张图时 CLI 会额外写一行
   `[Image: source: /tmp/…/1.png]`（带 `original 2748x1542, displayed at 2000x1122.
@@ -1008,6 +1011,25 @@ hub ── manager ── session ── process ── claude (NDJSON)
   **恢复出来的 `endedAt` 三个消费方共用**（`lib/subagents.endedElapsed`）：页头列表的
   运行时间、工具卡片的「N tokens · 02:30」、执行轨迹里那条子代理泳道的收边。
   漏掉任何一处，同一个子代理就会在两个地方给出不同的说法（轨迹里甚至只剩一根线）。
+- **`<task-notification>` 是「新的一轮」，不能整条丢掉**（`WakeItem`）：CLI 自己就这么记
+  ——真实转录里 `turnPosition` 在每次通知处都递增 `turnIndex`、而 `promptIndex` 不变
+  （实测一份转录里 `prompt=2` 下依次是 `turn=2 human → turn=3 通知 → turn=4 通知 →
+  turn=5 通知 → turn=6 human`）。以前把它折进卡片后整条丢弃，于是「主任务先收尾等子代理」
+  的那一段与后面每次唤醒**被并成一整轮**，界面上就是三个症状：等待期间已经挂上
+  `已完成`（并把思考收起）、子代理回报后又重新铺开（收起行忽隐忽现）、中间那段过渡正文
+  的用量（`本轮 26.7K tok`）留在旧轮的收起行下面，`已完成，用时` 报的是几次唤醒的和
+  （实测 10 分 16 秒 vs 真实的 3 分 49 秒）。
+  现在留一条 `wake` Item：**它开一轮，但不是用户气泡**（渲染成气泡就是一坨 XML）。
+  渲染成一条「轮次触发条」（`components/chat/WakeRow`，对齐 DSH 的 `turn-trigger`：
+  图标 + 一句人话 + 时刻，点开才看通知原文）。
+  **所有按轮切分的地方都必须用 `model.isTurnHead`**（`turns.turnsOf` /
+  `process.turnSpans` / `hiddenReplyIds` / `normalize.turnsFromTranscript` /
+  `usage.usageFromTranscript` / `ChatPane` 的轮数与计时行起点），各写一遍必然漂移——
+  漏了哪一处就是「底栏写着 1 轮、收起行却有 4 条」。
+  **它不参与标题与摘要**：`labels.sessionTitle`/`conversationTitle` 只认 user，
+  `SubagentPanel` 的派发消息只取开头的 user 条目——唤醒条不能成为会话标题。
+  `trace` 的轮 prompt 与 `sessionExport` 用它的人话标签（`model.wakeLabel`），
+  导出**不写通知原文**（那是子代理的整份报告）。
 - **子代理自己的转录里每一行都是 `isSidechain: true`**：`applyCLI` 默认丢掉 sidechain
   （主消息流要丢），回放子代理对话必须传 `{sidechain:true}`——漏了的话面板显示
   「子代理还没有输出」，重启后才能复现（实时走的是 `subagentItems`，不经过这条过滤）。
@@ -1046,7 +1068,8 @@ hub ── manager ── session ── process ── claude (NDJSON)
   （主 jsonl 没有 `system/task_*` 行，实测整份转录里一条 system 都没有）。所以
   `isTaskNotification` 不能把它直接丢掉，要先 `applyTaskNotification` 折进卡片
   （`<status>` → status、`<summary>`、`<usage>`，按 `tool-use-id` 匹配、回落 `<task-id>`；
-  `killed`/`stopped`/`cancelled` 记成 `stopped` 而不是失败），折完再丢。
+  `killed`/`stopped`/`cancelled` 记成 `stopped` 而不是失败），**然后留一条 `wake`**
+  （它同时是新的一轮，见上面那条）。
   少了这一步，回放历史时那条子代理永远停在「运行中」。
   **同步子代理不受影响**：它的 tool_result 带 `<usage>`，照旧判完成。
   ③ **被中断（TaskStop）的子代理连通知都不写**——上面那条 `<task-notification>`

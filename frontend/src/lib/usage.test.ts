@@ -796,6 +796,30 @@ describe("usageFromTranscript", () => {
     expect(snap.speedSamples).toBeUndefined();
   });
 
+  // 后台任务的唤醒通知是**新的一轮**（CLI 的 turnPosition.turnIndex 在这里递增）。
+  // 不切的话，「本轮消耗」会把等待子代理的那几段一起算进来——界面上就是
+  // 「本轮 87.2M tok」这种把几次唤醒加在一起的天文数字。
+  it("唤醒通知切轮：本轮消耗只算最近那一段", () => {
+    const snap = usageFromTranscript([
+      { type: "user", message: { content: "起个子代理然后等它" } },
+      { type: "assistant", message: { usage: { input_tokens: 10, cache_read_input_tokens: 100_000, output_tokens: 40 } } },
+      // 子代理回报：新的一轮从这里开始
+      {
+        type: "user",
+        message: {
+          content:
+            '<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n<summary>Agent "x" finished</summary>\n</task-notification>',
+        },
+      },
+      { type: "assistant", message: { usage: { input_tokens: 5, cache_read_input_tokens: 2_000, output_tokens: 11 } } },
+    ])!;
+    // 只算唤醒之后那一次请求，而不是两段相加（100005 + 2005）。
+    expect(snap.turnInputTokens).toBe(2005);
+    expect(snap.outputTokens).toBe(11);
+    // 会话累计照旧包含全部请求：那条回答「这条路一共花了多少」。
+    expect(snap.sessionInputTokens).toBe(102_015);
+  });
+
   it("转录里没有 usage 时返回 undefined，不编数字", () => {
     expect(usageFromTranscript([{ type: "user", message: { content: "hi" } }])).toBeUndefined();
     expect(usageFromTranscript([])).toBeUndefined();

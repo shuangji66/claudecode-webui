@@ -281,19 +281,24 @@ const NOTIFY_STATUS: Record<string, SubagentInfo["status"]> = {
  * `subagent` 就等于把它塞进页头的「子智能体」列表。回放时尤其容易踩——转录里没有
  * `task_started`，Bash 卡片上压根没有子代理信息，这条通知就是唯一的「身份来源」。
  *
- * 折完仍然整条丢弃：它是 CLI 注入的 user 行，不是用户说的话。
+ * **折完不能整条丢掉，要留一条 `wake`**（见 `WakeItem`）：CLI 把每次通知都算作
+ * **新的一轮**（真实转录里 `turnPosition.turnIndex` 在这里递增、`promptIndex` 不变）。
+ * 丢掉的话这几段会被并进上一个回合，界面上就是「主任务暂时收尾时挂上『已完成』并
+ * 收起思考 → 子代理回报后又重新铺开」，中间那段过渡正文的用量还留在旧轮下面。
  */
-function applyTaskNotification(items: Item[], text: string): Item[] {
+function applyTaskNotification(items: Item[], text: string, at: number): Item[] {
   const t = text.trim();
   const status = NOTIFY_STATUS[tagValue(t, "status") ?? ""];
   const toolUseId = tagValue(t, "tool-use-id");
   const summary = tagValue(t, "summary");
   const usageMatch = SUBAGENT_USAGE_RE.exec(t);
-  if (!status && !usageMatch) return items;
   // 匹配不到 tool_use_id 时回落 task-id（后台子代理的通知里两者都有，task-id 就是 agentId）。
   const taskId = tagValue(t, "task-id");
+  // 认不出状态也认不出用量的，不是任务通知（只是恰好长得像）：整条不动，
+  // 留给下面的通用分支按普通文本处理——凭空造一轮比漏一条更糟。
+  if (!status && !usageMatch) return items;
 
-  return items.map((it) => {
+  const folded = items.map((it) => {
     if (it.kind !== "tool") return it;
     // 通知可能先于 tool_result 到达：Agent 卡片此时还没有 `subagent`，按 task-id 建一个。
     if (!it.subagent && !isAgentTool(it.name)) return it;
@@ -314,6 +319,22 @@ function applyTaskNotification(items: Item[], text: string): Item[] {
     }
     return { ...it, subagent: next };
   });
+
+  return [
+    ...folded,
+    {
+      id: nextId(),
+      seq: seqOf(folded),
+      ts: at,
+      kind: "wake",
+      origin: "task",
+      ...(taskId ? { taskId } : {}),
+      ...(toolUseId ? { toolUseId } : {}),
+      ...(summary ? { summary } : {}),
+      ...(status ? { status } : {}),
+      text: t,
+    },
+  ];
 }
 
 /** 取 `<tag>…</tag>` 里的文本（任务通知是一份扁平 XML，不需要通用解析器）。 */
@@ -936,11 +957,13 @@ function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): 
   if (isImageAnnotation(textOfContent(content))) return items;
 
   // 后台任务通知同样是 CLI 注入的 user 行（`isMeta` 是 null，绕过顶上那道过滤）。
-  // 不丢的话，停掉一个后台命令再重进对话，界面上就多出一坨 `<task-notification>`
-  // 的原始 XML，还带着一串 task-id 与英文说明。
-  // 先把结论折进卡片再丢：后台子代理的 status / usage 只在这条里。
+  // 不挡的话，停进对话里就多出一坨 `<task-notification>` 的原始 XML，还带着一串
+  // task-id 与英文说明。
+  // 先把结论折进卡片，再留一条 `wake`（它是**新的一轮**，见 WakeItem）：CLI 自己
+  // 也是这么记的（turnIndex 在这里递增、promptIndex 不变），丢掉的话等待子代理的
+  // 那几段会被并进上一个回合，界面上来回挂 / 撤「已完成」。
   if (isTaskNotification(textOfContent(content))) {
-    return applyTaskNotification(items, textOfContent(content));
+    return applyTaskNotification(items, textOfContent(content), at);
   }
 
   // CLI 的中断标记：单独渲染成一句中性的「已中断」，不占用户气泡。
@@ -1127,12 +1150,17 @@ export function turnsFromTranscript(lines: unknown[], interjectedUUIDs?: readonl
       continue;
     }
     if (type === "user") {
-      if (!isPromptLine(line)) continue;
+      // 后台任务的唤醒通知也是**新的一轮**：CLI 自己就这么记（turnIndex 在这里递增、
+      // promptIndex 不变）。不切的话，等待子代理的那一段耗时与用量会被并进上一个
+      // 回合——界面上写着「已完成，用时 10 分 16 秒」，而那一整段其实是四次唤醒拼的。
+      // 它与下面的提问行共用同一套「关掉上一轮、开新的一轮」逻辑。
+      const wake = isTaskNotification(textOfContent(asRecord(line.message)?.content));
+      if (!wake && !isPromptLine(line)) continue;
       // **插话不切轮**（与 `lib/process.turnSpans` 同一套锚点）：它并进当前回合，
       // 不是新的一轮。按它 closeTurn 的话，同一个回合会被拆成两段耗时与两份用量，
       // 而界面上它们是同一轮（轮次刻度、收起行都按「插话不切轮」算）。
       // 转录里没有 `priority` 标记，只能靠 `interjectedPromptRows` 认出来。
-      if (interjected.has(index)) continue;
+      if (!wake && interjected.has(index)) continue;
       closeTurn();
       promptAt = at;
       last = undefined;

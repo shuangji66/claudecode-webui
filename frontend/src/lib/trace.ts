@@ -17,6 +17,7 @@
 // 把它画成某个实体就等于把「没测到」说成了「测到了」。
 import { formatDuration } from "./elapsed";
 import type { Item, ToolItem } from "./model";
+import { wakeLabel } from "./model";
 import { toolCategory, turnSpans, type ToolCategory } from "./process";
 import { toolSummary } from "./tools";
 
@@ -185,7 +186,10 @@ export function traceTurns(items: Item[], running = true, now = Date.now()): Tra
       const events = group.filter(isEventItem);
 
       for (const it of group) {
-        if (it.kind === "user" && !prompt) prompt = clip(it.text, DETAIL_MAX);
+        // 轮首可能是用户提问，也可能是一条唤醒通知（后台任务把这一轮叫醒）。
+        // 只认 user 的话，被唤醒的轮在轨迹里全叫「这一轮没有用户输入」。
+        if (it.kind === "wake" && !prompt) prompt = clip(wakeLabel(it), DETAIL_MAX);
+        if (it.kind === "user" && !it.interjected && !prompt) prompt = clip(it.text, DETAIL_MAX);
         if ((it.kind === "assistant" || it.kind === "thinking") && it.model) model = it.model;
         if (it.kind === "result" && it.usage) {
           // 一轮里可能有多条 result（插话把一轮拆成几个子回合），各自是本轮的累计口径，

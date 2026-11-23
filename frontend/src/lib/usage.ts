@@ -22,7 +22,27 @@
 //   - 攒不出来就不显示：上游把整段回复合并下发（算出来超过 `MAX_GENERATION_TPS`）时
 //     宁可不显示，也不编。
 
-import { interjectedPromptRows, isPromptRow } from "./transcriptRows";
+import { interjectedPromptRows, isPromptRow, isTaskNotification } from "./transcriptRows";
+
+/**
+ * 取一条 user 行的正文文本（只用于「这条是不是后台任务通知」这一种判定）。
+ *
+ * 不复用 `normalize.textOfContent`：`normalize` 已经 import 了本文件，反向引用会成环
+ * （见 `transcriptRows.ts` 的文件头）。这里只处理任务通知会出现的两种形态——
+ * 纯字符串，以及 `[{type:"text",text}]`。
+ *
+ * **入参是整个 `message` 对象**（与 CLI 的帧一致），不是 `content`：直接往里塞一个
+ * 对象进去会得到 `text.trim is not a function`（踩过一次）。
+ */
+function messageTextOf(message: unknown): string {
+  const content = message && typeof message === "object" ? (message as { content?: unknown }).content : message;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((b) => (b && typeof b === "object" ? (b as { text?: unknown }).text : undefined))
+    .filter((t): t is string => typeof t === "string")
+    .join("");
+}
 
 /** 一次请求的 token 用量（字段名与 CLI 一致，这里转成驼峰）。 */
 export interface UsageTotals {
@@ -733,9 +753,13 @@ export function usageFromTranscript(lines: unknown[], interjectedUUIDs?: readonl
       const post = compactMetaOf(m).postTokens;
       if (post !== undefined && post > 0) compactedTokens = post;
     } else if (m.type === "user") {
-      if (!isPromptLine(m)) continue;
+      // 后台任务的唤醒通知是**新的一轮**（与 `normalize.turnsFromTranscript` 同一口径：
+      // CLI 的 turnIndex 在这里递增）。不切的话，「本轮消耗」会把等待子代理的那几段
+      // 一起算进来——界面上就是「本轮 87.2M tok」这种把四次唤醒加在一起的天文数字。
+      const wake = isTaskNotification(messageTextOf(m.message));
+      if (!wake && !isPromptLine(m)) continue;
       // 插话并进当前回合，不重置「本轮」的累计（与 `normalize.turnsFromTranscript` 同一口径）。
-      if (interjected.has(index)) continue;
+      if (!wake && interjected.has(index)) continue;
       turnInput = 0;
       turnOutput = 0;
       turnApiMs = 0;

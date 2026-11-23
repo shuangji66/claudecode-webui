@@ -15,6 +15,7 @@ import { conversationTitle } from "../../lib/labels";
 import { workspaceFor } from "../../lib/conversations";
 import { canRevealInFnos, fnosHostAvailable } from "../../lib/fnos";
 import { isNewChat } from "../../lib/newChat";
+import { isTurnHead } from "../../lib/model";
 import { effortApply, effortFor, effortName, findOption, modelOptionsFromSettings } from "../../lib/providerForm";
 import { sessionToMarkdown } from "../../lib/sessionExport";
 import { copyText } from "../../lib/clipboard";
@@ -154,11 +155,14 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
   // 不再另存一份「回合开始时间」，免得重连、切对话后两份状态对不上。
   // **插话不是起点**：它并进当前回合（与 `lib/process.turnSpans` 同一套锚点），
   // 按它算会让计时在插一句之后倒回去，像「刚才等的那几十秒白等了」。
+  // **唤醒通知是本轮的起点**：子代理回报之后主任务重新开工，那一轮从「子代理已返回」
+  // 那一刻起算；按上一条人类消息算的话，计时行会把等待子代理的那十几分钟也报成
+  // 「这一轮跑了多久」。
   const turnStartedAt = useMemo(() => {
     if (!busy) return 0;
     for (let i = itemList.length - 1; i >= 0; i -= 1) {
       const it = itemList[i];
-      if (it.kind === "user" && !it.interjected) return it.ts;
+      if (isTurnHead(it)) return it.ts;
     }
     return 0;
   }, [busy, itemList]);
@@ -301,10 +305,12 @@ export function ChatPane({ onToggleSidebar, onAddWorkspace, rightOpen, onToggleR
     base && base.contextWindow === undefined && windowFromSettings
       ? { ...base, contextWindow: windowFromSettings }
       : base;
-  // 「轮」用用户消息数：重开对话时转录里没有 result 行，用 result 计数会归零。
+  // 「轮」用轮锚点数：重开对话时转录里没有 result 行，用 result 计数会归零。
   // **插话不算一轮**（与 `lib/turns.turnsOf`、`lib/process.turnSpans` 同一套锚点）：
   // 它并进当前回合，算进去的话底栏写着「2 轮」、右侧刻度却只有一格。
-  const turns = itemList.filter((i) => i.kind === "user" && !i.interjected).length;
+  // **后台任务的唤醒通知算一轮**：CLI 自己就这么记（turnPosition.turnIndex 递增），
+  // 不算的话等待子代理的三段会被并进上一轮，底栏轮数与收起行就对不上。
+  const turns = itemList.filter(isTurnHead).length;
 
   // 繁忙时那行提示的措辞：Enter 与 Ctrl/⌘+Enter 各用一档（哪一档在 `busyEnter` 里）。
   const busyHint =

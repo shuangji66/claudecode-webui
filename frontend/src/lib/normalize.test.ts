@@ -936,8 +936,18 @@ describe("子代理任务事件", () => {
       summary: 'Agent "跑单测" finished',
       usage: { totalTokens: 40131, toolUses: 1, durationMs: 9166 },
     });
-    // 通知本身不是用户消息。
-    expect(items).toHaveLength(1);
+    // 通知本身不是用户气泡，但**要留一条 wake**：CLI 把它算作新的一轮
+    // （turnPosition.turnIndex 在通知处递增），丢掉的话等待子代理的那几段会被
+    // 并进上一个回合，界面上来回挂 / 撤「已完成」。
+    expect(items).toHaveLength(2);
+    expect(items[1]).toMatchObject({
+      kind: "wake",
+      origin: "task",
+      taskId: "agent-7",
+      toolUseId: "toolu_01",
+      status: "completed",
+      summary: 'Agent "跑单测" finished',
+    });
   });
 
   it("task-notification 的 killed 记成被中断，不是失败", () => {
@@ -965,7 +975,8 @@ describe("子代理任务事件", () => {
       status: "stopped",
       summary: 'Agent "长任务" was stopped',
     });
-    expect(items).toHaveLength(1);
+    expect(items).toHaveLength(2);
+    expect(items[1]).toMatchObject({ kind: "wake", status: "stopped" });
   });
 
   // 同一种通知也发给**后台命令**（Bash + run_in_background）与 MCP 调用。
@@ -1000,8 +1011,9 @@ describe("子代理任务事件", () => {
       },
     });
     expect((items[0] as Extract<Item, { kind: "tool" }>).subagent).toBeUndefined();
-    // 通知本身照旧整条丢弃。
-    expect(items).toHaveLength(1);
+    // 不挂子代理，但**照样是一条唤醒**：后台命令也会叫醒一轮（它不是用户说的话）。
+    expect(items).toHaveLength(2);
+    expect(items[1]).toMatchObject({ kind: "wake", taskId: "bv3vaq2qk", status: "stopped" });
   });
 
   // 被中断（TaskStop）的子代理**不写 task-notification**：转录里只有那条启动回执。
@@ -2305,17 +2317,22 @@ describe("CLI 注入的后台任务通知", () => {
   beforeEach(() => __resetIds());
 
   // 后台命令/子代理结束时 CLI 会写一条普通 user 行（isMeta 是 null，绕过了
-  // applyCLI 顶上的 meta 过滤）。不丢掉的话，停掉后台命令再重进对话，界面上
-  // 就多出一坨 `<task-notification>` 原始 XML，还让轮次计数多一格。
+  // applyCLI 顶上的 meta 过滤）。**不能渲染成用户气泡**——那就是一坨原始 XML；
+  // 但也**不能整条丢掉**：CLI 把它算作新的一轮（turnPosition.turnIndex 在这里
+  // 递增、promptIndex 不变），丢掉的话等待子代理的几段会并进上一个回合，
+  // 界面上来回挂 / 撤「已完成」。所以它变成一条 `wake`（轮次触发条）。
   const notice =
     "<task-notification>\n<task-id>bv3vaq2qk</task-id>\n<tool-use-id>call_00_x</tool-use-id>\n" +
     "<output-file>/tmp/x.output</output-file>\n<status>killed</status>\n" +
     '<summary>Background command "Run 529 mock server" was stopped</summary>\n' +
     "<note>No completion record was found…</note>\n</task-notification>";
 
-  it("整条丢弃，不进消息流", () => {
+  it("不生成用户气泡，只留一条 wake", () => {
     const items = applyCLI([], { type: "user", message: { role: "user", content: notice } });
-    expect(items).toHaveLength(0);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "wake", origin: "task", status: "stopped" });
+    // 原文留着（点开触发条时看），但不进正文流。
+    expect((items[0] as Extract<Item, { kind: "wake" }>).text).toContain("<task-notification>");
   });
 
   it("内容块数组形态也认", () => {
@@ -2323,7 +2340,8 @@ describe("CLI 注入的后台任务通知", () => {
       type: "user",
       message: { role: "user", content: [{ type: "text", text: notice }] },
     });
-    expect(items).toHaveLength(0);
+    expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("wake");
   });
 
   it("用户正文里贴了这段 XML 时不吞（前后还有自己的话）", () => {

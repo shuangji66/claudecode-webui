@@ -111,3 +111,41 @@ describe("windowStart（只渲染最近一批）", () => {
     expect(windowStart(items, 80)).toBe(120);
   });
 });
+
+// 后台任务唤醒了新一轮（`WakeItem`）：CLI 自己就这么记（turnPosition.turnIndex 在
+// 通知处递增）。刻度不占一格的话，底栏写着「N 轮」而刻度只有 N-3 格。
+describe("turnsOf 把唤醒通知当轮锚点", () => {
+  const wake: Item = {
+    id: "w1",
+    seq: 0,
+    ts: 0,
+    kind: "wake",
+    origin: "task",
+    taskId: "agent-1",
+    status: "completed",
+    summary: 'Agent "审查网关鉴权" finished',
+    text: "<task-notification>…</task-notification>",
+  };
+
+  it("唤醒也占一格刻度，标签用人话而不是 XML", () => {
+    const turns = turnsOf([
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "起个子代理然后等它" },
+      wake,
+      { id: "u2", seq: 0, ts: 0, kind: "user", text: "继续" },
+    ]);
+    expect(turns).toHaveLength(3);
+    expect(turns[1].id).toBe("w1");
+    expect(turns[1].label).toBe("子代理「审查网关鉴权」已完成");
+    // 绝不能把通知原文当标签（那是 `<task-notification>` 那坨 XML）
+    expect(turns[1].label).not.toContain("<");
+  });
+
+  it("插话照旧不占刻度", () => {
+    const turns = turnsOf([
+      { id: "u1", seq: 0, ts: 0, kind: "user", text: "hi" },
+      { id: "u2", seq: 0, ts: 0, kind: "user", text: "插一句", interjected: true },
+      wake,
+    ]);
+    expect(turns.map((t) => t.id)).toEqual(["u1", "w1"]);
+  });
+});

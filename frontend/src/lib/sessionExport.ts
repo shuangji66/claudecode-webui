@@ -1,5 +1,6 @@
 // 把当前会话导出为 Markdown（右上角「更多」菜单用）。
 // 不含费用信息：对话结束的统计里已经去掉了花费，导出也保持一致。
+import { wakeLabel } from "./model";
 import type { Item } from "./model";
 import { tr, type Locale } from "./i18n";
 
@@ -90,6 +91,12 @@ export function sessionToMarkdown({ title, cwd, items, locale = "zh", now = new 
         break;
       case "result":
         // 刻意不导出耗时/费用。
+        break;
+      case "wake":
+        // 后台任务唤醒了一轮：写成一行引用块，**不导出通知原文**——那里面是
+        // 子代理的整份报告，塞进 Markdown 会让导出文件翻好几倍，而正文里主任务
+        // 已经把它消化成结论了。要看原文的场合是界面里点开那条横条。
+        lines.push(`> ${wakeLabel(item, locale)}`, "");
         break;
       default:
         break;

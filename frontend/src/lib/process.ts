@@ -14,6 +14,7 @@
 //
 // 分组只影响渲染：Item 本身、seq、id、转录回放都不动。
 import { tr, type Locale } from "./i18n";
+import { isTurnHead } from "./model";
 import type { AssistantItem, Item, ThinkingItem, ToolItem } from "./model";
 
 /** 工具按「用户在做什么」归类，组头文案与图标都用它。 */
@@ -366,9 +367,8 @@ export function hiddenReplyIds(items: Item[], keepTail: boolean): Set<string> {
   const hidden = new Set<string>();
   const starts: number[] = [];
   items.forEach((item, index) => {
-    // 插话不切轮（与 turnSpans / turns.turnsOf 同一套锚点），否则同一轮会被劈成两段，
-    // 「只留最后一条回答」就会把插话前的那条也藏掉。
-    if (item.kind === "user" && !item.interjected && index > 0) starts.push(index);
+    // 轮锚点统一走 `isTurnHead`（插话不切轮；后台任务的唤醒通知**要**切轮，见 WakeItem）。
+    if (isTurnHead(item) && index > 0) starts.push(index);
   });
   const bounds = [0, ...starts];
   if (bounds.length === 0) return hidden;
@@ -473,7 +473,7 @@ export function turnSpans(items: Item[], running = true): TurnSpan[] {
   // 列表开头没有用户消息（历史被窗口截断）时，这一段也算一轮，否则它的过程无处可收。
   const heads: number[] = [];
   items.forEach((item, index) => {
-    if (item.kind === "user" && !item.interjected && index > 0) heads.push(index);
+    if (isTurnHead(item) && index > 0) heads.push(index);
   });
   const bounds = [...heads, items.length];
   for (const end of bounds) {
@@ -501,6 +501,10 @@ export function turnSpans(items: Item[], running = true): TurnSpan[] {
       } else if (item.kind === "user") {
         // 段内只剩插话这一种 user（非插话的都已切轮）：它也算「有内容」，
         // 后面紧跟的 result 属于交棒，见 handoffResult。
+        lastActivity = i;
+      } else if (item.kind === "wake") {
+        // 轮首那条唤醒通知：它是这一段的起点，也算「有内容」——不然只有通知、
+        // 还没吐出正文的那一瞬会被判成「最后一条内容之后没有 result」的空段。
         lastActivity = i;
       } else if (item.kind === "result") {
         lastResult = i;

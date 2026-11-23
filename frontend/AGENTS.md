@@ -1216,6 +1216,20 @@ src/
     `turnSpans(items, running)` 的 `running` 必须传 store 的真实状态。同一个 `finished`
     还决定**最终回答前面那条分隔线**画不画（`replyDividerIds` 的第三个参数）：跑到一半时
     最后一段正文只是「说到哪」，按它画线会让线先挂在过渡正文上、之后又跳到结论前面。
+  - **轮锚点只有两种，统一走 `model.isTurnHead`**：用户亲手发的一条（插话除外），以及
+    **后台任务的唤醒通知**（`WakeItem`，渲染成 `components/chat/WakeRow`）。
+    后者是踩过的坑：`<task-notification>` 曾被整条丢弃，于是「主任务先收尾等子代理」的
+    那一段与后面每次唤醒被并成一整轮，界面上三个症状一起出现——等待期间就挂上「已完成」
+    并收起思考、子代理回报后又重新铺开、`已完成，用时` 报的是几次唤醒的和（实测 10 分 16 秒
+    vs 真实 3 分 49 秒）。CLI 自己把每次通知都算一轮（`turnPosition.turnIndex` 递增、
+    `promptIndex` 不变），我们跟上它。
+    **五个消费方一个都不能漏**：`turns.turnsOf`（刻度）、`process.turnSpans`（收起与耗时）、
+    `hiddenReplyIds`（仅最终回答）、`normalize.turnsFromTranscript`（回放的耗时/用量）、
+    `usage.usageFromTranscript`（本轮消耗，漏了就是「本轮 87.2M tok」这种几次唤醒相加的数）；
+    另外 `ChatPane` 的轮数与计时行起点也读它。各写一份 `kind === "user"` 必然漂移。
+    **它不能成为标题**：`labels` 的会话标题只认 user 条目（通知原文里有 `<task-id>`，
+    当标题会变成 XML）；`SubagentPanel` 补的派发消息也只取开头的 user 条目。
+    轨迹的轮 prompt 与导出用它的人话标签（`model.wakeLabel`），导出**不写通知原文**。
   - **纯空白的思考不能开气泡**（`lib/normalize.applyStreamEvent` + `ThinkingBlock`）：上游在
     工具调用之间会发 `" "` / `"\n"` 这样的 `thinking_delta`，开出来就是一行
     「思考过程 · 0 字」，点开只有一个空格（截图复现过）。三层都挡：空白增量在没有打开的气泡

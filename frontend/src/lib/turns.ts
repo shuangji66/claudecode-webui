@@ -3,6 +3,7 @@
 // 我们的消息流里没有显式的 turn 字段，但每一轮都以一条用户消息开头
 // （本地插入的那条，或 CLI 回显去重后的那条），所以「用户消息」就是轮的锚点。
 
+import { isTurnHead, wakeLabel } from "./model";
 import type { Item } from "./model";
 
 export interface Turn {
@@ -29,8 +30,16 @@ export function turnsOf(items: Item[]): Turn[] {
   const out: Turn[] = [];
   items.forEach((item, index) => {
     // 插话并进当前回合，不单独占一刻度（刻度是「跳到某一轮」的入口，插话不是一轮）。
-    if (item.kind !== "user" || item.interjected) return;
-    out.push({ index, id: item.id, seq: item.seq, label: firstLine(item.text) || `#${index + 1}` });
+    // **唤醒通知要占一刻度**：CLI 把它算作新的一轮，不占的话底下「1 轮」与刻度格数
+    // 又会和收起行对不上（一段对话里被唤醒三次就是三轮）。
+    if (!isTurnHead(item)) return;
+    const label =
+      item.kind === "wake"
+        ? wakeLabel(item)
+        : item.kind === "user"
+          ? firstLine(item.text)
+          : "";
+    out.push({ index, id: item.id, seq: item.seq, label: label || `#${index + 1}` });
   });
   return out;
 }
@@ -53,8 +62,6 @@ export function turnsOf(items: Item[]): Turn[] {
 export function windowStart(items: Item[], limit: number): number {
   const raw = items.length - limit;
   if (raw <= 0) return 0;
-  // 插话不算轮头：它是往当前这一轮里补的一句，按它切会把这一轮腰斩。
-  const isTurnHead = (item: Item | undefined): boolean => item?.kind === "user" && !item.interjected;
 
   // 当前这一轮的开头。没有用户消息时没有「轮」，按条数切。
   let lastUser = -1;

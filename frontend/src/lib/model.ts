@@ -256,6 +256,44 @@ export interface ErrorItem extends BaseItem {
   text: string;
 }
 
+/**
+ * 「这一轮是被谁唤醒的」——后台任务结束时 CLI 注入的那条 user 行
+ * （`<task-notification>`）。
+ *
+ * **它是新的一轮，不是上一轮的续写。** CLI 自己就是这么记的：真实转录里
+ * `turnPosition` 在每次通知处都递增 `turnIndex`、而 `promptIndex` 不变
+ * （实测一份转录里 `prompt=2` 下依次是 `turn=2 human → turn=3 通知 → turn=4 通知 →
+ * turn=5 通知 → turn=6 human`）。把三条通知并进同一个 turnIndex，界面上就会出现
+ * 「主任务暂时收尾、挂上『已完成』并收起思考 → 子代理回报后又重新铺开」的来回跳，
+ * 中间那段过渡正文的用量也留在旧轮的收起行下面（用户报的就是这个）。
+ *
+ * 它同时**不是用户说的话**：渲染成气泡等于把 `<task-id>` 那坨 XML 摆在对话里。
+ * 所以单列一种 Item——渲染层把它画成一行「轮次触发条」（对齐 DSH 的
+ * `turn-trigger` 节点：图标 + 一句人话 + 时刻，点开才看通知原文）。
+ *
+ * 三种消费方要注意：轮锚点（`turns.turnsOf` / `process.turnSpans` /
+ * `hiddenReplyIds` / `normalize.turnsFromTranscript`）把它当轮头；正文流渲染它；
+ * 标题与摘要（`labels`、`trace` 的 prompt）**跳过它**——它不该成为会话标题。
+ */
+export interface WakeItem extends BaseItem {
+  kind: "wake";
+  /**
+   * 唤醒来源。目前只有后台任务（子代理 / 后台命令 / MCP 调用），未来 CLI 可能加别的。
+   * 未知值按「后台任务」渲染，不要因此不显示这一行。
+   */
+  origin: "task";
+  /** 被唤醒的那个任务（子代理的 agentId / 后台命令的 task-id）。 */
+  taskId?: string;
+  /** 发起它的那次 tool_use：用来回查是哪条 Agent 卡片。 */
+  toolUseId?: string;
+  /** 一句话说明（通知里的 `<summary>`，通常是 `Agent "…" finished`）。 */
+  summary?: string;
+  /** 任务的最终状态（`<status>`）。未知值不猜，留空。 */
+  status?: SubagentInfo["status"];
+  /** 通知原文（点开触发条时看的），不展示在正文流里。 */
+  text: string;
+}
+
 export type Item =
   | UserItem
   | AssistantItem
@@ -264,7 +302,59 @@ export type Item =
   | SystemItem
   | InterruptItem
   | ResultItem
-  | ErrorItem;
+  | ErrorItem
+  | WakeItem;
+
+/**
+ * 这一条是不是「一轮的开头」。
+ *
+ * 两个来源：用户亲手发的一条（插话不算，它并进当前回合），以及后台任务的唤醒通知
+ * （见 `WakeItem`）。**所有按轮切分的地方都必须用这一份**，各写一遍必然漂移——
+ * 漏了 wake 就会出现「等待子代理的那一段」被压成一坨。
+ */
+export function isTurnHead(item: Item | undefined): boolean {
+  if (!item) return false;
+  if (item.kind === "wake") return true;
+  return item.kind === "user" && !item.interjected;
+}
+
+/**
+ * 唤醒轮的短标签（轮次刻度悬停、轨迹的 prompt 行用）。
+ *
+ * 通知里的 `<summary>` 是英文人话（`Agent "审查网关鉴权与路径围栏" finished`），
+ * 直接摆上去在中文界面里很突兀，所以只把它里的**名字**摘出来；摘不出就按状态说一句。
+ * 状态未知时说「已返回」——那是事实（通知到了就说明它停了），不猜成功或失败。
+ */
+export function wakeLabel(item: WakeItem, locale: "zh" | "en" = "zh"): string {
+  const name = agentNameOf(item.summary);
+  const state = wakeStatusText(item.status, locale);
+  if (locale === "en") return name ? `${name} — ${state}` : state;
+  return name ? `子代理「${name}」${state}` : state;
+}
+
+/** 从 `Agent "名字" finished` 里摘名字（CLI 的 summary 模板）。 */
+function agentNameOf(summary: string | undefined): string {
+  if (!summary) return "";
+  const quoted = /"([^"]+)"/.exec(summary);
+  if (quoted) return quoted[1];
+  // 没有引号（老模板 / 后台命令的摘要）：整句太吵，只留前 30 字。
+  const s = summary.trim();
+  return s.length > 30 ? `${s.slice(0, 30)}…` : s;
+}
+
+function wakeStatusText(status: SubagentInfo["status"] | undefined, locale: "zh" | "en"): string {
+  switch (status) {
+    case "completed":
+      return locale === "en" ? "finished" : "已完成";
+    case "failed":
+      return locale === "en" ? "failed" : "失败了";
+    case "stopped":
+      return locale === "en" ? "stopped" : "已停止";
+    default:
+      // running 不会出现在唤醒里（通知表示它停了）；未知值不猜成功。
+      return locale === "en" ? "woke this turn" : "已返回";
+  }
+}
 
 export function isTool(i: Item): i is ToolItem {
   return i.kind === "tool";
