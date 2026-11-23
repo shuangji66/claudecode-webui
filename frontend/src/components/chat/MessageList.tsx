@@ -66,6 +66,33 @@ const VISIBLE_STEP = 80;
  */
 const BOTTOM_SLOP = 24;
 /**
+ * 浏览器支不支持原生 `scrollend`，**每次现问**（不缓存成模块级常量）。
+ *
+ * 有它就用它收尾（惯性滚动真停下时才发），没有才退回 150ms 定时器。
+ *
+ * 支持情况（2026-11 实测 caniuse）：Chrome / Edge 114+、Firefox 109+、
+ * **Android System WebView 114+**（由 Play 独立更新，实际设备都远超这条线）。
+ * 真正缺的是 **Safari / iOS**：`scrollend` 到 26.2 才支持，而 iOS 的 WKWebView 版本
+ * 锁死在系统版本上，用户不升系统就拿不到——所以退化路径**必须留着**。
+ *
+ * 为什么不缓存：**jsdom 声称支持**（`'onscrollend' in window` 为 true）却从不派发
+ * 事件，测试要在加载之后把它抹掉；缓存成模块级常量的话，import 那一刻就定死了，
+ * 测试改不动（踩过一次：一个「收起后保位」的用例因为收尾永远不发生而挂）。
+ * 运行期读一次属性可以忽略不计。
+ */
+function supportsScrollEnd(): boolean {
+  if (typeof window === "undefined") return false;
+  if ((globalThis as { __ccwebNoScrollEnd?: boolean }).__ccwebNoScrollEnd) return false;
+  return "onscrollend" in window;
+}
+/**
+ * 键盘上「读者在翻这段对话」的键。
+ *
+ * 与 DSH 的 `SCROLL_KEYS` 同一份名单：方向键、翻页、首尾、空格。别的键（打字、
+ * 快捷键）不算阅读手势——尤其是焦点还在输入框里的时候。
+ */
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
+/**
  * 离屏跳过布局/绘制**只给密集的单行过程行**：它们的高度稳定在一行（~28px），32px 的
  * 占位与真实值几乎一致，滚动过程中不会来回回缩。
  *
@@ -946,6 +973,22 @@ export function MessageList({
   }, []);
 
   /**
+   * 滚动停下来之后要做的收尾：重量几何、同步轮次刻度、刷新锚点。
+   *
+   * 它由 `scrollend` 触发；浏览器没有 `scrollend` 时退回 150ms 定时器（见 `onScroll`）。
+   */
+  const settleScroll = useCallback(() => {
+    if (scrollSettle.current !== null) {
+      window.clearTimeout(scrollSettle.current);
+      scrollSettle.current = null;
+    }
+    measureTurns(true);
+    syncActiveTurn();
+    // 停手后刷新锚点：下一次「收起过程」要靠它把视线钉住。
+    if (!follow.following) captureAnchor();
+  }, [measureTurns, syncActiveTurn, follow]);
+
+  /**
    * 一次 scroll 事件 = 一次位置变化，按它结算跟随意图。
    *
    * 归因在 `ScrollFollow.read` 里：只有「相对上一次确认的位置真的动了」才算是读者
@@ -956,14 +999,12 @@ export function MessageList({
     const el = scroller.current;
     if (!el) return;
     const { metrics, movedByReader } = follow.read(el);
-    if (scrollSettle.current !== null) window.clearTimeout(scrollSettle.current);
-    scrollSettle.current = window.setTimeout(() => {
-      scrollSettle.current = null;
-      measureTurns(true);
-      syncActiveTurn();
-      // 停手后刷新锚点：下一次「收起过程」要靠它把视线钉住。
-      if (!follow.following) captureAnchor();
-    }, 150);
+    // 有 `scrollend` 就交给它收尾（它比定时器准：惯性滚动期间 150ms 可能不够，
+    // 中途"补"一次会把还没停的滚动当成停手）。没有才退回定时器。
+    if (!supportsScrollEnd()) {
+      if (scrollSettle.current !== null) window.clearTimeout(scrollSettle.current);
+      scrollSettle.current = window.setTimeout(settleScroll, 150);
+    }
     // 按住屏幕期间不结算：手指没动，跟随也不该在这里被改写（见 `press`）。
     if (press.current === null) follow.sample(metrics, movedByReader);
     // 这两个 setState 在值没变时会被 React 自己挡掉（`Object.is` 相同即跳过重渲染），
@@ -1094,6 +1135,67 @@ export function MessageList({
       window.removeEventListener("blur", settle);
     };
   }, [endPress]);
+
+  /**
+   * **读者开始操作**就放弃跟随，不等 scroll 事件、也不等位移。
+   *
+   * 与 DSH 的 `READING_INTENTS` 同一思路（`use-chat-viewport.ts` 的 `onIntent`）：
+   * 一次滚轮的位移可能小到落在容差里，那时内容仍会被下一帧的跟随推走；键盘翻页
+   * 更是压根没有 pointer 事件。判据必须是「手势本身」，不是它的结果。
+   *
+   * 这里补的是我们原先缺的两种来源（`wheel` 与 `pointerdown` 早就有各自的处理）：
+   *
+   *   - **`keydown`**：方向键 / PageUp / PageDown / Home / End / 空格。焦点在输入框里
+   *     时不算（那是打字，不是阅读），非滚动键也不算。
+   *   - **`beforematch`**：浏览器 Ctrl+F 页内查找命中并滚过去。它会改视口却没有任何
+   *     用户手势，不接的话跟随会跟它抢位置。
+   *
+   * **`keydown` 必须挂 `window`、不能挂滚动区**：滚动区是页面里的一个 div、没有
+   * `tabIndex`，焦点很少在它上面——挂在它上面的监听基本不会触发（DSH 能挂在容器上，
+   * 是因为它的列表在 `[data-conversation-scroll]` 且整页滚动）。挂 `window` 时用
+   * 「焦点在输入框里就跳过」把打字场景排除掉，判据与 DSH 的
+   * `target.closest('[data-composer-seat]')` 等价。
+   *
+   * **`touchstart` 没有单独接**：触屏按下一定先有 `pointerdown`，重复注册只会多一条
+   * 无用的路径（DSH 那五路里它对我们也是冗余的）。
+   */
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const intent = () => {
+      follow.release();
+      setAtBottom(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (!SCROLL_KEYS.has(e.key)) return;
+      // 焦点在输入框 / 可编辑区里时不干预：那里按方向键是在移动光标。
+      const t = e.target as Element | null;
+      if (t && t.closest("input, textarea, [contenteditable='true']")) return;
+      intent();
+    };
+    // `beforematch` 只对滚动区自己派发（查找命中会滚那个容器），就近挂。
+    window.addEventListener("keydown", onKey);
+    el.addEventListener("beforematch", intent);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      el.removeEventListener("beforematch", intent);
+    };
+  }, [follow]);
+
+  /**
+   * 原生 `scrollend`：滚动**真的**停下来时收尾（含惯性）。
+   *
+   * 比 150ms 定时器准：长惯性滚动超过 150ms 时，定时器会在滚动还没停时"补"一次，
+   * 把还在动的时刻当成停手去刷锚点与轮次刻度。没有这个事件时 `onScroll` 里仍走定时器
+   * （见 `supportsScrollEnd`）。
+   */
+  useEffect(() => {
+    if (!supportsScrollEnd()) return;
+    const el = scroller.current;
+    if (!el) return;
+    el.addEventListener("scrollend", settleScroll);
+    return () => el.removeEventListener("scrollend", settleScroll);
+  }, [settleScroll]);
 
   /**
    * 滚轮往上滚 = 读者要看历史。立刻解除跟随，不等 scroll 事件（一次滚轮的位移

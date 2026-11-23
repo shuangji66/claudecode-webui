@@ -803,6 +803,23 @@ src/
   写入被 clamp」留的余地，用在松手上就变成「轻滑十几像素松手又被拽回底部」。不恢复时
   `follow.release()` + `follow.reset(top)`（登记落点，别让下次 scroll 把这段位移再算成
   读者移动），右下角出现「回到底部」；读者自己滚回底部由 `onScroll` 的归因恢复。
+- **阅读手势要覆盖没有 pointer 事件的来源**（`MessageList` 挂到滚动区上的 `keydown` /
+  `beforematch`，对齐 DSH `use-chat-viewport.ts` 的 `READING_INTENTS`）：
+  - **`keydown` 只认滚动键**（`SCROLL_KEYS`：方向键 / PageUp / PageDown / Home / End /
+    空格）。键盘翻页完全不走 pointer，只看 `pointerdown`/`wheel` 的话读者按 PageUp 翻上去、
+    流式内容照样把他拽回底部。**焦点在 `input`/`textarea`/`contenteditable` 里时跳过**
+    ——那里按方向键是在移动光标，不是阅读。
+  - **`beforematch`**：浏览器 Ctrl+F 页内查找命中会自己滚动过去，它改视口却没有任何用户
+    手势，不接的话贴底跟随会跟它抢位置。
+  - **`touchstart` 不用单独接**：触屏按下一定先有 `pointerdown`，DSH 那五路里它是冗余的。
+- **滚动收尾用原生 `scrollend`，没有才退回 150ms 定时器**（`supportsScrollEnd()`）：
+  长惯性滚动超过 150ms 时定时器会在还没停时就"补"一次，把还在动的时刻当成停手去刷锚点。
+  支持情况（2026-11）：Chrome/Edge 114+、Firefox 109+、**Android System WebView 114+**
+  （Play 独立更新，实际设备都远超）；**Safari/iOS 要到 26.2**，而 iOS 的 WKWebView 版本
+  锁死在系统版本上——所以退化路径必须留着。
+  `supportsScrollEnd()` **每次现问、不缓存成模块级常量**：**jsdom 声称支持却从不派发**，
+  测试要在加载之后把它抹掉（`test-setup.ts` 的 `__ccwebNoScrollEnd`），缓存的话 import
+  那一刻就定死了。踩过：一个「收起后保位」的用例因为收尾永远不发生而挂。
 - **跳转（轨迹 / 刻度）后解除跟随**：落点离底部超过容差就 `release()`，否则下一帧
   流式内容会把视口拽回底部（「点了闪一下又弹回最新」）。
 - 「回到底部」用即时定位（`pin`），不写 `smooth`：它可能跨几百条消息，动画期间跟随会

@@ -588,3 +588,116 @@ describe("松手兜底", () => {
     expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
   });
 });
+
+// 键盘翻页是没有 pointer 事件的阅读手势：只看 `pointerdown` / `wheel` 时，
+// 读者按 PageUp 翻上去，流式内容照样会把他拽回底部。
+//
+// 监听挂在 `window` 上（滚动区是无 `tabIndex` 的 div，焦点很少在它身上），
+// 所以这里从 `document.body` 派发，模拟「焦点不在输入框里」的真实情形。
+describe("键盘翻页也是阅读手势", () => {
+  it("按 PageUp 立刻解除跟随，内容长高也不再拽回底部", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
+
+    fireEvent.keyDown(document.body, { key: "PageUp" });
+    expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
+
+    el.scrollTop = 300;
+    fireEvent.scroll(el);
+    grow(el, 1400);
+    await fireResize();
+    expect(el.scrollTop).toBe(300);
+  });
+
+  it("焦点在输入框里按方向键不算阅读手势（那是在移动光标）", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+
+    const input = document.createElement("textarea");
+    document.body.appendChild(input);
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
+    input.remove();
+  });
+
+  it("非滚动键（打字 / 快捷键）不算阅读手势", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+
+    fireEvent.keyDown(document.body, { key: "a" });
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    expect(screen.queryByRole("button", { name: /回到底部/ })).toBeNull();
+  });
+});
+
+// 浏览器 Ctrl+F 页内查找命中会自己滚动过去，那不是读者的滚动操作，但同样会改视口；
+// 不接的话贴底跟随会跟它抢位置。
+describe("页内查找命中（beforematch）也解除跟随", () => {
+  it("beforematch 之后内容长高不再拽回底部", async () => {
+    const el = await mountAndSettle([thinking, answer]);
+    el.scrollTop = 500;
+    fireEvent.scroll(el);
+
+    fireEvent(el, new Event("beforematch"));
+    expect(screen.getByRole("button", { name: /回到底部/ })).toBeInTheDocument();
+  });
+});
+
+// 原生 `scrollend`：滚动真停下来时收尾。
+//
+// 测试里 jsdom 声称支持却从不派发它，所以 `test-setup.ts` 把 `__ccwebNoScrollEnd`
+// 打开、让所有用例走 150ms 定时器那条退化路径。这个用例显式打开原生路径，验证
+// **组件真的据此收尾**：锚点刷新（`captureAnchor`）只在收尾时发生，而它决定了
+// 「收起一段内容后读者的视线还在不在原处」——用那个可观察后果来断言，
+// 而不是「我挂的监听被调用了」（我在同一个元素上挂的 spy 无论如何都会响）。
+describe("原生 scrollend 收尾", () => {
+  const q1: Item = { id: "q1", seq: 0, ts: 0, kind: "user", text: "问题" };
+  const r1: Item = { id: "r1", seq: 1, ts: 0, kind: "assistant", text: "回答", streaming: false };
+
+  it("打开原生路径后，scrollend 会刷新锚点（收起内容时视线仍被钉住）", async () => {
+    const g = globalThis as { __ccwebNoScrollEnd?: boolean };
+    g.__ccwebNoScrollEnd = false;
+    try {
+      const { rerender } = render(<MessageList items={[q1, r1]} resetKey="se" />);
+      const el = screen.getByTestId("message-scroller");
+      Object.defineProperty(el, "scrollHeight", { value: 2000, configurable: true });
+      Object.defineProperty(el, "clientHeight", { value: 500, configurable: true });
+      Object.defineProperty(el, "scrollTop", { value: 800, writable: true, configurable: true });
+
+      const place = (table: Record<string, [number, number]>) => {
+        Object.defineProperty(el, "getBoundingClientRect", { value: () => ({ top: 0 }) as DOMRect, configurable: true });
+        for (const [id, [top, bottom]] of Object.entries(table)) {
+          const row = el.querySelector<HTMLElement>(`[data-item-id="${id}"]`);
+          if (!row) continue;
+          Object.defineProperty(row, "getBoundingClientRect", {
+            value: () => ({ top, bottom }) as DOMRect,
+            configurable: true,
+          });
+        }
+      };
+      // 视口顶（scrollTop=800）落在 r1 的顶端：r1 是越过视口顶的那一行。
+      place({ q1: [-800, -400], r1: [0, 400] });
+      // 一次同长度的新数组：让 layout effect 记下内容高度（2000）。
+      rerender(<MessageList items={[{ ...q1 }, { ...r1 }]} resetKey="se" />);
+
+      el.scrollTop = 800;
+      fireEvent.scroll(el); // 读者在中间：跟随解除
+      // 收尾交给原生 scrollend（不是 150ms 定时器）。
+      fireEvent(el, new Event("scrollend"));
+
+      // 内容变短 400px：r1 上移到视口顶。
+      Object.defineProperty(el, "scrollHeight", { value: 1600, configurable: true });
+      place({ q1: [-800, -400], r1: [-400, 0] });
+      rerender(<MessageList items={[{ ...q1 }, { ...r1 }]} resetKey="se" />);
+
+      // 锚点已在 scrollend 时刷新过 → 视线跟着上移 400。
+      expect(el.scrollTop).toBe(400);
+    } finally {
+      g.__ccwebNoScrollEnd = true;
+    }
+  });
+});
