@@ -763,10 +763,11 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
     /**
      * 刚新建、还没发过第一条消息的对话（对齐 DSH 的 blank 行）。
      *
-     * 它此时只有「新建」这一件事可表达：归档、置顶、重命名、分叉、删除都还没有对象，
-     * 右键菜单同样没有能落地的项，所以整组管理入口都不摆。判定与对话区共用
-     * `isNewChat`（元数据 `messages === 0` 且没有标题，再叠加本机是否有消息流），
-     * 首条消息一发出（items 立刻非空）就恢复成普通行。
+     * 它此时只有「删除」这一件事可表达：归档、置顶、重命名、分叉都没有对象（没有标题、
+     * 没有上下文可复制），所以行内那三颗按钮不摆；但空壳必须能被清掉——直接关标签页 /
+     * 断网留下的空对话没有任何别的管理入口，攒到常驻上限之后用户既新建不了也删不掉。
+     * 判定与对话区共用 `isNewChat`（元数据 `messages === 0` 且没有标题，再叠加本机是否
+     * 有消息流），首条消息一发出（items 立刻非空）就恢复成普通行。
      */
     const blank = isNewChat(c, (items[c.id] ?? []).length);
     // 吸附提示线只画在「这次真的能落下去」的那一行上：同组、不是自己、置顶状态一致。
@@ -779,8 +780,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         className="group/session side-row relative gap-1"
         data-active={active}
         // 右键 = 「管理对话」菜单：桌面端不用先瞄准右上角那个只有在悬停时才出现的按钮。
-        // 新建的空对话不挂这条：菜单里每一项对它都不成立，弹出来只是几个灰格子。
-        onContextMenu={blank ? undefined : (e) => openMenuAt(e, c)}
+        // 新建的空对话同样挂：菜单里只剩「删除」一项，那正是清掉这个空壳的唯一入口。
+        onContextMenu={(e) => openMenuAt(e, c)}
         draggable={manual}
         onDragStart={
           manual
@@ -856,67 +857,66 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
             <span className="shrink-0 rounded-full bg-black/[0.06] px-1 text-[9px] text-muted">{t("归档", "Archived")}</span>
           )}
           <span
-            className={
-              // 空对话没有操作组要腾地方，时间一直显示（对齐 DSH 的 blank 行）。
-              blank
-                ? "ml-auto shrink-0 text-[10px] text-faint"
-                : `ml-auto shrink-0 text-[10px] text-faint ${
-                    // 桌面端两套显示（对齐 DSH）：不悬停只露时间，悬停 / 聚焦 / 菜单打开时让位给操作按钮。
-                    // `hidden` 而不是 `opacity-0`：悬停后按钮组要真的把时间挤掉，否则三颗按钮会盖在标题上。
-                    menu?.id === c.id
-                      ? "md:hidden"
-                      : "md:group-hover/session:hidden md:group-has-focus-visible/session:hidden"
-                  }`
-            }
+            className={`ml-auto shrink-0 text-[10px] text-faint ${
+              // 桌面端两套显示（对齐 DSH）：不悬停只露时间，悬停 / 聚焦 / 菜单打开时让位给操作按钮。
+              // `hidden` 而不是 `opacity-0`：悬停后按钮组要真的把时间挤掉，否则按钮会盖在标题上。
+              // 空对话只有一个「···」也一样让位——它仍然是这一行的操作入口。
+              menu?.id === c.id
+                ? "md:hidden"
+                : "md:group-hover/session:hidden md:group-has-focus-visible/session:hidden"
+            }`}
           >
             {relativeTime(c.last_active, Date.now(), locale)}
           </span>
         </button>
         {/* 操作组：桌面悬停 / 键盘聚焦 / 本行菜单打开时出现；触屏只留「···」
             （归档、置顶在菜单里同样能点，触屏没有 hover 也够得着）。
-            新建的空对话整组都不出现：没有可归档 / 置顶 / 管理的对象。 */}
-        {!blank && (
-          <div
-            className={`flex items-center gap-0.5 ${
-              menu?.id === c.id
-                ? "md:flex"
-                : "md:hidden md:group-hover/session:flex md:group-has-focus-visible/session:flex"
-            }`}
+            新建的空对话只留「···」：归档与置顶对空壳没有对象，而「删除」是清掉它的
+            唯一入口（触屏没有右键，全藏起来就没有任何办法删掉一个空对话）。 */}
+        <div
+          className={`flex items-center gap-0.5 ${
+            menu?.id === c.id
+              ? "md:flex"
+              : "md:hidden md:group-hover/session:flex md:group-has-focus-visible/session:flex"
+          }`}
+        >
+          {!blank && (
+            <>
+              <button
+                type="button"
+                onClick={() => void archiveConversation(c.id, !c.archived)}
+                // 已归档的行这颗是「取消归档」，用主题色与灰色的「归档」区分（与历史记录页一致）。
+                className={`hidden rounded-md p-1 transition md:inline-flex ${
+                  c.archived ? "text-brand hover:bg-brand/10" : "text-muted hover:bg-black/5 hover:text-ink"
+                }`}
+                aria-label={`${c.archived ? t("取消归档", "Unarchive") : t("归档", "Archive")} ${titleOf(c)}`}
+                title={c.archived ? t("取消归档", "Unarchive") : t("归档", "Archive")}
+              >
+                <IconArchive size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => void pinConversation(c.id, !c.pinned)}
+                className={`hidden rounded-md p-1 transition hover:bg-black/5 md:inline-flex ${c.pinned ? "text-brand" : "text-muted hover:text-ink"}`}
+                aria-label={`${c.pinned ? t("取消置顶", "Unpin") : t("置顶", "Pin")} ${titleOf(c)}`}
+                aria-pressed={Boolean(c.pinned)}
+                title={c.pinned ? t("取消置顶", "Unpin") : t("置顶", "Pin")}
+              >
+                <IconPin size={14} />
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={(e) => openMenu(e, c)}
+            className="rounded-md p-1 text-muted transition hover:bg-black/5 hover:text-ink"
+            aria-label={`${t("管理对话", "Manage conversation")} ${titleOf(c)}`}
+            aria-haspopup="menu"
+            title={t("管理对话", "Manage conversation")}
           >
-            <button
-              type="button"
-              onClick={() => void archiveConversation(c.id, !c.archived)}
-              // 已归档的行这颗是「取消归档」，用主题色与灰色的「归档」区分（与历史记录页一致）。
-              className={`hidden rounded-md p-1 transition md:inline-flex ${
-                c.archived ? "text-brand hover:bg-brand/10" : "text-muted hover:bg-black/5 hover:text-ink"
-              }`}
-              aria-label={`${c.archived ? t("取消归档", "Unarchive") : t("归档", "Archive")} ${titleOf(c)}`}
-              title={c.archived ? t("取消归档", "Unarchive") : t("归档", "Archive")}
-            >
-              <IconArchive size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={() => void pinConversation(c.id, !c.pinned)}
-              className={`hidden rounded-md p-1 transition hover:bg-black/5 md:inline-flex ${c.pinned ? "text-brand" : "text-muted hover:text-ink"}`}
-              aria-label={`${c.pinned ? t("取消置顶", "Unpin") : t("置顶", "Pin")} ${titleOf(c)}`}
-              aria-pressed={Boolean(c.pinned)}
-              title={c.pinned ? t("取消置顶", "Unpin") : t("置顶", "Pin")}
-            >
-              <IconPin size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={(e) => openMenu(e, c)}
-              className="rounded-md p-1 text-muted transition hover:bg-black/5 hover:text-ink"
-              aria-label={`${t("管理对话", "Manage conversation")} ${titleOf(c)}`}
-              aria-haspopup="menu"
-              title={t("管理对话", "Manage conversation")}
-            >
-              <IconMore size={14} />
-            </button>
-          </div>
-        )}
+            <IconMore size={14} />
+          </button>
+        </div>
         {/* 吸附提示线（对齐 DSH）：拖到这一行的上半/下半就画在它的上/下沿，
             比「整行变色」清楚得多，也不会盖住标题。 */}
         {marker && (
@@ -1185,6 +1185,8 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
   }
 
   const menuConv = menu ? conversations.find((c) => c.id === menu.id) ?? null : null;
+  /** 菜单开在一条新建的空对话上：只剩「删除」可落地（判定与行内操作组同一个口径）。 */
+  const menuBlank = menuConv ? isNewChat(menuConv, (items[menuConv.id] ?? []).length) : false;
 
   return (
     <aside className="safe-top flex h-full w-full shrink-0 flex-col border-r border-line bg-panel md:w-[280px] md:pt-0">
@@ -1701,7 +1703,14 @@ export function Sidebar({ onClose, collapsed = false, onToggleCollapse, onOpenSe
         width={208}
         items={
           menuConv
-            ? ([
+            ? menuBlank
+              ? // 新建的空对话：只有「删除」成立。重命名 / 置顶 / 归档 / 分叉都要一条有内容的
+                // 对话才有对象；「重启 / 结束进程」又和「删除」几乎同义（空壳没有转录、
+                // 也没有标题，结束之后它照样不在列表里），摆三条只会让人分不清该点哪条。
+                ([
+                  { id: "delete", label: t("删除", "Delete"), icon: <IconTrash size={13} />, danger: true, onSelect: () => void askDelete(menuConv) },
+                ] satisfies MenuItem[])
+              : ([
                 { id: "rename", label: t("重命名", "Rename"), icon: <IconPencil size={13} className="text-muted" />, onSelect: () => void askRename(menuConv) },
                 {
                   id: "pin",

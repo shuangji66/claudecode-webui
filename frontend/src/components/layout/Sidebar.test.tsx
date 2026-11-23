@@ -450,17 +450,65 @@ describe("Sidebar 新建的空对话（对齐 DSH 的 blank 行）", () => {
     });
   });
 
-  // DSH 的 blank 行只有标题：没有第一条消息，归档 / 置顶 / 重命名 / 分叉 / 删除
-  // 都还没有对象，摆出来只是几个点了没意义的图标。
-  it("还没发过消息：不摆归档 / 置顶 / 更多按钮，右键也不弹管理菜单", () => {
+  // 空对话只有「删除」这一件事可表达：归档 / 置顶需要一条有内容的对话才有对象，
+  // 所以行内只留「···」。但删除必须留着——直接关标签页留下的空壳没有别的管理入口。
+  it("还没发过消息：不摆归档 / 置顶，但保留更多按钮与右键菜单（只有删除）", async () => {
     const { container } = renderSidebar();
-    for (const name of [/归档/, /置顶/, /管理对话/]) {
+    for (const name of [/归档/, /置顶/]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
     }
-    // 没有 preventDefault：右键交回浏览器原生菜单，不弹「管理对话」。
+    expect(screen.getByRole("button", { name: "管理对话 新对话" })).toBeInTheDocument();
+
+    // 右键同样弹同一个菜单（锚在整行上），菜单里只有「删除」。
     const row = container.querySelector('[data-active="true"]') as HTMLElement;
-    expect(fireEvent.contextMenu(row)).toBe(true);
-    expect(screen.queryByRole("menu")).toBeNull();
+    await act(async () => {
+      fireEvent.contextMenu(row);
+    });
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["删除"]);
+  });
+
+  // 删除空对话同样要二次确认（它结束进程、把这一行从列表移除）。
+  it("空对话的删除先确认再动手，落点是同工作区的下一条", async () => {
+    const deleteConversation = vi.fn(async () => true);
+    useAppStore.setState({
+      deleteConversation,
+      conversations: [
+        {
+          id: "c-new",
+          cwd,
+          title: "",
+          created_at: "",
+          last_active: "2026-01-02T00:00:00Z",
+          messages: 0,
+          archived: false,
+          live: true,
+        },
+      ],
+    });
+    const confirm = vi.mocked(askConfirm);
+    confirm.mockClear();
+    confirm.mockResolvedValueOnce(false);
+    renderSidebar();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "管理对话 新对话" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "删除" }));
+    });
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: "删除对话" }));
+    expect(deleteConversation).not.toHaveBeenCalled();
+
+    confirm.mockResolvedValueOnce(true);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "管理对话 新对话" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "删除" }));
+    });
+    // 落点（同工作区下一条，没有就空态）由 store 的 deleteConversation 决定，
+    // 这里只钉住「侧栏确实把这次删除交下去了」。
+    expect(deleteConversation).toHaveBeenCalledWith("c-new");
   });
 
   // 判定复用 `isNewChat` 的实时信号：发送后 items 立刻非空，不必等 600ms 后那次列表刷新。
