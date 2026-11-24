@@ -380,7 +380,14 @@ export function settleStreaming(items: Item[]): Item[] {
 export function settleSubagents(
   items: Item[],
   states:
-    | ReadonlyArray<{ agent_id: string; tool_use_id?: string; finished: boolean; tokens?: number; ended_at?: number }>
+    | ReadonlyArray<{
+        agent_id: string;
+        tool_use_id?: string;
+        finished: boolean;
+        tokens?: number;
+        total_tokens?: number;
+        ended_at?: number;
+      }>
     | undefined,
 ): Item[] {
   if (!states || states.length === 0) return items;
@@ -403,9 +410,21 @@ export function settleSubagents(
     if (state.finished && sub.status === "running") next = { ...next, status: "stopped" as const };
     // 用量/收尾时刻在**重启之后**只能从子代理转录恢复：后台子代理的 usage 只在
     // stdout 的 task_notification 里，而主转录那条 <task-notification> 不带 <usage>。
-    // 已有 usage（CLI 的进度帧或结束通知）就保留——那是权威值，恢复出来的是同源副本。
-    if (state.tokens !== undefined && state.tokens > 0 && !next.usage) {
-      next = { ...next, usage: { totalTokens: state.tokens } };
+    //
+    // **两种口径分开存**（见 SubagentInfo.usage 的注释）：
+    //   - `totalTokens` 是「最后一次请求」，CLI 的进度帧与结束通知给的就是它；
+    //   - `consumedTokens` 是累计消耗，只有从转录整份扫才拿得到，界面上要的是它。
+    //
+    // 累计值**以后端这份为准**：实时跑着时只能在收到 `task_progress` 的那一刻累加，
+    // 而没有工具调用的纯思考请求一条进度帧都不发，那些 token 实时路径根本数不到
+    // （实测同一份子代理：实时累加 236K vs 转录真值 252K）。所以只要后端给出了
+    // `total_tokens` 就覆盖掉估算值——它不是「另一份同源副本」，是更全的那一份。
+    const usage = next.usage;
+    const patch: Partial<NonNullable<SubagentInfo["usage"]>> = {};
+    if (state.tokens !== undefined && state.tokens > 0 && !usage) patch.totalTokens = state.tokens;
+    if (state.total_tokens !== undefined && state.total_tokens > 0) patch.consumedTokens = state.total_tokens;
+    if (Object.keys(patch).length > 0) {
+      next = { ...next, usage: { totalTokens: 0, ...usage, ...patch } };
     }
     if (state.ended_at !== undefined && state.ended_at > 0) next = { ...next, endedAt: state.ended_at };
     if (next === sub) return it;
@@ -722,14 +741,47 @@ function applyTaskEvent(items: Item[], m: Raw, at: number): Item[] | undefined {
     if (typeof m.is_backgrounded === "boolean") next.background = m.is_backgrounded;
     next.spawnDepth = int(m.spawn_depth) ?? prev.spawnDepth;
   } else if (subtype === "task_progress") {
-    // 运行中的进度：只更新用量与一行摘要，状态保持 running。
+    // 运行中的进度：更新用量与「一行进度」，状态保持 running。
+    //
+    // 两行文字各有来源，**不能只取 summary**：
+    //   - `summary` 是模型生成的进度摘要（initialize 的 `agentProgressSummaries`），
+    //     语义最好，但它需要一次额外的模型请求、CLI 把整份子代理上下文 fork 进去。
+    //     实测 2.1.330 + 自建中转：模型无视提示词里的 "Do not use tools" 直接调工具，
+    //     那一次请求白花、一个子代理跑到底 `summary` 一条都没有（4 次尝试全空）。
+    //   - `description` + `last_tool_name` 是 CLI 自己的活动描述，随每次工具调用变，
+    //     不花请求、从不缺席（`"Reading b.txt"` / `Bash`）。它是唯一可靠的兜底。
+    // 只认 summary 的话，页头上那一行在多数中转上是永久空的。
     next.summary = str(m.summary) || prev.summary;
+    const description = str(m.description);
+    const lastTool = str(m.last_tool_name);
+    // 只有真的换了活动才写：这条帧每次工具调用都会来，秒数还一直变，
+    // 无脑覆盖会让 React 每帧都认为对象变了。
+    if (description && description !== prev.progressText) {
+      next.progressText = description;
+      next.progressTool = lastTool || undefined;
+    } else if (lastTool && !prev.progressTool) {
+      next.progressTool = lastTool;
+    }
     const usage = asRecord(m.usage);
     if (usage) {
+      const total = int(usage.total_tokens) ?? 0;
+      const tools = int(usage.tool_uses) ?? 0;
       next.usage = {
-        totalTokens: int(usage.total_tokens) ?? 0,
-        toolUses: int(usage.tool_uses) ?? 0,
+        totalTokens: total,
+        toolUses: tools,
         durationMs: int(usage.duration_ms) ?? 0,
+        // **实时累计**：CLI 的 `total_tokens` 只是「最后一次请求的上下文有多大」，
+        // 直接报它会把一个大任务说成「只花了 10K」（实测 97 次请求的真实消耗是
+        // 单次的 70 倍）。这里按 `tool_uses` 的增长把它累加成用户要看的那份。
+        //
+        // 为什么拿 `tool_uses` 当增量信号：它是 CLI 那侧单调递增的请求计数
+        // （每完成一次请求 +1），比「自己去重 message.id」稳——流式阶段同一条
+        // 消息会多发几帧，按内容判会重复计数。
+        //
+        // 与后端扫转录的权威值差几个百分点（没有工具调用的纯思考请求不发进度帧，
+        // 那些 token 这里数不到：实测 236K vs 252K）。跑到结束时后端那份会接上来
+        // （见 `settleSubagents`），这里只负责「跑着的时候别显示得太离谱」。
+        consumedTokens: accumulateConsumed(prev.usage, total, tools),
       };
     }
   } else if (subtype === "task_updated") {
@@ -741,15 +793,95 @@ function applyTaskEvent(items: Item[], m: Raw, at: number): Item[] | undefined {
     next.outputFile = str(m.output_file) || prev.outputFile;
     const usage = asRecord(m.usage);
     if (usage) {
+      const total = int(usage.total_tokens) ?? 0;
       next.usage = {
-        totalTokens: int(usage.total_tokens) ?? 0,
+        totalTokens: total,
         toolUses: int(usage.tool_uses) ?? 0,
         durationMs: int(usage.duration_ms) ?? 0,
+        // 结束通知里的 `total_tokens` 同样是「最后一次请求」，不是累计；
+        // 跑着的过程中已经按进度帧累加过（见 task_progress 分支），保留那份更大的。
+        consumedTokens: Math.max(prev.usage?.consumedTokens ?? 0, total) || undefined,
       };
     }
   }
 
-  return [...out.slice(0, index), { ...item, subagent: next }, ...out.slice(index + 1)];
+  const folded = [...out.slice(0, index), { ...item, subagent: next }, ...out.slice(index + 1)];
+
+  // `task_notification` 是**一条新的一轮的开始**，实时流也得留一条 `wake`。
+  //
+  // 转录里它是 CLI 注入的一条 user 行（`<task-notification>…`），走
+  // `applyTaskNotification` 造 wake；但**实时流里没有那条 user 行**（实测 2.1.330：
+  // 整份 stdout 里一次都没出现，它只落进磁盘转录）。只在实时侧漏掉它，界面上就是
+  // 「刷新之后才多出那块『子代理已完成』的触发条，而且轮次计数从 1 变 2」。
+  // 实时唯一的那份信号就是这条 `system/task_notification`（帧序：notif → 新 init →
+  // 唤醒轮的正文 → result），所以在这里补一条等价的 wake，两条路径各自造同一种 Item。
+  //
+  // 位置：折完卡片后的**末尾**。它不是给上一轮补一条尾巴，而是这一轮的轮首
+  // （`isTurnHead` 认 `wake`），藏在卡片前面会让收起行把它吞掉。
+  if (subtype === "task_notification") {
+    const summary = str(m.summary);
+    const status = subagentStatus(m.status) ?? next.status;
+    return [
+      ...folded,
+      {
+        id: nextId(),
+        seq: seqOf(folded),
+        ts: at,
+        kind: "wake",
+        origin: "task",
+        taskId,
+        ...(toolUseId ? { toolUseId } : {}),
+        // 实时帧的 `summary` 是**子代理的报告全文**（不是转录里那句
+        // `Agent "名字" finished`）：摆进触发条会把对话撑爆。名字从卡片取，
+        // 报告正文只留在卡片的「结果」里。
+        ...(next.description || next.type
+          ? { summary: agentWakeSummary(next.description || next.type || "") }
+          : summary
+            ? { summary: agentWakeSummary(summary) }
+            : {}),
+        ...(status ? { status } : {}),
+        // 实时流没有通知原文，点开也没有正文可看——留空串，渲染侧据此不摆那个展开区。
+        text: "",
+      },
+    ];
+  }
+
+  return folded;
+}
+
+/**
+ * 实时 `task_notification.summary` → 触发条那一行的名字。
+ *
+ * 转录里的 `summary` 是 `Agent "跑测试套件并报告" finished` 这种模板，而**实时帧里
+ * 同一个字段装的是子代理的报告全文**（几千字）。两者都喂给 `wakeLabel`，由它按
+ * `"…"` 摘名字——这里先截一刀（只留第一行前 40 字），避免把整份报告塞进 Item 里
+ * 常驻内存，也避免万一没有引号时整段被当成标签。
+ */
+function agentWakeSummary(text: string): string {
+  const first = text.split("\n").find((line) => line.trim()) ?? "";
+  return first.trim().slice(0, 40);
+}
+
+/**
+ * 实时累计用量：`task_progress` 的 `total_tokens` 是「这次请求的上下文」，
+ * 按 `tool_uses` 的增长逐次累加。
+ *
+ * 返回值只在能确定「这是一次新请求」时才前进：`tool_uses` 没变（同一请求的多帧）
+ * 或倒退（CLI 重启 / 换了计数口径）都保持原值，绝不重复累加。
+ */
+function accumulateConsumed(
+  prev: SubagentInfo["usage"] | undefined,
+  total: number,
+  tools: number,
+): number | undefined {
+  const before = prev?.consumedTokens ?? 0;
+  const beforeTools = prev?.toolUses;
+  if (total <= 0) return before > 0 ? before : undefined;
+  // 第一次拿到用量：直接以当前请求为准（它不是从 0 开始的）。
+  if (beforeTools === undefined) return Math.max(before, total);
+  if (tools <= beforeTools) return before > 0 ? before : total;
+  // 增长了几次请求就加几份——一次跳两格（慢帧）时也按差值算。
+  return before > 0 ? before + total : total;
 }
 
 /**

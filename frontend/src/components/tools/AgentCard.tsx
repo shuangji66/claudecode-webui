@@ -4,7 +4,7 @@ import { IconChat, IconSpark, IconStop } from "../common/Icons";
 import type { SubagentInfo, ToolItem } from "../../lib/model";
 import { formatTokens } from "../../lib/usage";
 import { formatDuration } from "../../lib/elapsed";
-import { endedElapsed, subagentStatusOf } from "../../lib/subagents";
+import { endedElapsed, subagentProgressLine, subagentStatusOf, subagentTokensUsed } from "../../lib/subagents";
 import { useT } from "../../lib/i18n";
 import { useAppStore } from "../../store/useAppStore";
 import { ToolImages } from "./ToolImages";
@@ -36,21 +36,26 @@ export function AgentBody({ item }: { item: ToolItem }) {
   // 见 `lib/subagents.subagentStatusOf`）。
   const status = subagentStatusOf(sub);
   const usage = sub?.usage;
+  // 报**累计消耗**，不是 CLI 的 `totalTokens`（那是最后一次请求的窗口大小，见
+  // `subagentTokensUsed`）。拿不到累计时才退回单次值。
+  const consumed = subagentTokensUsed(usage);
+  // 「此刻在做什么」：模型摘要优先，其次 CLI 的活动描述（见 `subagentProgressLine`）。
+  const progress = subagentProgressLine(sub);
   // 重启后 CLI 的结束通知已经不在（只在 stdout 上），耗时只剩「转录里的收尾时刻 -
   // 启动时刻」。卡片和页头那个子代理列表用同一个口径（`endedElapsed`）。
   const elapsed = endedElapsed(usage, item.ts, sub?.endedAt);
 
   return (
     <>
-      {(usage || sub?.summary) && (
+      {((consumed !== undefined && consumed > 0) || progress) && (
         <div className="space-y-1 px-3 py-2">
-          {usage && (
+          {consumed !== undefined && consumed > 0 && (
             <div className="flex flex-wrap items-center gap-2 text-[10.5px] text-muted">
-              <span>{formatTokens(usage.totalTokens)} tokens</span>
+              <span>{t(`${formatTokens(consumed)} tokens 消耗`, `${formatTokens(consumed)} tokens used`)}</span>
               {/* 工具次数只有 CLI 的进度/结束通知才给：重启后从子代理转录恢复的那份用量
                   只有 token 数，这里不能拿 0 补齐（「0 次工具」是假数据）。耗时能用
                   `endedAt - ts` 复原，见上面的 `elapsed`。 */}
-              {usage.toolUses !== undefined && (
+              {usage?.toolUses !== undefined && (
                 <>
                   <span>·</span>
                   <span>{t(`${usage.toolUses} 次工具`, `${usage.toolUses} tool calls`)}</span>
@@ -64,7 +69,10 @@ export function AgentBody({ item }: { item: ToolItem }) {
               )}
             </div>
           )}
-          {sub?.summary && <p className="line-clamp-3 text-[11.5px] leading-relaxed text-ink-2">{sub.summary}</p>}
+          {/* 跑完之后不再显示这一行：那时它是最后一次工具调用，不是「在做什么」。 */}
+          {progress && status === "running" && (
+            <p className="line-clamp-3 text-[11.5px] leading-relaxed text-ink-2">{progress}</p>
+          )}
         </div>
       )}
 

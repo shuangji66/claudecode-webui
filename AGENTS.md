@@ -998,15 +998,16 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **重启后子代理的用量与收尾时刻从它自己的转录恢复**：后台子代理的 usage 只在 stdout
   的 `system/task_notification` 里，而写进主转录的 `<task-notification>` **不带
   `<usage>`**（CLI 的模板只有 task-id / tool-use-id / task-type / output-file / status /
-  summary）——回放时它整条丢了。`history.subagentStates` 因此从 `agent-<id>.jsonl` 尾部
-  （64KB）读两样：最后一条带 usage 的 assistant 的
-  `input + cache_creation + cache_read + output`（CLI 的 `subagent_tokens` 口径），
-  与最后一行的 `timestamp`；随转录的 `subagents[].tokens` / `ended_at` 下发。
-  前端 `settleSubagents` **只在卡片没有 usage 时**才补（进度帧/结束通知更权威），
-  并写进 `subagent.endedAt`。
+  summary）——回放时它整条丢了。`history.subagentStates` 因此读两样，**来源不同、口径也不同**：
+  ① 尾部 64KB 拿「最后一次请求」的 `tokens` 与最后一行的 `timestamp`（`ended_at`）；
+  ② **整份扫**（`subagentTotalTokens`，按路径 + mtime + size 缓存）拿累计的
+  `total_tokens`。后者才是界面上要报的「消耗」，前者只是「最后一次请求的窗口有多大」。
+  只读尾部是不够的：累计值必须看完整份文件。
+  前端 `settleSubagents` 补进 `usage.consumedTokens` / `subagent.endedAt`；单次口径的
+  `usage.totalTokens` 仍然只在卡片完全没有 usage 时才补（进度帧 / 结束通知更权威）。
   **不要拿后台子代理的 `doneAt` 当结束时刻**：那是启动回执到达的时刻，差值是 0 秒
   （截图复现过「0s」）；`subagentElapsed` 对 `background` 条目在没有 `endedAt` 时
-  宁可不显示。恢复出来的 usage 只有 `totalTokens`，`toolUses` / `durationMs` 可以缺，
+  宁可不显示。恢复出来的 usage 只有 token 数，`toolUses` / `durationMs` 可以缺，
   界面不能拿 0 补齐。
   **恢复出来的 `endedAt` 三个消费方共用**（`lib/subagents.endedElapsed`）：页头列表的
   运行时间、工具卡片的「N tokens · 02:30」、执行轨迹里那条子代理泳道的收边。
@@ -1030,6 +1031,21 @@ hub ── manager ── session ── process ── claude (NDJSON)
   `SubagentPanel` 的派发消息只取开头的 user 条目——唤醒条不能成为会话标题。
   `trace` 的轮 prompt 与 `sessionExport` 用它的人话标签（`model.wakeLabel`），
   导出**不写通知原文**（那是子代理的整份报告）。
+- **实时流里没有那条 `<task-notification>` user 行，`wake` 必须由 `system/task_notification` 造**
+  （实测 2.1.330）：整份 stdout 里 `<task-notification>` 一次都不出现——它只在磁盘转录里
+  （CLI 写 jsonl 时注入）。实时的信号是 **`system/task_notification`** 那条 system 帧
+  （`task_id` / `tool_use_id` / `status` / `summary` / `usage`），帧序是
+  `task_notification → 新 init → 唤醒轮的正文 → result`。
+  只在转录回放里造 wake、实时不造，症状就是「那块『子代理已完成』刷新之后才出现，
+  轮次计数也是刷新后才 +1」——两条路径必须各自造同一种 Item（`applyTaskEvent` 与
+  `applyTaskNotification`）。
+  两处 `summary` 的含义**不一样**：转录里是 `Agent "名字" finished` 模板，实时帧里是
+  **子代理的报告全文**（几千字）。实时那条要先截到第一行前 40 字再交给 `wakeLabel`，
+  别把整份报告塞进 Item 常驻内存。
+  实时那条也没有通知原文（CLI 没发），`WakeItem.text` 留空串，`WakeRow` 据
+  `text.trim() !== ""` 决定给不给展开箭头——否则点开是个空框，像坏了。
+  **`task_notification` 不再是「纯结构化字段、不产生消息项」**：它确实不再另造一条气泡，
+  但会**多出一条 `wake`**（那正是它开的一轮）。写单测时 `toHaveLength(1)` 要改成 2。
 - **子代理自己的转录里每一行都是 `isSidechain: true`**：`applyCLI` 默认丢掉 sidechain
   （主消息流要丢），回放子代理对话必须传 `{sidechain:true}`——漏了的话面板显示
   「子代理还没有输出」，重启后才能复现（实时走的是 `subagentItems`，不经过这条过滤）。
@@ -1125,21 +1141,50 @@ hub ── manager ── session ── process ── claude (NDJSON)
     复位、菜单不关）：已运行、工具名、命令原文、进度说明。后台命令没有逐行输出流可看
     （那份在 CLI 的 `output_file` 里），不要摆一个空的「实时输出」框。
   - 子代理行右侧是 token 消耗 + 运行时间（**不带单位**：`47.2K · 2:31`。写成
-    `47.2K tokens · …` 会超出 `hint` 的 42% 宽度，先把运行时间截成「· 2…」），类型挪到
-    `MenuItem.meta` 的第二行。运行中按 `startedAt` 走墙钟、结束后优先用
-    `usage.durationMs`（`lib/subagents.subagentElapsed`）。
+    `47.2K tokens · …` 会超出 `hint` 的 42% 宽度，先把运行时间截成「· 2…」），第二行
+    给「此刻在做什么」（见下面那条「两行进度文字」）。运行中按 `startedAt` 走墙钟、
+    结束后优先用 `usage.durationMs`（`lib/subagents.subagentElapsed`）。
+  - **报「消耗」必须用累计值，CLI 的 `subagent_tokens` 不是消耗**：它取的是
+    **最后一次请求的上下文有多大**（`prompt + output`，2.1.330 的 `wke`/`RZr`）。
+    一个跑了很多轮的子代理，上下文每轮都被重新读一遍，两个数差一到两个数量级——
+    实测一份 97 次请求的审查子代理：单次 **232K**、累计 **16.4M（70 倍）**。
+    以前界面上报那个数，于是「大任务只花了 200 多 K」，看起来像没干活。
+    现在的两个字段（`lib/subagents.subagentTokensUsed` 取值）：
+    - `usage.totalTokens`：单次口径，**只**在完全没有累计值时才当兜底；
+    - `usage.consumedTokens`：累计消耗，三个来源，**以后端扫转录的那份为准**：
+      ① **跑着的时候**（磁盘上还没落全）按 `task_progress` 的 `tool_uses` 增长累加
+      （`normalize.accumulateConsumed`）。它是**估算**：CLI 的进度帧只在子代理调用过
+      工具之后才发，纯思考的请求一条都不来，那些 token 数不到（实测同一份子代理：
+      实时 236K vs 转录真值 252K）；
+      ② 后端在**下次读转录**时整份扫出来（`history.subagentTotalTokens`，按路径 +
+      mtime + size 缓存；实测 6.6MB / 220 行一次 37ms，命中 0 成本），随
+      `SubagentState.total_tokens` 下发；
+      ③ `settleSubagents` 把它并进卡片的 `subagent.usage`，**覆盖**①的估算值。
+    **回合结束时前端主动取一次②**（`store.refreshSubagentUsage` →
+    `GET /api/history/subagent-usage`，只扫 `subagents/`）：不取的话要等用户刷新页面
+    才看得见真值，实时期间一直停在偏小的估算上。**不要为此重读整份主转录**
+    （几 MB / 两万行，只为几个 token 数不值得）。
+    去重按 `message.id`：流式阶段同一条消息会写多行（每行一个内容块），不去重会算两三倍。
   - **子代理的用量要实时显示，不能只等 `task_progress`**：CLI 的那条进度帧只在子代理
     **调用过工具**之后才发（2.1.330 的发射条件：assistant 消息里带 `tool_use`），一个
     只思考、不调工具的子代理在结束前一条都不来，列表上就只剩时间，token 要等
     `task_notification` 才出现（截图复现过）。所以 store 在
-    `--forward-subagent-text` 转发的 assistant 帧上顺手记一份实时值
-    （`subagentTokens[sid][agentId]`，`lib/usage.messageTokens`）：口径与 CLI 的
-    `subagent_tokens` 相同——`prompt(input + cache_creation + cache_read) + output`，
-    **取最后一次请求、不累加**（2.1.330 的 `wke`/`RZr`）。列表里 `usage.totalTokens` 与
-    实时值取大的那个：同源，先到的可能是旧进度事件里的数。
+    `--forward-subagent-text` 转发的 assistant 帧上顺手记一份实时单次值
+    （`subagentTokens[sid][agentId]`，`lib/usage.messageTokens`），它**只作兜底**：
+    不少中转（含本机实测的 `deepseek-v4.1-flash`）转发的 assistant 帧 `usage` 全是 0，
+    那条路在真机上经常一个数都没有。
     结束通知里的 `usage` 仍是最权威的一份，回放时回落到 tool_result 的 `<usage>`。
-    **没有转发帧时（老版本 CLI / 未开该参数）会退回「只有结束时才有数」**，这是数据源
-    的限制，不要在那里编一个近似值。
+    **它没有累加，也不该累加**：它是「最后一次请求」的单次口径，累计那份走
+    `consumedTokens`（见上面「报『消耗』必须用累计值」那条）。
+  - **列表第二行「此刻在做什么」有两份来源，`summary` 不能单独用**
+    （`lib/subagents.subagentProgressLine` 决定显示哪份）：initialize 里开了
+    `agentProgressSummaries` 之后 CLI 才会生成 `summary`，它**要花一次额外的模型请求**
+    （把整份子代理上下文 fork 进摘要请求），而提示词里那句 "Do not use tools" 在中转上
+    的模型经常不听——实测 2.1.330 + 自建中转，四次尝试全部
+    `No new summary: the model called a tool`，`summary` 一个子代理跑到底一条都没有。
+    所以兜底用 `task_progress` 自带的 `description` + `last_tool_name`（CLI 自己的
+    活动描述，随每次工具调用变、不花请求、从不缺席），存在 `SubagentInfo.progressText` /
+    `progressTool`。只认 `summary` 的界面在多数中转上那一行**永久是空的**。
   - **后台 `local_bash` 没有 token 可报**（它不是模型调用），CLI 的 `<task-notification>`
     模板里也只有 task-id / tool-use-id / task-type / output-file / status / summary——
     运行时间只能由我们自己的时钟给。
@@ -1463,6 +1508,20 @@ hub ── manager ── session ── process ── claude (NDJSON)
 - **后端要认「result 之后的 init」**：那条 init 意味着 CLI 自己在跑新一轮，`session` 里
   `protocol.IsTurnInit` + `resultAt`（`TurnHandoffWindow`）把它标回 busy。不认的话界面会在整轮里
   显示空闲（发送按钮而不是中断按钮），待发送队列也会被提前放出去。
+- **`task_notification` 一到就要标回 busy，不能等后面那条 init**：后台任务（子代理 /
+  后台命令 / MCP 调用）跑完会开一轮新的，帧序是
+  `task_notification → background_tasks_changed → 新 init → 唤醒轮的正文 → result`
+  （实测 2.1.330）。**上一轮那条 result 早把状态标成 ready 了**，而 init 晚好几帧才到；
+  中间这段空档 `running=false`，前端的 `turnSpans` 就把**唤醒轮已经吐出来的正文**当成
+  收尾——思考与工具被折进「已完成」那一行，等 init 到了又铺开。用户看到的就是
+  「子代理回报唤醒之后，主任务的思考过程又被收起了」（截图复现过）。
+  所以 `session` 在 `protocol.IsTaskNotificationOf(raw, "completed","failed","stopped","killed")`
+  且当前是 `StateReady` 时立刻 `setState(StateBusy)`。
+  **只认真正结束的状态**：`task_progress` / `task_updated` 是进行中的事件，把它们当成
+  新一轮开始，等待子代理的那一整段都会被算成「正在跑」，收起行永远不出现
+  （`TestTaskProgressDoesNotMarkBusy` 钉住这一条）。
+  这和上一条是同一个 bug 的两半：**状态必须在「新一轮实际开始」的那一刻就翻**，
+  晚一帧前端就会把中间那段真空期误判成收尾。
 
 ### 4.15 端口访问、密码摘要与登录会话
 

@@ -35,7 +35,7 @@ describe("AgentCard", () => {
     expect(screen.getByText("probe child")).toBeInTheDocument();
     expect(screen.getByText("general-purpose")).toBeInTheDocument();
     expect(screen.getByText("运行中…")).toBeInTheDocument();
-    expect(screen.getByText("1.9K tokens")).toBeInTheDocument();
+    expect(screen.getByText("1.9K tokens 消耗")).toBeInTheDocument();
     expect(screen.getByText("3 次工具")).toBeInTheDocument();
     // 子代理耗时同样走分:秒（2.5s → 00:03，四舍五入）。
     expect(screen.getByText("00:03")).toBeInTheDocument();
@@ -62,7 +62,7 @@ describe("AgentCard", () => {
       />,
     );
     // `formatTokens` 按 1024 进制：47200 → 46.1K。
-    expect(screen.getByText(/46\.1K tokens/)).toBeInTheDocument();
+    expect(screen.getByText(/46\.1K tokens 消耗/)).toBeInTheDocument();
     // 150 秒 → 02:30（`formatDuration` 固定分:秒）。
     expect(screen.getByText("02:30")).toBeInTheDocument();
     expect(screen.queryByText(/次工具/)).toBeNull();

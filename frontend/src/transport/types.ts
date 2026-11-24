@@ -705,8 +705,18 @@ export interface SubagentState {
    *
    * 后端从子代理自己的转录里读：后台子代理的用量只在 stdout 的 `task_notification`
    * 里，而写进主转录的那条 `<task-notification>` 不带 `<usage>`，重启后就靠这份恢复。
+   *
+   * **它不是「消耗了多少」**——那是 `total_tokens`，两者差一到两个数量级。
    */
   tokens?: number;
+  /**
+   * 累计消耗（每次请求的 prompt + output 求和，按 `message.id` 去重）。
+   *
+   * CLI 自己不给这个数（`task_notification.usage.total_tokens` 同样是最后一份快照），
+   * 后端整份扫子代理转录才算得出来。实测一份 97 次请求的审查子代理：单次 232K、
+   * 累计 16.4M。界面上报「消耗」必须用它。
+   */
+  total_tokens?: number;
   /** 子代理转录最后一行的时刻（unix 毫秒）：重启后算「跑了多久」用它。 */
   ended_at?: number;
 }

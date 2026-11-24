@@ -131,14 +131,24 @@ export interface SubagentInfo {
   background?: boolean;
   spawnDepth?: number;
   summary?: string;
+  /**
+   * 子代理**此刻在做什么**的一行文字（`task_progress` 的 `description`）与工具名。
+   *
+   * 与 `summary` 是两个来源，后者是模型生成的摘要、多数中转上拿不到（见 normalize 的
+   * `task_progress` 分支），这一份是 CLI 自己的活动描述，每次工具调用都变。
+   * 界面优先显示 `summary`，没有再退回这一对。
+   */
+  progressText?: string;
+  progressTool?: string;
   outputFile?: string;
   /**
    * 用量。字段可缺：
    * - `totalTokens` 一定有（CLI 的 `subagent_tokens`，或重启后从子代理转录恢复的同一个数）；
    * - `toolUses` / `durationMs` 只有 CLI 的进度/结束通知才给，恢复出来的那份没有——
    *   别拿 0 兜底，界面上「0 次工具 · 00:00」比不显示更误导。
+   * - `consumedTokens` 是**累计消耗**，只有后端扫子代理转录才拿得到（CLI 不给）。
    */
-  usage?: { totalTokens: number; toolUses?: number; durationMs?: number };
+  usage?: { totalTokens: number; toolUses?: number; durationMs?: number; consumedTokens?: number };
   /**
    * 从子代理转录尾部读出的收尾时刻（unix 毫秒，`settleSubagents` 回填）。
    *

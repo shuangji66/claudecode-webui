@@ -151,6 +151,16 @@ func (e Envelope) ResponsePayload() json.RawMessage {
 // --- 客户端 → CLI 的消息构造 ---
 
 // Initialize 构造初始化控制请求。必须在进程启动后立刻发送。
+//
+// `agentProgressSummaries: true` 让 CLI 在 `system/task_progress` 里带上 `summary`
+// ——子代理列表那一行唯一会变的文字。**它不可靠，但也没有代价**（实测 2.1.330）：
+// 摘要由一次额外的模型请求生成，CLI 会把整份子代理上下文 fork 进去、提示词写死
+// "Do not use tools"；自建中转上的模型经常无视这句直接调工具，那一次请求就白花、
+// `summary` 一整个子代理跑下来一条都没有（实测 `deepseek-v4.1-flash` 4 次尝试全空）。
+// 所以界面**不能只靠它**：`task_progress` 一直带着 `description` + `last_tool_name`
+// （CLI 自己的活动描述，随每次工具调用变、不花请求），那条才是兜底。
+//
+// 它只在 initialize 里声明、没有对应的环境变量，而且必须先于首条消息发出。
 func Initialize(requestID string) []byte {
 	if requestID == "" {
 		requestID = InitializeRequestID
@@ -162,6 +172,8 @@ func Initialize(requestID string) []byte {
 			"subtype": SubtypeInitialize,
 			"hooks":   nil,
 			"agents":  nil,
+			// 子代理列表的一行进度摘要（见上面的注释：尽力而为）。
+			"agentProgressSummaries": true,
 		},
 	})
 }
@@ -417,6 +429,38 @@ func IsTaskEvent(raw []byte) bool {
 	switch msg.Subtype {
 	case "task_started", "task_progress", "task_updated", "task_notification":
 		return true
+	}
+	return false
+}
+
+// IsTaskNotificationOf 判断这条 system 消息是不是「某个后台任务已经结束」的通知，
+// 且结束状态在给定的那些里。
+//
+// 为什么会话层需要它：`task_notification` 到来说明 CLI **已经开了一轮新的**去回答
+// 那个回报（帧序：notification → background_tasks_changed → 新 init → 正文 → result，
+// 实测 2.1.330）。上一轮的 result 早把状态标成 ready，init 又晚几帧——中间那段空档里
+// 界面会把唤醒轮已经吐出来的正文当成「收尾」，把思考与工具折起来（截图复现过）。
+// 所以这一帧才是「新一轮开始」最早、也最直接的信号。
+//
+// 只认真正结束的状态：`task_progress` 之类进行中的事件不是唤醒。
+// 状态缺失时按「不知道」处理，返回 false——宁可晚几帧认 init，也别把进行中的进度帧
+// 当成新一轮开始。
+func IsTaskNotificationOf(raw []byte, statuses ...string) bool {
+	var msg struct {
+		Type    string `json:"type"`
+		Subtype string `json:"subtype"`
+		Status  string `json:"status"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return false
+	}
+	if msg.Type != TypeSystem || msg.Subtype != "task_notification" || msg.Status == "" {
+		return false
+	}
+	for _, want := range statuses {
+		if msg.Status == want {
+			return true
+		}
 	}
 	return false
 }

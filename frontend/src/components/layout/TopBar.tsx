@@ -3,7 +3,7 @@ import type { SessionInfo } from "../../transport/types";
 import { useT } from "../../lib/i18n";
 import { formatElapsed } from "../../lib/elapsed";
 import { formatTokens } from "../../lib/usage";
-import { subagentElapsed, type SubagentEntry } from "../../lib/subagents";
+import { subagentElapsed, subagentProgressLine, subagentTokensUsed, type SubagentEntry } from "../../lib/subagents";
 import { useAppStore } from "../../store/useAppStore";
 import type { BackgroundTaskEntry } from "../../lib/backgroundTasks";
 import { Menu } from "../common/Menu";
@@ -74,10 +74,11 @@ function useNow(active: boolean): number {
  */
 function subagentHint(sub: SubagentEntry, now: number, liveTokens?: number): string | undefined {
   const parts: string[] = [];
-  // CLI 的 usage 是权威值（结束通知给），实时值是转发帧算出来的；两边同源，取大的那个
-  // ——先到的可能是旧进度事件里的数，而转发的 assistant 帧已经往前走了。
-  const tokens = Math.max(sub.usage?.totalTokens ?? 0, liveTokens ?? 0);
-  if (tokens > 0) parts.push(formatTokens(tokens));
+  // **报累计消耗，不报 CLI 那个数**：`usage.totalTokens` 是「最后一次请求的上下文有多大」，
+  // 一个大任务子代理能差 70 倍（实测 232K vs 16.4M），摆在这里会让人以为它没干活。
+  // `liveTokens` 是转发帧算出的实时单次值，只在前者完全没有时当兜底。
+  const tokens = subagentTokensUsed(sub.usage) ?? liveTokens;
+  if (tokens !== undefined && tokens > 0) parts.push(formatTokens(tokens));
   const elapsed = subagentElapsed(sub, now);
   if (elapsed !== undefined) parts.push(formatElapsed(elapsed));
   return parts.length > 0 ? parts.join(" · ") : undefined;
@@ -235,9 +236,12 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, backgr
           items={subagents.map((sub) => ({
             id: sub.agentId,
             label: sub.label,
-            // 类型放第二行（DSH 的 subagent 列表同样是「标题 + 次要信息 + 指标」两行）：
-            // token 与运行时间要占住右侧那一列，两者挤在同一行只够显示一个。
-            meta: sub.type || undefined,
+            // 类型与「此刻在做什么」放第二行（DSH 的 subagent 列表同样是「标题 + 次要信息
+            // + 指标」两行）：token 与运行时间要占住右侧那一列。
+            //
+            // 进度文字在这里是**唯一会变的行**：运行中它随每次工具调用刷新（CLI 的
+            // `task_progress.description`），跑完就没有了——那时类型才是更有用的信息。
+            meta: (sub.status === "running" ? subagentProgressLine(sub) : undefined) ?? sub.type,
             icon: <SubagentMark status={sub.status} />,
             hint: subagentHint(sub, now, liveTokens?.[sub.agentId]),
             onSelect: () => onOpenSubagent(sub.agentId, sub.label),

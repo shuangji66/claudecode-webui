@@ -304,6 +304,49 @@ func TestSubagentStatesRecoverUsageFromTranscript(t *testing.T) {
 	}
 }
 
+// 累计消耗与「最后一次请求」是两个数：界面报「花了多少」必须用前者。
+// 实测一份 97 次请求的审查子代理：单次 232K、累计 16.4M（差 70 倍）。
+// 同一条消息在流式阶段会写多行，按 message.id 去重，不能累加两三倍。
+func TestSubagentTotalTokensSumsRequests(t *testing.T) {
+	root := t.TempDir()
+	id := "66666666-7777-4888-8999-aaaaaaaaaaaa"
+	proj := filepath.Join(root, "p")
+	writeJSONL(t, filepath.Join(proj, id+".jsonl"),
+		`{"type":"user","message":{"role":"user","content":"hi"}}`,
+	)
+	sub := filepath.Join(proj, id, "subagents")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeJSONL(t, filepath.Join(sub, "agent-sum.jsonl"),
+		// 两次请求，各自的内容块分两行写（同一个 message.id）——去重要吃掉重复。
+		`{"type":"assistant","message":{"id":"msg_a","role":"assistant","usage":{"input_tokens":100,"cache_read_input_tokens":900,"output_tokens":50},"content":[]}}`,
+		`{"type":"assistant","message":{"id":"msg_a","role":"assistant","usage":{"input_tokens":100,"cache_read_input_tokens":900,"output_tokens":50},"content":[]}}`,
+		`{"type":"assistant","message":{"id":"msg_b","role":"assistant","usage":{"input_tokens":300,"cache_read_input_tokens":9000,"cache_creation_input_tokens":700,"output_tokens":500},"content":[]}}`,
+		// 不是 assistant / 没有 usage 的行不参与。
+		`{"type":"user","message":{"role":"user","content":"x"}}`,
+		`{"type":"assistant","message":{"id":"msg_c","role":"assistant","content":[{"type":"text","text":"no usage"}]}}`,
+	)
+	tr, err := LoadTranscript(root, id)
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+	var got SubagentState
+	for _, s := range tr.Subagents {
+		if s.AgentID == "sum" {
+			got = s
+		}
+	}
+	// msg_a: 100+900+50 = 1050（只算一次）；msg_b: 300+9000+700+500 = 10500。
+	if got.TotalTokens != 11550 {
+		t.Fatalf("total_tokens = %d, want 11550", got.TotalTokens)
+	}
+	// 单次口径保持不变（CLI 的 subagent_tokens 仍是 msg_b）。
+	if got.Tokens != 10500 {
+		t.Fatalf("tokens = %d, want 10500", got.Tokens)
+	}
+}
+
 // 枚举以**转录文件**为准，不能只看 meta.json：meta 是 claude 收尾时才补全的，
 // 进程被杀 / 会话被回收 / TaskStop 打断时可能只留下 jsonl——偏偏这些才是需要
 // 「已结束」判定的（前端本来还挂在 running 上转圈）。

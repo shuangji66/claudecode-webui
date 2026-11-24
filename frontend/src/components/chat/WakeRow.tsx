@@ -28,24 +28,32 @@ export function WakeRow({ item }: { item: WakeItem }) {
   const label = wakeLabel(item, locale);
   // 后台命令 / MCP 调用没有对话可看，用终端图标；子代理用火花（与页头子智能体入口一致）。
   const Icon = item.summary?.includes("Agent") ? IconSpark : IconTerminal;
+  // **实时流里这一条没有原文**：CLI 只在唤醒轮的末尾发 `system/task_notification`，
+  // 而带 `<task-notification>` 全文的那条 user 行只写进磁盘转录（实测 2.1.330）。
+  // 那时不给展开箭头——点开是个空框，比不可点更让人以为是坏了。
+  const hasText = item.text.trim() !== "";
 
   return (
     <div className="rounded-xl border border-line bg-panel/60">
       <button
         type="button"
-        aria-expanded={open}
+        aria-expanded={hasText ? open : undefined}
+        // 没有原文时整行不可点：它仍然是一条轮次刻度，只是没有可下钻的东西。
+        disabled={!hasText}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[11.5px] text-muted transition hover:text-ink"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[11.5px] text-muted transition enabled:hover:text-ink"
       >
         <Icon size={13} className="shrink-0" />
         <span className="min-w-0 flex-1 truncate [overflow-wrap:anywhere]">{label}</span>
         <span className="shrink-0 tabular-nums text-[10.5px] text-faint">{clockTime(item.ts, locale)}</span>
-        <IconChevronDown
-          size={12}
-          className={`shrink-0 text-faint transition-transform ${open ? "" : "-rotate-90"}`}
-        />
+        {hasText && (
+          <IconChevronDown
+            size={12}
+            className={`shrink-0 text-faint transition-transform ${open ? "" : "-rotate-90"}`}
+          />
+        )}
       </button>
-      {open && (
+      {hasText && open && (
         <div className="border-t border-line px-3 py-2">
           <p className="mb-1 text-[10.5px] text-faint">
             {t("这条通知唤醒了本轮，下面是它的原文。", "This notification woke the turn; the original text is below.")}

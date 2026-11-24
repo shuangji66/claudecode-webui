@@ -625,6 +625,58 @@ func TestTurnInitAfterResultMarksBusy(t *testing.T) {
 	waitState(t, sess, StateBusy)
 }
 
+// 后台任务回报（子代理 / 后台命令跑完）同样会开一轮新的：CLI 的帧序是
+// `task_notification` → `background_tasks_changed` → 新 init → 唤醒轮的正文 → result。
+//
+// 上一轮那条 result 早就把状态标成 ready 了，而 init 要晚好几帧才到。中间这段时间
+// `running=false`，前端的 `turnSpans` 就会把**唤醒轮已经吐出来的正文**当成收尾——
+// 思考与工具被折进「已完成」那一行，等 init 到了又铺开（用户报的「子代理回报唤醒后
+// 主任务的思考过程又被收起了」）。所以 task_notification 一到就得标回 busy。
+func TestTaskNotificationMarksBusy(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.Prompt("派个子代理"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	// 主任务把活交出去、这一轮收尾：状态回到 ready，界面此时收起上一轮是对的。
+	fc.next()
+	fc.send(map[string]any{"type": "result", "subtype": "success"})
+	waitState(t, sess, StateReady)
+
+	// 子代理跑完：通知一到就是新一轮开始，不等后面那条 init。
+	fc.send(map[string]any{
+		"type": "system", "subtype": "task_notification",
+		"task_id": "a1", "tool_use_id": "tu1", "status": "completed",
+		"summary": "找到了新闻",
+	})
+	waitState(t, sess, StateBusy)
+}
+
+// 进行中的进度帧**不是**唤醒：把它当成新一轮开始，等待子代理的那一整段都会被当成
+// 「正在跑」，收起行一直不出现。
+func TestTaskProgressDoesNotMarkBusy(t *testing.T) {
+	sess, fc, _ := startSession(t)
+	defer sess.Close()
+
+	if err := sess.Prompt("派个子代理"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	fc.next()
+	fc.send(map[string]any{"type": "result", "subtype": "success"})
+	waitState(t, sess, StateReady)
+
+	fc.send(map[string]any{
+		"type": "system", "subtype": "task_progress",
+		"task_id": "a1", "tool_use_id": "tu1",
+		"usage": map[string]any{"total_tokens": 100, "tool_uses": 1, "duration_ms": 1000},
+	})
+	time.Sleep(80 * time.Millisecond)
+	if got := sess.State(); got != StateReady {
+		t.Fatalf("task_progress 之后 state = %q, want ready（进度帧不是唤醒）", got)
+	}
+}
+
 // 插话没赶上当前回合时，CLI 先发 result 收尾、再开新一轮跑插话（实测 2.1.328）。
 // 那条 result 到达时不能把状态标回 ready：前端据此画发送键、计时行与收起行，
 // 标了就会先闪一下「已完成 / 可以发送」，然后被紧随其后的 init 推翻。

@@ -235,6 +235,26 @@ describe("turnSpans", () => {
     expect(turnSpans([user2("u1"), tool("x1"), result2("r1")], true)[0].finished).toBe(true);
   });
 
+  // 子代理回报会开一轮新的（`wake` 是轮首）。**主任务把活交给后台子代理之后，
+  // 主会话往往已经 ready**——那一轮还没结束，过程绝不能被收起。
+  //
+  // 曾经的症状：task_notification 之后、新 init 之前有一小段 status 还是 ready，
+  // `running=false` 让这里把唤醒轮已经吐出来的正文当成收尾，思考与工具折进
+  // 「已完成」那一行，等 init 到了又铺开（截图复现过）。
+  // 后端现在在 task_notification 到达时就标回 busy（见 session/session.go），
+  // 前端这条断言守住「running 时唤醒轮不收起」这一半。
+  it("唤醒轮还在跑时不算结束（过程要看得见）", () => {
+    const wake = (id: string): Item => ({ id, seq: 0, ts: 0, kind: "wake", origin: "task", text: "" });
+    const items = [user2("u1"), thinking("t1"), result2("r1", 26000), wake("w1"), thinking("t2"), reply("a2")];
+    const spans = turnSpans(items, true);
+    expect(spans).toHaveLength(2);
+    // 上一轮跑完了，该收。
+    expect(spans[0].finished).toBe(true);
+    // 唤醒轮：还没 result，会话也还在跑 → 不能收。
+    expect(spans[1].finished).toBe(false);
+    expect(spans[1].process.map((i) => i.id)).toEqual(["t2"]);
+  });
+
   it("带上本轮耗时（没有 result 时按时间戳推，连时间戳都没有才是 undefined）", () => {
     expect(turnSpans([user2("u1"), result2("r1", 9000)], true)[0].durationMs).toBe(9000);
     expect(turnSpans([user2("u1")], false)[0].durationMs).toBeUndefined();

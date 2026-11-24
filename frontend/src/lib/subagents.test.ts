@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { endedElapsed, runningSubagents, subagentElapsed, subagentEntries, subagentLabel, type SubagentEntry } from "./subagents";
+import {
+  endedElapsed,
+  runningSubagents,
+  subagentElapsed,
+  subagentEntries,
+  subagentLabel,
+  subagentProgressLine,
+  subagentTokensUsed,
+  type SubagentEntry,
+} from "./subagents";
 import type { Item, ToolItem } from "./model";
 
 function tool(over: Partial<ToolItem>): ToolItem {
@@ -164,5 +173,44 @@ describe("endedElapsed（已结束的耗时，卡片与列表共用）", () => {
     expect(endedElapsed({ totalTokens: 1 }, undefined, 28_000)).toBeUndefined();
     // durationMs 为 0 也不算数（流式中间态上报的 0）。
     expect(endedElapsed({ totalTokens: 1, durationMs: 0 }, 1_000, undefined)).toBeUndefined();
+  });
+});
+
+// 「此刻在做什么」一行字：两条来源（模型摘要 / CLI 的活动描述），后者才是多数环境下
+// 真正会动的。
+describe("subagentProgressLine（行内进度）", () => {
+  it("有模型摘要时用它，不再叠工具名", () => {
+    expect(subagentProgressLine({ taskId: "t", status: "running", summary: "Reading runAgent.ts", progressText: "Read a.txt", progressTool: "Read" })).toBe(
+      "Reading runAgent.ts",
+    );
+  });
+
+  // 实测 2.1.330 + 自建中转：模型无视 "Do not use tools"，摘要一次都没产出。
+  // 那时 `task_progress.description` 就是唯一会变的一行。
+  it("没有摘要时退回 CLI 的活动描述，并带上工具名", () => {
+    expect(subagentProgressLine({ taskId: "t", status: "running", progressText: "Reading b.txt", progressTool: "Read" })).toBe("Read · Reading b.txt");
+  });
+
+  it("两者都没有时不摆一行占位", () => {
+    expect(subagentProgressLine({ taskId: "t", status: "running" })).toBeUndefined();
+    expect(subagentProgressLine(undefined)).toBeUndefined();
+    expect(subagentProgressLine({ taskId: "t", status: "running", summary: "   " })).toBeUndefined();
+  });
+});
+
+// 界面报的是「消耗」：CLI 的 totalTokens 是最后一次请求的窗口大小。
+describe("subagentTokensUsed（累计消耗）", () => {
+  it("优先累计值", () => {
+    expect(subagentTokensUsed({ totalTokens: 232_346, consumedTokens: 16_363_498 })).toBe(16_363_498);
+  });
+
+  it("没有累计值时退回单次值（有数字总比空着好）", () => {
+    expect(subagentTokensUsed({ totalTokens: 47_200 })).toBe(47_200);
+  });
+
+  it("一个都没有时不编数字", () => {
+    expect(subagentTokensUsed(undefined)).toBeUndefined();
+    expect(subagentTokensUsed({ totalTokens: 0 })).toBeUndefined();
+    expect(subagentTokensUsed({ totalTokens: 0, consumedTokens: 0 })).toBeUndefined();
   });
 });

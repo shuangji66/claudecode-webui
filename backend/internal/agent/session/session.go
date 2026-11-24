@@ -1414,6 +1414,20 @@ func (s *Session) handleLine(line []byte) {
 		// 「CLI 自己在干活」的状态（压缩中 / hook 在跑）：同样随快照下发。
 		// 压缩途中刷新页面的连接拿不到那条 `status: compacting`，会误报上游无响应。
 		s.noteLocalBusy(env.Raw)
+		// **后台任务回报 = 新一轮已经开始**，立刻标回 busy。
+		//
+		// 帧序（实测 2.1.330）：`task_notification` → `background_tasks_changed` →
+		// 新的 `system/init` → 唤醒轮的正文 → `result`。上一轮那条 result 早就把状态
+		// 标成 ready 了，而 init 要晚好几帧才到；中间这段时间界面上 `running=false`，
+		// `turnSpans` 于是把**这一轮已经吐出来的正文当成收尾了**——思考与工具被折进
+		// 「已完成」那一行，等 init 到了又铺开，用户看到的就是「子代理回报之后主任务的
+		// 思考又被收起了」（截过图）。
+		//
+		// 只认「完成/失败/停止」的通知：`task_progress` 之类的进行中事件不是唤醒。
+		// 状态已经是 busy 时不动它（自己就是空闲态才需要推回去）。
+		if protocol.IsTaskNotificationOf(env.Raw, "completed", "failed", "stopped", "killed") && s.State() == StateReady {
+			s.setState(StateBusy)
+		}
 		// 刚结束一轮又来了一条 init：这是我们写进去的插话没赶上本轮，CLI 把它
 		// 当成新的一轮在跑。不认这个信号，界面会在整轮里显示「空闲」（发送按钮
 		// 而不是中断按钮），待发送队列也会被提前放出去。

@@ -26,6 +26,10 @@ export interface SubagentEntry {
   finishedAt?: number;
   /** 从子代理转录尾部恢复的收尾时刻（见 `SubagentInfo.endedAt`）。 */
   endedAt?: number;
+  /** 「此刻在做什么」的来源（见 `subagentProgressLine`）：模型摘要与 CLI 的活动描述。 */
+  summary?: string;
+  progressText?: string;
+  progressTool?: string;
 }
 
 function text(v: unknown): string {
@@ -76,12 +80,54 @@ export function subagentEntries(items: Item[]): SubagentEntry[] {
       status: sub.status,
       usage: sub.usage,
       ...(sub.background ? { background: true } : {}),
+      ...(sub.summary ? { summary: sub.summary } : {}),
+      ...(sub.progressText ? { progressText: sub.progressText } : {}),
+      ...(sub.progressTool ? { progressTool: sub.progressTool } : {}),
       startedAt: it.ts,
       ...(it.doneAt !== undefined ? { finishedAt: it.doneAt } : {}),
       ...(sub.endedAt !== undefined ? { endedAt: sub.endedAt } : {}),
     });
   }
   return out;
+}
+
+/**
+ * 子代理**此刻在做什么**的一行字（页头列表的第二行、卡片上那句摘要）。
+ *
+ * 两条来源，优先模型摘要、其次 CLI 自己的活动描述：
+ *   - `summary`：initialize 的 `agentProgressSummaries` 让 CLI 生成的摘要。语义最好，
+ *     但它要花一次额外的模型请求（CLI 把整份子代理上下文 fork 进去），而自建中转上的
+ *     模型常常无视提示词里的 "Do not use tools" 直接调工具——那一次白花，`summary`
+ *     一个子代理跑到底一条都没有（实测 2.1.330 四次尝试全空）。
+ *   - `progressText` / `progressTool`：`task_progress` 自带的 `description` 与
+ *     `last_tool_name`，每次工具调用都变、不花请求、从不缺席。多数环境下真正会动的
+ *     就是这一份。
+ *
+ * 两者都没有时返回 undefined（不摆一行空占位）。
+ */
+export function subagentProgressLine(sub: SubagentInfo | undefined | null): string | undefined {
+  if (!sub) return undefined;
+  const activity = sub.summary?.trim() || sub.progressText?.trim();
+  if (!activity) return undefined;
+  const tool = sub.progressTool?.trim();
+  // 工具名只在没有模型摘要时当前缀：摘要已经说清在干什么，再叠一个工具名是噪音。
+  if (tool && !sub.summary?.trim()) return `${tool} · ${activity}`;
+  return activity;
+}
+
+/**
+ * 这个子代理**消耗**了多少 token。
+ *
+ * 只认累计值（`consumedTokens`）：CLI 的 `totalTokens` 是「最后一次请求的上下文有多大」，
+ * 拿它当消耗会小看一到两个数量级（实测 97 次请求的审查子代理：232K 对 16.4M）。
+ * 累计值有两个来源、同口径：实时由后端扫子代理转录（重启后），或 `settleSubagents`
+ * 从同一条旁路恢复。两者都没有时才退回 `totalTokens`——那时界面上至少有个数字，
+ * 但它是「最近一次请求」，不是消耗。
+ */
+export function subagentTokensUsed(usage: SubagentInfo["usage"] | undefined): number | undefined {
+  if (!usage) return undefined;
+  if (usage.consumedTokens !== undefined && usage.consumedTokens > 0) return usage.consumedTokens;
+  return usage.totalTokens > 0 ? usage.totalTokens : undefined;
 }
 
 /** 按 agentId 找展示名（审批面板标「来自子代理 X」用）。 */

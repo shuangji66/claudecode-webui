@@ -175,11 +175,20 @@ export function contextTokens(u: UsageTotals): number {
  * 再加这次请求的 `output_tokens`；它不累加历史请求，所以长任务里这个数不会越滚越大
  * （`task_progress` / `task_notification` 的 `usage.total_tokens` 就是这么来的）。
  *
+ * **它是「最后一次请求的上下文有多大」，不是「这个子代理花了多少」**——两者能差 70 倍
+ * （实测一份 97 次请求的审查子代理：232K vs 16.4M）。界面上报「消耗」要用累计值
+ * （`subagentConsumed`，或重启后由后端扫转录得到的 `usage.consumedTokens`）。
+ *
  * 只用来给子代理列表出**实时**数字：CLI 的进度事件只在子代理调用过工具之后才发，
- * 纯思考的子代理中途没有帧，而 `--forward-subagent-text` 转发的 assistant 帧一直带 usage。
- * `output_tokens` 为 0 的消息不算（流式中间态与工具预填充都是这种），返回 undefined。
+ * 纯思考的子代理中途没有帧。`output_tokens` 为 0 的消息不算（流式中间态与工具预填充
+ * 都是这种），返回 undefined。
  */
 export function messageTokens(msg: unknown): number | undefined {
+  return requestTokens(msg);
+}
+
+/** 一次请求的 prompt + output；`output_tokens` 为 0（流式中间态 / 工具预填充）时 undefined。 */
+function requestTokens(msg: unknown): number | undefined {
   if (!msg || typeof msg !== "object") return undefined;
   const m = msg as Record<string, unknown>;
   if (m.type !== "assistant") return undefined;
@@ -188,6 +197,21 @@ export function messageTokens(msg: unknown): number | undefined {
   const totals = totalsFromUsage((message as Record<string, unknown>).usage);
   if (!totals || totals.output <= 0) return undefined;
   return contextTokens(totals) + totals.output;
+}
+
+/**
+ * 一条 assistant 帧的 `message.id`（去重键）。
+ *
+ * 流式阶段同一条消息会写多行（每行只带一个内容块），累计用量必须按它去重，
+ * 否则同一次请求会被算好几遍。没有 id 时返回 undefined（调用方跳过，宁可少算）。
+ */
+export function messageID(msg: unknown): string | undefined {
+  const m = msg as Record<string, unknown> | null;
+  if (!m || typeof m !== "object" || m.type !== "assistant") return undefined;
+  const message = m.message;
+  if (!message || typeof message !== "object") return undefined;
+  const id = (message as Record<string, unknown>).id;
+  return typeof id === "string" && id !== "" ? id : undefined;
 }
 
 /** 缓存命中率：命中 token / 输入侧总量；输入侧为 0 时没有意义，返回 undefined。 */

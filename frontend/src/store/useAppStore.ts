@@ -62,6 +62,7 @@ import type {
   PublicSettings,
   Selection,
   SessionInfo,
+  SubagentState,
   TranscriptPayload,
   WireAttachment,
   WireEvent,
@@ -895,6 +896,38 @@ async function persistUsage(id: string, usage: UsageSnapshot): Promise<void> {
   } catch {
     persistedUsage.delete(id);
   }
+}
+
+/**
+ * 一轮结束时把子代理的**累计消耗**从后端补齐。
+ *
+ * 为什么需要这一趟：实时流里 CLI 只给「最后一次请求的上下文有多大」，累计值只能扫
+ * 子代理转录。前端跑着的时候按 `tool_uses` 的增长估算（见 normalize 的 task_progress
+ * 分支），但**没有工具调用的纯思考请求不发进度帧**，那些 token 估算数不到（实测
+ * 236K vs 转录真值 252K）。所以回合结束时问一次后端，拿到就以它为准。
+ *
+ * 只走 `/api/history/subagent-usage`（只扫 `subagents/` 目录，带 mtime 缓存），
+ * **不重读整份主转录**——那要几 MB / 两万行，为一个 token 数不值得。
+ *
+ * 失败静默：估算值仍在界面上，只是没那么准；下次回合结束会再试一次。
+ */
+async function refreshSubagentUsage(id: string): Promise<void> {
+  let states: SubagentState[] | undefined;
+  try {
+    const res = await apiFetch<{ subagents?: SubagentState[] }>(
+      `/api/history/subagent-usage?id=${encodeURIComponent(id)}`,
+    );
+    states = res.subagents;
+  } catch {
+    return;
+  }
+  if (!states || states.length === 0) return;
+  useAppStore.setState((s) => {
+    const cur = s.items[id];
+    if (!cur) return {};
+    const next = settleSubagents(cur, states);
+    return next === cur ? {} : { items: { ...s.items, [id]: next } };
+  });
 }
 
 /** 等 WS 真正 open；新建会话后立刻发送消息时不能只看 HTTP 返回。 */
@@ -3005,6 +3038,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
               },
               // 同一条帧顺手记实时用量：子代理的进度事件要等它调用过工具才来，
               // 只靠它的话列表上的 token 会一直空到任务结束。
+              //
+              // 这是**最后一次请求**的口径（CLI 的 subagent_tokens），不是累计消耗：
+              // 累计值只能靠后端扫子代理转录（见 refreshSubagentUsage），转发帧在
+              // 不少中转上 usage 全是 0，也没法用来累加。
               ...(tokens !== undefined
                 ? {
                     subagentTokens: {
@@ -3051,6 +3088,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         }));
         // 一回合结束就把用量写进对话元数据：页面重开 / 换设备打开时底部统计不丢。
         if (usage && isTurnResult(ev.data)) void persistUsage(sid, usage);
+        // 子代理的累计消耗只有后端扫转录才准（实时那条是估算，见 refreshSubagentUsage）。
+        if (isTurnResult(ev.data)) void refreshSubagentUsage(sid);
         // 这一轮正常结束：把待发送的队首发出去。被中断 / 出错时留在队列里
         // （shouldFlushAfter 的判定与理由见 lib/queue.ts）。
         if (shouldFlushAfter(ev.data)) void get().flushQueued(sid);

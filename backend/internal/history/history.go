@@ -619,7 +619,20 @@ type SubagentState struct {
 	// `<usage>`**（CLI 的模板只有 task-id / tool-use-id / task-type / output-file /
 	// status / summary）。重启后主转录回放拿不到它，列表上的 token 就整条丢了。
 	// 子代理自己的 jsonl 一直带着 assistant 消息的 `message.usage`，同源同口径。
+	//
+	// **它不是「花了多少」**：这是「最后一次请求的上下文有多大」，见 TotalTokens。
 	Tokens int `json:"tokens,omitempty"`
+	// TotalTokens 是这个子代理**累计消耗**的 token（每次请求的 prompt + output 求和，
+	// 按 `message.id` 去重）。
+	//
+	// 与 `Tokens` 差一到两个数量级，两者回答的是不同问题：实测一份 97 次请求的审查
+	// 子代理，最后一次请求 232K、累计 16.4M（**70 倍**）。子代理的上下文每轮都被重新
+	// 读一遍，tokens 只反映最后一轮的窗口大小；要看「这个子代理干了多少活」必须用累计。
+	//
+	// CLI 自己没有这个数（`task_notification.usage.total_tokens` 也是最后一份快照），
+	// 只能由我们整份扫它的转录。成本受 `subagentUsageCache` 兜着：文件没变（路径 +
+	// mtime + size）就直接复用，实测 6.6MB / 220 行的一次全扫是 37ms。
+	TotalTokens int `json:"total_tokens,omitempty"`
 	// EndedAt 是子代理转录最后一行的时刻（unix 毫秒），用来在重启后算「跑了多久」。
 	//
 	// 后台子代理的 tool_result 只是启动回执，拿它当结束时刻会算出 0 秒；主转录里也
@@ -657,6 +670,22 @@ func LoadTranscript(projectsDir, id string) (Transcript, error) {
 	tr.Subagents = subagentStates(filepath.Dir(path), id)
 	tr.InterjectedUUIDs = loadInterjections(filepath.Dir(path), id)
 	return tr, nil
+}
+
+// LoadSubagentUsage 只取某个会话下各子代理的**累计消耗**与收尾状态。
+//
+// 为什么需要它：实时流里 CLI 只给「最后一次请求的上下文有多大」，真正的累计值
+// 必须扫子代理转录。前端跑完一轮就重读整份主转录（几 MB / 20000 行）只为拿几个
+// token 数太重，所以给一条只扫 `subagents/` 的轻量入口。
+//
+// 返回的是 `subagentStates` 的子集，字段名与转录里的 `subagents[]` 完全一致，
+// 前端拿它喂同一个 `settleSubagents`。
+func LoadSubagentUsage(projectsDir, id string) ([]SubagentState, error) {
+	path, err := findTranscript(projectsDir, id)
+	if err != nil {
+		return nil, err
+	}
+	return subagentStates(filepath.Dir(path), id), nil
 }
 
 // subagentStates 读 <project>/<session>/subagents/ 下每个子代理的收尾状态。
@@ -698,10 +727,99 @@ func subagentStates(projectDir, sessionID string) []SubagentState {
 			Description: m.Description,
 			Finished:    m.Finished || subagentEnded(path),
 			Tokens:      tokens,
+			TotalTokens: subagentTotalTokens(path),
 			EndedAt:     endedAt,
 		})
 	}
 	return out
+}
+
+// subagentUsageCache 缓存子代理转录的**累计**用量。
+//
+// 为什么要缓存：`TotalTokens` 必须整份扫（每行都得看），而子代理转录可以到 6.6MB /
+// 220 行，一次 37ms。列表页与回放都会走到这里，一个会话里常有十几条子代理。
+// 转录只会被追加，所以按「路径 + mtime + size」缓存；文件没变就直接复用。
+//
+// 与 `summaryCache` 是不同的东西：那份是主转录的列表摘要，键不同、生命周期也不同。
+var subagentUsageCache = struct {
+	mu sync.Mutex
+	m  map[string]subagentUsageEntry
+}{m: map[string]subagentUsageEntry{}}
+
+type subagentUsageEntry struct {
+	modTime time.Time
+	size    int64
+	total   int
+}
+
+// subagentTotalTokens 从子代理转录里算出**累计** token（每次请求求和）。
+//
+// 口径与 CLI 的 `subagent_tokens` 不同，这是刻意的：CLI 那个数是「最后一次请求的
+// 上下文」（`task_progress.usage.total_tokens` 与结束通知都用它），而一个跑了 97 次
+// 请求的审查子代理，最后一次 232K、累计 16.4M——拿前者当「消耗」会小看 70 倍。
+//
+// 去重按 `message.id`：流式阶段同一条消息会写多行（每行只带一个内容块），
+// 累加会把同一次请求算好几遍。
+//
+// best-effort：读不到就返回 0（调用方按「没有这个数」处理，不拿 0 冒充真值）。
+func subagentTotalTokens(path string) int {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	subagentUsageCache.mu.Lock()
+	if e, ok := subagentUsageCache.m[path]; ok && e.size == info.Size() && e.modTime.Equal(info.ModTime()) {
+		subagentUsageCache.mu.Unlock()
+		return e.total
+	}
+	subagentUsageCache.mu.Unlock()
+
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	seen := make(map[string]bool, 64)
+	total := 0
+	_ = scanLines(f, 8<<20, func(line []byte) bool {
+		// 粗筛：绝大多数行是 user / attachment，先按两个子串跳过，
+		// 省掉整行 JSON 解码（实测这份 6.6MB 的转录里只有 220 行是 assistant）。
+		if !bytes.Contains(line, []byte(`"assistant"`)) || !bytes.Contains(line, []byte(`"usage"`)) {
+			return true
+		}
+		var rec struct {
+			Type    string `json:"type"`
+			Message struct {
+				ID    string `json:"id"`
+				Usage *struct {
+					Input       int `json:"input_tokens"`
+					CacheCreate int `json:"cache_creation_input_tokens"`
+					CacheRead   int `json:"cache_read_input_tokens"`
+					Output      int `json:"output_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &rec) != nil || rec.Type != "assistant" || rec.Message.Usage == nil {
+			return true
+		}
+		if id := rec.Message.ID; id != "" {
+			if seen[id] {
+				return true
+			}
+			seen[id] = true
+		}
+		u := rec.Message.Usage
+		total += u.Input + u.CacheCreate + u.CacheRead + u.Output
+		return true
+	})
+
+	subagentUsageCache.mu.Lock()
+	subagentUsageCache.m[path] = subagentUsageEntry{modTime: info.ModTime(), size: info.Size(), total: total}
+	// 条目随转录被清掉（claude 会清理旧的子代理目录）。不做后台清理：
+	// 一个会话的子代理数量是个位到几十条，每条只有几个字段。
+	subagentUsageCache.mu.Unlock()
+	return total
 }
 
 // subagentTailStats 从子代理转录的尾部读两样东西：用量与收尾时刻。

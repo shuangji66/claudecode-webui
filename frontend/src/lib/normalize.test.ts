@@ -756,6 +756,51 @@ describe("子代理任务事件", () => {
     },
   };
 
+  // `task_progress` 里那一行「在做什么」有两个来源。摘要（agentProgressSummaries）
+  // 需要一次额外的模型请求、在自建中转上常常一条都产不出来；description +
+  // last_tool_name 是 CLI 自己的活动描述，每次工具调用都变。只认前者 = 页头永久空白。
+  it("task_progress 记下活动描述与工具名，作为摘要的兜底", () => {
+    let items = applyCLI([], toolUse);
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "task_started",
+      task_id: "task-1",
+      tool_use_id: "toolu_01",
+      description: "probe child",
+      subagent_type: "general-purpose",
+    });
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "task_progress",
+      task_id: "task-1",
+      tool_use_id: "toolu_01",
+      description: "Reading b.txt",
+      last_tool_name: "Read",
+      usage: { total_tokens: 100, tool_uses: 2, duration_ms: 5000 },
+    });
+    let sub = (items[0] as Extract<Item, { kind: "tool" }>).subagent!;
+    expect(sub.progressText).toBe("Reading b.txt");
+    expect(sub.progressTool).toBe("Read");
+    // 状态始终保持 running：进度帧不是结论。
+    expect(sub.status).toBe("running");
+    // 第一次拿到用量：累计值 = 这一次请求（不是从 0 起算的）。
+    expect(sub.usage).toEqual({ totalTokens: 100, toolUses: 2, durationMs: 5000, consumedTokens: 100 });
+
+    // 摘要到了就用它（两行文字都留着，渲染时优先前者）。
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "task_progress",
+      task_id: "task-1",
+      tool_use_id: "toolu_01",
+      description: "Reading c.txt",
+      last_tool_name: "Read",
+      summary: "Reviewing the diff",
+    });
+    sub = (items[0] as Extract<Item, { kind: "tool" }>).subagent!;
+    expect(sub.summary).toBe("Reviewing the diff");
+    expect(sub.progressText).toBe("Reading c.txt");
+  });
+
   it("task_started / task_updated / task_notification 折进 Agent 卡片", () => {
     let items = applyCLI([], toolUse);
     items = applyCLI(items, {
@@ -794,8 +839,88 @@ describe("子代理任务事件", () => {
       summary: "child says hello",
       usage: { totalTokens: 19, toolUses: 3, durationMs: 81 },
     });
-    // 任务事件不能额外生成消息项。
-    expect(items).toHaveLength(1);
+    // `task_notification` 额外留一条 wake：它是**新的一轮的开始**（实时流里没有
+    // 转录那条 <task-notification> user 行，这里必须补，否则刷新才看得见）。
+    expect(items).toHaveLength(2);
+    expect(items[1]).toMatchObject({ kind: "wake", origin: "task", taskId: "task-1", toolUseId: "toolu_01" });
+  });
+
+  // 实时流里**没有** <task-notification> 那条 user 行（实测 2.1.330：整份 stdout 里
+  // 一次都不出现，它只写进磁盘转录）。不补这一条，界面上「子代理已完成」那块只有
+  // 刷新页面（走转录回放）才出现，轮次计数也是刷新后才 +1。
+  it("实时 task_notification 补一条 wake（转录里它是 user 行，这里没有）", () => {
+    let items = applyCLI([], toolUse);
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "task_started",
+      task_id: "task-9",
+      tool_use_id: "toolu_01",
+      description: "跑去查新闻",
+      subagent_type: "general-purpose",
+    });
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-9",
+      tool_use_id: "toolu_01",
+      status: "completed",
+      // 实时帧的这个字段是**报告全文**（不是转录里那句 Agent "…" finished）。
+      summary: "我找到了一篇近期科技新闻\n\n标题：NVIDIA 董事会恢复黄仁勋 CEO 职务",
+    });
+    const wake = items.find((it) => it.kind === "wake") as Extract<Item, { kind: "wake" }>;
+    expect(wake).toBeDefined();
+    expect(wake.origin).toBe("task");
+    expect(wake.taskId).toBe("task-9");
+    expect(wake.toolUseId).toBe("toolu_01");
+    expect(wake.status).toBe("completed");
+    // 只留描述给触发条，不把整份报告塞进 Item 常驻内存。
+    expect(wake.summary).toBe("跑去查新闻");
+    // 实时流没有通知原文：留空串，渲染侧据此不给展开箭头。
+    expect(wake.text).toBe("");
+    // 它排在卡片后面（= 这一轮的开头），而不是插在卡片前面。
+    expect(items[items.length - 1].kind).toBe("wake");
+  });
+
+  // CLI 的 total_tokens 是「最后一次请求的窗口大小」。跑着的时候后端还没扫转录，
+  // 直接把单次值报上去会把一个大任务说成「只花了 10K」（真实差距能到 70 倍）。
+  it("task_progress 按 tool_uses 累加出实时消耗", () => {
+    let items = applyCLI([], toolUse);
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "task_started",
+      task_id: "task-1",
+      tool_use_id: "toolu_01",
+      description: "probe child",
+    });
+    const progress = (tools: number, total: number) =>
+      applyCLI(items, {
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-1",
+        tool_use_id: "toolu_01",
+        usage: { total_tokens: total, tool_uses: tools, duration_ms: 1000 * tools },
+      });
+    items = progress(1, 10_000);
+    expect((items[0] as Extract<Item, { kind: "tool" }>).subagent?.usage?.consumedTokens).toBe(10_000);
+    items = progress(2, 12_000);
+    expect((items[0] as Extract<Item, { kind: "tool" }>).subagent?.usage?.consumedTokens).toBe(22_000);
+    items = progress(3, 9_000);
+    expect((items[0] as Extract<Item, { kind: "tool" }>).subagent?.usage?.consumedTokens).toBe(31_000);
+    // 同一请求的多帧（tool_uses 没变）不再累加——否则一次请求会被算两三遍。
+    items = progress(3, 9_000);
+    expect((items[0] as Extract<Item, { kind: "tool" }>).subagent?.usage?.consumedTokens).toBe(31_000);
+    // 结束通知里那个数仍是单次口径：不能把它覆盖累计值。
+    items = applyCLI(items, {
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-1",
+      tool_use_id: "toolu_01",
+      status: "completed",
+      usage: { total_tokens: 9_500, tool_uses: 3, duration_ms: 3_000 },
+    });
+    const usage = (items[0] as Extract<Item, { kind: "tool" }>).subagent?.usage;
+    expect(usage?.totalTokens).toBe(9_500);
+    expect(usage?.consumedTokens).toBe(31_000);
   });
 
   it("任务事件先到：先造占位卡，真实入参到达时合并", () => {
@@ -1114,6 +1239,42 @@ describe("子代理任务事件", () => {
       expect(sub.endedAt).toBe(endedAt);
     });
 
+    // 累计消耗与「最后一次请求」是两个数，必须分开存：界面上报「消耗」用前者。
+    // 实测一份 97 次请求的审查子代理：单次 232K、累计 16.4M。
+    it("累计消耗单独存进 consumedTokens，不与单次口径混用", () => {
+      const items = started("tu-1", "a1");
+      const out = settleSubagents(items, [
+        { agent_id: "a1", tool_use_id: "tu-1", finished: true, tokens: 232_346, total_tokens: 16_363_498 },
+      ]);
+      const sub = (out[0] as Extract<Item, { kind: "tool" }>).subagent!;
+      expect(sub.usage).toEqual({ totalTokens: 232_346, consumedTokens: 16_363_498 });
+    });
+
+    // CLI 的进度帧 / 结束通知只给单次口径，累计那份要另从转录补——不能互相顶掉。
+    it("已有 usage 时补上累计值，不覆盖单次口径与工具次数", () => {
+      let items = started("tu-1", "a1");
+      items = applyCLI(items, {
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: '<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>tu-1</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n<usage>\nsubagent_tokens: 48000\ntool_uses: 3\nduration_ms: 9000\n</usage>\n</task-notification>',
+            },
+          ],
+        },
+      });
+      const out = settleSubagents(items, [{ agent_id: "a1", finished: true, total_tokens: 900_000 }]);
+      const sub = (out[0] as Extract<Item, { kind: "tool" }>).subagent!;
+      expect(sub.usage).toEqual({
+        totalTokens: 48_000,
+        toolUses: 3,
+        durationMs: 9_000,
+        consumedTokens: 900_000,
+      });
+    });
+
     it("已有的 usage（进度帧 / 结束通知）更权威，不被恢复值覆盖", () => {
       let items = started("tu-1", "a1");
       items = applyCLI(items, {
@@ -1131,6 +1292,29 @@ describe("子代理任务事件", () => {
       const out = settleSubagents(items, [{ agent_id: "a1", finished: true, tokens: 47_200, ended_at: Date.now() }]);
       const sub = (out[0] as Extract<Item, { kind: "tool" }>).subagent!;
       expect(sub.usage).toEqual({ totalTokens: 48_000, toolUses: 3, durationMs: 9_000 });
+    });
+
+    // 实时累加只能数到「有工具调用的请求」，纯思考的请求一条进度帧都不发
+    // （实测同一份子代理：实时 236K vs 转录真值 252K）。后端给出权威值时必须覆盖，
+    // 否则刷新前后两个数、而且刷新前那个偏小。
+    it("后端扫转录的累计值覆盖实时估算（同口径，后者更全）", () => {
+      let items = started("tu-1", "a1");
+      items = applyCLI(items, {
+        type: "system",
+        subtype: "task_progress",
+        task_id: "a1",
+        tool_use_id: "tu-1",
+        usage: { total_tokens: 10_000, tool_uses: 1, duration_ms: 1_000 },
+      });
+      const before = (items[0] as Extract<Item, { kind: "tool" }>).subagent!;
+      expect(before.usage?.consumedTokens).toBe(10_000);
+      const out = settleSubagents(items, [
+        { agent_id: "a1", tool_use_id: "tu-1", finished: true, total_tokens: 252_192 },
+      ]);
+      const sub = (out[0] as Extract<Item, { kind: "tool" }>).subagent!;
+      expect(sub.usage?.consumedTokens).toBe(252_192);
+      // 单次口径不动（10K 就是那一次请求的真实大小）。
+      expect(sub.usage?.totalTokens).toBe(10_000);
     });
 
     it("没有 meta（老转录 / 读不到）时原样返回", () => {

@@ -71,6 +71,10 @@ func TestInitializeShape(t *testing.T) {
 	if _, ok := req["agents"]; !ok {
 		t.Fatal("request 缺少 agents 字段")
 	}
+	// 子代理进度摘要：只在 initialize 里声明（没有环境变量、先于首条消息发出）。
+	if req["agentProgressSummaries"] != true {
+		t.Fatalf("agentProgressSummaries = %v", req["agentProgressSummaries"])
+	}
 }
 
 func TestUserTextShape(t *testing.T) {
