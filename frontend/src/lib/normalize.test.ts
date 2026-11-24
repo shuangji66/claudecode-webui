@@ -23,6 +23,7 @@ import {
 } from "./normalize";
 
 import type { Item } from "./model";
+import { wakeLabel } from "./model";
 import { turnSpans } from "./process";
 
 function assistantText(text: string) {
@@ -839,16 +840,18 @@ describe("子代理任务事件", () => {
       summary: "child says hello",
       usage: { totalTokens: 19, toolUses: 3, durationMs: 81 },
     });
-    // `task_notification` 额外留一条 wake：它是**新的一轮的开始**（实时流里没有
-    // 转录那条 <task-notification> user 行，这里必须补，否则刷新才看得见）。
-    expect(items).toHaveLength(2);
-    expect(items[1]).toMatchObject({ kind: "wake", origin: "task", taskId: "task-1", toolUseId: "toolu_01" });
+    // **这一轮已经收尾过吗**：这条用例里 `task_updated` 把状态标成 completed 了，
+    // 但流里从来没有 result——`currentTurnSettled` 判 false，于是这条通知不造 wake
+    // （它被吸收进了当前回合）。要造 wake 的前提是**这一轮真的收尾了**，
+    // 那种情形见下面「回合已经收尾的通知照旧开新一轮」。
+    expect(items).toHaveLength(1);
   });
 
   // 实时流里**没有** <task-notification> 那条 user 行（实测 2.1.330：整份 stdout 里
-  // 一次都不出现，它只写进磁盘转录）。不补这一条，界面上「子代理已完成」那块只有
-  // 刷新页面（走转录回放）才出现，轮次计数也是刷新后才 +1。
-  it("实时 task_notification 补一条 wake（转录里它是 user 行，这里没有）", () => {
+  // 一次都不出现，它只写进磁盘转录）。这一轮的 result 到了之后再来的通知，界面上
+  // 必须补出那块「已完成」的触发条，否则只有刷新页面（走转录回放）才出现，
+  // 轮次计数也是刷新后才 +1。
+  it("实时 task_notification 在回合收尾后补一条 wake", () => {
     let items = applyCLI([], toolUse);
     items = applyCLI(items, {
       type: "system",
@@ -858,6 +861,8 @@ describe("子代理任务事件", () => {
       description: "跑去查新闻",
       subagent_type: "general-purpose",
     });
+    // 主任务把活交出去、这一轮收尾了（帧序：result 在通知之前）。
+    items = applyCLI(items, { type: "result", subtype: "success", is_error: false, result: "已派出" });
     items = applyCLI(items, {
       type: "system",
       subtype: "task_notification",
@@ -873,12 +878,160 @@ describe("子代理任务事件", () => {
     expect(wake.taskId).toBe("task-9");
     expect(wake.toolUseId).toBe("toolu_01");
     expect(wake.status).toBe("completed");
-    // 只留描述给触发条，不把整份报告塞进 Item 常驻内存。
-    expect(wake.summary).toBe("跑去查新闻");
+    // **与转录回放同一种形状**：CLI 写进 jsonl 的是 `Agent "名字" finished` 模板，
+    // 实时帧的 summary 是报告全文（甚至空串），所以按卡片上的 description 拼回模板。
+    // 只拼名字、不把整份报告塞进 Item 常驻内存。
+    expect(wake.summary).toBe('Agent "跑去查新闻" finished');
+    // 触发条上要能看见名字，而不是只有一句「已完成」（截图复现过：实时缺名字、
+    // 刷新之后才补上）。
+    expect(wakeLabel(wake)).toBe("子代理「跑去查新闻」已完成");
     // 实时流没有通知原文：留空串，渲染侧据此不给展开箭头。
     expect(wake.text).toBe("");
     // 它排在卡片后面（= 这一轮的开头），而不是插在卡片前面。
     expect(items[items.length - 1].kind).toBe("wake");
+  });
+
+  // **用户报过的 bug**（截图：正在跑的回合中间连排三条只有「已完成」三个字的横条，
+  // 上面写着「已完成，用时 11 分 36 秒」，思考过程被劈成两段）。
+  //
+  // CLI 在回合**进行中**收到后台任务通知时，会把它吸收进当前回合（转录里
+  // `queue-operation` 的 `remove` 记的就是 `reason: "absorbed_mid_turn"`——全库实测
+  // 52 条通知全是它），不切轮。前端一律按轮首造 wake 的话，正在跑的那一轮被从中间
+  // 劈开：前半截判定收尾、后半截重新开始。刷新走转录回放又恢复（那边根本没有这条
+  // user 行，只有 queued_command attachment）。
+  it("回合进行中的后台命令通知不造任何消息项（过程里那张卡片已经说了）", () => {
+    let items = applyCLI([], { type: "user", message: { role: "user", content: "跑个后台命令" } });
+    items = applyCLI(items, {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "tu_bg", name: "Bash", input: { command: "cd /tmp && sleep 20", run_in_background: true } }],
+      },
+    });
+    items = applyCLI(items, {
+      type: "system", subtype: "task_started", task_id: "task-bg", tool_use_id: "tu_bg",
+      description: "Run slow task", task_type: "local_bash",
+    });
+    // 这一轮还在跑（还没有 result）：通知到达。
+    items = applyCLI(items, {
+      type: "system", subtype: "task_notification", task_id: "task-bg", tool_use_id: "tu_bg",
+      status: "completed", summary: 'Background command "cd /tmp && sleep 20" completed (exit code 0)',
+    });
+    // **什么都不造**：那张 Bash 卡片上已经写着「完成」，再插一条只剩「已完成」的横条
+    // 是纯噪音（截图里连排三条就是这么来的）。
+    expect(items.some((it) => it.kind === "wake")).toBe(false);
+    // 结论仍然折进了卡片。
+    const card = items.find((it) => it.kind === "tool") as Extract<Item, { kind: "tool" }>;
+    expect(card.subagent?.status).toBe("completed");
+    // 整段仍然只有一轮，而且这一轮还没收尾（不会先挂一条「已完成」）。
+    const spans = turnSpans(items, true);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].finished).toBe(false);
+  });
+
+  // 不唤醒主任务的**子代理**也一样：**什么都不造**。
+  //
+  // 试过「轮内留一行轻量标记」，用户在截图上立刻指出了它（过程中间横着的
+  // 「子代理…已完成」）。它要说的信息在别处都有：卡片上的「完成」、点开卡片看对话、
+  // 页头的「子智能体」列表。而且它刷新后会消失（转录里被吸收的通知根本没有 user 行），
+  // 「刷新会自动消失的东西」就是不该在实时流里造出来的东西。
+  it("回合进行中的子代理通知同样不造任何消息项", () => {
+    let items = applyCLI([], { type: "user", message: { role: "user", content: "让子代理去查新闻" } });
+    items = applyCLI(items, toolUse);
+    items = applyCLI(items, {
+      type: "system", subtype: "task_started", task_id: "task-1", tool_use_id: "toolu_01",
+      description: "查新闻", subagent_type: "general-purpose", task_type: "local_agent",
+    });
+    items = applyCLI(items, {
+      type: "system", subtype: "task_notification", task_id: "task-1", tool_use_id: "toolu_01",
+      status: "completed", summary: "报告全文",
+    });
+    expect(items.some((it) => it.kind === "wake")).toBe(false);
+    // 结论折进卡片：状态与名字都在那张卡上。
+    const card = items.find((it) => it.kind === "tool") as Extract<Item, { kind: "tool" }>;
+    expect(card.subagent).toMatchObject({ status: "completed", description: "查新闻" });
+    // 整段仍然只有一轮，而且这一轮还没收尾。
+    const spans = turnSpans(items, true);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].finished).toBe(false);
+  });
+
+  it("回合已经收尾的通知照旧开新一轮（等待子代理的那段不并进上一轮）", () => {
+    let items = applyCLI([], { type: "user", message: { role: "user", content: "让子代理去查新闻" } });
+    items = applyCLI(items, toolUse);
+    items = applyCLI(items, {
+      type: "system", subtype: "task_started", task_id: "task-1", tool_use_id: "toolu_01",
+      description: "查新闻", subagent_type: "general-purpose",
+    });
+    // 主任务先把活交出去、这一轮收尾了。
+    items = applyCLI(items, { type: "result", subtype: "success", is_error: false, result: "已派出" });
+    items = applyCLI(items, {
+      type: "system", subtype: "task_notification", task_id: "task-1", tool_use_id: "toolu_01",
+      status: "completed", summary: "报告全文",
+    });
+    const wake = items[items.length - 1] as Extract<Item, { kind: "wake" }>;
+    expect(wake.kind).toBe("wake");
+    // 收尾了 → 它真的开新一轮（这是唯一该造 wake 的情况）。
+    expect(wake.summary).toBe('Agent "查新闻" finished');
+    expect(turnSpans(items, true)).toHaveLength(2);
+  });
+
+  // **用户报过的 bug**：后台子代理跑完时，实时流那条触发条只有「已完成」三个字，
+  // 刷新之后才补上名字（截图复现）。
+  //
+  // 差异来自两边拿到的输入不同：转录里 CLI 写的是 `Agent "名字" finished` 模板，
+  // 实时帧的 `task_notification.summary` 对后台子代理**常常是空串**。名字的唯一
+  // 可靠来源是卡片上的 `description`（回放读的也是它），所以实时侧要按同一种模板
+  // 形状拼回去——下面这条断言钉住「两条路径给同一行标签」。
+  it("后台子代理：实时与转录回放给出同一行标签（名字不能刷新才出现）", () => {
+    const spawn = {
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "tu_bg",
+            name: "Agent",
+            input: { description: "Background sleep test", prompt: "sleep 20", subagent_type: "general-purpose", run_in_background: true },
+          },
+        ],
+      },
+    };
+    // 实时：summary 是空串（实测二进制里就是 `summary: o?.summary ?? ""`）。
+    let live = applyCLI([], { type: "user", message: { role: "user", content: "起个后台子代理" } });
+    live = applyCLI(live, spawn);
+    live = applyCLI(live, { type: "result", subtype: "success", is_error: false, result: "已派出" });
+    live = applyCLI(live, {
+      type: "system", subtype: "task_notification", task_id: "task-bg", tool_use_id: "tu_bg",
+      status: "completed", summary: "",
+    });
+    const liveWake = live.find((it) => it.kind === "wake") as Extract<Item, { kind: "wake" }>;
+
+    // 回放：CLI 写进 jsonl 的那条模板。
+    const replay = applyCLI([], {
+      type: "user",
+      message: {
+        role: "user",
+        content: [{
+          type: "text",
+          text: [
+            "<task-notification>",
+            "<task-id>task-bg</task-id>",
+            "<tool-use-id>tu_bg</tool-use-id>",
+            "<status>completed</status>",
+            '<summary>Agent "Background sleep test" finished</summary>',
+            "</task-notification>",
+          ].join("\n"),
+        }],
+      },
+    });
+    const replayWake = replay.find((it) => it.kind === "wake") as Extract<Item, { kind: "wake" }>;
+
+    expect(liveWake).toBeDefined();
+    expect(wakeLabel(liveWake)).toBe("子代理「Background sleep test」已完成");
+    // 同一条通知，两条路径必须说同一句话。
+    expect(wakeLabel(liveWake)).toBe(wakeLabel(replayWake));
   });
 
   // CLI 的 total_tokens 是「最后一次请求的窗口大小」。跑着的时候后端还没扫转录，
@@ -2526,6 +2679,19 @@ describe("CLI 注入的后台任务通知", () => {
     });
     expect(items).toHaveLength(1);
     expect(items[0].kind).toBe("wake");
+  });
+
+  // CLI 在回合**进行中**收到通知时会把它吸收进当前回合（转录里
+  // `queue-operation` 的 `remove` 记的就是 `reason: "absorbed_mid_turn"`，
+  // 全库实测 52 条通知全是它），并把通知写成 `queued_command` attachment，
+  // **不写 user 行**。所以转录里能看到这条 user 行 = 它确实开了一轮，
+  // 不需要再判。这里钉住的是「别把用户正文里的 XML 当通知」那一侧。
+  it("用户正文里只有后半段像通知时不吞", () => {
+    const items = applyCLI([], {
+      type: "user",
+      message: { role: "user", content: "日志如下\n" + notice },
+    });
+    expect(items[0].kind).toBe("user");
   });
 
   it("用户正文里贴了这段 XML 时不吞（前后还有自己的话）", () => {

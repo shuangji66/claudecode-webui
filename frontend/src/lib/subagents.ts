@@ -1,6 +1,7 @@
 // 从消息流里收集子代理，供页头「子智能体 N」与审批归属使用（纯函数）。
 
 import type { Item, SubagentInfo } from "./model";
+import { toolSummary } from "./tools";
 
 export interface SubagentEntry {
   /** claude 的 agentId（= taskId），打开对话用它。 */
@@ -26,6 +27,14 @@ export interface SubagentEntry {
   finishedAt?: number;
   /** 从子代理转录尾部恢复的收尾时刻（见 `SubagentInfo.endedAt`）。 */
   endedAt?: number;
+  /**
+   * 派发任务时那句话（`task_started.description` / Agent 入参的 `description`）。
+   *
+   * 留一份不只是为了兜底标题：CLI 的 `task_progress.description` 在工具没有活动描述
+   * 解析器（MCP / WebFetch 全都没有）时会**回落到这一句**，`subagentProgressLine`
+   * 靠它认出「这不是当前进度，是派发时的原话」。
+   */
+  description?: string;
   /** 「此刻在做什么」的来源（见 `subagentProgressLine`）：模型摘要与 CLI 的活动描述。 */
   summary?: string;
   progressText?: string;
@@ -79,6 +88,7 @@ export function subagentEntries(items: Item[]): SubagentEntry[] {
       taskType: sub.taskType,
       status: sub.status,
       usage: sub.usage,
+      ...(description ? { description } : {}),
       ...(sub.background ? { background: true } : {}),
       ...(sub.summary ? { summary: sub.summary } : {}),
       ...(sub.progressText ? { progressText: sub.progressText } : {}),
@@ -94,24 +104,46 @@ export function subagentEntries(items: Item[]): SubagentEntry[] {
 /**
  * 子代理**此刻在做什么**的一行字（页头列表的第二行、卡片上那句摘要）。
  *
- * 两条来源，优先模型摘要、其次 CLI 自己的活动描述：
+ * 三条来源，优先级从高到低：
  *   - `summary`：initialize 的 `agentProgressSummaries` 让 CLI 生成的摘要。语义最好，
  *     但它要花一次额外的模型请求（CLI 把整份子代理上下文 fork 进去），而自建中转上的
  *     模型常常无视提示词里的 "Do not use tools" 直接调工具——那一次白花，`summary`
  *     一个子代理跑到底一条都没有（实测 2.1.330 四次尝试全空）。
  *   - `progressText` / `progressTool`：`task_progress` 自带的 `description` 与
- *     `last_tool_name`，每次工具调用都变、不花请求、从不缺席。多数环境下真正会动的
- *     就是这一份。
+ *     `last_tool_name`。
+ *   - `lastAction`：子代理自己**最近一次工具调用**的一句话（从它转发过来的
+ *     assistant 帧里现算，见 `subagentLastAction`）。
  *
- * 两者都没有时返回 undefined（不摆一行空占位）。
+ * **只认前两条时，用 MCP / WebFetch 干活的子代理那一行会一直定住**（截图复现过：
+ * 「mcp__ccweb-web__web_fetch · 查找一篇新闻」，直到任务结束都不动）。原因在 CLI 那侧：
+ * 2.1.330 的进度帧是
+ * `description: tracker.lastActivity?.activityDescription ?? 派发任务的 description`，
+ * 而 `activityDescription` 只有声明了 `getActivityDescription` 的内置工具才产出——
+ * `mcp__*` 没有，于是 `description` 每次都回落到**派发时那句话**；`last_tool_name`
+ * 又只有换了工具名才会变，反复调同一个 `mcp__…__web_fetch` 时它同样是常量。
+ * 这不是我们漏了刷新，是那两个字段本身不动。
+ *
+ * 所以 `progressText` **和派发描述一模一样时按「没更新过」处理**（那正是 CLI 回落的值），
+ * 让位给 `lastAction`。只按「是否为空」判的话，回落值刚好非空，兜底永远轮不到。
+ *
+ * 三条都没有时返回 undefined（不摆一行空占位）。
  */
-export function subagentProgressLine(sub: SubagentInfo | undefined | null): string | undefined {
+export function subagentProgressLine(
+  sub: SubagentInfo | undefined | null,
+  lastAction?: string,
+): string | undefined {
   if (!sub) return undefined;
-  const activity = sub.summary?.trim() || sub.progressText?.trim();
+  const summary = sub.summary?.trim();
+  const progress = sub.progressText?.trim();
+  // 与派发描述相同 = CLI 的 `?? 派发描述` 回落值，不是真实活动。
+  const fresh = progress && progress !== sub.description?.trim() ? progress : "";
+  const action = lastAction?.trim();
+  const activity = summary || fresh || action;
   if (!activity) return undefined;
   const tool = sub.progressTool?.trim();
   // 工具名只在没有模型摘要时当前缀：摘要已经说清在干什么，再叠一个工具名是噪音。
-  if (tool && !sub.summary?.trim()) return `${tool} · ${activity}`;
+  // `lastAction` 自己已经是「工具名 · 摘要」，不再叠一次。
+  if (tool && !summary && activity !== action) return `${tool} · ${activity}`;
   return activity;
 }
 
@@ -133,6 +165,34 @@ export function subagentTokensUsed(usage: SubagentInfo["usage"] | undefined): nu
 /** 按 agentId 找展示名（审批面板标「来自子代理 X」用）。 */
 export function subagentLabel(items: Item[], agentId: string): string | undefined {
   return subagentEntries(items).find((e) => e.agentId === agentId)?.label;
+}
+
+/**
+ * 子代理**自己**最近一步在做什么：从它转发过来的消息流里取最后一次工具调用。
+ *
+ * 为什么需要它：`task_progress` 的 `description` / `last_tool_name` 在 MCP / WebFetch
+ * 这类工具上根本不变（见 `subagentProgressLine` 上面那段），只靠它们的话用搜索工具
+ * 干活的子代理，列表那一行会从派发之后一直定住到结束。
+ * 而 `--forward-subagent-text` 转发过来的 assistant 帧里有完整的 `tool_use` 入参，
+ * 拿 `toolSummary` 摘一句就是「查了什么 / 读了哪个文件 / 跑了什么命令」。
+ *
+ * 只认最后一个 `tool_use`：一段子代理的思考可能连发好几条工具，读者要看的是「现在」。
+ * 流式正文**不参与**——半截句子在列表里跳来跳去比不动更糟。
+ */
+export function subagentLastAction(items: Item[] | undefined): string | undefined {
+  if (!items || items.length === 0) return undefined;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind !== "tool") continue;
+    const summary = toolSummary(it);
+    const name = it.name || "";
+    // MCP 工具名是 `mcp__<服务>__<工具>`：整串塞进那一行会把摘要挤没
+    // （`mcp__ccweb-web__web_fetch · …` 里前缀就占了大半）。只留最后一段。
+    const short = name.startsWith("mcp__") ? (name.split("__").pop() ?? name) : name;
+    if (!summary) return short || undefined;
+    return short ? `${short} · ${summary}` : summary;
+  }
+  return undefined;
 }
 
 /** 正在跑的子代理数量（页头触发器用强调色）。 */

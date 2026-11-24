@@ -4,7 +4,7 @@ import { IconChat, IconSpark, IconStop } from "../common/Icons";
 import type { SubagentInfo, ToolItem } from "../../lib/model";
 import { formatTokens } from "../../lib/usage";
 import { formatDuration } from "../../lib/elapsed";
-import { endedElapsed, subagentProgressLine, subagentStatusOf, subagentTokensUsed } from "../../lib/subagents";
+import { endedElapsed, subagentLastAction, subagentProgressLine, subagentStatusOf, subagentTokensUsed } from "../../lib/subagents";
 import { useT } from "../../lib/i18n";
 import { useAppStore } from "../../store/useAppStore";
 import { ToolImages } from "./ToolImages";
@@ -39,8 +39,16 @@ export function AgentBody({ item }: { item: ToolItem }) {
   // 报**累计消耗**，不是 CLI 的 `totalTokens`（那是最后一次请求的窗口大小，见
   // `subagentTokensUsed`）。拿不到累计时才退回单次值。
   const consumed = subagentTokensUsed(usage);
-  // 「此刻在做什么」：模型摘要优先，其次 CLI 的活动描述（见 `subagentProgressLine`）。
-  const progress = subagentProgressLine(sub);
+  // 「此刻在做什么」：模型摘要优先，其次 CLI 的活动描述，最后是它自己转发过来的
+  // 最后一次工具调用（`subagentLastAction`）。第三档不能省：MCP / WebFetch 这类工具
+  // 在 CLI 那边没有活动描述，`task_progress.description` 恒等于派发任务那句话，
+  // 只认前两档时卡片上这句会从派发之后一直定住（见 `subagentProgressLine`）。
+  const agentId = sub?.agentId ?? sub?.taskId;
+  const liveAction = useAppStore((s) => {
+    if (!agentId || !s.activeId) return undefined;
+    return subagentLastAction(s.subagentItems[s.activeId]?.[agentId]);
+  });
+  const progress = subagentProgressLine(sub, liveAction);
   // 重启后 CLI 的结束通知已经不在（只在 stdout 上），耗时只剩「转录里的收尾时刻 -
   // 启动时刻」。卡片和页头那个子代理列表用同一个口径（`endedElapsed`）。
   const elapsed = endedElapsed(usage, item.ts, sub?.endedAt);

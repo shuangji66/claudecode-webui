@@ -2,7 +2,7 @@ import { useState } from "react";
 import { IconChevronDown, IconSpark, IconTerminal } from "../common/Icons";
 import { clockTime } from "../../lib/labels";
 import { useLocale, useT } from "../../lib/i18n";
-import { wakeLabel, type WakeItem } from "../../lib/model";
+import { wakeKind, wakeLabel, type WakeItem } from "../../lib/model";
 
 /**
  * 「这一轮是被谁唤醒的」——后台任务结束时 CLI 注入的那条通知（`<task-notification>`）。
@@ -26,18 +26,24 @@ export function WakeRow({ item }: { item: WakeItem }) {
   const locale = useLocale();
   const [open, setOpen] = useState(false);
   const label = wakeLabel(item, locale);
-  // 后台命令 / MCP 调用没有对话可看，用终端图标；子代理用火花（与页头子智能体入口一致）。
-  const Icon = item.summary?.includes("Agent") ? IconSpark : IconTerminal;
+  // 后台命令用终端图标；子代理（含后台子代理）用火花（与页头子智能体入口一致）。
+  // 按 `wakeKind` 分，不看 summary 里有没有 "Agent"——`Background agent "…"` 含
+  // "agent" 却大小写不同，"Background command" 里也可能带 Agent 字样（命令原文）。
+  const isAgent = wakeKind(item) === "agent" || wakeKind(item) === "background-agent";
+  const Icon = isAgent ? IconSpark : IconTerminal;
   // **实时流里这一条没有原文**：CLI 只在唤醒轮的末尾发 `system/task_notification`，
   // 而带 `<task-notification>` 全文的那条 user 行只写进磁盘转录（实测 2.1.330）。
   // 那时不给展开箭头——点开是个空框，比不可点更让人以为是坏了。
   const hasText = item.text.trim() !== "";
+  // 整句摘要（含英文模板）放悬停提示：标签里只摘了引号中的名字，看不到「为什么停的」。
+  const title = item.summary?.trim() || undefined;
 
   return (
     <div className="rounded-xl border border-line bg-panel/60">
       <button
         type="button"
         aria-expanded={hasText ? open : undefined}
+        title={title}
         // 没有原文时整行不可点：它仍然是一条轮次刻度，只是没有可下钻的东西。
         disabled={!hasText}
         onClick={() => setOpen((v) => !v)}

@@ -16,7 +16,7 @@ import {
   totalsFromUsage,
   type UsageSnapshot,
 } from "./usage";
-import { interruptReason } from "./model";
+import { interruptReason, isTurnHead } from "./model";
 import type { Item, SubagentInfo, ToolImage, TurnUsage, UserImage } from "./model";
 import type { CommandInfo } from "../transport/types";
 import { isInjectedUserRow, splitContinuation } from "./continuation";
@@ -335,6 +335,32 @@ function applyTaskNotification(items: Item[], text: string, at: number): Item[] 
       text: t,
     },
   ];
+}
+
+/**
+ * 这一轮**跑完了吗**（最后一条内容之后有 result）。
+ *
+ * 与 `lib/process.turnSpans` 的 `settledByResult` 同一个口径，只是按需算一次
+ * （不 import process：process 依赖 model，normalize 再 import process 会成环）。
+ *
+ * 用途只有一个：实时收到 `task_notification` 时判它**开没开新一轮**——
+ * 没开就一条 Item 都不造（见 `applyTaskEvent`）。
+ */
+function currentTurnSettled(items: Item[]): boolean {
+  let lastResult = -1;
+  let lastActivity = -1;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const it = items[i];
+    // 走到本轮的轮首就停：只判最后这一轮。
+    if (i > 0 && isTurnHead(it)) break;
+    if (it.kind === "result") {
+      lastResult = i;
+      continue;
+    }
+    if (it.kind === "assistant" && it.text.trim() === "") continue;
+    lastActivity = i;
+  }
+  return lastResult >= 0 && lastResult > lastActivity;
 }
 
 /** 取 `<tag>…</tag>` 里的文本（任务通知是一份扁平 XML，不需要通用解析器）。 */
@@ -807,20 +833,43 @@ function applyTaskEvent(items: Item[], m: Raw, at: number): Item[] | undefined {
 
   const folded = [...out.slice(0, index), { ...item, subagent: next }, ...out.slice(index + 1)];
 
-  // `task_notification` 是**一条新的一轮的开始**，实时流也得留一条 `wake`。
+  // `task_notification` 只有在**它真的开了一轮**时才是轮首，才需要留一条 `wake`。
   //
   // 转录里它是 CLI 注入的一条 user 行（`<task-notification>…`），走
   // `applyTaskNotification` 造 wake；但**实时流里没有那条 user 行**（实测 2.1.330：
   // 整份 stdout 里一次都没出现，它只落进磁盘转录）。只在实时侧漏掉它，界面上就是
-  // 「刷新之后才多出那块『子代理已完成』的触发条，而且轮次计数从 1 变 2」。
+  // 「刷新之后才多出那块『已完成』的触发条，而且轮次计数从 1 变 2」。
   // 实时唯一的那份信号就是这条 `system/task_notification`（帧序：notif → 新 init →
   // 唤醒轮的正文 → result），所以在这里补一条等价的 wake，两条路径各自造同一种 Item。
   //
-  // 位置：折完卡片后的**末尾**。它不是给上一轮补一条尾巴，而是这一轮的轮首
-  // （`isTurnHead` 认 `wake`），藏在卡片前面会让收起行把它吞掉。
+  // **回合还在跑的时候什么都不造**（用户报过三次，最近一次截图里过程中间横着两条
+  // 只剩「已完成」的框）：CLI 会把进行中到来的通知**吸收进当前回合**（转录里
+  // `queue-operation` 的 `remove` 记的是 `reason: "absorbed_mid_turn"`——全库实测
+  // 52 条通知全是它），既不切轮、也不递增 turnIndex，磁盘上根本不是 user 行
+  // （只留一条 `queued_command` attachment，我们不渲染）——所以刷新之后它们凭空消失，
+  // 与实时对不上。**「刷新会自动消失的东西」就是不该在实时流里造出来的东西。**
+  //
+  // 也不做「轮内一行轻量标记」那种折中（试过）：用户需要的信息在别处已经有了——
+  // ① 上面 `folded` 已经把 status / usage / summary 折进了那张工具卡片，过程里本来
+  // 就有一行「运行命令 … / 完成」/「Background agent test / 完成」；
+  // ② 子代理还能点开看对话；
+  // ③ 页头的「后台操作 N」「子智能体 N」在它跑着的时候一直都在。
+  // 再往正文里插一行，无论有没有边框都是同一句话的第三遍——连排几条时尤其像噪音。
+  //
+  // 判据是「这一轮此刻收尾了没有」，与 `process.turnSpans` 的 `settledByResult` 同口径。
   if (subtype === "task_notification") {
+    // 这一轮还在跑 → 吸收进当前回合：只保留折进卡片的那份结果，不产生任何消息项。
+    if (!currentTurnSettled(folded)) return folded;
     const summary = str(m.summary);
     const status = subagentStatus(m.status) ?? next.status;
+    // 名字的取法**要跟转录回放一致**，否则同一个子代理实时叫「已完成」、
+    // 刷新之后才变成「子代理「Background sleep test」已完成」（用户截图复现）。
+    // 回放那边 CLI 写的是 `Agent "名字" finished` 模板；实时帧的 `summary`
+    // 对后台子代理常常是空串（二进制里就是 `summary: o?.summary ?? ""`），
+    // 所以按 `wakeLabel` 认得的模板形状从卡片补一个——
+    // 回放读的是同一个 `description`（Agent 的 tool_use 入参一直带着它），
+    // 两边摘出来的名字因此必然一致。
+    const wakeSummary = wakeSummaryFor(next, summary, item.input);
     return [
       ...folded,
       {
@@ -831,14 +880,7 @@ function applyTaskEvent(items: Item[], m: Raw, at: number): Item[] | undefined {
         origin: "task",
         taskId,
         ...(toolUseId ? { toolUseId } : {}),
-        // 实时帧的 `summary` 是**子代理的报告全文**（不是转录里那句
-        // `Agent "名字" finished`）：摆进触发条会把对话撑爆。名字从卡片取，
-        // 报告正文只留在卡片的「结果」里。
-        ...(next.description || next.type
-          ? { summary: agentWakeSummary(next.description || next.type || "") }
-          : summary
-            ? { summary: agentWakeSummary(summary) }
-            : {}),
+        ...(wakeSummary ? { summary: wakeSummary } : {}),
         ...(status ? { status } : {}),
         // 实时流没有通知原文，点开也没有正文可看——留空串，渲染侧据此不摆那个展开区。
         text: "",
@@ -850,16 +892,42 @@ function applyTaskEvent(items: Item[], m: Raw, at: number): Item[] | undefined {
 }
 
 /**
- * 实时 `task_notification.summary` → 触发条那一行的名字。
+ * 实时 `task_notification` → 触发条那一行的 `summary`，**形状与转录回放一致**。
  *
- * 转录里的 `summary` 是 `Agent "跑测试套件并报告" finished` 这种模板，而**实时帧里
- * 同一个字段装的是子代理的报告全文**（几千字）。两者都喂给 `wakeLabel`，由它按
- * `"…"` 摘名字——这里先截一刀（只留第一行前 40 字），避免把整份报告塞进 Item 里
- * 常驻内存，也避免万一没有引号时整段被当成标签。
+ * 两边的输入不一样，但必须产出同一种模板，否则同一个子代理在实时与刷新后长得不同：
+ *   - **转录回放**：CLI 写进 jsonl 的 `summary` 是 `Agent "名字" finished`
+ *     （后台命令是 `Background command "…" completed (exit code 0)`），名字就在引号里；
+ *   - **实时帧**：同一个字段对后台子代理**常常是空串**（二进制里是
+ *     `summary: o?.summary ?? ""`），或者是几千字的报告全文。
+ *
+ * 名字的唯一可靠来源是**卡片上的 `description`**（Agent 的 `tool_use` 入参一直带着它，
+ * `task_started` 也会给），回放那边读的也是同一个值——所以按模板形状拼出来，
+ * 两边摘出的名字必然相同。
+ *
+ * 只保留第一行前 40 字，避免把整份报告塞进 Item 常驻内存。
  */
-function agentWakeSummary(text: string): string {
-  const first = text.split("\n").find((line) => line.trim()) ?? "";
-  return first.trim().slice(0, 40);
+function wakeSummaryFor(sub: SubagentInfo, live: string, input?: unknown): string {
+  // 卡片上的 `description` 来自 `task_started`，而**后台子代理可能一条 task_started
+  // 都没有**（它由 Agent 的 tool_use 直接起）。所以还要回落到那条 tool_use 的入参——
+  // 转录回放读的也正是入参（`subagentEntries` 同一套兜底），两边才对得上。
+  const raw = (sub.description || inputDescription(input) || sub.type || "").trim() || firstLine(live);
+  const short = raw.split("\n").find((line) => line.trim())?.trim().slice(0, 40) ?? "";
+  if (!short) return "";
+  // 后台子代理与普通子代理的命令行模板不同，选哪个只影响 `wakeKind` 的角色词
+  // （「后台子代理」还是「子代理」），两者都带引号，`wakeLabel` 都能摘出名字。
+  return sub.background ? `Background agent "${short}" finished` : `Agent "${short}" finished`;
+}
+
+/** 从 Agent 的 tool_use 入参里取任务描述（`task_started` 缺失时的唯一来源）。 */
+function inputDescription(input: unknown): string {
+  const rec = input && typeof input === "object" ? (input as Record<string, unknown>) : undefined;
+  const v = rec?.description;
+  return typeof v === "string" ? v : "";
+}
+
+/** 取第一段非空文本（报告全文只在第一行有意义）。 */
+function firstLine(text: string): string {
+  return text.split("\n").find((line) => line.trim()) ?? "";
 }
 
 /**
@@ -1095,6 +1163,8 @@ function applyUser(items: Item[], m: Raw, at: number, opts: ApplyOptions = {}): 
   // 也是这么记的（turnIndex 在这里递增、promptIndex 不变），丢掉的话等待子代理的
   // 那几段会被并进上一个回合，界面上来回挂 / 撤「已完成」。
   if (isTaskNotification(textOfContent(content))) {
+    // 转录里读得到这条 user 行 = 它确实开了一轮（被吸收的那种根本不写 user 行，
+    // 只留一条 queued_command，见 `applyTaskEvent` 的注释）。所以这里不做额外判定。
     return applyTaskNotification(items, textOfContent(content), at);
   }
 

@@ -503,8 +503,8 @@ export function turnSpans(items: Item[], running = true): TurnSpan[] {
         // 后面紧跟的 result 属于交棒，见 handoffResult。
         lastActivity = i;
       } else if (item.kind === "wake") {
-        // 轮首那条唤醒通知：它是这一段的起点，也算「有内容」——不然只有通知、
-        // 还没吐出正文的那一瞬会被判成「最后一条内容之后没有 result」的空段。
+        // 唤醒通知是这一段的起点，也算「有内容」——不然只有通知、还没吐出正文的
+        // 那一瞬会被判成「最后一条内容之后没有 result」的空段。
         lastActivity = i;
       } else if (item.kind === "result") {
         lastResult = i;

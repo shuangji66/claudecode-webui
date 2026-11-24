@@ -296,7 +296,13 @@ export interface WakeItem extends BaseItem {
   taskId?: string;
   /** 发起它的那次 tool_use：用来回查是哪条 Agent 卡片。 */
   toolUseId?: string;
-  /** 一句话说明（通知里的 `<summary>`，通常是 `Agent "…" finished`）。 */
+  /**
+   * 通知里的 `<summary>`。
+   *
+   * **三种模板**（全库实测）：`Agent "名字" finished`（子代理）、
+   * `Background command "命令" completed (exit code 0)` / `Background agent "…"`（后台
+   * 操作）。渲染时不能一律写成「子代理「…」」——后台命令不是子代理（见 `wakeLabel`）。
+   */
   summary?: string;
   /** 任务的最终状态（`<status>`）。未知值不猜，留空。 */
   status?: SubagentInfo["status"];
@@ -319,8 +325,10 @@ export type Item =
  * 这一条是不是「一轮的开头」。
  *
  * 两个来源：用户亲手发的一条（插话不算，它并进当前回合），以及后台任务的唤醒通知
- * （见 `WakeItem`）。**所有按轮切分的地方都必须用这一份**，各写一遍必然漂移——
- * 漏了 wake 就会出现「等待子代理的那一段」被压成一坨。
+ * （见 `WakeItem`）。**所有按轮切分的地方都必须用这一份**，各写一遍必然漂移。
+ *
+ * 只有**真的开了新一轮**的通知才会走到这里：CLI 在回合进行中收到的通知会被吸收进
+ * 当前回合，那种情况 `normalize.applyTaskEvent` 根本不造 Item（见那里的注释）。
  */
 export function isTurnHead(item: Item | undefined): boolean {
   if (!item) return false;
@@ -329,27 +337,77 @@ export function isTurnHead(item: Item | undefined): boolean {
 }
 
 /**
+ * 后台通知里的人话标签。
+ *
+ * **不是所有通知都关于子代理**：CLI 的 `<summary>` 有三种模板，实测全库只出现过这几种
+ * （`Background command "…" completed (exit code 0)` 之类占了大头）。以前一律写成
+ * 「子代理「…」已完成」，一条后台命令跑完，界面上就冒出一句「子代理「cd /tmp &&…」
+ * 已完成」——它根本不是子代理，用户会去找一个并不存在的子代理。
+ *
+ * 判据只看 `summary` 里的模板词，不猜别的：
+ *   - `Agent "名字" …` → 子代理；
+ *   - `Background command "…"` / `Background shell command …` → 后台命令；
+ *   - `Background agent "…"` → 后台子代理（确实是子代理，但强调它是后台的）；
+ *   - 其余（MCP 任务、老模板）→ 只说状态，不加任何角色前缀。
+ */
+export type WakeKind = "agent" | "background-agent" | "command" | "other";
+
+/** 只依赖 `summary`：normalize 造 Item 之前就要判角色（见 `applyTaskEvent`）。 */
+export function wakeKind(item: { summary?: string }): WakeKind {
+  const s = item.summary ?? "";
+  if (/^Background command\b|^Background shell command\b/i.test(s)) return "command";
+  if (/^Background agent\b/i.test(s)) return "background-agent";
+  if (/^(?:Agent|Remote task)\b/i.test(s)) return "agent";
+  return "other";
+}
+
+/**
  * 唤醒轮的短标签（轮次刻度悬停、轨迹的 prompt 行用）。
  *
- * 通知里的 `<summary>` 是英文人话（`Agent "审查网关鉴权与路径围栏" finished`），
- * 直接摆上去在中文界面里很突兀，所以只把它里的**名字**摘出来；摘不出就按状态说一句。
- * 状态未知时说「已返回」——那是事实（通知到了就说明它停了），不猜成功或失败。
+ * 通知里的 `<summary>` 是英文人话，直接摆上去在中文界面里很突兀，所以只把引号里的
+ * 名字摘出来。**摘不出名字时只报「角色 + 状态」**（`Background shell command didn't
+ * finish before the previous session ended` 这种整句摆上去比不说还乱，原文留给
+ * 触发条的悬停提示）。**状态未知时说「已返回」**——那是事实（通知到了就说明它停了），
+ * 不猜成功或失败。角色词按 `wakeKind` 给，后台命令不叫「子代理」。
  */
 export function wakeLabel(item: WakeItem, locale: "zh" | "en" = "zh"): string {
   const name = agentNameOf(item.summary);
   const state = wakeStatusText(item.status, locale);
-  if (locale === "en") return name ? `${name} — ${state}` : state;
-  return name ? `子代理「${name}」${state}` : state;
+  const kind = wakeKind(item);
+  const subject =
+    kind === "command"
+      ? locale === "en"
+        ? "Background command"
+        : "后台命令"
+      : kind === "background-agent"
+        ? locale === "en"
+          ? "Background agent"
+          : "后台子代理"
+        : kind === "agent"
+          ? locale === "en"
+            ? "Subagent"
+            : "子代理"
+          : "";
+  if (locale === "en") {
+    if (subject) return name ? `${subject} "${name}" — ${state}` : `${subject} — ${state}`;
+    return name ? `${name} — ${state}` : state;
+  }
+  if (subject) return name ? `${subject}「${name}」${state}` : `${subject}${state}`;
+  return name ? `${name}${state}` : state;
 }
 
-/** 从 `Agent "名字" finished` 里摘名字（CLI 的 summary 模板）。 */
+/**
+ * 从 `Agent "名字" finished` 里摘名字（CLI 的 summary 模板）。
+ *
+ * **只认引号里那段**。以前没有引号时回落到「整句前 30 字」，于是
+ * `Background shell command didn't finish before the previous session ended`
+ * 会被拼成「后台命令Background shell command didn't…已停止」——一句英文半截挂在
+ * 中文里，既不是名字也不像话。整句留给 `WakeRow` 的悬停提示。
+ */
 function agentNameOf(summary: string | undefined): string {
   if (!summary) return "";
   const quoted = /"([^"]+)"/.exec(summary);
-  if (quoted) return quoted[1];
-  // 没有引号（老模板 / 后台命令的摘要）：整句太吵，只留前 30 字。
-  const s = summary.trim();
-  return s.length > 30 ? `${s.slice(0, 30)}…` : s;
+  return quoted ? quoted[1] : "";
 }
 
 function wakeStatusText(status: SubagentInfo["status"] | undefined, locale: "zh" | "en"): string {

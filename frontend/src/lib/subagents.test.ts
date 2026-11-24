@@ -5,6 +5,7 @@ import {
   subagentElapsed,
   subagentEntries,
   subagentLabel,
+  subagentLastAction,
   subagentProgressLine,
   subagentTokensUsed,
   type SubagentEntry,
@@ -176,8 +177,8 @@ describe("endedElapsed（已结束的耗时，卡片与列表共用）", () => {
   });
 });
 
-// 「此刻在做什么」一行字：两条来源（模型摘要 / CLI 的活动描述），后者才是多数环境下
-// 真正会动的。
+// 「此刻在做什么」一行字：三条来源（模型摘要 / CLI 的活动描述 / 子代理自己的最后一次
+// 工具调用），后两档才是多数环境下真正会动的。
 describe("subagentProgressLine（行内进度）", () => {
   it("有模型摘要时用它，不再叠工具名", () => {
     expect(subagentProgressLine({ taskId: "t", status: "running", summary: "Reading runAgent.ts", progressText: "Read a.txt", progressTool: "Read" })).toBe(
@@ -191,10 +192,57 @@ describe("subagentProgressLine（行内进度）", () => {
     expect(subagentProgressLine({ taskId: "t", status: "running", progressText: "Reading b.txt", progressTool: "Read" })).toBe("Read · Reading b.txt");
   });
 
+  // CLI 的进度帧是 `description: lastActivity?.activityDescription ?? 派发描述`，
+  // 而 MCP / WebFetch 没有活动描述解析器 —— 那个字段每次都等于派发时那句话。
+  // 拿它当「当前活动」显示的话，列表从派发之后就定住到结束（截图复现过）。
+  it("description 只是派发描述的半截回显时不算进度，让位给最后一次工具调用", () => {
+    const sub = {
+      taskId: "t",
+      status: "running" as const,
+      description: "查找一篇新闻",
+      progressText: "查找一篇新闻",
+      progressTool: "mcp__ccweb-web__web_fetch",
+    };
+    expect(subagentProgressLine(sub, "web_fetch · 新闻：某地暴雨")).toBe("web_fetch · 新闻：某地暴雨");
+    // 没有第三档时也不摆那句派发描述——它不是「在做什么」。
+    expect(subagentProgressLine(sub)).toBeUndefined();
+  });
+
   it("两者都没有时不摆一行占位", () => {
     expect(subagentProgressLine({ taskId: "t", status: "running" })).toBeUndefined();
     expect(subagentProgressLine(undefined)).toBeUndefined();
     expect(subagentProgressLine({ taskId: "t", status: "running", summary: "   " })).toBeUndefined();
+  });
+});
+
+describe("subagentLastAction（子代理自己最近一步）", () => {
+  const frame = (over: Partial<ToolItem>): ToolItem => ({
+    id: `i${Math.random()}`,
+    seq: 0,
+    ts: 0,
+    kind: "tool",
+    toolUseId: "tu1",
+    name: "Read",
+    input: {},
+    ...over,
+  });
+
+  it("取最后一次工具调用，MCP 名只留最后一段", () => {
+    const items: Item[] = [
+      frame({ name: "Read", input: { file_path: "a.ts" } }),
+      frame({ name: "mcp__ccweb-web__web_fetch", input: { url: "https://example.com/news" } }),
+    ];
+    expect(subagentLastAction(items)).toBe("web_fetch · https://example.com/news");
+  });
+
+  it("没有摘要时只给工具名，不返回空串", () => {
+    expect(subagentLastAction([frame({ name: "Bash", input: {} })])).toBe("Bash");
+  });
+
+  it("还没有工具调用 / 没有实时流时返回 undefined", () => {
+    expect(subagentLastAction([])).toBeUndefined();
+    expect(subagentLastAction(undefined)).toBeUndefined();
+    expect(subagentLastAction([{ id: "a", seq: 0, ts: 0, kind: "assistant", text: "hi", streaming: false }])).toBeUndefined();
   });
 });
 

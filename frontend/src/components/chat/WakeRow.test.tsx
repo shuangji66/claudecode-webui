@@ -48,4 +48,41 @@ describe("WakeRow", () => {
     expect((container.textContent ?? "").trim()).not.toBe("");
     expect(container.textContent).toContain("Run mock server");
   });
+
+  // 用户报过的 bug（截图）：一条后台命令跑完，界面上写的是「子代理「Background
+  // command "cd /tmp &&…」已…」」——它不是子代理，用户会去找一个并不存在的子代理。
+  // 角色词必须按 `<summary>` 的模板给，不能一律当前缀写死。
+  it("后台命令不叫子代理，子代理才叫子代理", () => {
+    const cmd = render(<WakeRow item={item({ summary: 'Background command "npm test" completed (exit code 0)' })} />);
+    expect(cmd.container.textContent).toContain("后台命令「npm test」已完成");
+    expect(cmd.container.textContent).not.toContain("子代理");
+    cmd.unmount();
+
+    const agent = render(<WakeRow item={item({ summary: 'Agent "找一篇新闻" finished' })} />);
+    expect(agent.container.textContent).toContain("子代理「找一篇新闻」已完成");
+    agent.unmount();
+
+    const bgAgent = render(<WakeRow item={item({ status: "stopped", summary: 'Background agent "审查代码" didn\'t finish' })} />);
+    expect(bgAgent.container.textContent).toContain("后台子代理「审查代码」已停止");
+  });
+
+  // `Background shell command didn't finish before the previous session ended` 这种
+  // 没有引号的整句：以前会被截成「子代理Background shell command didn't…已停止」——
+  // 一句英文半截挂在中文里，既不是名字也不像话。
+  it("摘要里没有引号里的名字时只报角色 + 状态，整句放进悬停提示", () => {
+    const summary = "Background shell command didn't finish before the previous session ended";
+    const { container } = render(<WakeRow item={item({ status: "stopped", summary })} />);
+    const text = container.textContent ?? "";
+    expect(text).toContain("后台命令已停止");
+    expect(text).not.toContain("didn't finish");
+    expect(container.querySelector("button")?.getAttribute("title")).toBe(summary);
+  });
+
+  it("图标按类型给：子代理是火花，后台命令是终端", () => {
+    const icon = (summary: string) =>
+      render(<WakeRow item={item({ summary })} />).container.querySelector("button svg")?.outerHTML ?? "";
+    // `Background agent` 里是小写的 "agent"，旧判定 `includes("Agent")` 认不出。
+    expect(icon('Agent "x" finished')).toBe(icon('Background agent "y" finished'));
+    expect(icon('Background command "npm test" completed (exit code 0)')).not.toBe(icon('Agent "x" finished'));
+  });
 });

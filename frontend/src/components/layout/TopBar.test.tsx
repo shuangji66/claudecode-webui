@@ -81,7 +81,9 @@ describe("TopBar 子智能体", () => {
     fireEvent.click(screen.getByLabelText("子智能体 2 个"));
 
     // 结束的用 CLI 的用量口径（tokens + duration_ms），运行中的按启动时刻走墙钟。
-    expect(screen.getByText("12.5K · 1:23")).toBeInTheDocument();
+    // 两个数之间不留空格（`12.5K/1:23`）：右侧提示是 shrink-0 的，空出来的每一像素
+    // 都是从第二行的进度文字里扣的。
+    expect(screen.getByText("12.5K/1:23")).toBeInTheDocument();
     expect(screen.getByText("5s")).toBeInTheDocument();
     expect(screen.getByText("Explore")).toBeInTheDocument();
   });
@@ -102,7 +104,48 @@ describe("TopBar 子智能体", () => {
     ];
     render(bar({ session: { id: "s1", cwd: "/w", state: "ready" }, subagents: running }));
     fireEvent.click(screen.getByLabelText("子智能体 1 个"));
-    expect(screen.getByText("47.4K · 5s")).toBeInTheDocument();
+    expect(screen.getByText("47.4K/5s")).toBeInTheDocument();
+  });
+
+  it("第二行跟着子代理自己的工具调用走：CLI 的进度描述在 MCP 工具上是不动的", () => {
+    // CLI 的 task_progress 是 `description: 活动描述 ?? 派发描述`，MCP / WebFetch 没有
+    // 活动描述解析器 —— 那一行会从派发之后一直定住到结束（截图复现过）。
+    // 兜底是子代理自己转发过来的最后一次工具调用（store.subagentItems）。
+    const running: SubagentEntry[] = [
+      {
+        agentId: "u3",
+        taskId: "u3",
+        label: "找新闻",
+        type: "general-purpose",
+        status: "running",
+        startedAt: Date.now() - 5_000,
+        description: "查找一篇新闻",
+        progressText: "查找一篇新闻",
+        progressTool: "mcp__ccweb-web__web_fetch",
+      },
+    ];
+    useAppStore.setState({
+      subagentItems: {
+        s1: {
+          u3: [
+            {
+              id: "i1",
+              seq: 0,
+              ts: 0,
+              kind: "tool",
+              toolUseId: "tu1",
+              name: "mcp__ccweb-web__web_fetch",
+              input: { url: "https://example.com/news" },
+            },
+          ],
+        },
+      },
+    });
+    render(bar({ session: { id: "s1", cwd: "/w", state: "ready" }, subagents: running }));
+    fireEvent.click(screen.getByLabelText("子智能体 1 个"));
+    expect(screen.getByText("web_fetch · https://example.com/news")).toBeInTheDocument();
+    // 派发描述不是「在做什么」，不顶上去当进度。
+    expect(screen.queryByText("mcp__ccweb-web__web_fetch · 查找一篇新闻")).toBeNull();
   });
 
   it("列表左侧的状态标记：运行中转圈、完成绿点、被中断主题色、失败红点", () => {

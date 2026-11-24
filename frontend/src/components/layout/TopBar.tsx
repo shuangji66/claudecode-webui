@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { SessionInfo } from "../../transport/types";
 import { useT } from "../../lib/i18n";
 import { formatElapsed } from "../../lib/elapsed";
 import { formatTokens } from "../../lib/usage";
-import { subagentElapsed, subagentProgressLine, subagentTokensUsed, type SubagentEntry } from "../../lib/subagents";
+import { subagentElapsed, subagentLastAction, subagentProgressLine, subagentTokensUsed, type SubagentEntry } from "../../lib/subagents";
 import { useAppStore } from "../../store/useAppStore";
 import type { BackgroundTaskEntry } from "../../lib/backgroundTasks";
 import { Menu } from "../common/Menu";
@@ -47,6 +48,14 @@ function SubagentMark({ status }: { status: SubagentEntry["status"] }) {
 }
 
 /**
+ * 「子代理此刻在做什么」的空结果。
+ *
+ * 必须是**模块级常量**：`useShallow` 按引用比较，每次 selector 现造一个 `{}` 的话，
+ * 列表关着的时候每次 store 变更都会认为「变了」，白白把页头重画一遍。
+ */
+const EMPTY_ACTIONS: Record<string, string> = {};
+
+/**
  * 菜单开着时每秒走一次的时钟。
  *
  * 运行时间必须自己走：后台命令与子代理都没有「每秒一帧」的保证（`task_progress` 只在
@@ -69,8 +78,10 @@ function useNow(active: boolean): number {
 /**
  * 子代理行右侧的指标：token 消耗 + 运行时间（拿不到的项不占位）。
  *
- * 用量**不带单位**：它是这一行右侧的指标，不是一句话；`47.2K tokens · 2:31` 在
- * 42% 的提示宽度里放不下，先把运行时间截掉（截图复现过「· 2…」），而两个都是要看的数。
+ * 用量**不带单位**：它是这一行右侧的指标，不是一句话；`47.2K tokens / 2:31` 在
+ * 42% 的提示宽度里放不下，先把运行时间截掉（截图复现过「/ 2…」），而两个都是要看的数。
+ * 两个数之间也**不留空格**（`47.2K/2:31`）：提示是 `shrink-0` 的，它宽出来的每一像素
+ * 都是从左边那行「此刻在做什么」里扣的，而那一行才是要读的内容。
  */
 function subagentHint(sub: SubagentEntry, now: number, liveTokens?: number): string | undefined {
   const parts: string[] = [];
@@ -81,7 +92,7 @@ function subagentHint(sub: SubagentEntry, now: number, liveTokens?: number): str
   if (tokens !== undefined && tokens > 0) parts.push(formatTokens(tokens));
   const elapsed = subagentElapsed(sub, now);
   if (elapsed !== undefined) parts.push(formatElapsed(elapsed));
-  return parts.length > 0 ? parts.join(" · ") : undefined;
+  return parts.length > 0 ? parts.join("/") : undefined;
 }
 
 /**
@@ -165,6 +176,27 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, backgr
   const liveTokens = useAppStore((s) =>
     subAnchor !== null && session ? s.subagentTokens[session.id] : undefined,
   );
+  /**
+   * 子代理**此刻在做什么**：从它自己转发过来的消息流里取最后一次工具调用。
+   *
+   * 不订阅它的话，这一行只在 `task_progress` 到达时变，而那条帧的 `description`
+   * 在 MCP / WebFetch 这类工具上恒等于派发任务时那句话（见
+   * `lib/subagents.subagentProgressLine` 上面那段），列表会从派发之后一直定住到结束。
+   * 只订阅自己那一条记录，并用 `useShallow` 按 agentId→字符串比较：内容没变就不重画。
+   */
+  const liveActions = useAppStore(
+    useShallow((s) => {
+      if (subAnchor === null || !session) return EMPTY_ACTIONS;
+      const byAgent = s.subagentItems[session.id];
+      if (!byAgent) return EMPTY_ACTIONS;
+      const out: Record<string, string> = {};
+      for (const [agentId, items] of Object.entries(byAgent)) {
+        const action = subagentLastAction(items);
+        if (action) out[agentId] = action;
+      }
+      return out;
+    }),
+  );
 
   // 复制/下载后的「已完成」提示要自己复位。句柄记在 ref 里，卸载时清掉：
   // 不清的话定时器会在组件已经卸载之后触发 setState（React 19 不再报错，但那次
@@ -239,15 +271,26 @@ export function TopBar({ session, title, busy, subagents, onOpenSubagent, backgr
             // 类型与「此刻在做什么」放第二行（DSH 的 subagent 列表同样是「标题 + 次要信息
             // + 指标」两行）：token 与运行时间要占住右侧那一列。
             //
-            // 进度文字在这里是**唯一会变的行**：运行中它随每次工具调用刷新（CLI 的
-            // `task_progress.description`），跑完就没有了——那时类型才是更有用的信息。
-            meta: (sub.status === "running" ? subagentProgressLine(sub) : undefined) ?? sub.type,
+            // 进度文字在这里是**唯一会变的行**：运行中它随每次工具调用刷新——但**不能
+            // 只靠 CLI 的 `task_progress.description`**：MCP / WebFetch 这类工具没有活动
+            // 描述解析器，那条帧每次都回落到派发任务时那句话，于是列表从派发之后就定住
+            // 到结束（截图复现过）。第三参 `liveActions` 是子代理自己转发过来的最后一次
+            // 工具调用，兜住这一档（见 `subagentProgressLine`）。
+            // 跑完就没有进度可说了——那时类型才是更有用的信息。
+            meta:
+              (sub.status === "running"
+                ? subagentProgressLine(sub, liveActions[sub.agentId])
+                : undefined) ?? sub.type,
             icon: <SubagentMark status={sub.status} />,
             hint: subagentHint(sub, now, liveTokens?.[sub.agentId]),
             onSelect: () => onOpenSubagent(sub.agentId, sub.label),
           }))}
           onClose={() => setSubAnchor(null)}
-          width={300}
+          // 360 而不是 300：这一行是「标题 / 进度 + 右侧指标」两行结构，右侧那列
+          // （hint）是 shrink-0 的、固定扣掉一段宽度，剩下的才给第二行那句「此刻在做什么」
+          // ——而它常常是 `mcp__ccweb-web__web_fetch · …` 这种最需要看全的长串。
+          // 300 时那行几乎只剩工具名前缀（手机上尤其明显）。手机上仍由定位层按视口收窄。
+          width={360}
           align="end"
         />
 

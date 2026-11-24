@@ -1045,7 +1045,52 @@ hub ── manager ── session ── process ── claude (NDJSON)
   实时那条也没有通知原文（CLI 没发），`WakeItem.text` 留空串，`WakeRow` 据
   `text.trim() !== ""` 决定给不给展开箭头——否则点开是个空框，像坏了。
   **`task_notification` 不再是「纯结构化字段、不产生消息项」**：它确实不再另造一条气泡，
-  但会**多出一条 `wake`**（那正是它开的一轮）。写单测时 `toHaveLength(1)` 要改成 2。
+  但会**多出一条 `wake`**。写单测时 `toHaveLength(1)` 要改成 2。
+- **回合进行中的通知不造任何消息项**（踩过并三次截图复现）：
+  CLI 在回合**进行中**收到通知时会把它**吸收进当前回合**——转录里 `queue-operation` 的
+  `remove` 记的就是 `reason: "absorbed_mid_turn"`（全库实测 **52/52 条通知全是这个**），
+  它不切轮、不递增 `turnPosition.turnIndex`，而且**不写那条 `<task-notification>` user
+  行**（只留一条 `queued_command` attachment，我们不渲染）。
+  所以两条路径的判据不同、各管一段：
+  - **实时**（`applyTaskEvent`）没有 `turnPosition` 可看，只能按「这一轮此刻收尾了没有」
+    判（`currentTurnSettled`，与 `process.turnSpans` 的 `settledByResult` 同口径）；
+    没收尾就 `return folded`，**一条 Item 都不造**。
+    逐条一律按轮首造的话，正在跑的一轮被**从中间劈开**：前半截判收尾（「已完成，用时
+    11 分 36 秒」其实只跑了前面一小段）、后半截带着这条通知重新开始，思考过程横跨两条轮。
+  - **转录回放**（`applyTaskNotification`）读得到 user 行就说明它确实开了一轮，
+    不用再判——被吸收的那种在磁盘上压根没有这一行。
+  **轮内那种一律不渲染，后台操作与子代理都一样**。试过两版折中，都被用户当场指出来：
+  ① 统一造一条轮首横条 → 截图里三条只剩「已完成」的带壳横条连排；
+  ② 只给子代理造一条轻盈的「轮内一行」→ 截图里过程中间仍横着
+  「子代理…已完成」，而且它刷新后会消失。
+  **「刷新会自动消失的东西」就是不该在实时流里造出来的东西**——这是最硬的判据。
+  它要说的信息在别处都有：`folded` 已经把 status / usage / summary 折进那张工具卡片
+  （过程里就是「运行命令 … / 完成」那一行）、子代理还能点开看对话、页头的
+  「后台操作 N」「子智能体 N」在它跑着的时候一直都在。再插一行是同句话的第三遍。
+- **实时与回放的触发条必须是同一句话**（`normalize.wakeSummaryFor`，踩过并截图复现）：
+  同一条通知，两边拿到的 `summary` 完全不同——
+  **转录里** CLI 写的是 `Agent "名字" finished` / `Background command "…" completed`
+  模板，名字就在引号里；**实时帧**对后台子代理**常常是空串**（二进制里是
+  `summary: o?.summary ?? ""`），偶尔是几千字的报告全文。
+  所以实时侧「按原样摆 summary」的结果是只有一句「已完成」，
+  刷新之后才变成「子代理「Background sleep test」已完成」。
+  修法：实时侧按**与回放同一种模板形状**从卡片补出来——名字取
+  `sub.description → Agent 的 tool_use 入参 description → sub.type`。
+  **入参那一档不能少**：后台子代理可能一条 `task_started` 都没有（由 Agent 的
+  `tool_use` 直接起），那时卡片上没有 `description`，只有入参有；而转录回放读的
+  也正是入参（`subagentEntries` 同一套兜底），两边才对得上。
+  改这条链路时先看 `normalize.test.ts` 里「实时与转录回放给出同一行标签」那条用例：
+  它同时跑两条路径、断言 `wakeLabel` 相等——只改一边就会红。
+- **`wakeLabel` 的角色词按 `<summary>` 的模板给，不能写死「子代理」**（同一张截图）：
+  CLI 的模板实测只有这几种——`Agent "名字" finished` / `Background command "…" completed
+  (exit code 0)` / `Background agent "…" didn't finish` / `Background shell command …` /
+  `Agent "…" was stopped by Claude`。后台命令跑完却写「子代理「cd /tmp &&…」已完成」，
+  用户会去找一个并不存在的子代理。`lib/model.wakeKind` 分出
+  agent / background-agent / command / other，`wakeLabel` 与 `WakeRow` 的图标都按它走
+  （**不要用 `summary.includes("Agent")`**：`Background agent` 是小写 a，认不出来）。
+  摘不出引号里的名字时（`Background shell command didn't finish…`）**只说
+  「角色 + 状态」**，整句英文留给 `WakeRow` 的 `title` 悬停——以前会截成
+  「子代理Background shell command didn't…已停止」，半截英文挂在中文里。
 - **子代理自己的转录里每一行都是 `isSidechain: true`**：`applyCLI` 默认丢掉 sidechain
   （主消息流要丢），回放子代理对话必须传 `{sidechain:true}`——漏了的话面板显示
   「子代理还没有输出」，重启后才能复现（实时走的是 `subagentItems`，不经过这条过滤）。
@@ -1140,9 +1185,12 @@ hub ── manager ── session ── process ── claude (NDJSON)
   - 点一行**就地展开详情**（`MenuItem.keepOpen` + `expanded` + `detail`，默认折叠、关菜单
     复位、菜单不关）：已运行、工具名、命令原文、进度说明。后台命令没有逐行输出流可看
     （那份在 CLI 的 `output_file` 里），不要摆一个空的「实时输出」框。
-  - 子代理行右侧是 token 消耗 + 运行时间（**不带单位**：`47.2K · 2:31`。写成
-    `47.2K tokens · …` 会超出 `hint` 的 42% 宽度，先把运行时间截成「· 2…」），第二行
-    给「此刻在做什么」（见下面那条「两行进度文字」）。运行中按 `startedAt` 走墙钟、
+  - 子代理行右侧是 token 消耗 + 运行时间（**不带单位、中间不留空格**：`47.2K/2:31`。
+    写成 `47.2K tokens / …` 会超出 `hint` 的 42% 宽度，先把运行时间截成「/ 2…」；
+    中间那个空格也省掉，因为提示是 `shrink-0` 的，它宽出来的每一像素都是从第二行那句
+    「此刻在做什么」里扣的，而那一行（`mcp__ccweb-web__web_fetch · …`）才是要读的内容）。
+    菜单宽度因此给 360（不是 300）：`300` 时第二行几乎只剩工具名前缀，手机上尤其明显。
+    第二行给「此刻在做什么」（见下面那条「两行进度文字」）。运行中按 `startedAt` 走墙钟、
     结束后优先用 `usage.durationMs`（`lib/subagents.subagentElapsed`）。
   - **报「消耗」必须用累计值，CLI 的 `subagent_tokens` 不是消耗**：它取的是
     **最后一次请求的上下文有多大**（`prompt + output`，2.1.330 的 `wke`/`RZr`）。
@@ -1176,15 +1224,26 @@ hub ── manager ── session ── process ── claude (NDJSON)
     结束通知里的 `usage` 仍是最权威的一份，回放时回落到 tool_result 的 `<usage>`。
     **它没有累加，也不该累加**：它是「最后一次请求」的单次口径，累计那份走
     `consumedTokens`（见上面「报『消耗』必须用累计值」那条）。
-  - **列表第二行「此刻在做什么」有两份来源，`summary` 不能单独用**
-    （`lib/subagents.subagentProgressLine` 决定显示哪份）：initialize 里开了
-    `agentProgressSummaries` 之后 CLI 才会生成 `summary`，它**要花一次额外的模型请求**
-    （把整份子代理上下文 fork 进摘要请求），而提示词里那句 "Do not use tools" 在中转上
-    的模型经常不听——实测 2.1.330 + 自建中转，四次尝试全部
+  - **列表第二行「此刻在做什么」有三份来源，任何一份都不能单独用**
+    （`lib/subagents.subagentProgressLine` 决定显示哪份）：
+    ① initialize 里开了 `agentProgressSummaries` 之后 CLI 才会生成 `summary`，它
+    **要花一次额外的模型请求**（把整份子代理上下文 fork 进摘要请求），而提示词里那句
+    "Do not use tools" 在中转上的模型经常不听——实测 2.1.330 + 自建中转，四次尝试全部
     `No new summary: the model called a tool`，`summary` 一个子代理跑到底一条都没有。
-    所以兜底用 `task_progress` 自带的 `description` + `last_tool_name`（CLI 自己的
-    活动描述，随每次工具调用变、不花请求、从不缺席），存在 `SubagentInfo.progressText` /
-    `progressTool`。只认 `summary` 的界面在多数中转上那一行**永久是空的**。
+    ② `task_progress` 自带的 `description` + `last_tool_name`（存在
+    `SubagentInfo.progressText` / `progressTool`）——**但它在 MCP / WebFetch 上根本不动**：
+    2.1.330 的进度帧是 `description: tracker.lastActivity?.activityDescription ?? 派发描述`，
+    而 `activityDescription` 只有声明了 `getActivityDescription` 的内置工具才产出，
+    `mcp__*` 全没有，于是 `description` 每次都回落到**派发任务那句话**；`last_tool_name`
+    又只有换了工具名才变，反复调同一个 `mcp__…__web_fetch` 时同样是常量。只认它的话，
+    那一行会从派发之后**一直定住到结束**（截图复现过「mcp__ccweb-web__web_fetch ·
+    查找一篇新闻」）。所以 `progressText` 与 `sub.description` 相同时按「没更新过」处理，
+    不让它顶上去。
+    ③ 兜底是**子代理自己转发过来的最后一次工具调用**（`subagentLastAction`：读
+    `subagentItems[sid][agentId]`，取最后一个 `tool_use`，摘要走 `toolSummary`；
+    MCP 工具名只留 `__` 之后那一段，整串前缀会把摘要挤没）。流式正文不参与——
+    半截句子在列表里跳比不动更糟。页头列表（`TopBar`）与工具卡片（`AgentCard`）
+    两个消费方都要传这一档，漏一个那一处就还是定住的。
   - **后台 `local_bash` 没有 token 可报**（它不是模型调用），CLI 的 `<task-notification>`
     模板里也只有 task-id / tool-use-id / task-type / output-file / status / summary——
     运行时间只能由我们自己的时钟给。

@@ -32,6 +32,8 @@ export function turnsOf(items: Item[]): Turn[] {
     // 插话并进当前回合，不单独占一刻度（刻度是「跳到某一轮」的入口，插话不是一轮）。
     // **唤醒通知要占一刻度**：CLI 把它算作新的一轮，不占的话底下「1 轮」与刻度格数
     // 又会和收起行对不上（一段对话里被唤醒三次就是三轮）。
+    // 回合**进行中**被吸收的通知不会走到这里——它压根不造 `wake`
+    // （见 `normalize.applyTaskEvent`）。
     if (!isTurnHead(item)) return;
     const label =
       item.kind === "wake"
