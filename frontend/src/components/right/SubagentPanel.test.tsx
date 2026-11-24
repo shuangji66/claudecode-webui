@@ -16,8 +16,10 @@ vi.mock("../../lib/runtime", () => ({
 }));
 
 vi.mock("../chat/MessageList", () => ({
-  MessageList: ({ items }: { items: Item[] }) => (
-    <div>
+  // `running` 挂成 data 属性：面板必须把自己那份「在不在跑」传进去（见 SubagentPanel
+  // 里 running 的注释），漏传的话子代理还在干活却会被收起来。
+  MessageList: ({ items, running }: { items: Item[]; running?: boolean }) => (
+    <div data-running={String(running)}>
       {items.map((it) => (
         <p key={it.id} data-kind={it.kind}>
           {it.kind === "user" || it.kind === "assistant" || it.kind === "thinking" ? it.text : `<${it.kind}>`}
@@ -67,5 +69,41 @@ describe("SubagentPanel 派发消息", () => {
     render(<SubagentPanel sessionId="s1" agentId="a1" />);
     expect(await screen.findByText("你负责审查后端")).toBeInTheDocument();
     expect(screen.getByText("我先读一遍。")).toBeInTheDocument();
+  });
+});
+
+// 主任务把活交给后台子代理之后，主会话往往已经 ready。面板不能借主会话的状态去判
+// 「这一轮结束没有」——否则子代理还在干活，右栏却已经把思考收起来了（截图复现过）。
+describe("SubagentPanel 的运行状态取自子代理自己", () => {
+  const agentCard = (agentId: string, status: "running" | "completed"): Item => ({
+    id: "t1",
+    seq: 0,
+    ts: 0,
+    kind: "tool",
+    toolUseId: "toolu_01",
+    name: "Agent",
+    input: { description: "找一篇最新新闻" },
+    subagent: { taskId: agentId, agentId, status },
+  });
+
+  it("主会话 ready、子代理仍在跑时，running 传 true", async () => {
+    useAppStore.setState({ items: { s1: [agentCard("a1", "running")] } });
+    render(<SubagentPanel sessionId="s1" agentId="a1" />);
+    const box = await screen.findByText("你负责审查后端");
+    expect(box.parentElement?.dataset.running).toBe("true");
+  });
+
+  it("子代理已经收尾时 running 传 false", async () => {
+    useAppStore.setState({ items: { s1: [agentCard("a1", "completed")] } });
+    render(<SubagentPanel sessionId="s1" agentId="a1" />);
+    const box = await screen.findByText("你负责审查后端");
+    expect(box.parentElement?.dataset.running).toBe("false");
+  });
+
+  it("主消息流里没有那张卡片时按不在跑算（历史对话点开的子代理）", async () => {
+    useAppStore.setState({ items: {} });
+    render(<SubagentPanel sessionId="s1" agentId="a1" />);
+    const box = await screen.findByText("你负责审查后端");
+    expect(box.parentElement?.dataset.running).toBe("false");
   });
 });

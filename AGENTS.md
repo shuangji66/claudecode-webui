@@ -1045,6 +1045,13 @@ hub ── manager ── session ── process ── claude (NDJSON)
   user 条目（子代理 jsonl 的首条 user 行就是 prompt）接到实时流前面；实时流自己已经带了
   user 条目时按数量跳过，避免同一条 prompt 出现两遍。也不整份回落转录——那是落盘快照，
   正在跑的时候尾巴上缺一段。
+- **子代理面板的「在不在跑」必须自己传，不能用主会话的状态**（`MessageList` 的
+  `running` prop）：主任务把活交给后台子代理之后，主会话往往已经 `ready`。按主会话去判
+  「最后一条内容之后没有 result」的话，子代理那一整轮会被当成已结束收起来——收起行写着
+  「已完成」、思考过程看不见，而它其实正在干活（截图复现过：主对话已经正常了，右栏还是
+  收着的）。真源是**主消息流里那张 Agent 卡片**的 `subagent.status`（实时的 `task_*` 与
+  回放的 `<task-notification>` / `settleSubagents` 都折在它上面）；卡片不存在时按
+  「不在跑」算——历史对话里点开的子代理本来就已经结束了。
 - **子代理卡片的状态只认 `subagent.status`，不看 `item.result`**（`lib/subagents`
   的 `subagentStatusOf`）：后台子代理的 `tool_result` 只是**启动回执**
   （`Async agent launched successfully.` + `agentId:`，没有 `<usage>`），非空只说明

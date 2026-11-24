@@ -417,11 +417,21 @@ export function MessageList({
   items,
   empty,
   resetKey,
+  running: runningProp,
 }: {
   items: Item[];
   empty?: string;
   /** 切换对话时用它把「已展开的批次」复位。 */
   resetKey?: string;
+  /**
+   * 「这份消息流此刻在不在跑」——决定**最后一条内容之后没有 result**的轮算不算已结束。
+   *
+   * 不传就按主会话（`activeId` 的 state）算，那是聊天区的口径。**子代理面板必须自己传**：
+   * 它渲染的是子代理的历史，而主会话这时往往已经 `ready`（主任务交出去了在等子代理），
+   * 拿主会话的状态去判，子代理那一整轮会被当成「已结束」收起来——思考过程看不见，
+   * 收起行写着「已完成」，而它其实正在干活（截图复现过）。
+   */
+  running?: boolean;
 }) {
   const t = useT();
   const scroller = useRef<HTMLDivElement>(null);
@@ -610,10 +620,11 @@ export function MessageList({
    * 按它判断的话重开一个旧对话会让最新一轮永远保持展开。
    */
   const folded = useFoldedReplies();
-  const running = useAppStore((s) => {
+  const storeRunning = useAppStore((s) => {
     const st = s.states[s.activeId ?? ""];
     return st === "busy" || st === "starting";
   });
+  const running = runningProp ?? storeRunning;
   const keepTail = timing === "onNextSend" || running;
   const hiddenReplies = useMemo(
     () => (folded === "final" ? hiddenReplyIds(shown, keepTail) : null),

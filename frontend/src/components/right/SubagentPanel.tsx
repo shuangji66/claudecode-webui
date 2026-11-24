@@ -20,6 +20,27 @@ export function SubagentPanel({ sessionId, agentId }: { sessionId: string; agent
   const [state, setState] = useState<"loading" | "ok" | "missing">("loading");
   // 实时帧（--forward-subagent-text）优先：转录是落盘快照，会比界面慢一拍。
   const live = useAppStore((s) => s.subagentItems[sessionId]?.[agentId]);
+  /**
+   * 这个子代理**自己**还在不在跑。
+   *
+   * 不能借主会话的状态（`MessageList` 默认读 `activeId` 的 state）：主任务把活交给
+   * 后台子代理之后，主会话往往已经 `ready`——拿它去判，子代理那一整轮会被当成
+   * 「已结束」收起来，收起行写着「已完成」、思考过程看不见，而它其实正在干活
+   * （截图复现过：主对话正常了，右栏还是收着的）。
+   *
+   * 真源是**主消息流里那张 Agent 卡片**的 `subagent.status`：实时的 `task_*` 事件与
+   * 回放的 `<task-notification>` / `settleSubagents` 都折在它上面。缺卡片时按
+   * 「不在跑」算——历史对话里点开的子代理本来就已经结束了。
+   */
+  const running = useAppStore((s) => {
+    for (const it of s.items[sessionId] ?? []) {
+      if (it.kind !== "tool" || !it.subagent) continue;
+      if (it.subagent.agentId === agentId || it.subagent.taskId === agentId) {
+        return it.subagent.status === "running";
+      }
+    }
+    return false;
+  });
 
   useEffect(() => {
     let alive = true;
@@ -120,6 +141,7 @@ export function SubagentPanel({ sessionId, agentId }: { sessionId: string; agent
       <div className="min-h-0 flex-1">
         <MessageList
           items={merged}
+          running={running}
           empty={t("子代理还没有输出", "No output from this subagent yet")}
         />
       </div>
