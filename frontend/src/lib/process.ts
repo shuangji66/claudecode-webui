@@ -356,14 +356,47 @@ export function replyDividerIds(done: Item[], hidden?: Set<string>, settled = tr
 }
 
 /**
+ * 每一轮此刻是不是「收起态」——过程（思考 + 工具）收进轮首那一行。
+ *
+ * 这是渲染与「仅最终回答」共用的**唯一**判据：收起行画不画、过渡正文藏不藏，
+ * 都从这一份结果推导。两边各算一遍的话，用户点开一轮之后会出现「过程回来了、
+ * 过渡正文还是不在」，或者反过来。
+ *
+ * 三条规则，顺序不能换：
+ *   ① 没有过程的轮永远不算收起（纯问答没有那一行可点，收起它等于把正文吞掉）；
+ *   ② 还在跑的轮永远不算收起（把正在执行的步骤藏起来等于让人不知道它在干什么）；
+ *   ③ 用户手动点过的那一轮以 `manual` 为准（点开历史轮就该一直开着，自动逻辑不再改它）；
+ *      没点过时按收起时机：`deferTail`（「下次发送时收起」）下最新一轮保持展开。
+ *
+ * 返回的数组与 `spans` 一一对应（`turnSpans` 的轮锚点与这里相同）。
+ */
+export function collapsedTurns(
+  spans: TurnSpan[],
+  items: Item[],
+  options: { manual?: Record<string, boolean>; deferTail?: boolean } = {},
+): boolean[] {
+  const { manual, deferTail = false } = options;
+  return spans.map((span, index) => {
+    if (span.process.length === 0) return false;
+    if (!span.finished) return false;
+    const touched = manual?.[items[span.start]?.id ?? ""];
+    if (touched !== undefined) return !touched;
+    return !(deferTail && index === spans.length - 1);
+  });
+}
+
+/**
  * 「仅最终回答」时该隐藏哪些 Assistant 回复。
  *
- * 按用户消息切轮；被折叠的轮次只留**最后一条**有正文的回复，阶段回复随过程一起收起。
- * `keepTail` 表示最新一轮的过程仍展开（运行中 / 「下次发送时收起」的保留期），这时它的
- * 回复全部保留——过程都没收，回复先消失会让人以为消息丢了。
+ * 按用户消息切轮；**被收起的轮次**只留最后一条有正文的回复，过渡正文随过程一起收起。
+ * `collapsed` 是 `collapsedTurns` 的结果（按下标与轮对齐）——所以：
+ *   - 用户点开收起行、过程重新铺开时，这一轮的过渡正文也一起回来（对齐 DSH：过渡正文
+ *     本来就是过程的一部分，收起时才看不见）；
+ *   - 没有过程的轮、以及还在跑 / 保留期里的最新一轮，一条都不藏——过程都没收，
+ *     回复先消失会让人以为消息丢了。
  * 返回 Item id 集合，渲染层据此跳过整行（不是把它塞进过程组）。
  */
-export function hiddenReplyIds(items: Item[], keepTail: boolean): Set<string> {
+export function hiddenReplyIds(items: Item[], collapsed: readonly boolean[]): Set<string> {
   const hidden = new Set<string>();
   const starts: number[] = [];
   items.forEach((item, index) => {
@@ -371,12 +404,10 @@ export function hiddenReplyIds(items: Item[], keepTail: boolean): Set<string> {
     if (isTurnHead(item) && index > 0) starts.push(index);
   });
   const bounds = [0, ...starts];
-  if (bounds.length === 0) return hidden;
 
   bounds.forEach((start, turn) => {
+    if (collapsed[turn] !== true) return;
     const end = turn + 1 < bounds.length ? bounds[turn + 1] : items.length;
-    const isTail = turn === bounds.length - 1;
-    if (isTail && keepTail) return;
     const replies: Item[] = [];
     for (let i = start; i < end; i += 1) {
       const item = items[i];

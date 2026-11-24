@@ -25,6 +25,7 @@ import { useT } from "../../lib/i18n";
 import { activeTurnIndex, turnsOf, windowStart, type Turn } from "../../lib/turns";
 import {
   buildProcessRows,
+  collapsedTurns,
   hiddenReplyIds,
   isProcessItem,
   replyCopy,
@@ -253,9 +254,8 @@ const TurnRows = memo(function TurnRows({
   copies,
   hiddenReplies,
   dividers,
+  collapsed,
   dense,
-  manual,
-  timing,
   onToggleTurn,
 }: {
   spans: TurnSpan[];
@@ -265,25 +265,22 @@ const TurnRows = memo(function TurnRows({
   hiddenReplies: Set<string> | null;
   /** 每轮里「前面要加一条分隔线」的正文 item id（见 `replyDividerIds`）。 */
   dividers: Set<string>[];
+  /**
+   * 每轮此刻是不是收起态（`lib/process.collapsedTurns`）。
+   *
+   * **由上层算好传进来，不在这里现判**：同一个判定还被「仅最终回答」用来决定藏不藏
+   * 过渡正文（见那里的 `hiddenReplyIds`）。两处各算一遍的话，用户点开一轮之后就会
+   * 出现「过程回来了、过渡正文还是不在」这种半展开状态。
+   */
+  collapsed: boolean[];
   dense: boolean;
-  manual: Record<string, boolean>;
-  timing: CollapseTiming;
   onToggleTurn: (key: string, collapsed: boolean) => void;
 }) {
-
-  /** 某一轮此刻是不是收起态。 */
-  const isCollapsed = (span: TurnSpan, index: number): boolean => {
-    if (span.process.length === 0) return false; // 没有过程可收：纯问答不该多一行
-    if (!span.finished) return false; // 还在跑：过程必须看得见
-    const touched = manual[shown[span.start].id];
-    if (touched !== undefined) return !touched;
-    return !(timing === "onNextSend" && index === spans.length - 1);
-  };
 
   return (
     <div className={dense ? "" : "space-y-5"}>
       {spans.map((span, index) => {
-        const collapsed = isCollapsed(span, index);
+        const isCollapsed = collapsed[index];
         const turnRows = rows[index];
         /**
          * 收起/展开那一行（DSH 的「已完成，用时 …」）。
@@ -296,8 +293,8 @@ const TurnRows = memo(function TurnRows({
           <TurnCollapse
             durationMs={span.durationMs}
             outcome={span.outcome}
-            open={!collapsed}
-            onToggle={() => onToggleTurn(shown[span.start].id, collapsed)}
+            open={!isCollapsed}
+            onToggle={() => onToggleTurn(shown[span.start].id, isCollapsed)}
           />
         );
         // 只有窗口截断把用户消息切掉时，第一行才不是用户消息：那种情况放在最前面。
@@ -322,10 +319,10 @@ const TurnRows = memo(function TurnRows({
               );
               // 过程收起来了：整批跳过，只留正文。正文与用户消息是「结果」，
               // 收起要藏的只有过程（思考与工具调用）——但问答气泡不是过程，留下。
-              if (collapsed && entryTouchesProcess(entry)) {
+              if (isCollapsed && entryTouchesProcess(entry)) {
                 return askBubbles ? <Fragment key={entry.key}>{askBubbles}</Fragment> : null;
               }
-              // 「仅最终回答」：阶段回复整行跳过，不缩成一行占位。
+              // 「仅最终回答」：过渡正文与过程一起收起，展开时一起回来（见 `hiddenReplyIds`）。
               if (entry.type === "item" && hiddenReplies?.has(entry.item.id)) return null;
               let row: ReactNode = null;
               if (entry.type === "process") {
@@ -613,8 +610,8 @@ export function MessageList({
    */
   const timing = useCollapseTiming();
   /**
-   * 「仅最终回答」：只有**最新一轮**在过程仍展开时才保留全部回复；
-   * 其余轮次（以及已完成的最新一轮）只留最后一条回答。
+   * 「仅最终回答」：**被收起的轮次**只留最后一条回答，过渡正文随过程一起收起；
+   * 过程还展开着（还在跑 / 「下次发送时收起」的保留期 / 用户点开过）时回复全部保留。
    *
    * 「最新一轮结束了没有」认会话状态而不是「有没有 result」：转录回放里没有 result 行，
    * 按它判断的话重开一个旧对话会让最新一轮永远保持展开。
@@ -625,10 +622,28 @@ export function MessageList({
     return st === "busy" || st === "starting";
   });
   const running = runningProp ?? storeRunning;
-  const keepTail = timing === "onNextSend" || running;
+  /**
+   * 用户手动开合过的轮：键是轮头（用户消息 / 唤醒条）的 id，值是「要不要展开」。
+   * 记下来之后自动逻辑不再改它——点开历史轮就该一直开着。
+   */
+  const [manual, setManual] = useState<Record<string, boolean>>({});
+  const spans = useMemo(() => turnSpans(shown, running), [shown, running]);
+  /**
+   * 每轮此刻是不是收起态。**渲染与「仅最终回答」共用这一份**（`lib/process.collapsedTurns`）：
+   * 过渡正文藏不藏必须跟过程收没收严格同步，否则点开一轮会得到「过程回来了、过渡正文
+   * 还是不在」的半展开状态。
+   */
+  const collapsed = useMemo(
+    () => collapsedTurns(spans, shown, { manual, deferTail: timing === "onNextSend" }),
+    [spans, shown, manual, timing],
+  );
+  /**
+   * 过渡正文的隐藏集合：只对**收起的那几轮**生效。展开的轮一条都不藏，所以点开收起行时
+   * 过渡正文跟着过程一起回来（对齐 DSH：过渡正文本来就是过程的一部分）。
+   */
   const hiddenReplies = useMemo(
-    () => (folded === "final" ? hiddenReplyIds(shown, keepTail) : null),
-    [folded, shown, keepTail],
+    () => (folded === "final" ? hiddenReplyIds(shown, collapsed) : null),
+    [folded, shown, collapsed],
   );
   /**
    * 每轮里哪些正文段前面要加分隔线（过渡正文 → 过程 → 最终回答）。
@@ -642,7 +657,6 @@ export function MessageList({
    *
    * 要在 `spans` 之后定义（按轮切片）。
    */
-  const spans = useMemo(() => turnSpans(shown, running), [shown, running]);
   const dividers = useMemo(
     () =>
       spans.map((span) =>
@@ -650,7 +664,6 @@ export function MessageList({
       ),
     [spans, shown, hiddenReplies],
   );
-  const [manual, setManual] = useState<Record<string, boolean>>({});
   /**
    * 右侧栏轨迹面板点某一步 → 滚到对话里的那一条。
    *
@@ -1335,9 +1348,8 @@ export function MessageList({
               copies={copies}
               hiddenReplies={hiddenReplies}
               dividers={dividers}
+              collapsed={collapsed}
               dense={dense}
-              manual={manual}
-              timing={timing}
               onToggleTurn={toggleTurn}
             />
           </div>

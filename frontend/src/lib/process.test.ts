@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Item, ThinkingItem, ToolItem } from "./model";
 import {
   buildProcessRows,
+  collapsedTurns,
   hiddenReplyIds,
   dominantCategory,
   groupCategories,
@@ -180,35 +181,84 @@ describe("组头详情与推理预览", () => {
 describe("hiddenReplyIds（仅最终回答）", () => {
   const user = (id: string): Item => ({ id, seq: 0, ts: 0, kind: "user", text: id });
   const say = (id: string, text = id): Item => ({ id, seq: 0, ts: 0, kind: "assistant", text, streaming: false });
+  /** 只关心「这一轮收没收起」时的简写：`collapsed` 逐轮给值。 */
+  const hidden = (items: Item[], ...collapsed: boolean[]) => hiddenReplyIds(items, collapsed);
 
   it("同一轮只留最后一条回答", () => {
     const items = [user("u1"), say("a1"), tool("t1"), say("a2")];
-    expect([...hiddenReplyIds(items, false)]).toEqual(["a1"]);
+    expect([...hidden(items, true)]).toEqual(["a1"]);
   });
 
-  it("最新一轮仍在展开时一条都不隐藏（过程都没收，回复先消失会像丢消息）", () => {
+  it("过程没收起（最新一轮展开 / 用户点开过）时一条都不隐藏", () => {
     const items = [user("u1"), say("a1"), tool("t1"), say("a2")];
-    expect(hiddenReplyIds(items, true).size).toBe(0);
+    expect(hidden(items, false).size).toBe(0);
   });
 
   it("每一轮各自只留最后一条", () => {
     const items = [user("u1"), say("a1"), say("a2"), user("u2"), say("b1"), say("b2")];
-    expect([...hiddenReplyIds(items, false)].sort()).toEqual(["a1", "b1"]);
+    expect([...hidden(items, true, true)].sort()).toEqual(["a1", "b1"]);
+  });
+
+  it("只藏收起的那些轮：展开的那一轮过渡正文照常在", () => {
+    const items = [user("u1"), say("a1"), tool("t1"), say("a2"), user("u2"), say("b1"), tool("t2"), say("b2")];
+    // 第一轮收起、第二轮展开（例如「下次发送时收起」保留下来的最新一轮）
+    expect([...hidden(items, true, false)]).toEqual(["a1"]);
+    // 反过来也对称
+    expect([...hidden(items, false, true)]).toEqual(["b1"]);
   });
 
   it("没有用户消息（窗口被截断）时整段当一轮", () => {
     const items = [say("a1"), tool("t1"), say("a2")];
-    expect([...hiddenReplyIds(items, false)]).toEqual(["a1"]);
+    expect([...hidden(items, true)]).toEqual(["a1"]);
   });
 
   it("空白回答不参与：只有一条有正文时不会被隐藏", () => {
     const items = [user("u1"), say("a0", "   "), say("a1")];
-    expect(hiddenReplyIds(items, false).size).toBe(0);
+    expect(hidden(items, true).size).toBe(0);
   });
 
   it("只有一条回答的轮次不动", () => {
     const items = [user("u1"), say("a1")];
-    expect(hiddenReplyIds(items, false).size).toBe(0);
+    expect(hidden(items, true).size).toBe(0);
+  });
+});
+
+// 「收没收起」是渲染与「仅最终回答」共用的唯一判据：两边各算一遍就会点开之后
+// 得到「过程回来了、过渡正文还是不在」的半展开状态。
+describe("collapsedTurns", () => {
+  const user2 = (id: string): Item => ({ id, seq: 0, ts: 0, kind: "user", text: id });
+  const say2 = (id: string): Item => ({ id, seq: 0, ts: 0, kind: "assistant", text: id, streaming: false });
+  const result2 = (id: string): Item => ({ id, seq: 0, ts: 0, kind: "result", durationMs: 1000 });
+  /** 已结束、带过程的一轮。 */
+  const done = [user2("u1"), tool("t1"), say2("a1"), result2("r1")];
+
+  it("结束且有过程的轮默认收起", () => {
+    const spans = turnSpans(done, false);
+    expect(collapsedTurns(spans, done)).toEqual([true]);
+  });
+
+  it("没有过程的轮永远不算收起（纯问答没有那一行可点）", () => {
+    const items = [user2("u1"), say2("a1"), result2("r1")];
+    expect(collapsedTurns(turnSpans(items, false), items)).toEqual([false]);
+  });
+
+  it("还在跑的轮永远不算收起", () => {
+    const items = [user2("u1"), tool("t1"), say2("a1")];
+    expect(collapsedTurns(turnSpans(items, true), items)).toEqual([false]);
+  });
+
+  it("用户点开过的那一轮保持展开，收起时机不再改它", () => {
+    const spans = turnSpans(done, false);
+    expect(collapsedTurns(spans, done, { manual: { u1: true } })).toEqual([false]);
+    // 点回去（manual=false）就重新收起
+    expect(collapsedTurns(spans, done, { manual: { u1: false } })).toEqual([true]);
+  });
+
+  it("「下次发送时收起」下最新一轮保持展开，历史轮照常收起", () => {
+    const items = [...done, user2("u2"), tool("t2"), say2("a2"), result2("r2")];
+    const spans = turnSpans(items, false);
+    expect(collapsedTurns(spans, items, { deferTail: true })).toEqual([true, false]);
+    expect(collapsedTurns(spans, items)).toEqual([true, true]);
   });
 });
 
@@ -663,8 +713,8 @@ describe("turnSpans 把唤醒通知当轮锚点", () => {
       wake("w1"),
       reply("a2"),
     ];
-    // 保留最新的唤醒轮 → 上一轮只留最后一条回答（它本来就只有一条）
-    const hidden = hiddenReplyIds(items, true);
+    // 最新那一轮展开着 → 上一轮（也只有一条回答）一条都不藏
+    const hidden = hiddenReplyIds(items, [false, false]);
     expect(hidden.has("a1")).toBe(false);
     expect(hidden.has("a2")).toBe(false);
   });

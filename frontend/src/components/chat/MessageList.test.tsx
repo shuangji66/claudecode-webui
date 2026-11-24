@@ -856,6 +856,39 @@ describe("MessageList 收起后的回复", () => {
     expect(screen.getByText("最终答案")).toBeInTheDocument();
   });
 
+  // 过渡正文是过程的一部分：过程展开着的时候它必须看得见，收起才随过程一起藏起来。
+  // 无条件藏掉的话，点开收起行只找回思考与工具，那段正文再也见不到（DSH 里它是随过程
+  // 一起进出的）。
+  it("点开收起行：过渡正文随过程一起回来，收起时再一起藏起来", () => {
+    setFoldedReplies("final");
+    render(<MessageList items={[user(), stage, read, bash, final, result]} />);
+    // 默认「完成时收起」：过程与过渡正文一起藏起来，只剩最终回答。
+    expect(screen.queryByText("阶段回复")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /已完成/ }));
+    expect(screen.getByText("阶段回复")).toBeInTheDocument();
+    expect(screen.getByText("最终答案")).toBeInTheDocument();
+
+    // 再点一次收起来，过渡正文跟着消失。
+    fireEvent.click(screen.getByRole("button", { name: /已完成/ }));
+    expect(screen.queryByText("阶段回复")).toBeNull();
+    expect(screen.getByText("最终答案")).toBeInTheDocument();
+  });
+
+  // 没有过程的轮没有「已完成」那一行可点，收起行不存在 → 过渡正文藏了就无处可寻。
+  it("没有过程的轮不隐藏过渡正文（没有收起行可以点开）", () => {
+    setFoldedReplies("final");
+    const items: Item[] = [
+      user(),
+      { id: "a1", seq: 0, ts: 0, kind: "assistant", text: "上半句", streaming: false },
+      { id: "a2", seq: 0, ts: 0, kind: "assistant", text: "下半句", streaming: false },
+      result,
+    ];
+    render(<MessageList items={items} />);
+    expect(screen.getByText("上半句")).toBeInTheDocument();
+    expect(screen.getByText("下半句")).toBeInTheDocument();
+  });
+
   it("仍有过程在跑时，阶段回复不消失", () => {
     setFoldedReplies("final");
     setSessionRunning(true);
